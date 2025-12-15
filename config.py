@@ -1,5 +1,7 @@
-RP_SPACE_LENGTH = 128
-RP_SPACE_DIM = 128
+RP_SPACE_LENGTH = 5
+RP_SPACE_DIM = 512 # 一千二百万参数左右
+# V:5*DIM -(DIM*1024)> 5*1024
+# T:5*DIM -(DIM*2560)> 5*2560
 
 MMRL_VISION_LORA_CONFIG = {
     "lora_dropout": 0.05,
@@ -32,3 +34,8 @@ MMRL_TEXT_LORA_DEFINITIONS = {
     "t_to_layer7":{"r": 8, "lora_alpha": 16},
     "t_to_layer8":{"r": 8, "lora_alpha": 16},
 }
+
+INSERT_LAYER = range(17,23)
+
+INSERT_METHOD = "replace"
+# INSERT_METHOD = "add"

@@ -73,21 +73,21 @@ class MMRL(nn.Module):
         self.t_lora_config_map = cfg.MMRL_TEXT_LORA_DEFINITIONS
 
     def forward(self):
-        v_rtok_list = []
+        v_r_token_list = []
         ########################## vision part ##########################
         for vision_adapter_name in self.v_lora_config_map.keys():
             with self.r2v_backbone_projector.adapter_config(vision_adapter_name):
                 projected_output = self.r2v_backbone_projector(self.shared_represent_space)
-                v_rtok_list.append(projected_output)
+                v_r_token_list.append(projected_output)
 
         ########################## text part ##########################
-        t_rtok_list = []
+        t_r_token_list = []
         for text_adapter_name in self.t_lora_config_map.keys():
             with self.r2t_backbone_projector.adapter_config(text_adapter_name):
                 projected_output = self.r2t_backbone_projector(self.shared_represent_space)
-                t_rtok_list.append(projected_output)
+                t_r_token_list.append(projected_output)
 
-        return v_rtok_list, t_rtok_list
+        return v_r_token_list, t_r_token_list
 
 
 

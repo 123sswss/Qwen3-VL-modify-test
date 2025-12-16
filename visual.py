@@ -99,19 +99,6 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
                 grid_thw: torch.Tensor,
                 v_r_token_list: Optional[list[torch.Tensor]] = None,
                 **kwargs):
-        """
-        Args:
-            hidden_states (`torch.Tensor` of shape `(seq_len, hidden_size)`):
-                The final hidden states of the model.
-            grid_thw (`torch.Tensor` of shape `(num_images_or_videos, 3)`):
-                The temporal, height and width of feature shape of each image in LLM.
-
-        Returns:
-            `torch.Tensor`: hidden_states.
-            :param v_r_token_list:
-            :param hidden_states:
-            :param grid_thw:
-        """
         hidden_states = self.patch_embed(hidden_states)  # hidden_states -> pixel_values?
 
         pos_embeds = self.fast_pos_embed_interpolate(grid_thw)

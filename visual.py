@@ -99,41 +99,47 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
                 grid_thw: torch.Tensor,
                 v_r_token_list: Optional[list[torch.Tensor]] = None,
                 **kwargs):
-        hidden_states = self.patch_embed(hidden_states)  # hidden_states -> pixel_values?
 
+        hidden_states = self.patch_embed(hidden_states)
         pos_embeds = self.fast_pos_embed_interpolate(grid_thw)
         hidden_states = hidden_states + pos_embeds
 
         rotary_pos_emb = self.rot_pos_emb(grid_thw)
-
         seq_len, _ = hidden_states.size()
         hidden_states = hidden_states.reshape(seq_len, -1)
         rotary_pos_emb = rotary_pos_emb.reshape(seq_len, -1)
         emb = torch.cat((rotary_pos_emb, rotary_pos_emb), dim=-1)
         position_embeddings = (emb.cos(), emb.sin())
 
+        original_seq_lens_list = (grid_thw[:, 1] * grid_thw[:, 2] * grid_thw[:, 0]).tolist()
+
         cu_seqlens = torch.repeat_interleave(grid_thw[:, 1] * grid_thw[:, 2], grid_thw[:, 0]).cumsum(
             dim=0,
-            # Select dtype based on the following factors:
-            #  - FA2 requires that cu_seqlens_q must have dtype int32
-            #  - torch.onnx.export requires that cu_seqlens_q must have same dtype as grid_thw
-            # See https://github.com/huggingface/transformers/pull/34852 for more information
             dtype=grid_thw.dtype if torch.jit.is_tracing() else torch.int32,
         )
         cu_seqlens = F.pad(cu_seqlens, (1, 0), value=0)
 
+        has_r_token = False  # 标记当前 hidden_states 是否包含 r_token
+        current_num_r_token = 0  # 记录 r_token 的长度
+
         deepstack_feature_lists = []
+
         for layer_num, blk in enumerate(self.blocks):
+
             if layer_num not in cfg.INSERT_LAYER:
                 hidden_states = blk(
                     hidden_states,
                     cu_seqlens=cu_seqlens,
                     position_embeddings=position_embeddings,
+                    rotary_pos_emb=rotary_pos_emb,
                     **kwargs,
                 )
             else:
                 idx = cfg.INSERT_LAYER.index(layer_num)
-                r_tokens_input = v_r_token_list[idx]
+                r_tokens_input = v_r_token_list[idx] if v_r_token_list is not None else None
+
+                if not has_r_token and r_tokens_input is not None:
+                    current_num_r_token = r_tokens_input.shape[0]
 
                 out = blk(
                     hidden_states,
@@ -141,21 +147,45 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
                     position_embeddings=position_embeddings,
                     r_token=r_tokens_input,
                     r_token_idx=idx,
+                    rotary_pos_emb=rotary_pos_emb,
                     **kwargs,
                 )
 
-                # 状态更新逻辑
                 if isinstance(out, tuple):
                     hidden_states, cu_seqlens, position_embeddings = out
+                    if idx == 0:
+                        has_r_token = True
                 elif isinstance(out, torch.Tensor):
                     hidden_states = out
 
             if layer_num in self.deepstack_visual_indexes:
-                deepstack_feature = self.deepstack_merger_list[self.deepstack_visual_indexes.index(layer_num)](
-                    hidden_states
-                )
+                feature_to_save = hidden_states
+                if has_r_token and current_num_r_token > 0:
+                    feature_to_save = self._strip_r_token(
+                        feature_to_save,
+                        original_seq_lens_list,
+                        current_num_r_token
+                    )
+                deepstack_feature = self.deepstack_merger_list[
+                    self.deepstack_visual_indexes.index(layer_num)
+                ](feature_to_save)
                 deepstack_feature_lists.append(deepstack_feature)
+
+        if has_r_token and current_num_r_token > 0:
+            hidden_states = self._strip_r_token(
+                hidden_states,
+                original_seq_lens_list,
+                current_num_r_token
+            )
 
         hidden_states = self.merger(hidden_states)
         return hidden_states, deepstack_feature_lists
+
+    def _strip_r_token(self, hidden_states, original_lens, num_r_token):
+        current_lens = [l + num_r_token for l in original_lens]
+        hidden_states_split = torch.split(hidden_states, current_lens, dim=0)
+        clean_list = []
+        for seq in hidden_states_split:
+            clean_list.append(seq[num_r_token:])
+        return torch.cat(clean_list, dim=0)
 

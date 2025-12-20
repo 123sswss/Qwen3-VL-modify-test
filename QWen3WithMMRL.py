@@ -80,6 +80,18 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
             )
             inputs_embeds = inputs_embeds.masked_scatter(image_mask, image_embeds)
 
+        t_r_embeds = torch.cat(t_r_token_list, dim=0).to(dtype=inputs_embeds.dtype, device=inputs_embeds.device)
+        # todo: 生成掩码
+        # 关键：你需要定义一个特殊的 Token ID 用于占位，例如 cfg.MMRL_TOKEN_ID
+        # 如果没有专门的 token，也可以借用 video_pad (如果不跑视频) 或者其他 unused token
+        mmrl_token_id = cfg.MMRL_TOKEN_ID
+        mmrl_mask = (input_ids == mmrl_token_id)
+
+        if mmrl_mask.sum() != t_r_embeds.shape[0]:
+            raise ValueError(
+                f"MMRL Token 数量不匹配! Input_ids占位符: {mmrl_mask.sum()}, 生成Token: {t_r_embeds.shape[0]}")
+        inputs_embeds = inputs_embeds.masked_scatter(mmrl_mask.unsqueeze(-1), t_r_embeds)
+
         # 暂无支持视频推理的计划
 
         visual_pos_masks = None
@@ -135,7 +147,6 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
                     delta = delta.repeat_interleave(batch_size // delta.shape[0], dim=0)
                 position_ids = position_ids.add(delta)
                 position_ids = position_ids.unsqueeze(0).expand(3, -1, -1)
-        # todo: 把文字rtoken插入文本编码器
         outputs = self.language_model(
             input_ids=None,
             position_ids=position_ids,

@@ -41,5 +41,5 @@ INSERT_METHOD = "replace"
 # INSERT_METHOD = "add"
 
 MMRL_SPECIAL_TOKENS = {
-        "additional_special_tokens": ["<|text_R_token|>", "<|text_R_token_end|>"]
+        "additional_special_tokens": ["<|text_R_token_start|>", "<|text_R_token_end|>", "<|text_R_token_placeholder|>"]
     }

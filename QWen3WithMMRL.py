@@ -1,13 +1,14 @@
 from typing import Optional, Union
 
 import torch
-from transformers import Cache
+from transformers import Cache, AutoTokenizer
 from transformers.models.qwen3_vl.modeling_qwen3_vl import Qwen3VLModelOutputWithPast
 from transformers.processing_utils import Unpack
 from transformers.utils import auto_docstring, is_torchdynamo_compiling
 from transformers.utils.generic import check_model_inputs, TransformersKwargs
 
 import MMRL
+import config as cfg
 
 from transformers.models.qwen3_vl import modeling_qwen3_vl as qwen3_vl
 
@@ -15,13 +16,18 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
     def __init__(self,
                  config,
                  mode: Optional[str] = None,
-                 precomputed_path: Optional[str] = None
+                 precomputed_path: Optional[str] = None,
+                 tokenizer = None,
                  ):
         super().__init__(config)
         if mode is None:
             raise ValueError("mode must be specified")
         self.mode = mode
         self.precomputed_path = precomputed_path
+        if tokenizer is not None:
+            self.mmrl_token_id = tokenizer.convert_tokens_to_ids("<|text_R_token_placeholder|>")
+        else:
+            raise ValueError("tokenizer must be specified")
         self.MMRL = MMRL.MMRL(insert_layer_num=len(config.INSERT_LAYER),
                               vision_token_dim=1024,
                               text_token_dim=2560,
@@ -81,15 +87,20 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
             inputs_embeds = inputs_embeds.masked_scatter(image_mask, image_embeds)
 
         t_r_embeds = torch.cat(t_r_token_list, dim=0).to(dtype=inputs_embeds.dtype, device=inputs_embeds.device)
-        # todo: 生成掩码
-        # 关键：你需要定义一个特殊的 Token ID 用于占位，例如 cfg.MMRL_TOKEN_ID
-        # 如果没有专门的 token，也可以借用 video_pad (如果不跑视频) 或者其他 unused token
-        mmrl_token_id = cfg.MMRL_TOKEN_ID
-        mmrl_mask = (input_ids == mmrl_token_id)
 
-        if mmrl_mask.sum() != t_r_embeds.shape[0]:
+        placeholder_id = self.mmrl_token_id
+        mmrl_mask = (input_ids == placeholder_id)
+        expected_count = input_ids.shape[0] * 40  # Batch_Size * 40
+        actual_count = mmrl_mask.sum().item()
+
+        if actual_count != expected_count:
             raise ValueError(
-                f"MMRL Token 数量不匹配! Input_ids占位符: {mmrl_mask.sum()}, 生成Token: {t_r_embeds.shape[0]}")
+                f"占位符数量错误！期望 {expected_count} (Batch * 40), "
+                f"实际 input_ids 中找到 {actual_count}。"
+                f"请检查 Processor 是否正确插入了 40 个 <|text_R_token_placeholder|>。"
+            )
+        if t_r_embeds.shape[0] != actual_count:
+            raise ValueError(f"生成的 R-Token 维度与占位符不匹配: {t_r_embeds.shape[0]} vs {actual_count}")
         inputs_embeds = inputs_embeds.masked_scatter(mmrl_mask.unsqueeze(-1), t_r_embeds)
 
         # 暂无支持视频推理的计划

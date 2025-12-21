@@ -9,14 +9,6 @@ from safetensors.torch import save_file
 import config as cfg
 
 def create_lora_configs(task_definitions, base_config):
-    """
-    Args:
-        task_definitions (dict): 一个字典，key是任务名，value是该任务的特定配置字典。
-        base_config (dict): 包含所有任务共享参数的基础配置字典。
-
-    Returns:
-        dict: 一个字典，key是任务名，value是生成的 LoraConfig 对象。
-    """
     lora_configs = {}
     for vision_adapter_name, overrides in task_definitions.items():
         current_config_dict = base_config.copy()
@@ -67,7 +59,6 @@ class MMRL(nn.Module):
         self.mode = mode
 
         if self.mode == 'train':
-            # --- 训练模式：初始化所有组件 ---
             print("MMRL is initialized in 'train' mode.")
             assert insert_layer_num == len(cfg.MMRL_VISION_LORA_DEFINITIONS.keys()), \
                 "insert_layer_num must be equal to the number of vision adapters"
@@ -123,7 +114,6 @@ class MMRL(nn.Module):
         在推理模式下，直接返回预加载的张量。
         """
         if self.mode == 'train':
-            # --- 训练模式的计算逻辑 ---
             v_r_token_list = []
             for vision_adapter_name in self.v_lora_config_map.keys():
                 with self.r2v_backbone_projector.adapter_config(vision_adapter_name):
@@ -139,8 +129,6 @@ class MMRL(nn.Module):
             return v_r_token_list, t_r_token_list
 
         elif self.mode == 'inference':
-            # --- 推理模式直接返回结果 ---
-            # 用户可以按需将张量移动到特定设备
             # e.g., v_tokens = [t.to('cuda') for t in self.v_r_token_list]
             return self.v_r_token_list, self.t_r_token_list
 
@@ -157,27 +145,19 @@ class MMRL(nn.Module):
         """
         if self.mode != 'train':
             raise RuntimeError("This method can only be called when the module is in 'train' mode.")
-
         print("Generating precomputed tensors for saving...")
-        self.eval()  # 切换到评估模式
+        self.eval()
         with torch.no_grad():
             v_r_token_list, t_r_token_list = self.forward()
-
-        # 创建一个扁平的字典以便 safetensors 保存
         flat_token_dict = {}
         for i, tensor in enumerate(v_r_token_list):
-            # 保存前最好将张量移到CPU，以保证通用性
             flat_token_dict[f'vision_{i}'] = tensor.cpu()
         for i, tensor in enumerate(t_r_token_list):
             flat_token_dict[f'text_{i}'] = tensor.cpu()
-
-        # 保存元数据，用于在加载时恢复列表结构
         metadata = {
             'num_vision_tokens': str(len(v_r_token_list)),
             'num_text_tokens': str(len(t_r_token_list))
         }
-
-        # 保存到文件
         save_file(flat_token_dict, file_path, metadata=metadata)
         print(f"Precomputed tokens have been successfully saved to {file_path}")
 

@@ -175,6 +175,3 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
             past_key_values=outputs.past_key_values,
             rope_deltas=self.rope_deltas,
         )
-
-
-

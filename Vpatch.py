@@ -7,6 +7,7 @@
 from PIL import Image
 import torch
 from torch import nn
+import config as cfg
 
 def _get_patch_from_origin_pic(image_path, bbox):
     """
@@ -23,32 +24,55 @@ class Vpatch(nn.Module):
         super().__init__()
         #todo:动态K值的阈值τ,K max,相似度计算算法
         #todo:vpatch token缓存
+        # ============================================================
+        # 阶段 1: 前置准备 (Preprocessing)
+        # ============================================================
+        # 1. 接收原始输入：一张高清大图 I_orig，用户画的框 B_list，以及原始问题 P
+        # 2. 图像裁切：利用 PIL 根据 B_list 从 I_orig 中截取多个高清 ROI 小图 [I_roi_1, I_roi_2, ...]
+        # 3. 构造图像列表：images = [I_orig, I_roi_1, I_roi_2, ...] (多图模式)
+        # 4. 调用 Processor：将 images 和 基础 Prompt 喂给 processor，得到：
+        #    - pixel_values: 拼接后的像素张量
+        #    - image_grid_thw: 记录每张图在序列中的长宽信息
+        #    - input_ids: 基础文本的 ID (此时还不包含细节占位符)
 
-    #todo：如下
-    # ============================================================
-    # 阶段 1: 前置准备 (Preprocessing)
-    # ============================================================
-    # 1. 接收原始输入：一张高清大图 I_orig，用户画的框 B_list，以及原始问题 P
-    # 2. 图像裁切：利用 PIL 根据 B_list 从 I_orig 中截取多个高清 ROI 小图 [I_roi_1, I_roi_2, ...]
-    # 3. 构造图像列表：images = [I_orig, I_roi_1, I_roi_2, ...] (多图模式)
-    # 4. 调用 Processor：将 images 和 基础 Prompt 喂给 processor，得到：
-    #    - pixel_values: 拼接后的像素张量
-    #    - image_grid_thw: 记录每张图在序列中的长宽信息
-    #    - input_ids: 基础文本的 ID (此时还不包含细节占位符)
-    # ============================================================
-    # 阶段 2: 视觉特征提取与 IVTP 提炼 (Visual & Pruning)
-    # ============================================================
-    # 5. 提取 Query 语义：
-    #    - 将用户问题 P 转化为 Embedding (query_embed)，作为 IVTP 评分的“筛子”
-    # 6. 运行视觉编码器 (model.visual)：
-    #    - hidden_states, _ = model.visual(pixel_values, grid_thw)
-    #    - 此时 hidden_states 是一个长序列，包含了 [全局图特征, ROI_1特征, ROI_2特征, ...]
-    # 7. 调用 IVTPManager.split_features：
-    #    - 根据 grid_thw 的索引，将 hidden_states 拆分为 global_feat 和 [roi_feat_1, roi_feat_2, ...]
-    # 8. 执行 IVTP 动态剪枝：
-    #    - 遍历每个 roi_feat，计算其与 query_embed 的相关性
-    #    - 根据 Top-p 或 阈值，选出最关键的 K 个 Token (例如 ROI_1 选了 5 个，ROI_2 选了 3 个)
-    #    - 记录下每个 ROI 最终保留的 Token 数量列表: k_list = [5, 3, ...]
+    def split_image_hidden_states(self, image_hidden_states) -> list[torch.Tensor]:
+        return roi_hidden_states_list
+
+    def q_embedding(self, query: str) -> torch.Tensor:
+        pass
+
+    def similarity_calculation(self, roi_hidden_states: torch.Tensor,
+                              input_embed: torch.Tensor) -> torch.Tensor:
+        return similarity
+
+    def forward(self, image_hidden_states: torch.Tensor,
+                input_embeds: torch.Tensor):
+        # ============================================================
+        # 阶段 2: 视觉特征提取与 IVTP 提炼 (Visual & Pruning)
+        # ============================================================
+        # 5. 提取 Query 语义：
+        #    - 将用户问题 P 转化为 Embedding (query_embed)，作为 IVTP 评分的“筛子”
+        # 6. 运行视觉编码器 (model.visual)：
+        #    - hidden_states, _ = model.visual(pixel_values, grid_thw)
+        #    - 此时 hidden_states 是一个长序列，包含了 [全局图特征, ROI_1特征, ROI_2特征, ...]
+        # 7. 调用 IVTPManager.split_features：
+        #    - 根据 grid_thw 的索引，将 hidden_states 拆分为 global_feat 和 [roi_feat_1, roi_feat_2, ...]
+        # 8. 执行 IVTP 动态剪枝：
+        #    - 遍历每个 roi_feat，计算其与 query_embed 的相关性
+        #    - 根据 Top-p 或 阈值，选出最关键的 K 个 Token (例如 ROI_1 选了 5 个，ROI_2 选了 3 个)
+        #    - 记录下每个 ROI 最终保留的 Token 数量列表: k_list = [5, 3, ...]
+
+        filtered_roi_token_list = []
+        ########################## 在经过投影器之后 ##########################
+        roi_hidden_states_list = self.split_image_hidden_states(image_hidden_states)
+        for roi_hidden_states in roi_hidden_states_list:
+            sim_matrix  = self.similarity_calculation(roi_hidden_states, input_embeds)
+            similarity = sim_matrix.max(dim=-1)[0]
+            filtered_roi_token = roi_hidden_states[similarity.topk(roi_hidden_states.shape[0]*cfg.VPATCH_COMPRESS_RATIO).indices]
+            filtered_roi_token_list.append(filtered_roi_token)
+
+
+
     # ============================================================
     # 阶段 3: 动态 Prompt 构造与 Embedding 手术 (Injection)
     # ============================================================
@@ -71,7 +95,8 @@ class Vpatch(nn.Module):
     #    - 传入 input_embeds (已经融合了全局特征和提炼后的局部细节特征)
     #    - 注意：由于 IVTP 后的 Token 是作为 1D 序列插入的，我们需要为这些 Token 构造
     #      简单的 position_ids 或修改 attention_mask，确保模型知道它们是视觉补充
-    # 13. 生成回答：
-    #    - 4B 模型由于只看到了最关键的 8 个细节 Token，注意力高度集中，能够精准回答
-    #    - 例如：“区域 1 的螺丝有生锈迹象，区域 2 的垫片完整。”
+
+
+
+
 

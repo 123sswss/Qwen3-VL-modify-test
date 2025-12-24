@@ -15,23 +15,23 @@ from transformers.models.qwen3_vl import modeling_qwen3_vl as qwen3_vl
 class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
     def __init__(self,
                  config,
-                 mode: Optional[str] = None,
+                 MMRL_mode: Optional[str] = None,
                  precomputed_path: Optional[str] = None,
                  tokenizer = None,
                  ):
         super().__init__(config)
-        if mode is None:
+        if MMRL_mode is None:
             raise ValueError("mode must be specified")
-        self.mode = mode
+        self.MMRL_mode = MMRL_mode
         self.precomputed_path = precomputed_path
         if tokenizer is not None:
             self.mmrl_token_id = tokenizer.convert_tokens_to_ids("<|text_R_token_placeholder|>")
         else:
             raise ValueError("tokenizer must be specified")
         self.MMRL = MMRL.MMRL(insert_layer_num=len(config.INSERT_LAYER),
-                              vision_token_dim=1024,
-                              text_token_dim=2560,
-                              mode=self.mode,
+                              vision_token_dim=cfg.vision_token_dim,
+                              text_token_dim=cfg.text_token_dim,
+                              mode=self.MMRL_mode,
                               precomputed_path=self.precomputed_path)
 
     def get_image_features(self,
@@ -60,6 +60,7 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
         pixel_values: Optional[torch.Tensor] = None,
         image_grid_thw: Optional[torch.LongTensor] = None,
         cache_position: Optional[torch.LongTensor] = None,
+        img_path: Optional[list[str]] = None,
         **kwargs: Unpack[TransformersKwargs],
     ) -> Union[tuple, Qwen3VLModelOutputWithPast]:
         r"""

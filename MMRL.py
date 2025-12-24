@@ -52,7 +52,7 @@ class MMRL(nn.Module):
             insert_layer_num (int): 要插入的层数，必须与LoRA定义数量一致。
             vision_token_dim (int): 视觉分支输出token的维度。
             text_token_dim (int): 文本分支输出token的维度。
-            mode (str, optional): 模块的运行模式，'train' 或 'inference'。默认为 'train'。
+            mode (str): 模块的运行模式，'train' 或 'inference'。
             precomputed_path (Optional[str], optional): 在 'inference' 模式下，缓存r token的文件路径。默认为 None。
         """
         super().__init__()

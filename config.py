@@ -1,3 +1,16 @@
+vision_token_dim=1024
+text_token_dim=2560
+
+SPECIAL_TOKENS = {
+        "additional_special_tokens": ["<|text_R_token_start|>",
+                                      "<|text_R_token_end|>",
+                                      "<|text_R_token_placeholder|>",
+                                      "<|request_zoom|>",
+                                      "<|detail_start|>",
+                                      "<|detail_end|>",
+                                      "<|detail_placeholder|>",]
+    }
+##################################### MMRL #####################################
 RP_SPACE_LENGTH = 5
 RP_SPACE_DIM = 512 # 一千二百万参数左右
 # V:5*DIM -(DIM*1024)> 5*1024
@@ -40,12 +53,12 @@ INSERT_LAYER = range(17,23)
 INSERT_METHOD = "replace"
 # INSERT_METHOD = "add"
 
-SPECIAL_TOKENS = {
-        "additional_special_tokens": ["<|text_R_token_start|>",
-                                      "<|text_R_token_end|>",
-                                      "<|text_R_token_placeholder|>",
-                                      "<|request_zoom|>",
-                                      "<|detail_start|>",
-                                      "<|detail_end|>",
-                                      "<|detail_placeholder|>",]
-    }
+##################################### VPATCH #####################################
+VPATCH_SIMILARITY_METHOD = "IVTP"
+# VPATCH_SIMILARITY_METHOD = "FALCON"
+# VPATCH_SIMILARITY_METHOD = "cross attention"
+
+VPATCH_COMPRESS_RATIO = 0.02
+
+VPATCH_RATING_DIM = 128
+

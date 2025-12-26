@@ -159,6 +159,11 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
                     delta = delta.repeat_interleave(batch_size // delta.shape[0], dim=0)
                 position_ids = position_ids.add(delta)
                 position_ids = position_ids.unsqueeze(0).expand(3, -1, -1)
+
+        #todo:插入vpatch
+        # qwenvl的压缩比例 self.visual.spatial_merge_size
+        # https://aistudio.google.com/prompts/1_PmmU9ZeCG9_dMmEtPtxiQkqqpqoTSqW
+
         outputs = self.language_model(
             input_ids=None,
             position_ids=position_ids,

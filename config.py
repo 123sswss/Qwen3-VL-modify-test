@@ -54,11 +54,18 @@ INSERT_METHOD = "replace"
 # INSERT_METHOD = "add"
 
 ##################################### VPATCH #####################################
+# 协议：全局图总是放在所有图的最前面
 VPATCH_SIMILARITY_METHOD = "IVTP"
 # VPATCH_SIMILARITY_METHOD = "FALCON"
 # VPATCH_SIMILARITY_METHOD = "cross attention"
 
 VPATCH_COMPRESS_RATIO = 0.02
 
+VPATCH_EMBEDDING_COMPRESS_METHOD = "attention pooling"
+# VPATCH_EMBEDDING_COMPRESS_METHOD = "average pooling"
+# VPATCH_EMBEDDING_COMPRESS_METHOD = "FALCON"
+# 将数据投影至低维比较空间
 VPATCH_RATING_DIM = 128
+# 可以为全体VPATCH分配的token总量
+VPATCH_TOTAL_NUM = 576
 

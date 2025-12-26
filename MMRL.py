@@ -37,6 +37,7 @@ def _create_peft_projector(lora_definitions, lora_config, in_features, out_featu
 
 
 class MMRL(nn.Module):
+    # todo:重构一下缓存逻辑
     def __init__(self,
                  insert_layer_num: int,
                  vision_token_dim: int,

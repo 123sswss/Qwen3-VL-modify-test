@@ -9,6 +9,7 @@ from transformers.utils.generic import check_model_inputs, TransformersKwargs
 
 import MMRL
 import config as cfg
+import Vpatch
 
 from transformers.models.qwen3_vl import modeling_qwen3_vl as qwen3_vl
 
@@ -33,6 +34,7 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
                               text_token_dim=cfg.text_token_dim,
                               mode=self.MMRL_mode,
                               precomputed_path=self.precomputed_path)
+        self.Vpatch = Vpatch.Vpatch()
 
     def get_image_features(self,
                            pixel_values: torch.FloatTensor,
@@ -51,101 +53,109 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
     @auto_docstring
     @check_model_inputs()
     def forward(
-        self,
-        input_ids: torch.LongTensor = None,
-        attention_mask: Optional[torch.Tensor] = None,
-        position_ids: Optional[torch.LongTensor] = None,
-        past_key_values: Optional[Cache] = None,
-        inputs_embeds: Optional[torch.FloatTensor] = None,
-        pixel_values: Optional[torch.Tensor] = None,
-        image_grid_thw: Optional[torch.LongTensor] = None,
-        cache_position: Optional[torch.LongTensor] = None,
-        img_path: Optional[list[str]] = None,
-        **kwargs: Unpack[TransformersKwargs],
+            self,
+            input_ids: torch.LongTensor = None,
+            attention_mask: Optional[torch.Tensor] = None,
+            position_ids: Optional[torch.LongTensor] = None,
+            past_key_values: Optional[Cache] = None,
+            inputs_embeds: Optional[torch.FloatTensor] = None,
+            pixel_values: Optional[torch.Tensor] = None,
+            image_grid_thw: Optional[torch.LongTensor] = None,
+            cache_position: Optional[torch.LongTensor] = None,
+            img_path: Optional[list[str]] = None,
+            **kwargs: Unpack[TransformersKwargs],
     ) -> Union[tuple, Qwen3VLModelOutputWithPast]:
-        r"""
-        image_grid_thw (`torch.LongTensor` of shape `(num_images, 3)`, *optional*):
-            The temporal, height and width of feature shape of each image in LLM.
-        """
         if (input_ids is None) ^ (inputs_embeds is not None):
             raise ValueError("You must specify exactly one of input_ids or inputs_embeds")
-
         if inputs_embeds is None:
             inputs_embeds = self.get_input_embeddings()(input_ids)
-
-        image_mask = None
-
         v_r_token_list, t_r_token_list = self.MMRL()
 
+        visual_pos_masks = None
+        deepstack_visual_embeds = None
         if pixel_values is not None:
-            image_embeds, deepstack_image_embeds = self.get_image_features(pixel_values,
-                                                                           image_grid_thw,
-                                                                           v_r_token_list)
-            image_embeds = torch.cat(image_embeds, dim=0).to(inputs_embeds.device, inputs_embeds.dtype)
-            image_mask, _ = self.get_placeholder_mask(
+            image_embeds_raw, deepstack_image_embeds = self.get_image_features(
+                pixel_values, image_grid_thw, v_r_token_list
+            )
+            image_embeds_flatten = torch.cat(image_embeds_raw, dim=0).to(inputs_embeds.device, inputs_embeds.dtype)
+
+            merged_hidden, merged_deepstack, new_grid_thw = self.vpatch(
+                image_hidden_states=image_embeds_flatten,
+                deepstack_feature_lists=deepstack_image_embeds,
+                input_embeds=inputs_embeds,
+                grid_thw=image_grid_thw,
+                spatial_merge_size=self.visual.spatial_merge_size
+            )
+
+            original_vision_len = image_embeds_flatten.shape[0]
+            new_vision_len = merged_hidden.shape[0]
+
+            if original_vision_len != new_vision_len:
+                num_drop = original_vision_len - new_vision_len
+                image_mask_original, _ = self.get_placeholder_mask(
+                    input_ids, inputs_embeds=inputs_embeds, image_features=image_embeds_flatten
+                )
+                img_indices = torch.nonzero(image_mask_original.squeeze(-1), as_tuple=False)
+                keep_mask = torch.ones_like(input_ids, dtype=torch.bool)
+                if num_drop > 0:
+                    indices_to_drop = img_indices[-num_drop:]
+                    keep_mask[indices_to_drop[:, 0], indices_to_drop[:, 1]] = False
+                input_ids = input_ids[keep_mask].view(input_ids.shape[0], -1)
+                if attention_mask is not None:
+                    attention_mask = attention_mask[keep_mask].view(attention_mask.shape[0], -1)
+                inputs_embeds = inputs_embeds[keep_mask].view(input_ids.shape[0], -1, inputs_embeds.shape[-1])
+                image_grid_thw = new_grid_thw
+
+            image_embeds = merged_hidden.to(inputs_embeds.device, inputs_embeds.dtype)
+            deepstack_visual_embeds = merged_deepstack
+
+            new_image_mask, _ = self.get_placeholder_mask(
                 input_ids, inputs_embeds=inputs_embeds, image_features=image_embeds
             )
-            inputs_embeds = inputs_embeds.masked_scatter(image_mask, image_embeds)
-
+            inputs_embeds = inputs_embeds.masked_scatter(new_image_mask, image_embeds)
+            visual_pos_masks = new_image_mask[..., 0]
         t_r_embeds = torch.cat(t_r_token_list, dim=0).to(dtype=inputs_embeds.dtype, device=inputs_embeds.device)
 
         placeholder_id = self.mmrl_token_id
         mmrl_mask = (input_ids == placeholder_id)
-        expected_count = input_ids.shape[0] * 40  # Batch_Size * 40
+        expected_count = input_ids.shape[0] * 40
         actual_count = mmrl_mask.sum().item()
-
         if actual_count != expected_count:
             raise ValueError(
                 f"占位符数量错误！期望 {expected_count} (Batch * 40), "
                 f"实际 input_ids 中找到 {actual_count}。"
-                f"请检查 Processor 是否正确插入了 40 个 <|text_R_token_placeholder|>。"
             )
         if t_r_embeds.shape[0] != actual_count:
             raise ValueError(f"生成的 R-Token 维度与占位符不匹配: {t_r_embeds.shape[0]} vs {actual_count}")
+
         inputs_embeds = inputs_embeds.masked_scatter(mmrl_mask.unsqueeze(-1), t_r_embeds)
-
-        # 暂无支持视频推理的计划
-
-        visual_pos_masks = None
-        deepstack_visual_embeds = None
-        if image_mask is not None:
-            image_mask = image_mask[..., 0]
-            visual_pos_masks = image_mask
-            deepstack_visual_embeds = deepstack_image_embeds
-
         if position_ids is None:
             attention_mask_tensor = (
                 attention_mask if not isinstance(attention_mask, dict) else attention_mask["full_attention"]
             )
             if attention_mask_tensor is not None and attention_mask_tensor.ndim == 4:
                 attention_mask_tensor = torch.diagonal(attention_mask_tensor[:, 0], dim1=1, dim2=2)
-                # Only apply conversion for floating point tensors (inverted masks)
                 if attention_mask_tensor.dtype.is_floating_point:
                     attention_mask_tensor = attention_mask_tensor / torch.finfo(attention_mask_tensor.dtype).min
                     attention_mask_tensor = (1.0 - attention_mask_tensor).int()
 
-            # Calculate RoPE index once per generation in the pre-fill stage only.
-            # When compiling, we can't check tensor values thus we check only input length
-            # It is safe to assume that `length!=1` means we're in pre-fill because compiled
-            # models currently cannot do asssisted decoding
             prefill_compiled_stage = is_torchdynamo_compiling() and (
-                (input_ids is not None and input_ids.shape[1] != 1)
-                or (inputs_embeds is not None and inputs_embeds.shape[1] != 1)
+                    (input_ids is not None and input_ids.shape[1] != 1)
+                    or (inputs_embeds is not None and inputs_embeds.shape[1] != 1)
             )
             prefill_noncompiled_stage = not is_torchdynamo_compiling() and (
-                (cache_position is not None and cache_position[0] == 0)
-                or (past_key_values is None or past_key_values.get_seq_length() == 0)
+                    (cache_position is not None and cache_position[0] == 0)
+                    or (past_key_values is None or past_key_values.get_seq_length() == 0)
             )
+
             if (prefill_compiled_stage or prefill_noncompiled_stage) or self.rope_deltas is None:
                 position_ids, rope_deltas = self.get_rope_index(
                     input_ids,
                     image_grid_thw,
-                    # video_grid_thw,
                     None,
                     attention_mask=attention_mask_tensor,
                 )
                 self.rope_deltas = rope_deltas
-            # then use the prev pre-calculated rope-deltas to get the correct position ids
             else:
                 batch_size, seq_length, _ = inputs_embeds.shape
                 delta = (
@@ -155,14 +165,10 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
                 )
                 position_ids = torch.arange(seq_length, device=inputs_embeds.device)
                 position_ids = position_ids.view(1, -1).expand(batch_size, -1)
-                if cache_position is not None:  # otherwise `deltas` is an int `0`
+                if cache_position is not None:
                     delta = delta.repeat_interleave(batch_size // delta.shape[0], dim=0)
                 position_ids = position_ids.add(delta)
                 position_ids = position_ids.unsqueeze(0).expand(3, -1, -1)
-
-        #todo:插入vpatch
-        # qwenvl的压缩比例 self.visual.spatial_merge_size
-        # https://aistudio.google.com/prompts/1_PmmU9ZeCG9_dMmEtPtxiQkqqpqoTSqW
 
         outputs = self.language_model(
             input_ids=None,
@@ -175,7 +181,6 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
             deepstack_visual_embeds=deepstack_visual_embeds,
             **kwargs,
         )
-
         return Qwen3VLModelOutputWithPast(
             last_hidden_state=outputs.last_hidden_state,
             past_key_values=outputs.past_key_values,

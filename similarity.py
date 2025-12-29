@@ -21,6 +21,7 @@ class attention_pooling(nn.Module):
     def __init__(self,):
         super().__init__()
         #todo:query_cache
+
         self.query = nn.Parameter(torch.randn(1, cfg.text_token_dim))
         self.projector_q = nn.Linear(cfg.text_token_dim, cfg.VPATCH_RATING_DIM)
         self.projector_e = nn.Linear(cfg.text_token_dim, cfg.VPATCH_RATING_DIM)

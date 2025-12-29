@@ -57,10 +57,12 @@ class Vpatch(nn.Module):
 
     def forward(self,
                 image_hidden_states: torch.Tensor,
-                deepstack_feature_lists: list[torch.Tensor],  # 修正标注
+                deepstack_feature_lists: list[torch.Tensor],
                 input_embeds: torch.Tensor,
                 grid_thw: torch.Tensor,
                 spatial_merge_size: int):
+        #todo: 如果是ai申请看图没有全局图？
+        k = cfg.VPATCH_TOTAL_NUM
         global_vision, partial_vision = split_vision_features(image_hidden_states,
                                                               deepstack_feature_lists,
                                                               grid_thw,
@@ -68,7 +70,7 @@ class Vpatch(nn.Module):
         hidden_states, deepstack = partial_vision
         score = self.similarity(hidden_states, input_embeds)
         topk_values, topk_indices = torch.topk(score, k, sorted=False)
-        topk_indices, _ = torch.sort(topk_indices)  # 保持原始时空顺序非常重要
+        topk_indices, _ = torch.sort(topk_indices)
         filtered_hidden_states = hidden_states[topk_indices]
         filtered_deepstack = [layer_feat[topk_indices] for layer_feat in deepstack]
         filtered_grid_thw = torch.tensor([[1, 1, k]],

@@ -50,6 +50,23 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
         image_embeds = torch.split(image_embeds, split_sizes)
         return image_embeds, deepstack_image_embeds
 
+    def _prepare_mmrl_embeddings(self,
+                                 input_ids:torch.Tensor,
+                                 inputs_embeds:torch.Tensor):
+        placeholder_id = self.mmrl_token_id
+        mmrl_mask = (input_ids == placeholder_id)
+        actual_count = mmrl_mask.sum().item()
+        if actual_count == 0:
+            return inputs_embeds, None
+        v_r_token_list, t_r_token_list = self.MMRL()
+        t_r_embeds = torch.cat(t_r_token_list, dim=0).to(
+            dtype=inputs_embeds.dtype, device=inputs_embeds.device
+        )
+        if actual_count % 40 != 0:
+            raise ValueError(f"占位符数量异常: {actual_count}")
+        inputs_embeds = inputs_embeds.masked_scatter(mmrl_mask.unsqueeze(-1), t_r_embeds)
+        return inputs_embeds, v_r_token_list
+
     @auto_docstring
     @check_model_inputs()
     def forward(
@@ -65,20 +82,30 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
             img_path: Optional[list[str]] = None,
             **kwargs: Unpack[TransformersKwargs],
     ) -> Union[tuple, Qwen3VLModelOutputWithPast]:
+        #todo:在预处理阶段就进行是否为第一轮的判定
         if (input_ids is None) ^ (inputs_embeds is not None):
             raise ValueError("You must specify exactly one of input_ids or inputs_embeds")
         if inputs_embeds is None:
             inputs_embeds = self.get_input_embeddings()(input_ids)
-        v_r_token_list, t_r_token_list = self.MMRL()
+        #### MMRL ####
+        placeholder_id = self.mmrl_token_id
+        mmrl_mask = (input_ids == placeholder_id)
+        has_mmrl_placeholders = mmrl_mask.any()
+        v_r_token_list = None
+        t_r_token_list = None
+        if pixel_values is not None or has_mmrl_placeholders:
+             v_r_token_list, t_r_token_list = self.MMRL()
+        #### MMRL ####
 
         visual_pos_masks = None
         deepstack_visual_embeds = None
         if pixel_values is not None:
-            image_embeds_raw, deepstack_image_embeds = self.get_image_features(
-                pixel_values, image_grid_thw, v_r_token_list
-            )
+            #todo: 这里的v_r_token_list是可能会为空，需要处理
+            image_embeds_raw, deepstack_image_embeds = self.get_image_features(pixel_values,
+                                                                               image_grid_thw,
+                                                                               v_r_token_list)
             image_embeds_flatten = torch.cat(image_embeds_raw, dim=0).to(inputs_embeds.device, inputs_embeds.dtype)
-
+            #todo:不一定会用到vpatch
             merged_hidden, merged_deepstack, new_grid_thw = self.vpatch(
                 image_hidden_states=image_embeds_flatten,
                 deepstack_feature_lists=deepstack_image_embeds,
@@ -101,6 +128,7 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
                     indices_to_drop = img_indices[-num_drop:]
                     keep_mask[indices_to_drop[:, 0], indices_to_drop[:, 1]] = False
                 input_ids = input_ids[keep_mask].view(input_ids.shape[0], -1)
+                mmrl_mask = mmrl_mask[keep_mask].view(input_ids.shape[0], -1)
                 if attention_mask is not None:
                     attention_mask = attention_mask[keep_mask].view(attention_mask.shape[0], -1)
                 inputs_embeds = inputs_embeds[keep_mask].view(input_ids.shape[0], -1, inputs_embeds.shape[-1])
@@ -114,21 +142,16 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
             )
             inputs_embeds = inputs_embeds.masked_scatter(new_image_mask, image_embeds)
             visual_pos_masks = new_image_mask[..., 0]
-        t_r_embeds = torch.cat(t_r_token_list, dim=0).to(dtype=inputs_embeds.dtype, device=inputs_embeds.device)
 
-        placeholder_id = self.mmrl_token_id
-        mmrl_mask = (input_ids == placeholder_id)
-        expected_count = input_ids.shape[0] * 40
-        actual_count = mmrl_mask.sum().item()
-        if actual_count != expected_count:
-            raise ValueError(
-                f"占位符数量错误！期望 {expected_count} (Batch * 40), "
-                f"实际 input_ids 中找到 {actual_count}。"
-            )
-        if t_r_embeds.shape[0] != actual_count:
-            raise ValueError(f"生成的 R-Token 维度与占位符不匹配: {t_r_embeds.shape[0]} vs {actual_count}")
-
-        inputs_embeds = inputs_embeds.masked_scatter(mmrl_mask.unsqueeze(-1), t_r_embeds)
+        #### MMRL ####
+        if has_mmrl_placeholders and t_r_token_list is not None:
+            t_r_embeds = torch.cat(t_r_token_list, dim=0).to(dtype=inputs_embeds.dtype, device=inputs_embeds.device)
+            actual_count = mmrl_mask.sum().item()
+            generated_count = t_r_embeds.shape[0]
+            if generated_count != actual_count:
+                raise ValueError(f"R-Token 数量不足: 生成 {generated_count} vs 坑位 {actual_count}")
+            inputs_embeds = inputs_embeds.masked_scatter(mmrl_mask.unsqueeze(-1), t_r_embeds)
+        #### MMRL ####
         if position_ids is None:
             attention_mask_tensor = (
                 attention_mask if not isinstance(attention_mask, dict) else attention_mask["full_attention"]

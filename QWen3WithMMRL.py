@@ -83,10 +83,12 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
             **kwargs: Unpack[TransformersKwargs],
     ) -> Union[tuple, Qwen3VLModelOutputWithPast]:
         #todo:在预处理阶段就进行是否为第一轮的判定
+        #todo:解耦vpatch使其变成非必须调用。或者可以使其自动化检测是否为局部图？
         if (input_ids is None) ^ (inputs_embeds is not None):
             raise ValueError("You must specify exactly one of input_ids or inputs_embeds")
         if inputs_embeds is None:
             inputs_embeds = self.get_input_embeddings()(input_ids)
+
         #### MMRL ####
         placeholder_id = self.mmrl_token_id
         mmrl_mask = (input_ids == placeholder_id)

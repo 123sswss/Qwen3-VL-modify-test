@@ -39,7 +39,6 @@ class MMRL(nn.Module):
                  insert_layer_num: int,
                  vision_token_dim: int,
                  text_token_dim: int):
-
         super().__init__()
         assert insert_layer_num == len(cfg.MMRL_VISION_LORA_DEFINITIONS.keys()), \
             "insert_layer_num must be equal to the number of vision adapters"

@@ -1,11 +1,15 @@
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from peft import LoraConfig, get_peft_model
 from collections import OrderedDict
 from typing import Tuple, List
 
 import config as cfg
 
+#todo:模仿 MMRL，在后8层的 Attention 中，
+# 只允许 [REP] 去看（Attend to）原始的 Patch Tokens，
+# 但不允许原始的 Patch Tokens 去看 [REP]
 def create_lora_configs(task_definitions, base_config):
     lora_configs = {}
     for vision_adapter_name, overrides in task_definitions.items():
@@ -32,7 +36,6 @@ def _create_peft_projector(lora_definitions, lora_config, in_features, out_featu
             peft_projector.add_adapter(name, lconfig)
 
     return peft_projector
-
 
 class MMRL(nn.Module):
     def __init__(self,
@@ -61,6 +64,8 @@ class MMRL(nn.Module):
         self.cached_v_tokens = None
         self.cached_t_tokens = None
 
+        self.alpha = -1
+
     def _compute_tokens(self) -> Tuple[List[torch.Tensor], List[torch.Tensor]]:
         v_list = []
         for name in self.v_adapter_keys:
@@ -79,21 +84,10 @@ class MMRL(nn.Module):
             self.cached_v_tokens = None
             self.cached_t_tokens = None
             return self._compute_tokens()
-
         else:
             if self.cached_v_tokens is None:
                 with torch.no_grad():
                     v_out, t_out = self._compute_tokens()
                     self.cached_v_tokens = [t.detach() for t in v_out]
                     self.cached_t_tokens = [t.detach() for t in t_out]
-
-            # 直接返回缓存
             return self.cached_v_tokens, self.cached_t_tokens
-
-
-
-
-
-
-
-

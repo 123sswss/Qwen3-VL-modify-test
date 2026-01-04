@@ -7,7 +7,7 @@ import torch.nn.functional as F
 from transformers.models.qwen3_vl import modeling_qwen3_vl as qwen3_vl
 
 import config as cfg
-
+import MMRLGating
 
 class VisionBlockWithMMRL(qwen3_vl.Qwen3VLVisionBlock):
     def forward(self,
@@ -93,13 +93,15 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
     def __init__(self, config, *inputs, **kwargs):
         super().__init__(config, *inputs, **kwargs)
         self.blocks = nn.ModuleList([VisionBlockWithMMRL(config) for _ in range(config.depth)])
+        self.MMRL_gating = MMRLGating.MMRL_gating()
+        self.alpha = -1
 
     def forward(self,
                 hidden_states: torch.Tensor,
                 grid_thw: torch.Tensor,
                 v_r_token_list: Optional[list[torch.Tensor]] = None,
+                embedding_after_pooling: Optional[torch.Tensor] = None,
                 **kwargs):
-
         hidden_states = self.patch_embed(hidden_states)
         pos_embeds = self.fast_pos_embed_interpolate(grid_thw)
         hidden_states = hidden_states + pos_embeds
@@ -125,8 +127,7 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
         deepstack_feature_lists = []
 
         for layer_num, blk in enumerate(self.blocks):
-
-            if layer_num not in cfg.INSERT_LAYER:
+            if layer_num not in cfg.INSERT_LAYER and not (cfg.INSERT_LAYER[0]-1):
                 hidden_states = blk(
                     hidden_states,
                     cu_seqlens=cu_seqlens,
@@ -134,6 +135,21 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
                     rotary_pos_emb=rotary_pos_emb,
                     **kwargs,
                 )
+            elif layer_num == (cfg.INSERT_LAYER[0]-1):
+                hidden_states = blk(
+                    hidden_states,
+                    cu_seqlens=cu_seqlens,
+                    position_embeddings=position_embeddings,
+                    rotary_pos_emb=rotary_pos_emb,
+                    **kwargs,
+                )
+                mid_state = hidden_states.detch()
+                ############ 门控参数alpha ############
+                mid_state_after_pooling = mid_state.mean(0)
+                self.alpha = self.MMRL_gating(mid_state_after_pooling,
+                                              embedding_after_pooling)
+                ############ 门控参数alpha ############
+
             else:
                 idx = cfg.INSERT_LAYER.index(layer_num)
                 r_tokens_input = v_r_token_list[idx] if v_r_token_list is not None else None

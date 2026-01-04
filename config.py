@@ -1,3 +1,5 @@
+##################################### init #####################################
+USE_MMRL = False
 vision_token_dim=1024
 text_token_dim=2560
 
@@ -53,6 +55,7 @@ INSERT_LAYER = range(17,23)
 INSERT_METHOD = "replace"
 # INSERT_METHOD = "add"
 
+GATING_MID_DIM = 512
 ##################################### VPATCH #####################################
 # 协议：全局图总是放在所有图的最前面
 VPATCH_SIMILARITY_METHOD = "IVTP"

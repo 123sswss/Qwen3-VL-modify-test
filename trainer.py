@@ -2,7 +2,7 @@ from transformers import Qwen3VLForConditionalGeneration, AutoProcessor
 import os
 
 import QWen3WithMMRL as qwen3
-import visual as qwen3Vison
+import VisionModelWithMMRL as qwen3Vison
 import addSpecialToken
 import config as cfg
 

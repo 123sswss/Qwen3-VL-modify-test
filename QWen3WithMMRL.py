@@ -31,11 +31,7 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
         else:
             raise ValueError("tokenizer must be specified")
         ###################
-        self.MMRL = MMRL.MMRL(insert_layer_num=len(config.INSERT_LAYER),
-                              vision_token_dim=cfg.vision_token_dim,
-                              text_token_dim=cfg.text_token_dim,
-                              mode=self.MMRL_mode,
-                              precomputed_path=self.precomputed_path)
+        self.MMRL = MMRL.MMRL()
         self.attention_pooling = similarity.attention_pooling()
         ###################
 

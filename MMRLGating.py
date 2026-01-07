@@ -1,9 +1,10 @@
-#todo:给这个模块设计一个独特的LOSS
+from typing import Optional
+
 import torch
 from torch import nn
 import config as cfg
 
-class MMRL_gating(nn.Module):
+class Task_classifier(nn.Module):
     def __init__(self):
         super().__init__()
         self.vision_proj = nn.Linear(cfg.vision_token_dim, cfg.GATING_MID_DIM)
@@ -22,5 +23,37 @@ class MMRL_gating(nn.Module):
         # [Batch, MID_DIM*2]
         combined = torch.cat((v_feat, t_feat), dim=-1)
         combined = self.relu(self.fc_fusion(combined))
-        alpha = torch.sigmoid(self.output_head(combined))
+        alpha = self.output_head(combined)
+        # alpha = torch.sigmoid(alpha)
+        #todo:将alpha经过sigmoid之后进行loss计算
         return alpha
+
+class Gating(nn.Module):
+    def __init__(self,):
+        super().__init__()
+        self.gating_temperature = cfg.gating_temperature
+        self.upper_bounds = 1 + cfg.stretching_length
+        self.lower_bounds = 0 - cfg.stretching_length
+
+    def forward(self,
+                alpha: torch.Tensor,
+                temperature_overide: Optional[float] = None):
+
+        if temperature_overide is not None:
+            temperature = temperature_overide
+        else:
+            temperature = self.gating_temperature
+
+        if self.training:
+            u = torch.rand_like(alpha)
+            u = torch.clamp(u, min=1e-7, max=1 - 1e-7)
+            epsilon = torch.log(u) - torch.log(1 - u)
+        else:
+            epsilon = 0
+        # 此处alpha未经sigmoid
+        s = torch.sigmoid((epsilon + alpha) / temperature)
+
+        ss = s * (self.upper_bounds - self.lower_bounds) + self.lower_bounds
+        G = torch.clip(ss, 0, 1)
+        return G
+

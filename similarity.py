@@ -17,24 +17,6 @@ class _Vsimilarity(nn.Module):
         else:
             raise NotImplementedError
 
-class attention_pooling(nn.Module):
-    def __init__(self,):
-        super().__init__()
-        self.query = nn.Parameter(torch.randn(1, cfg.text_token_dim))
-        self.projector_q = nn.Linear(cfg.text_token_dim, cfg.VPATCH_RATING_DIM)
-        self.projector_e = nn.Linear(cfg.text_token_dim, cfg.VPATCH_RATING_DIM)
-        self.ln = nn.LayerNorm(cfg.text_token_dim)
-
-    def forward(self, input_embeds):
-        # input_embeds: [B, S, D]
-        batch_size = input_embeds.shape[0]
-        qq = self.projector_q(self.query).unsqueeze(0).expand(batch_size, -1, -1) # [B, 1, R_DIM]
-        kk = self.projector_e(input_embeds) # [B, S, R_DIM]
-        score = torch.matmul(qq, kk.transpose(-1, -2))/math.sqrt(cfg.VPATCH_RATING_DIM)
-        score = torch.nn.functional.softmax(score, dim=-1)
-        g = torch.matmul(score, input_embeds) # [B, 1, D]
-        return self.ln(g.squeeze(1))
-
 class FALCON_embedding_compress(nn.Module):
     def __init__(self,):
         super().__init__()

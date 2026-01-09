@@ -9,7 +9,7 @@ from transformers.utils.generic import check_model_inputs, TransformersKwargs
 
 import MMRL
 import config as cfg
-import similarity
+import utils
 # import Vpatch
 from transformers.models.qwen3_vl import modeling_qwen3_vl as qwen3_vl
 
@@ -31,7 +31,7 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
             raise ValueError("tokenizer must be specified")
         ###################
         self.MMRL = MMRL.MMRL()
-        self.attention_pooling = similarity.attention_pooling()
+        self.attention_pooling = utils.attention_pooling(cfg.text_token_dim, cfg.POOLING_DIM)
         ###################
 
     def get_image_features(self,

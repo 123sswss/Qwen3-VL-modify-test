@@ -12,6 +12,8 @@ SPECIAL_TOKENS = {
                                       "<|detail_end|>",
                                       "<|detail_placeholder|>",]
     }
+POOLING_DIM = 128
+
 ##################################### MMRL #####################################
 RP_SPACE_LENGTH = 5
 RP_SPACE_DIM = 512 # 一千二百万参数左右
@@ -38,8 +40,6 @@ VPATCH_COMPRESS_RATIO = 0.02
 VPATCH_EMBEDDING_COMPRESS_METHOD = "attention pooling"
 # VPATCH_EMBEDDING_COMPRESS_METHOD = "average pooling"
 # VPATCH_EMBEDDING_COMPRESS_METHOD = "FALCON"
-# 将数据投影至低维比较空间
-VPATCH_RATING_DIM = 128
 # 可以为全体VPATCH分配的token总量
 VPATCH_TOTAL_NUM = 576
 

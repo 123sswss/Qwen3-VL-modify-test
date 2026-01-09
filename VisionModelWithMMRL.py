@@ -9,127 +9,36 @@ from transformers.models.qwen3_vl import modeling_qwen3_vl as qwen3_vl
 import config as cfg
 import MMRLGating
 
-class abandonedBlock(qwen3_vl.Qwen3VLVisionBlock):
-    def forward(self,
-                hidden_states: torch.Tensor,
-                cu_seqlens: torch.Tensor,
-                r_token: Optional[torch.Tensor] = None,
-                r_token_idx: Optional[int] = None,
-                rotary_pos_emb: Optional[torch.Tensor] = None,
-                position_embeddings: Optional[tuple[torch.Tensor, torch.Tensor]] = None,
-                **kwargs):
-        if r_token is not None:
-            num_r_tokens = r_token.shape[0]
-            batch_size = cu_seqlens.shape[0] - 1
-            seq_lengths = (cu_seqlens[1:] - cu_seqlens[:-1]).cpu().tolist()
-            hidden_states_split = torch.split(hidden_states, seq_lengths, dim=0)
-            if r_token_idx == 0:
-                new_hidden_states_list = []
-                for seq_hidden in hidden_states_split:
-                    new_hidden_states_list.append(torch.cat([r_token, seq_hidden], dim=0))
-                hidden_states = torch.cat(new_hidden_states_list, dim=0)
-
-                original_cos, original_sin = position_embeddings
-                dtype = original_cos.dtype
-                device = original_cos.device
-                pos_emb_dim = original_cos.shape[-1]
-
-
-                r_token_cos = torch.ones(num_r_tokens, pos_emb_dim, device=device, dtype=dtype)
-                r_token_sin = torch.zeros(num_r_tokens, pos_emb_dim, device=device, dtype=dtype)
-
-                cos_split = torch.split(original_cos, seq_lengths, dim=0)
-                sin_split = torch.split(original_sin, seq_lengths, dim=0)
-
-                new_cos_list = []
-                new_sin_list = []
-
-                for i in range(batch_size):
-                    new_cos_list.append(torch.cat([r_token_cos, cos_split[i]], dim=0))
-                    new_sin_list.append(torch.cat([r_token_sin, sin_split[i]], dim=0))
-
-                new_cos = torch.cat(new_cos_list, dim=0)
-                new_sin = torch.cat(new_sin_list, dim=0)
-                updated_position_embeddings = (new_cos, new_sin)
-
-                if batch_size > 0:
-                    offsets = torch.arange(batch_size + 1, device=cu_seqlens.device,
-                                           dtype=cu_seqlens.dtype) * num_r_tokens
-                    updated_cu_seqlens = cu_seqlens + offsets
-                else:
-                    updated_cu_seqlens = cu_seqlens
-
-                hidden_states = hidden_states + self.attn(self.norm1(hidden_states),
-                                                          cu_seqlens=updated_cu_seqlens,
-                                                          rotary_pos_emb=rotary_pos_emb,
-                                                          position_embeddings=updated_position_embeddings,
-                                                          **kwargs)
-                hidden_states = hidden_states + self.mlp(self.norm2(hidden_states))
-                return hidden_states, updated_cu_seqlens, updated_position_embeddings
-
-            else:
-                new_hidden_states_list = []
-                updated_seq = None
-                for seq_hidden in hidden_states_split:
-                    if cfg.INSERT_METHOD == "replace":
-                        updated_seq = torch.cat([r_token, seq_hidden[num_r_tokens:]], dim=0)
-                    elif cfg.INSERT_METHOD == "add":
-                        prefix = (seq_hidden[:num_r_tokens] + r_token) / 2
-                        suffix = seq_hidden[num_r_tokens:]
-                        updated_seq = torch.cat([prefix, suffix], dim=0)
-                    new_hidden_states_list.append(updated_seq)
-                hidden_states = torch.cat(new_hidden_states_list, dim=0)
-
-        hidden_states = hidden_states + self.attn(self.norm1(hidden_states),
-                                                  cu_seqlens=cu_seqlens,
-                                                  rotary_pos_emb=rotary_pos_emb,
-                                                  position_embeddings=position_embeddings,
-                                                  **kwargs)
-        hidden_states = hidden_states + self.mlp(self.norm2(hidden_states))
-        return hidden_states
-
 class MMRLVitBlock(qwen3_vl.Qwen3VLVisionBlock):
     def forward(self,
                 hidden_states: torch.Tensor,
                 cu_seqlens: torch.Tensor,
                 r_token: Optional[torch.Tensor] = None,
-                r_token_idx: Optional[int] = None,
                 rotary_pos_emb: Optional[torch.Tensor] = None,
                 position_embeddings: Optional[tuple[torch.Tensor, torch.Tensor]] = None,
+                first_insert: Optional[bool] = False,
                 **kwargs):
-        if r_token is not None:
-            # 多图拆分
-            num_r_tokens = r_token.shape[0]
-            batch_size = cu_seqlens.shape[0] - 1
-            seq_lengths = (cu_seqlens[1:] - cu_seqlens[:-1]).cpu().tolist()
-            hidden_states_split = torch.split(hidden_states, seq_lengths, dim=0)
-            if r_token_idx == 0:
-                new_hidden_states_list = []
-                for seq_hidden in hidden_states_split:
-                    new_hidden_states_list.append(torch.cat([r_token, seq_hidden], dim=0))
-                hidden_states = torch.cat(new_hidden_states_list, dim=0)
-
-                original_cos, original_sin = position_embeddings
-                dtype = original_cos.dtype
-                device = original_cos.device
-                pos_emb_dim = original_cos.shape[-1]
-
-                r_token_cos = torch.ones(num_r_tokens, pos_emb_dim, device=device, dtype=dtype)
-                r_token_sin = torch.zeros(num_r_tokens, pos_emb_dim, device=device, dtype=dtype)
-
-                cos_split = torch.split(original_cos, seq_lengths, dim=0)
-                sin_split = torch.split(original_sin, seq_lengths, dim=0)
-
-                new_cos_list = []
-                new_sin_list = []
-
-                for i in range(batch_size):
-                    new_cos_list.append(torch.cat([r_token_cos, cos_split[i]], dim=0))
-                    new_sin_list.append(torch.cat([r_token_sin, sin_split[i]], dim=0))
-
-                new_cos = torch.cat(new_cos_list, dim=0)
-                new_sin = torch.cat(new_sin_list, dim=0)
-                updated_position_embeddings = (new_cos, new_sin)
+        assert r_token is not None
+        num_r_tokens = r_token.shape[0]
+        seq_lengths = (cu_seqlens[1:] - cu_seqlens[:-1]).cpu().tolist()
+        hidden_states_split = torch.split(hidden_states, seq_lengths, dim=0)
+        if first_insert:
+            new_hidden_states_list = []
+            for seq_hidden in hidden_states_split:
+                new_hidden_states_list.append(torch.cat([r_token, seq_hidden], dim=0))
+            hidden_states = torch.cat(new_hidden_states_list, dim=0)
+        else:
+            new_hidden_states_list = []
+            updated_seq = None
+            for seq_hidden in hidden_states_split:
+                if cfg.INSERT_METHOD == "replace":
+                    updated_seq = torch.cat([r_token, seq_hidden[num_r_tokens:]], dim=0)
+                elif cfg.INSERT_METHOD == "add":
+                    prefix = seq_hidden[:num_r_tokens] + r_token
+                    suffix = seq_hidden[num_r_tokens:]
+                    updated_seq = torch.cat([prefix, suffix], dim=0)
+                new_hidden_states_list.append(updated_seq)
+            hidden_states = torch.cat(new_hidden_states_list, dim=0)
 
         hidden_states = hidden_states + self.attn(self.norm1(hidden_states),
                                                   cu_seqlens=cu_seqlens,
@@ -165,6 +74,7 @@ def _resize_cu_and_pos(r_token, cu_seqlens, position_embeddings):
     new_cos = torch.cat(new_cos_list, dim=0)
     new_sin = torch.cat(new_sin_list, dim=0)
     updated_position_embeddings = (new_cos, new_sin)
+    # todo:用极大位置编码替换0位置编码，或者做实验看结果
 
     if batch_size > 0:
         offsets = torch.arange(batch_size + 1, device=cu_seqlens.device,
@@ -183,14 +93,26 @@ def _strip_r_token(hidden_states, original_lens, num_r_token):
         clean_list.append(seq[num_r_token:])
     return torch.cat(clean_list, dim=0)
 
+class zeroInit(nn.Module):
+    def __init__(self, dim):
+        super(zeroInit, self).__init__()
+        self.net = nn.Sequential(nn.Linear(dim, dim // 4),
+                                 nn.ReLU(),
+                                 nn.Linear(dim // 4, dim))
+        nn.init.zeros_(self.net[-1].weight)
+        nn.init.zeros_(self.net[-1].bias)
+
+    def forward(self, x):
+        return self.net(x)
 
 class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
     def __init__(self, config, *inputs, **kwargs):
         super().__init__(config, *inputs, **kwargs)
         self.blocks = nn.ModuleList([qwen3_vl.Qwen3VLVisionBlock(config) for _ in range(config.depth)])
-        self.blocks_with_rep = wocaosinidema()# 位置编码和cu序列已经处理好了，别乱动原来的顺序
+        self.blocks_with_rep = nn.ModuleList([MMRLVitBlock(config) for _ in cfg.INSERT_LAYER])
         self.Task_classifier = MMRLGating.Task_classifier()
         self.Gating = MMRLGating.Gating()
+        self.zero_init_layer = zeroInit(cfg.vision_token_dim)
         self.alpha_list = []
         self.G_list = []
 
@@ -274,23 +196,19 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
                     assert cu_seqlens_with_rep is not None
                     assert position_embeddings_with_rep is not None
                 if self.training:
-                    hidden_states_with_rep = self.blocks_with_rep(hidden_states if first_insert else hidden_states_with_rep,
-                                                                  cu_seqlens=cu_seqlens_with_rep,
-                                                                  position_embeddings=position_embeddings_with_rep,
-                                                                  r_token=r_tokens_input,
-                                                                  r_token_idx=idx,
-                                                                  rotary_pos_emb=rotary_pos_emb,
-                                                                  **kwargs)
+                    hidden_states_with_rep = self.blocks_with_rep[layer_num](
+                        hidden_states if first_insert else hidden_states_with_rep,
+                        cu_seqlens=cu_seqlens_with_rep,
+                        position_embeddings=position_embeddings_with_rep,
+                        r_token=r_tokens_input,
+                        r_token_idx=idx,
+                        rotary_pos_emb=rotary_pos_emb,
+                        **kwargs
+                    )
                     # todo:规定这里输出的都是没移除rep的
 
             if layer_num in self.deepstack_visual_indexes:
-                feature_to_save = hidden_states if first_insert else org_hidden_states
-                if first_insert and current_num_r_token > 0:
-                    feature_to_save = _strip_r_token(
-                        feature_to_save,
-                        original_seq_lens_list,
-                        current_num_r_token
-                    )
+                feature_to_save = org_hidden_states
                 deepstack_feature = self.deepstack_merger_list[
                     self.deepstack_visual_indexes.index(layer_num)
                 ](feature_to_save)
@@ -299,6 +217,7 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
         hidden_states_with_rep = _strip_r_token(hidden_states_with_rep,
                                                 original_seq_lens_list,
                                                 current_num_r_token)
+        # 此处已移除rep
 
         # for i in range(cu_seqlens.size(0) - 1):
         #     hidden_states_with_rep = hidden_states_with_rep[cu_seqlens[i]:cu_seqlens[i+1]] * self.G_list[i]
@@ -308,7 +227,7 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
         hidden_states_with_rep = hidden_states_with_rep * G_mask
 
         delta = hidden_states_with_rep - org_hidden_states
-        hidden_states_with_rep_delta = self.zero_init_layer(delta)# todo:zero_init_layer
+        hidden_states_with_rep_delta = self.zero_init_layer(delta)
         hidden_states = org_hidden_states + hidden_states_with_rep_delta
 
         hidden_states = self.merger(hidden_states)

@@ -1,4 +1,3 @@
-# todo:MMRL和vpatch都需要注意力池化，直接拆出来。
 from typing import Optional, Union
 
 import torch

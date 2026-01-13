@@ -10,13 +10,13 @@ class attention_pooling(nn.Module):
         self.projector_q = nn.Linear(input_dim, proj_dim)
         self.projector_e = nn.Linear(input_dim, proj_dim)
         self.ln = nn.LayerNorm(input_dim)
-        self.vpatch_proj_dim = proj_dim
+        self.proj_dim = proj_dim
 
     def forward(self, input_embeds):
         # input_embeds: [B, S, D] 或 [S, D]
         qq = self.projector_q(self.query)
         kk = self.projector_e(input_embeds)
-        d_k = self.vpatch_proj_dim
+        d_k = self.proj_dim
 
         score = torch.matmul(qq, kk.transpose(-1, -2)) / math.sqrt(d_k)
         score = torch.nn.functional.softmax(score, dim=-1)

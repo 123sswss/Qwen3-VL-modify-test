@@ -8,6 +8,7 @@ from transformers.models.qwen3_vl import modeling_qwen3_vl as qwen3_vl
 
 import config as cfg
 import MMRLGating
+import utils
 
 class MMRLVitBlock(qwen3_vl.Qwen3VLVisionBlock):
     def forward(self,
@@ -110,8 +111,10 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
         super().__init__(config, *inputs, **kwargs)
         self.blocks = nn.ModuleList([qwen3_vl.Qwen3VLVisionBlock(config) for _ in range(config.depth)])
         self.blocks_with_rep = nn.ModuleList([MMRLVitBlock(config) for _ in cfg.INSERT_LAYER])
+        self.embedding_pooling = utils.attention_pooling(cfg.vision_token_dim, cfg.POOLING_DIM)
         self.Task_classifier = MMRLGating.Task_classifier()
-        self.Gating = MMRLGating.Gating()
+        self.visionGating = MMRLGating.HardConcreteGate(cfg.gating_temperature)
+        self.text_gating = MMRLGating.textGating(cfg.text_gating_epsilon, cfg.gating_temperature)
         self.zero_init_layer = zeroInit(cfg.vision_token_dim)
         self.alpha_list = []
         self.G_list = []
@@ -120,9 +123,10 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
                 hidden_states: torch.Tensor,
                 grid_thw: torch.Tensor,
                 v_r_token_list: Optional[list[torch.Tensor]] = None,
-                embedding_after_pooling: Optional[torch.Tensor] = None,
+                embedding: Optional[torch.Tensor] = None,
                 gating_temperature_overied: float = None,
                 **kwargs):
+        embedding_after_pooling = self.embedding_pooling(embedding)
         hidden_states = self.patch_embed(hidden_states)
         pos_embeds = self.fast_pos_embed_interpolate(grid_thw)
         hidden_states = hidden_states + pos_embeds
@@ -161,6 +165,7 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
             else:
                 ############ N图切分+门控 ############
                 batch_size = cu_seqlens.size(0) - 1
+                #todo:向量化操作
                 if first_insert:
                     for i in range(batch_size):
                         tmp_state = hidden_states[cu_seqlens[i]:cu_seqlens[i+1]]
@@ -169,9 +174,9 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
                                                       embedding_after_pooling)
                         self.alpha_list.append(alpha)
                         if self.training and gating_temperature_overied is not None:
-                            G = self.Gating(alpha, gating_temperature_overied)
+                            G = self.visionGating(alpha, gating_temperature_overied)
                         else:
-                            G = self.Gating(alpha)
+                            G = self.visionGating(alpha)
                         self.G_list.append(G)
                 ############ N图切分+门控 ############
                 idx = cfg.INSERT_LAYER.index(layer_num)
@@ -218,7 +223,6 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
                                                 original_seq_lens_list,
                                                 current_num_r_token)
         # 此处已移除rep
-
         # for i in range(cu_seqlens.size(0) - 1):
         #     hidden_states_with_rep = hidden_states_with_rep[cu_seqlens[i]:cu_seqlens[i+1]] * self.G_list[i]
         seqlens = cu_seqlens[1:] - cu_seqlens[:-1]
@@ -229,7 +233,20 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
         delta = hidden_states_with_rep - org_hidden_states
         hidden_states_with_rep_delta = self.zero_init_layer(delta)
         hidden_states = org_hidden_states + hidden_states_with_rep_delta
-
         hidden_states = self.merger(hidden_states)
-        return hidden_states, deepstack_feature_lists, self.alpha
+        ########### text gating ###########
+        out = self.text_gating(hidden_states_with_rep_delta,
+                                  self.alpha_list,
+                                  gating_temperature_overied)
+        if self.training:
+            k_list, tax_loss = out
+            k_float = k_list.sum()
+            k = k_float.item().floor()
+            k_remainder = k - k_float
+            k = (k, k_remainder, tax_loss)
+        else:
+            k_list = out
+            k = round(k_list.sum())
+
+        return hidden_states, deepstack_feature_lists, k
 

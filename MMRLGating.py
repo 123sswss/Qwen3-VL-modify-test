@@ -3,6 +3,8 @@ from typing import Optional
 import torch
 from torch import nn
 import config as cfg
+from utils import attention_pooling
+
 
 class Task_classifier(nn.Module):
     def __init__(self):
@@ -28,32 +30,76 @@ class Task_classifier(nn.Module):
         #todo:将alpha经过sigmoid之后进行loss计算
         return alpha
 
-class Gating(nn.Module):
-    def __init__(self,):
+
+class HardConcreteGate(nn.Module):
+    def __init__(self,
+                 temperature: float,
+                 stretching_length: float = 0.1,
+                 eps: float = 1e-7):
         super().__init__()
-        self.gating_temperature = cfg.gating_temperature
-        self.upper_bounds = 1 + cfg.stretching_length
-        self.lower_bounds = 0 - cfg.stretching_length
+        self.temperature = temperature
+        self.upper_bound = 1 + stretching_length
+        self.lower_bound = 0 - stretching_length
+        self.eps = eps
 
     def forward(self,
-                alpha: torch.Tensor,
-                temperature_overide: Optional[float] = None):
-
-        if temperature_overide is not None:
-            temperature = temperature_overide
+                logits: torch.Tensor,
+                temperature_override: Optional[float] = None) -> torch.Tensor:
+        temp = temperature_override if temperature_override is not None else self.temperature
+        if self.training:
+            u = torch.rand_like(logits)
+            u = torch.clamp(u, min=self.eps, max=1 - self.eps)
+            noise = torch.log(u) - torch.log(1 - u)
         else:
-            temperature = self.gating_temperature
+            noise = 0.0
+        y = torch.sigmoid((noise + logits) / temp)
+        y_stretched = y * (self.upper_bound - self.lower_bound) + self.lower_bound
+        gate = torch.clamp(y_stretched, min=0, max=1)
+        return gate
+
+class textGating(nn.Module):
+    def __init__(self,
+                 epsilon:float = 0.1,
+                 temperature: float = 1.0,
+                 lamuda = None):
+        super().__init__()
+        self.total_rep_num = cfg.RP_SPACE_LENGTH * 8
+        self.attention_pooling = attention_pooling(cfg.vision_token_dim, cfg.GATING_MID_DIM)
+        self.intensity_mlp = nn.Sequential(nn.Linear(cfg.vision_token_dim, cfg.GATING_MID_DIM),
+                                           nn.ReLU(),
+                                           nn.Linear(cfg.GATING_MID_DIM, self.total_rep_num))
+        self.threshold_mlp = nn.Sequential(nn.Linear(cfg.vision_token_dim, cfg.GATING_MID_DIM),
+                                           nn.ReLU(),
+                                           nn.Linear(cfg.GATING_MID_DIM, self.total_rep_num))
+        self.epsilon = epsilon
+        self.softplus = nn.Softplus()
+        self.hard_concrete = HardConcreteGate(temperature)
+        self.lamuda = lamuda
+
+    def tax_loss(self, lamuda, intensity):
+        tax_loss = lamuda * intensity.sum()/self.total_rep_num
+        return tax_loss
+
+    def forward(self,
+                delta_vision_token: torch.Tensor, # 图像rep支路的delta,[n,vision_token_dim]
+                alpha: torch.Tensor, # [batch]
+                temperature_overide: Optional[float] = None):
+        delta_vision_token = self.attention_pooling(delta_vision_token)
+        alpha = alpha.max()
+        # [1, GATING_MID_DIM + 1]
+        hidden_state = torch.cat([delta_vision_token, alpha], dim=-1)
+
+        intensity = torch.sigmoid(self.intensity_mlp(hidden_state)).sum()
+
+        threshold = self.threshold_mlp(hidden_state)
+        threshold = self.softplus(threshold) + self.epsilon
+
+        K_logits = intensity - torch.cumsunc(threshold)
+        hard_k_logits = self.hard_concrete(K_logits, temperature_overide)
 
         if self.training:
-            u = torch.rand_like(alpha)
-            u = torch.clamp(u, min=1e-7, max=1 - 1e-7)
-            epsilon = torch.log(u) - torch.log(1 - u)
-        else:
-            epsilon = 0
-        # 此处alpha未经sigmoid
-        s = torch.sigmoid((epsilon + alpha) / temperature)
+            tax_loss = self.tax_loss(self.lamuda, intensity)
+            return hard_k_logits, tax_loss
+        return hard_k_logits
 
-        ss = s * (self.upper_bounds - self.lower_bounds) + self.lower_bounds
-        G = torch.clip(ss, 0, 1)
-        return G
 

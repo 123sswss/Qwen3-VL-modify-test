@@ -40,18 +40,20 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
                            pixel_values: torch.FloatTensor,
                            image_grid_thw: Optional[torch.LongTensor] = None,
                            v_r_token_list: Optional[list[torch.Tensor]] = None,
-                           embedding: Optional[torch.nn.Module] = None,):
+                           embedding: Optional[torch.nn.Module] = None,
+                           images_per_sample: Optional[list[int]] = None,):
         if self.use_mmrl and v_r_token_list is None:
             raise ValueError("v_r_token_list must be specified")
         elif self.use_mmrl and v_r_token_list is not None:
             pixel_values = pixel_values.type(self.visual.dtype)
-            image_embeds, deepstack_image_embeds = self.visual(pixel_values,
+            image_embeds, deepstack_image_embeds, k = self.visual(pixel_values,
                                                                grid_thw=image_grid_thw,
                                                                v_r_token_list=v_r_token_list,
-                                                               embedding=embedding)
+                                                               embedding=embedding,
+                                                               images_per_sample=images_per_sample)
             split_sizes = (image_grid_thw.prod(-1) // self.visual.spatial_merge_size ** 2).tolist()
             image_embeds = torch.split(image_embeds, split_sizes)
-            return image_embeds, deepstack_image_embeds
+            return image_embeds, deepstack_image_embeds, k
         elif not self.use_mmrl:
             pixel_values = pixel_values.type(self.visual.dtype)
             image_embeds, deepstack_image_embeds = self.visual(pixel_values, grid_thw=image_grid_thw)
@@ -84,21 +86,40 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
         #### MMRL ####
         v_r_token_list = None
         t_r_token_list = None
-        k = None
         k_remainder = None
         if pixel_values is not None and self.use_mmrl:
             v_r_token_list, t_r_token_list = self.MMRL()
         #### MMRL ####
+        images_per_sample = []
+        if input_ids is not None:
+            # 遍历 Batch 中的每一条数据
+            for seq_input_ids in input_ids:
+                # 统计等于 image_token_id 的数量
+                count = (seq_input_ids == self.config.image_token_id).sum().item()
+                images_per_sample.append(count)
         # todo：优化无mmrl流程
+        # todo：假设只有文字没有图片？
+        # todo：多轮对话逻辑？
         visual_pos_masks = None
         deepstack_visual_embeds = None
         if pixel_values is not None:
-            image_embeds_raw, deepstack_image_embeds, k = self.get_image_features(
-                pixel_values,
-                image_grid_thw,
-                v_r_token_list,
-                inputs_embeds
-            )
+            if self.use_mmrl:
+                image_embeds_raw, deepstack_image_embeds, k = self.get_image_features(
+                    pixel_values=pixel_values,
+                    image_grid_thw=image_grid_thw,
+                    v_r_token_list=v_r_token_list,
+                    embedding = inputs_embeds,
+                    images_per_sample = images_per_sample
+                )
+            else:
+                image_embeds_raw, deepstack_image_embeds = self.get_image_features(
+                    pixel_values=pixel_values,
+                    image_grid_thw=image_grid_thw,
+                    v_r_token_list=v_r_token_list,
+                    embedding=inputs_embeds,
+                    images_per_sample=images_per_sample
+                )
+            # todo：适配batch维度
             if self.training:
                 k, k_remainder, tax_loss = k
                 self.tax_loss = tax_loss
@@ -106,29 +127,16 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
                 k = k
             assert k is not None, "k is None"
             if self.training:
-                place_holder_num = k + 1 if k < 40 else k
+                real_rep_num = k + 1 if k < 40 else k
             else:
-                place_holder_num = k
-            place_holders = self.rep_placeholder_ids[:place_holder_num]
-            indices = (input_ids == self.vision_end_token_id).nonzero(as_tuple=True)[1]
-            if len(indices) > 0:
-                idx = indices[0].item()
-                insert_tensor = torch.tensor([[place_holders]], dtype=input_ids.dtype)
-                input_ids = torch.cat([
-                    input_ids[:, :idx + 1],
-                    insert_tensor,
-                    input_ids[:, idx + 1:]
-                ], dim=1)
-                rep_ph_mask = torch.cat([
-                    torch.zeros_like(input_ids[:, :idx + 1]),
-                    torch.ones_like(insert_tensor),
-                    torch.zeros_like(input_ids[:, idx + 1:])
-                ], dim=1)
-                inputs_embeds = self.get_input_embeddings()(input_ids)
-                rep_embeds = v_r_token_list[:place_holder_num]
-                if self.training:
-                    rep_embeds = rep_embeds[-1] * k_remainder
-                inputs_embeds = inputs_embeds.masked_scatter(rep_ph_mask, rep_embeds)
+                real_rep_num = k
+            gate_mask = torch.cat([torch.ones([real_rep_num]),
+                                   torch.zeros([40 - real_rep_num])]).to(dtype=inputs_embeds.dtype)
+            inputs_embeds[:, :40, :] = t_r_token_list * gate_mask
+            attention_mask[:, :40] = gate_mask.to(dtype=attention_mask.dtype)
+            if self.training:
+                inputs_embeds = inputs_embeds[-1] * k_remainder
+            inputs_embeds = inputs_embeds.masked_scatter(rep_ph_mask, rep_embeds)
 
             image_embeds = torch.cat(image_embeds_raw, dim=0).to(inputs_embeds.device, inputs_embeds.dtype)
             image_mask, _ = self.get_placeholder_mask(

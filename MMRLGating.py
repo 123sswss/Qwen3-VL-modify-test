@@ -27,7 +27,6 @@ class Task_classifier(nn.Module):
         combined = self.relu(self.fc_fusion(combined))
         alpha = self.output_head(combined)
         # alpha = torch.sigmoid(alpha)
-        #todo:将alpha经过sigmoid之后进行loss计算
         return alpha
 
 
@@ -41,7 +40,7 @@ class HardConcreteGate(nn.Module):
         self.upper_bound = 1 + stretching_length
         self.lower_bound = 0 - stretching_length
         self.eps = eps
-
+    ################## 传入HardConcreteGate的都必须是未经归一化的值 ##################
     def forward(self,
                 logits: torch.Tensor,
                 temperature_override: Optional[float] = None) -> torch.Tensor:
@@ -61,7 +60,7 @@ class textGating(nn.Module):
     def __init__(self,
                  epsilon:float = 0.1,
                  temperature: float = 1.0,
-                 lamuda = None):
+                 lambda_ = 0.01):
         super().__init__()
         self.total_rep_num = cfg.RP_SPACE_LENGTH * 8
         self.attention_pooling = attention_pooling(cfg.vision_token_dim, cfg.GATING_MID_DIM)
@@ -74,10 +73,10 @@ class textGating(nn.Module):
         self.epsilon = epsilon
         self.softplus = nn.Softplus()
         self.hard_concrete = HardConcreteGate(temperature)
-        self.lamuda = lamuda
+        self.lambda_ = lambda_
 
-    def tax_loss(self, lamuda, intensity):
-        tax_loss = lamuda * intensity.sum()/self.total_rep_num
+    def tax_loss(self, lambda_, intensity):
+        tax_loss = lambda_ * intensity.sum()/self.total_rep_num
         return tax_loss
 
     def forward(self,
@@ -85,6 +84,7 @@ class textGating(nn.Module):
                 alpha: torch.Tensor, # [batch]
                 temperature_overide: Optional[float] = None):
         delta_vision_token = self.attention_pooling(delta_vision_token)
+        alpha = torch.sigmoid(alpha)
         alpha = alpha.max()
         # [1, GATING_MID_DIM + 1]
         hidden_state = torch.cat([delta_vision_token, alpha], dim=-1)
@@ -94,11 +94,11 @@ class textGating(nn.Module):
         threshold = self.threshold_mlp(hidden_state)
         threshold = self.softplus(threshold) + self.epsilon
 
-        K_logits = intensity - torch.cumsunc(threshold)
+        K_logits = intensity - torch.cumsum(threshold, -1)
         hard_k_logits = self.hard_concrete(K_logits, temperature_overide)
 
         if self.training:
-            tax_loss = self.tax_loss(self.lamuda, intensity)
+            tax_loss = self.tax_loss(self.lambda_, intensity)
             return hard_k_logits, tax_loss
         return hard_k_logits
 

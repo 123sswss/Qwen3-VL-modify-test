@@ -175,7 +175,6 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
                 )
             else:
                 ############ N图切分+门控 ############
-                #todo:向量化操作
                 if first_insert:
                     # cu_seqlens: [0, len0, len0+len1, ...]
                     img_seqlens = cu_seqlens[1:] - cu_seqlens[:-1]  # [Total_Images]

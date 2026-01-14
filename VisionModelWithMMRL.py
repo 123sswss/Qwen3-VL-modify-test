@@ -25,14 +25,14 @@ class MMRLVitBlock(qwen3_vl.Qwen3VLVisionBlock):
                 **kwargs):
         assert r_token is not None
         num_r_tokens = r_token.shape[0]
-        seq_lengths = (cu_seqlens[1:] - cu_seqlens[:-1]).cpu().tolist()
-        hidden_states_split = torch.split(hidden_states, seq_lengths, dim=0)
+        full_seq_lengths = (cu_seqlens[1:] - cu_seqlens[:-1]).cpu().tolist()
         if first_insert:
-            new_hidden_states_list = []
-            for seq_hidden in hidden_states_split:
-                new_hidden_states_list.append(torch.cat([r_token, seq_hidden], dim=0))
+            split_lengths = [l - num_r_tokens for l in full_seq_lengths]
+            hidden_states_split = torch.split(hidden_states, split_lengths, dim=0)
+            new_hidden_states_list = [torch.cat([r_token, s], dim=0) for s in hidden_states_split]
             hidden_states = torch.cat(new_hidden_states_list, dim=0)
         else:
+            hidden_states_split = torch.split(hidden_states, full_seq_lengths, dim=0)
             new_hidden_states_list = []
             updated_seq = None
             for seq_hidden in hidden_states_split:
@@ -176,19 +176,33 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
             else:
                 ############ N图切分+门控 ############
                 #todo:向量化操作
-                for i in range(total_pic_num):
-                    tmp_state = hidden_states[cu_seqlens[i]:cu_seqlens[i + 1]]
-                    tmp_state_after_pooling = tmp_state.mean(0)  # 平均池化
-                    alpha = self.Task_classifier(tmp_state_after_pooling,
-                                                 embedding_after_pooling[i])
-                    self.alpha_list.append(alpha)
+                if first_insert:
+                    # cu_seqlens: [0, len0, len0+len1, ...]
+                    img_seqlens = cu_seqlens[1:] - cu_seqlens[:-1]  # [Total_Images]
+                    img_indices = torch.repeat_interleave(
+                        torch.arange(total_pic_num, device=hidden_states.device),
+                        img_seqlens
+                    )
+                    pooled_vision_states = torch.zeros(
+                        total_pic_num,
+                        hidden_states.shape[-1],
+                        dtype=hidden_states.dtype,
+                        device=hidden_states.device
+                    )
+                    pooled_vision_states.index_add_(0, img_indices, hidden_states)
+                    pooled_vision_states = pooled_vision_states / img_seqlens.unsqueeze(-1)
+                    images_per_sample_tensor = torch.tensor(images_per_sample, device=hidden_states.device)
+                    expanded_text_embedding = torch.repeat_interleave(
+                        embedding_after_pooling,
+                        images_per_sample_tensor,
+                        dim=0
+                    )
+                    self.alpha_list = self.Task_classifier(pooled_vision_states, expanded_text_embedding)
+                    # G_list: [Total_Images, 1]
                     if self.training and gating_temperature_overied is not None:
-                        G = self.visionGating(alpha, gating_temperature_overied)
+                        self.G_list = self.visionGating(self.alpha_list, gating_temperature_overied)
                     else:
-                        G = self.visionGating(alpha)
-                    self.G_list.append(G)
-                    # G和alpha是每张图一个的
-                    # alpha_list/G_list:[total_pic_num]
+                        self.G_list = self.visionGating(self.alpha_list)
 
                 ############ N图切分+门控 ############
                 idx = cfg.INSERT_LAYER.index(layer_num)
@@ -205,7 +219,6 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
                     cu_seqlens_with_rep, position_embeddings_with_rep = _resize_cu_and_pos(r_tokens_input,
                                                                                            cu_seqlens,
                                                                                            position_embeddings)
-                    first_insert = False
                 else:
                     assert cu_seqlens_with_rep is not None
                     assert position_embeddings_with_rep is not None
@@ -219,7 +232,8 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
                         rotary_pos_emb=rotary_pos_emb,
                         **kwargs
                     )
-                    # 规定这里输出的都是没移除rep的
+                first_insert = False
+                # 规定这里输出的都是没移除rep的
 
             if layer_num in self.deepstack_visual_indexes:
                 feature_to_save = org_hidden_states
@@ -231,7 +245,6 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
         hidden_states_with_rep = _strip_r_token(hidden_states_with_rep,
                                                 original_seq_lens_list,
                                                 current_num_r_token)
-        # 此处已移除rep
         # for i in range(cu_seqlens.size(0) - 1):
         #     hidden_states_with_rep = hidden_states_with_rep[cu_seqlens[i]:cu_seqlens[i+1]] * self.G_list[i]
         seqlens = cu_seqlens[1:] - cu_seqlens[:-1]
@@ -247,29 +260,34 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
 
         hidden_states = self.merger(hidden_states)
         ########### text gating ###########
-        # todo：向量化操作
+        img_counts = torch.tensor(images_per_sample, device=hidden_states.device)
+        batch_indices_img = torch.repeat_interleave(
+            torch.arange(batch_size, device=hidden_states.device),
+            img_counts
+        )
+        batch_indices_token = torch.repeat_interleave(
+            batch_indices_img,
+            img_seqlens
+        )
+        out = self.text_gating(
+            final_delta,  # [Total_Tokens, Dim]
+            self.alpha_list,  # [Total_Images, 1]
+            batch_indices_token,
+            batch_indices_img,
+            batch_size,
+            gating_temperature_overied
+        )
         k_results = []
-        for i in range(batch_size):
-            img_start_idx = pic_seqlens[i]
-            img_end_idx = pic_seqlens[i + 1]
-            token_start_idx = cu_seqlens[img_start_idx]
-            token_end_idx = cu_seqlens[img_end_idx]
+        if self.training:
+            hard_k_logits, tax_loss = out  # hard_k_logits: [Batch, 40]
 
-            sample_alphas = torch.stack(self.alpha_list[img_start_idx: img_end_idx])
-            sample_visual_feat = final_delta[token_start_idx: token_end_idx]
-            out = self.text_gating(sample_visual_feat,
-                                   sample_alphas,
-                                   gating_temperature_overied)
-
-            if self.training:
-                k_raw, tax_loss = out
-                k_float = k_raw.sum()
-                k_int = torch.floor(k_float)
-                k_remainder = k_float - k_int
-                k_results.append((k_int, k_remainder, tax_loss))
-            else:
-                k_raw = out
-                k_results.append(round(k_raw.sum().item()))
-
+            k_sums = hard_k_logits.sum(dim=-1)
+            k_ints = torch.floor(k_sums)
+            k_remainders = k_sums - k_ints
+            for i in range(batch_size):
+                k_results.append((k_ints[i], k_remainders[i], tax_loss))
+        else:
+            k_sums = out.sum(dim=-1)
+            k_results = k_sums.round().int().tolist()
         return hidden_states, deepstack_feature_lists, k_results
 

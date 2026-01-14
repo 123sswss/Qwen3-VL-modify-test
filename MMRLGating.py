@@ -56,18 +56,20 @@ class HardConcreteGate(nn.Module):
         gate = torch.clamp(y_stretched, min=0, max=1)
         return gate
 
+
 class textGating(nn.Module):
     def __init__(self,
-                 epsilon:float = 0.1,
+                 epsilon: float = 0.1,
                  temperature: float = 1.0,
-                 lambda_ = 0.01):
+                 lambda_=0.01):
         super().__init__()
         self.total_rep_num = cfg.RP_SPACE_LENGTH * 8
         self.attention_pooling = attention_pooling(cfg.vision_token_dim, cfg.GATING_MID_DIM)
-        self.intensity_mlp = nn.Sequential(nn.Linear(cfg.vision_token_dim, cfg.GATING_MID_DIM),
+
+        self.intensity_mlp = nn.Sequential(nn.Linear(cfg.vision_token_dim + 1, cfg.GATING_MID_DIM),  # 注意维度变化
                                            nn.ReLU(),
                                            nn.Linear(cfg.GATING_MID_DIM, self.total_rep_num))
-        self.threshold_mlp = nn.Sequential(nn.Linear(cfg.vision_token_dim, cfg.GATING_MID_DIM),
+        self.threshold_mlp = nn.Sequential(nn.Linear(cfg.vision_token_dim + 1, cfg.GATING_MID_DIM),  # 注意维度变化
                                            nn.ReLU(),
                                            nn.Linear(cfg.GATING_MID_DIM, self.total_rep_num))
         self.epsilon = epsilon
@@ -75,30 +77,32 @@ class textGating(nn.Module):
         self.hard_concrete = HardConcreteGate(temperature)
         self.lambda_ = lambda_
 
-    def tax_loss(self, lambda_, intensity):
-        tax_loss = lambda_ * intensity.sum()/self.total_rep_num
-        return tax_loss
-
     def forward(self,
-                delta_vision_token: torch.Tensor, # 图像rep支路的delta,[n,vision_token_dim]
-                alpha: torch.Tensor, # [batch]
+                delta_vision_token: torch.Tensor,  # [Total_Tokens, Dim]
+                alpha: torch.Tensor,  # [Total_Images, 1]
+                batch_indices_token: torch.Tensor,  # [Total_Tokens]
+                batch_indices_img: torch.Tensor,  # [Total_Images]
+                batch_size: int,
                 temperature_overide: Optional[float] = None):
-        delta_vision_token = self.attention_pooling(delta_vision_token)
-        alpha = torch.sigmoid(alpha)
-        alpha = alpha.max()
-        # [1, GATING_MID_DIM + 1]
-        hidden_state = torch.cat([delta_vision_token, alpha], dim=-1)
+        # [Batch_Size, Dim]
+        pooled_vision = self.attention_pooling.forward_vectorized(
+            delta_vision_token, batch_indices_token, batch_size
+        )
 
-        intensity = torch.sigmoid(self.intensity_mlp(hidden_state)).sum()
-
+        alpha_logits = torch.sigmoid(alpha)
+        batch_alpha = torch.zeros(batch_size, 1, device=alpha_logits.device, dtype=alpha_logits.dtype)
+        batch_alpha.index_reduce_(0, batch_indices_img, alpha_logits, reduce="amax", include_self=False)
+        hidden_state = torch.cat([pooled_vision, batch_alpha], dim=-1)
+        intensity = torch.sigmoid(self.intensity_mlp(hidden_state)).sum(dim=-1, keepdim=True)
         threshold = self.threshold_mlp(hidden_state)
         threshold = self.softplus(threshold) + self.epsilon
-
         K_logits = intensity - torch.cumsum(threshold, -1)
         hard_k_logits = self.hard_concrete(K_logits, temperature_overide)
-
         if self.training:
-            tax_loss = self.tax_loss(self.lambda_, intensity)
+            batch_alpha_prob = batch_alpha
+            dynamic_lambda = self.lambda_ * (1.0 - batch_alpha_prob)
+            raw_loss = dynamic_lambda * intensity.sum(dim=-1) / self.total_rep_num
+            tax_loss = raw_loss.mean()
             return hard_k_logits, tax_loss
         return hard_k_logits
 

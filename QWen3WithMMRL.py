@@ -104,13 +104,30 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
         deepstack_visual_embeds = None
         if pixel_values is not None:
             if self.use_mmrl:
-                image_embeds_raw, deepstack_image_embeds, k = self.get_image_features(
+                image_embeds_raw, deepstack_image_embeds, k_results = self.get_image_features(
                     pixel_values=pixel_values,
                     image_grid_thw=image_grid_thw,
                     v_r_token_list=v_r_token_list,
                     embedding = inputs_embeds,
                     images_per_sample = images_per_sample
                 )
+                if self.training:
+                    # [b] [b] [1]
+                    k, k_remainder, tax_loss = k_results
+                    self.tax_loss = tax_loss
+                    lower40Mask = k < 40 #todo：参数化
+                    real_rep_num_list = k + lower40Mask.astype(k)
+                else:
+                    k = k_results
+                    real_rep_num_list = k
+                # [batch, 40]
+                gate_mask = torch.arange(40).unsqueeze(0) < real_rep_num_list.unsqueeze(1) #todo：参数化
+                gate_mask = gate_mask.unsqueeze(-1)
+
+                inputs_embeds[:, :40, :] = t_r_token_list.unsqueeze(0).unsqueeze(-1) * gate_mask
+                attention_mask[:, :40] = gate_mask.to(dtype=attention_mask.dtype)
+                if self.training:
+                    inputs_embeds = inputs_embeds[-1] * k_remainder
             else:
                 image_embeds_raw, deepstack_image_embeds = self.get_image_features(
                     pixel_values=pixel_values,
@@ -119,25 +136,6 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
                     embedding=inputs_embeds,
                     images_per_sample=images_per_sample
                 )
-            # todo：适配batch维度
-            if self.training:
-                k, k_remainder, tax_loss = k
-                self.tax_loss = tax_loss
-            else:
-                k = k
-            assert k is not None, "k is None"
-            if self.training:
-                real_rep_num = k + 1 if k < 40 else k
-            else:
-                real_rep_num = k
-            gate_mask = torch.cat([torch.ones([real_rep_num]),
-                                   torch.zeros([40 - real_rep_num])]).to(dtype=inputs_embeds.dtype)
-            inputs_embeds[:, :40, :] = t_r_token_list * gate_mask
-            attention_mask[:, :40] = gate_mask.to(dtype=attention_mask.dtype)
-            if self.training:
-                inputs_embeds = inputs_embeds[-1] * k_remainder
-            inputs_embeds = inputs_embeds.masked_scatter(rep_ph_mask, rep_embeds)
-
             image_embeds = torch.cat(image_embeds_raw, dim=0).to(inputs_embeds.device, inputs_embeds.dtype)
             image_mask, _ = self.get_placeholder_mask(
                 input_ids, inputs_embeds=inputs_embeds, image_features=image_embeds

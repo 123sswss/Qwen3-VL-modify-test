@@ -276,15 +276,14 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
             batch_size,
             gating_temperature_overied
         )
-        k_results = []
+        # k_results = []
         if self.training:
             hard_k_logits, tax_loss = out  # hard_k_logits: [Batch, 40]
 
             k_sums = hard_k_logits.sum(dim=-1)
             k_ints = torch.floor(k_sums)
             k_remainders = k_sums - k_ints
-            for i in range(batch_size):
-                k_results.append((k_ints[i], k_remainders[i], tax_loss))
+            k_results = (k_ints, k_remainders, tax_loss)
         else:
             k_sums = out.sum(dim=-1)
             k_results = k_sums.round().int().tolist()

@@ -6,12 +6,12 @@ from utils import attention_pooling
 
 
 class Task_classifier(nn.Module):
-    def __init__(self):
+    def __init__(self,config):
         super().__init__()
-        self.vision_proj = nn.Linear(cfg.vision_token_dim, cfg.GATING_MID_DIM)
-        self.text_proj = nn.Linear(cfg.text_token_dim, cfg.GATING_MID_DIM)
-        self.fc_fusion = nn.Linear(cfg.GATING_MID_DIM * 2, cfg.GATING_MID_DIM)
-        self.output_head = nn.Linear(cfg.GATING_MID_DIM, 1)
+        self.vision_proj = nn.Linear(config.vision_token_dim, config.GATING_MID_DIM)
+        self.text_proj = nn.Linear(config.text_token_dim, config.GATING_MID_DIM)
+        self.fc_fusion = nn.Linear(config.GATING_MID_DIM * 2, config.GATING_MID_DIM)
+        self.output_head = nn.Linear(config.GATING_MID_DIM, 1)
         self.relu = nn.ReLU()
         # 默认让 alpha 趋近于 0，只有看到强烈的专业特征才激活
         nn.init.constant_(self.output_head.bias, -2.0)
@@ -27,7 +27,6 @@ class Task_classifier(nn.Module):
         alpha = self.output_head(combined)
         # alpha = torch.sigmoid(alpha)
         return alpha
-
 
 class HardConcreteGate(nn.Module):
     def __init__(self,
@@ -58,19 +57,20 @@ class HardConcreteGate(nn.Module):
 
 class textGating(nn.Module):
     def __init__(self,
+                 config,
                  epsilon: float = 0.1,
                  temperature: float = 1.0,
                  lambda_=0.01):
         super().__init__()
-        self.total_rep_num = cfg.RP_SPACE_LENGTH * 8
-        self.attention_pooling = attention_pooling(cfg.vision_token_dim, cfg.GATING_MID_DIM)
+        self.total_rep_num = config.RP_SPACE_LENGTH * 8
+        self.attention_pooling = attention_pooling(config.vision_token_dim, config.GATING_MID_DIM)
 
-        self.intensity_mlp = nn.Sequential(nn.Linear(cfg.vision_token_dim + 1, cfg.GATING_MID_DIM),  # 注意维度变化
+        self.intensity_mlp = nn.Sequential(nn.Linear(config.vision_token_dim + 1, config.GATING_MID_DIM),  # 注意维度变化
                                            nn.ReLU(),
-                                           nn.Linear(cfg.GATING_MID_DIM, self.total_rep_num))
-        self.threshold_mlp = nn.Sequential(nn.Linear(cfg.vision_token_dim + 1, cfg.GATING_MID_DIM),  # 注意维度变化
+                                           nn.Linear(config.GATING_MID_DIM, self.total_rep_num))
+        self.threshold_mlp = nn.Sequential(nn.Linear(config.vision_token_dim + 1, config.GATING_MID_DIM),  # 注意维度变化
                                            nn.ReLU(),
-                                           nn.Linear(cfg.GATING_MID_DIM, self.total_rep_num))
+                                           nn.Linear(config.GATING_MID_DIM, self.total_rep_num))
         self.epsilon = epsilon
         self.softplus = nn.Softplus()
         self.hard_concrete = HardConcreteGate(temperature)

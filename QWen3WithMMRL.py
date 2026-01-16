@@ -105,18 +105,20 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
         if inputs_embeds is None:
             inputs_embeds = self.get_input_embeddings()(input_ids)
 
+        placeholder_ids_tensor = torch.tensor(self.rep_placeholder_ids, device=input_ids.device)
+        # [Batch, Seq]
+        is_placeholder = (input_ids.unsqueeze(-1) == placeholder_ids_tensor).any(dim=-1)
         #### MMRL ####
         v_r_token_list = None
         t_r_token_list = None
         if pixel_values is not None and self.use_mmrl:
             v_r_token_list, t_r_token_list = self.MMRL()
+            t_r_tokens = torch.cat(t_r_token_list, dim=0)
         self.tax_loss = 0.0
         #### MMRL ####
         images_per_sample = []
         if input_ids is not None:
-            # 遍历 Batch 中的每一条数据
             for seq_input_ids in input_ids:
-                # 统计等于 image_token_id 的数量
                 count = (seq_input_ids == self.config.image_token_id).sum().item()
                 images_per_sample.append(count)
         # todo：优化无mmrl流程
@@ -139,15 +141,18 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
                     self.tax_loss = tax_loss
                 else:
                     k_sums = k_results
-                token_indices = torch.arange(40, device=inputs_embeds.device).unsqueeze(0)
-                soft_mask = torch.clamp(k_sums - token_indices, min=0, max=1)
-                soft_mask = soft_mask.unsqueeze(-1)
-                inputs_embeds[:, :40, :] = torch.cat(t_r_token_list,0).unsqueeze(0) * soft_mask
-                if self.training:
-                    attention_mask[:, :40] = 1
-                else:
-                    hard_mask = soft_mask.squeeze(-1) > 0.5
-                    attention_mask[:, :40] = hard_mask.to(dtype=attention_mask.dtype)
+                placeholder_cumsum = is_placeholder.cumsum(dim=-1)  # [Batch, Seq]
+                placeholder_idx = (placeholder_cumsum - 1).clamp(min=0)
+                target_embeds = t_r_tokens[placeholder_idx]  # [Batch, Seq, Dim]
+                gate_soft_mask = torch.clamp(k_sums.unsqueeze(-1) - placeholder_idx.float(), min=0, max=1).unsqueeze(-1)
+                inputs_embeds = torch.where(is_placeholder.unsqueeze(-1), target_embeds * gate_soft_mask, inputs_embeds)
+                dynamic_gate_mask = (gate_soft_mask.squeeze(-1) > 1e-3)  # [Batch, Seq]
+                attention_mask = attention_mask & ((~is_placeholder) | dynamic_gate_mask)
+                if not self.training:
+                    # 推理时，关闭 gated < 0.5 的占位符
+                    hard_gate = (gate_soft_mask.squeeze(-1) > 0.5)
+                    # 只有当它是占位符且 gate 开启时才为 1，或者是原本的 normal token
+                    attention_mask = attention_mask & ((~is_placeholder) | hard_gate)
             else:
                 image_embeds_raw, deepstack_image_embeds = self.get_image_features(
                     pixel_values=pixel_values,
@@ -206,13 +211,10 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
                 position_ids = position_ids.unsqueeze(0).expand(3, -1, -1)
 
         if self.use_mmrl:
-            prompt_len = 40 # todo:参数化
-            modified_pos_ids = position_ids.clone()
-            t_ids = modified_pos_ids[0]
-            mask = t_ids >= prompt_len
-            t_ids[mask] = t_ids[mask] - prompt_len
-            modified_pos_ids[0] = t_ids
-            position_ids = modified_pos_ids
+            shift = is_placeholder.cumsum(dim=-1)  # [Batch, Seq]
+            new_position_ids = position_ids.clone()
+            new_position_ids[0] = position_ids[0] - shift
+            position_ids = new_position_ids
 
         outputs = self.language_model(
             input_ids=None,

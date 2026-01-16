@@ -65,8 +65,8 @@ def _resize_cu_and_pos(r_token, cu_seqlens, position_embeddings, rotary_pos_emb)
     device = original_cos.device
     pos_emb_dim = original_cos.shape[-1]
 
-    r_token_cos = torch.ones(num_r_tokens, pos_emb_dim, device=device, dtype=dtype)
-    r_token_sin = torch.zeros(num_r_tokens, pos_emb_dim, device=device, dtype=dtype)
+    # r_token_cos = torch.ones(num_r_tokens, pos_emb_dim, device=device, dtype=dtype)
+    # r_token_sin = torch.zeros(num_r_tokens, pos_emb_dim, device=device, dtype=dtype)
 
     cos_split = torch.split(original_cos, seq_lengths, dim=0)
     sin_split = torch.split(original_sin, seq_lengths, dim=0)
@@ -80,16 +80,21 @@ def _resize_cu_and_pos(r_token, cu_seqlens, position_embeddings, rotary_pos_emb)
     new_rotary_list = []
 
     for i in range(total_pic_num):
-        new_cos_list.append(torch.cat([r_token_cos, cos_split[i]], dim=0))
-        new_sin_list.append(torch.cat([r_token_sin, sin_split[i]], dim=0))
-        new_rotary_list.append(torch.cat([r_token_rotary, rotary_split[i]], dim=0))
+        current_img_cos = cos_split[i]  # [Seq_Len_i, Dim]
+        current_img_sin = sin_split[i]  # [Seq_Len_i, Dim]
+        current_img_rot = rotary_split[i]  # [Seq_Len_i, Dim]
+        anchor_cos = current_img_cos[0:1].expand(num_r_tokens, -1)
+        anchor_sin = current_img_sin[0:1].expand(num_r_tokens, -1)
+        anchor_rot = current_img_rot[0:1].expand(num_r_tokens, -1)
+        new_cos_list.append(torch.cat([anchor_cos, current_img_cos], dim=0))
+        new_sin_list.append(torch.cat([anchor_sin, current_img_sin], dim=0))
+        new_rotary_list.append(torch.cat([anchor_rot, current_img_rot], dim=0))
 
     new_cos = torch.cat(new_cos_list, dim=0)
     new_sin = torch.cat(new_sin_list, dim=0)
     new_rotary = torch.cat(new_rotary_list, dim=0)
 
     updated_position_embeddings = (new_cos, new_sin)
-    # todo:用极大位置编码替换0位置编码，或者做实验看结果
 
     if total_pic_num > 0:
         offsets = torch.arange(total_pic_num + 1, device=cu_seqlens.device,
@@ -124,12 +129,17 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
     def __init__(self, config, *inputs, **kwargs):
         super().__init__(config, *inputs, **kwargs)
         self.cfg = SimpleNamespace(**config.mmrl_config)
-        self.blocks = nn.ModuleList([qwen3_vl.Qwen3VLVisionBlock(config) for _ in range(config.depth)])
-        self.blocks_with_rep = nn.ModuleList([MMRLVitBlock(config) for _ in self.cfg.INSERT_LAYER])
-        self.embedding_pooling = utils.attention_pooling(self.cfg.vision_token_dim, self.cfg.POOLING_DIM)
-        self.Task_classifier = MMRLGating.Task_classifier()
+        self.blocks = nn.ModuleList([qwen3_vl.Qwen3VLVisionBlock(config)
+                                     for _ in range(config.depth)])
+        self.blocks_with_rep = nn.ModuleList([MMRLVitBlock(config)
+                                              for _ in self.cfg.INSERT_LAYER])
+        self.embedding_pooling = utils.attention_pooling(self.cfg.vision_token_dim,
+                                                         self.cfg.POOLING_DIM)
+        self.Task_classifier = MMRLGating.Task_classifier(self.cfg)
         self.visionGating = MMRLGating.HardConcreteGate(self.cfg.gating_temperature)
-        self.text_gating = MMRLGating.textGating(self.cfg.text_gating_epsilon, self.cfg.gating_temperature)
+        self.text_gating = MMRLGating.textGating(self.cfg,
+                                                 self.cfg.text_gating_epsilon,
+                                                 self.cfg.gating_temperature)
         self.zero_init_layer = zeroInit(self.cfg.vision_token_dim)
         self.alpha_list = []
         self.G_list = []
@@ -273,6 +283,7 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
 
         hidden_states = self.merger(hidden_states)
         ########### text gating ###########
+        img_seqlens = cu_seqlens[1:] - cu_seqlens[:-1]
         img_counts = torch.tensor(images_per_sample, device=hidden_states.device)
         batch_indices_img = torch.repeat_interleave(
             torch.arange(batch_size, device=hidden_states.device),

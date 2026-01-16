@@ -1,15 +1,11 @@
-from typing import Any
-
 import torch
 import torch.nn as nn
-
-from torch.nn import ModuleList
-
-import config as cfg
+from types import SimpleNamespace
 
 class MMRL(nn.Module):
-    def __init__(self):
+    def __init__(self,config):
         super().__init__()
+        cfg = SimpleNamespace(**config.mmrl_config)
         self.shared_represent_space = nn.Parameter(torch.empty(cfg.RP_SPACE_LENGTH, cfg.RP_SPACE_DIM))
         nn.init.normal_(self.shared_represent_space, std=0.02)
         self.v_r_token_projector = nn.ModuleList([nn.Linear(cfg.RP_SPACE_DIM, cfg.vision_token_dim) for _ in range(len(cfg.INSERT_LAYER))])

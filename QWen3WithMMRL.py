@@ -17,6 +17,21 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
                  config,
                  tokenizer=None,
                  ):
+        # todo：研究一下处理训练保存与加载
+        if not hasattr(config, "mmrl_config"):
+            config.mmrl_config = {
+                "USE_MMRL": cfg.USE_MMRL,
+                "INSERT_LAYER": list(cfg.INSERT_LAYER),
+                "POOLING_DIM": cfg.POOLING_DIM,
+                "RP_SPACE_LENGTH": cfg.RP_SPACE_LENGTH,
+                "RP_SPACE_DIM": cfg.RP_SPACE_DIM,
+                "INSERT_METHOD": cfg.INSERT_METHOD,
+                "GATING_MID_DIM": cfg.GATING_MID_DIM,
+                "stretching_length": cfg.stretching_length,
+                "gating_temperature": cfg.gating_temperature,
+                "text_gating_epsilon": cfg.text_gating_epsilon
+            }
+
         super().__init__(config)
         if tokenizer is not None:
             self.vision_end_token_id = (
@@ -30,8 +45,15 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
         else:
             raise ValueError("tokenizer must be specified")
         ###################
-        self.MMRL = MMRL.MMRL()
-        self.use_mmrl = cfg.USE_MMRL
+        original_visual = self.visual
+        self.visual = vmmrl.VisionWithMMRL(config)
+        self.visual.load_state_dict(original_visual.state_dict(), strict=False)
+        del original_visual
+        torch.cuda.empty_cache()
+        self.MMRL = MMRL.MMRL(config)
+        self.post_init()
+
+        self.use_mmrl = config.USE_MMRL
         self.visual = vmmrl.VisionWithMMRL(config, self.use_mmrl)
         self.tax_loss = None
         ###################
@@ -86,9 +108,9 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
         #### MMRL ####
         v_r_token_list = None
         t_r_token_list = None
-        k_remainder = None
         if pixel_values is not None and self.use_mmrl:
             v_r_token_list, t_r_token_list = self.MMRL()
+        self.tax_loss = 0.0
         #### MMRL ####
         images_per_sample = []
         if input_ids is not None:
@@ -112,22 +134,20 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
                     images_per_sample = images_per_sample
                 )
                 if self.training:
-                    # [b] [b] [1]
-                    k, k_remainder, tax_loss = k_results
+                    # [b] [1]
+                    k_sums, tax_loss = k_results
                     self.tax_loss = tax_loss
-                    lower40Mask = k < 40 #todo：参数化
-                    real_rep_num_list = k + lower40Mask.astype(k)
                 else:
-                    k = k_results
-                    real_rep_num_list = k
-                # [batch, 40]
-                gate_mask = torch.arange(40).unsqueeze(0) < real_rep_num_list.unsqueeze(1) #todo：参数化
-                gate_mask = gate_mask.unsqueeze(-1)
-
-                inputs_embeds[:, :40, :] = t_r_token_list.unsqueeze(0).unsqueeze(-1) * gate_mask
-                attention_mask[:, :40] = gate_mask.to(dtype=attention_mask.dtype)
+                    k_sums = k_results
+                token_indices = torch.arange(40, device=inputs_embeds.device).unsqueeze(0)
+                soft_mask = torch.clamp(k_sums - token_indices, min=0, max=1)
+                soft_mask = soft_mask.unsqueeze(-1)
+                inputs_embeds[:, :40, :] = torch.cat(t_r_token_list,0).unsqueeze(0) * soft_mask
                 if self.training:
-                    inputs_embeds = inputs_embeds[-1] * k_remainder
+                    attention_mask[:, :40] = 1
+                else:
+                    hard_mask = soft_mask.squeeze(-1) > 0.5
+                    attention_mask[:, :40] = hard_mask.to(dtype=attention_mask.dtype)
             else:
                 image_embeds_raw, deepstack_image_embeds = self.get_image_features(
                     pixel_values=pixel_values,
@@ -184,6 +204,15 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
                     delta = delta.repeat_interleave(batch_size // delta.shape[0], dim=0)
                 position_ids = position_ids.add(delta)
                 position_ids = position_ids.unsqueeze(0).expand(3, -1, -1)
+
+        if self.use_mmrl:
+            prompt_len = 40 # todo:参数化
+            modified_pos_ids = position_ids.clone()
+            t_ids = modified_pos_ids[0]
+            mask = t_ids >= prompt_len
+            t_ids[mask] = t_ids[mask] - prompt_len
+            modified_pos_ids[0] = t_ids
+            position_ids = modified_pos_ids
 
         outputs = self.language_model(
             input_ids=None,

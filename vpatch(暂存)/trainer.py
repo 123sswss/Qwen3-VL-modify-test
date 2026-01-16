@@ -6,7 +6,7 @@ import VisionModelWithMMRL as qwen3Vison
 import addSpecialToken
 import config as cfg
 
-model_id = os.path.abspath("../model/qwen3vl")
+model_id = os.path.abspath("../../model/qwen3vl")
 model = Qwen3VLForConditionalGeneration.from_pretrained(
     model_id, dtype="auto", device_map="auto"
 )

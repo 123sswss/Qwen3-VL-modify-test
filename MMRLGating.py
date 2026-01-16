@@ -2,7 +2,6 @@ from typing import Optional
 
 import torch
 from torch import nn
-import config as cfg
 from utils import attention_pooling
 
 

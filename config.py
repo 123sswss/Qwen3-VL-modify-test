@@ -1,7 +1,5 @@
 ##################################### init #####################################
 USE_MMRL = False
-vision_token_dim=1024
-text_token_dim=2560
 
 SPECIAL_TOKENS = {"additional_special_tokens":
                       [f"<|REP_placeholder{i}|>" for i in range(40)]}

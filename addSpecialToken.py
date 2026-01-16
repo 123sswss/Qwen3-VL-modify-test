@@ -1,7 +1,4 @@
-import config as cfg
 import os
-
-import torch
 from transformers import Qwen3VLForConditionalGeneration, AutoProcessor
 
 def add_special_token(model_instance, tokenizer_instance, special_tokens):
@@ -17,9 +14,9 @@ if __name__ == '__main__':
     processor = AutoProcessor.from_pretrained(model_id)
     tokenizer = processor.tokenizer
     print(f"原始词汇表大小: {len(tokenizer)}")
-    add_special_token(model, tokenizer, cfg.SPECIAL_TOKENS)
+    add_special_token(model, tokenizer,model.config["SPECIAL_TOKENS"])
     print(f"新词汇表大小: {len(tokenizer)}")
-    for _, value in cfg.SPECIAL_TOKENS.items():
+    for _, value in model.config["SPECIAL_TOKENS"].items():
         for token in value:
             token_id = tokenizer.convert_tokens_to_ids(token)
             print(f"新 token '{token}' 的 ID: {token_id}")

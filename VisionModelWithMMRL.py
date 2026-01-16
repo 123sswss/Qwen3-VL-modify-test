@@ -3,11 +3,10 @@ from typing import Optional
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from jieba.lac_small.predict import batch_size
+from types import SimpleNamespace
 
 from transformers.models.qwen3_vl import modeling_qwen3_vl as qwen3_vl
 
-import config as cfg
 import MMRLGating
 import utils
 
@@ -15,6 +14,9 @@ from itertools import accumulate
 
 
 class MMRLVitBlock(qwen3_vl.Qwen3VLVisionBlock):
+    def __init__(self, config):
+        super(MMRLVitBlock, self).__init__(config)
+        self.INSERT_METHOD = config.mmrl_config["insert_method"]
     def forward(self,
                 hidden_states: torch.Tensor,
                 cu_seqlens: torch.Tensor,
@@ -36,9 +38,9 @@ class MMRLVitBlock(qwen3_vl.Qwen3VLVisionBlock):
             new_hidden_states_list = []
             updated_seq = None
             for seq_hidden in hidden_states_split:
-                if cfg.INSERT_METHOD == "replace":
+                if self.INSERT_METHOD == "replace":
                     updated_seq = torch.cat([r_token, seq_hidden[num_r_tokens:]], dim=0)
-                elif cfg.INSERT_METHOD == "add":
+                elif self.INSERT_METHOD == "add":
                     prefix = seq_hidden[:num_r_tokens] + r_token
                     suffix = seq_hidden[num_r_tokens:]
                     updated_seq = torch.cat([prefix, suffix], dim=0)
@@ -53,7 +55,7 @@ class MMRLVitBlock(qwen3_vl.Qwen3VLVisionBlock):
         hidden_states = hidden_states + self.mlp(self.norm2(hidden_states))
         return hidden_states
 
-def _resize_cu_and_pos(r_token, cu_seqlens, position_embeddings):
+def _resize_cu_and_pos(r_token, cu_seqlens, position_embeddings, rotary_pos_emb):
     num_r_tokens = r_token.shape[0]
     total_pic_num = cu_seqlens.shape[0] - 1
     seq_lengths = (cu_seqlens[1:] - cu_seqlens[:-1]).cpu().tolist()
@@ -69,15 +71,23 @@ def _resize_cu_and_pos(r_token, cu_seqlens, position_embeddings):
     cos_split = torch.split(original_cos, seq_lengths, dim=0)
     sin_split = torch.split(original_sin, seq_lengths, dim=0)
 
+    rotary_dim = rotary_pos_emb.shape[-1]
+    r_token_rotary = torch.zeros(num_r_tokens, rotary_dim, device=device, dtype=rotary_pos_emb.dtype)
+    rotary_split = torch.split(rotary_pos_emb, seq_lengths, dim=0)
+
     new_cos_list = []
     new_sin_list = []
+    new_rotary_list = []
 
     for i in range(total_pic_num):
         new_cos_list.append(torch.cat([r_token_cos, cos_split[i]], dim=0))
         new_sin_list.append(torch.cat([r_token_sin, sin_split[i]], dim=0))
+        new_rotary_list.append(torch.cat([r_token_rotary, rotary_split[i]], dim=0))
 
     new_cos = torch.cat(new_cos_list, dim=0)
     new_sin = torch.cat(new_sin_list, dim=0)
+    new_rotary = torch.cat(new_rotary_list, dim=0)
+
     updated_position_embeddings = (new_cos, new_sin)
     # todo:用极大位置编码替换0位置编码，或者做实验看结果
 
@@ -88,7 +98,7 @@ def _resize_cu_and_pos(r_token, cu_seqlens, position_embeddings):
     else:
         updated_cu_seqlens = cu_seqlens
 
-    return updated_position_embeddings, updated_cu_seqlens
+    return updated_position_embeddings, updated_cu_seqlens, new_rotary
 
 def _strip_r_token(hidden_states, original_lens, num_r_token):
     current_lens = [l + num_r_token for l in original_lens]
@@ -113,13 +123,14 @@ class zeroInit(nn.Module):
 class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
     def __init__(self, config, *inputs, **kwargs):
         super().__init__(config, *inputs, **kwargs)
+        self.cfg = SimpleNamespace(**config.mmrl_config)
         self.blocks = nn.ModuleList([qwen3_vl.Qwen3VLVisionBlock(config) for _ in range(config.depth)])
-        self.blocks_with_rep = nn.ModuleList([MMRLVitBlock(config) for _ in cfg.INSERT_LAYER])
-        self.embedding_pooling = utils.attention_pooling(cfg.vision_token_dim, cfg.POOLING_DIM)
+        self.blocks_with_rep = nn.ModuleList([MMRLVitBlock(config) for _ in self.cfg.INSERT_LAYER])
+        self.embedding_pooling = utils.attention_pooling(self.cfg.vision_token_dim, self.cfg.POOLING_DIM)
         self.Task_classifier = MMRLGating.Task_classifier()
-        self.visionGating = MMRLGating.HardConcreteGate(cfg.gating_temperature)
-        self.text_gating = MMRLGating.textGating(cfg.text_gating_epsilon, cfg.gating_temperature)
-        self.zero_init_layer = zeroInit(cfg.vision_token_dim)
+        self.visionGating = MMRLGating.HardConcreteGate(self.cfg.gating_temperature)
+        self.text_gating = MMRLGating.textGating(self.cfg.text_gating_epsilon, self.cfg.gating_temperature)
+        self.zero_init_layer = zeroInit(self.cfg.vision_token_dim)
         self.alpha_list = []
         self.G_list = []
 
@@ -137,6 +148,7 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
 
         self.alpha_list = []
         self.G_list = []
+        rotary_pos_emb_with_rep = None
         embedding_after_pooling = self.embedding_pooling(embedding)
         hidden_states = self.patch_embed(hidden_states)
         pos_embeds = self.fast_pos_embed_interpolate(grid_thw)
@@ -158,14 +170,14 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
         cu_seqlens = F.pad(cu_seqlens, (1, 0), value=0)
 
         first_insert = True
-        current_num_r_token = cfg.RP_SPACE_LENGTH  # 记录 r_token 的长度
+        current_num_r_token = self.cfg.RP_SPACE_LENGTH  # 记录 r_token 的长度
 
         deepstack_feature_lists = []
         cu_seqlens_with_rep, position_embeddings_with_rep = None, None
         hidden_states_with_rep, org_hidden_states= None, None
         total_pic_num = cu_seqlens.size(0) - 1
         for layer_num, blk in enumerate(self.blocks):
-            if layer_num not in cfg.INSERT_LAYER:
+            if layer_num not in self.cfg.INSERT_LAYER:
                 hidden_states = blk(
                     hidden_states,
                     cu_seqlens=cu_seqlens,
@@ -204,7 +216,7 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
                         self.G_list = self.visionGating(self.alpha_list)
 
                 ############ N图切分+门控 ############
-                idx = cfg.INSERT_LAYER.index(layer_num)
+                idx = self.cfg.INSERT_LAYER.index(layer_num)
                 assert v_r_token_list[idx] is not None
                 r_tokens_input = v_r_token_list[idx]
                 assert r_tokens_input is not None
@@ -215,9 +227,11 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
                                         position_embeddings=position_embeddings,
                                         **kwargs)
                 if first_insert:
-                    cu_seqlens_with_rep, position_embeddings_with_rep = _resize_cu_and_pos(r_tokens_input,
-                                                                                           cu_seqlens,
-                                                                                           position_embeddings)
+                    cu_seqlens_with_rep, position_embeddings_with_rep, rotary_pos_emb_with_rep = \
+                        _resize_cu_and_pos(r_tokens_input,
+                                           cu_seqlens,
+                                           position_embeddings,
+                                           rotary_pos_emb)
                 else:
                     assert cu_seqlens_with_rep is not None
                     assert position_embeddings_with_rep is not None
@@ -228,7 +242,7 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
                         position_embeddings=position_embeddings_with_rep,
                         r_token=r_tokens_input,
                         r_token_idx=idx,
-                        rotary_pos_emb=rotary_pos_emb,
+                        rotary_pos_emb=rotary_pos_emb_with_rep,
                         **kwargs
                     )
                 first_insert = False
@@ -276,14 +290,10 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
             batch_size,
             gating_temperature_overied
         )
-        # k_results = []
         if self.training:
             hard_k_logits, tax_loss = out  # hard_k_logits: [Batch, 40]
-
             k_sums = hard_k_logits.sum(dim=-1)
-            k_ints = torch.floor(k_sums)
-            k_remainders = k_sums - k_ints
-            k_results = (k_ints, k_remainders, tax_loss)
+            k_results = (k_sums, tax_loss)
         else:
             k_sums = out.sum(dim=-1)
             k_results = k_sums.round().int().tolist()

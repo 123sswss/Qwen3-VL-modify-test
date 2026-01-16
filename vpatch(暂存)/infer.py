@@ -2,27 +2,10 @@ from transformers import Qwen3VLForConditionalGeneration, AutoProcessor
 
 # default: Load the model on the available device(s)
 model = Qwen3VLForConditionalGeneration.from_pretrained(
-    "../model/qwen3vl", dtype="auto", device_map="auto"
+    "../../model/qwen3vl", dtype="auto", device_map="auto"
 )
 
-processor = AutoProcessor.from_pretrained("../model/qwen3vl")
-
-vocab = processor.tokenizer.get_vocab()
-
-# 常见的坐标相关关键词：box, point, ref, coord, object
-# 以及 Qwen 系列常用的特殊标识符开头 <|
-target_keywords = ["box", "point", "ref", "coord", "object", "rect"]
-special_coords = {k: v for k, v in vocab.items() if any(key in k.lower() for key in target_keywords) and "<|" in k}
-
-print("找到的可能相关的特殊 Token:")
-for token, token_id in sorted(special_coords.items(), key=lambda x: x[1]):
-    print(f"ID: {token_id} \t Token: {token}")
-
-# 另外，检查一下是否有专门的数字表示方式（有的模型会将 0-1000 编码为特殊 token）
-# 看看有没有类似 <|0|> 到 <|1000|> 的东西
-numeric_tokens = [k for k in vocab.keys() if k.startswith("<|") and k[2:-2].isdigit()]
-if numeric_tokens:
-    print(f"\n检测到数字型特殊 Token (共{len(numeric_tokens)}个)，例如: {numeric_tokens[:5]}")
+processor = AutoProcessor.from_pretrained("../../model/qwen3vl")
 
 messages = [
     {

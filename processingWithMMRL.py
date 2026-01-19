@@ -18,37 +18,39 @@ class Qwen3ProcessorWithMMRL(Qwen3VLProcessor):
                  tokenizer=None,
                  cfg = None,
                  **kwargs):
-        super().__init__(image_processor, tokenizer, video_processor=None, **kwargs)
+        super().__init__(image_processor=image_processor, tokenizer=tokenizer, video_processor=None, **kwargs)
         self.rep_tokens = [f"<|REP_placeholder{i}|>" for i in range(len(modcfg.INSERT_LAYER))]
         self.rep_type_id = 3
         self.rep_token_ids = tokenizer.convert_tokens_to_ids(self.rep_tokens)
 
-        def apply_chat_template(self,
-                                conversation,
-                                chat_template=None,
-                                tokenize=True,
-                                return_tensors=None,
-                                **kwargs
-        ):
-            prompt = super().apply_chat_template(
-                conversation,
-                chat_template=chat_template,
-                tokenize=False,
-                add_generation_prompt=kwargs.get("add_generation_prompt", False)
+    def apply_chat_template(self,
+                            conversation,
+                            chat_template=None,
+                            tokenize=True,
+                            return_tensors=None,
+                            **kwargs
+    ):
+        if chat_template is None:
+            chat_template = self.tokenizer.chat_template
+        prompt = super().apply_chat_template(
+            conversation,
+            chat_template=chat_template,
+            tokenize=False,
+            add_generation_prompt=kwargs.get("add_generation_prompt", False)
+        )
+        rep_str = "".join(self.rep_tokens)
+        if isinstance(prompt, list):
+            prompt = [rep_str + p for p in prompt]
+        elif isinstance(prompt, str):
+            prompt = rep_str + prompt
+        if tokenize:
+            return self.tokenizer(
+                prompt,
+                return_tensors=return_tensors,
+                **kwargs
             )
-            rep_str = "".join(self.rep_tokens)
-            if isinstance(prompt, list):
-                prompt = [rep_str + p for p in prompt]
-            elif isinstance(prompt, str):
-                prompt = rep_str + prompt
-            if tokenize:
-                return self.tokenizer(
-                    prompt,
-                    return_tensors=return_tensors,
-                    **kwargs
-                )
-            else:
-                return prompt
+        else:
+            return prompt
 
     def __call__(
             self,

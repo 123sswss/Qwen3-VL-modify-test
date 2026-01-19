@@ -18,6 +18,8 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
                  tokenizer=None,
                  ):
         # todo：研究一下处理训练保存与加载
+        vision_dim = getattr(config.vision_config, "hidden_size")  # 默认值防报错
+        text_dim = getattr(config.text_config, "hidden_size")
         if not hasattr(config, "mmrl_config"):
             config.mmrl_config = {
                 "USE_MMRL": cfg.USE_MMRL,
@@ -29,7 +31,10 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
                 "GATING_MID_DIM": cfg.GATING_MID_DIM,
                 "stretching_length": cfg.stretching_length,
                 "gating_temperature": cfg.gating_temperature,
-                "text_gating_epsilon": cfg.text_gating_epsilon
+                "text_gating_epsilon": cfg.text_gating_epsilon,
+                "insert_method": cfg.INSERT_METHOD,
+                "vision_token_dim": vision_dim,
+                "text_token_dim": text_dim
             }
 
         super().__init__(config)
@@ -62,7 +67,7 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
                 print(f"[Warning] Resizing token embeddings from {curr_embedding_size} to {vocab_size}")
                 self.resize_token_embeddings(vocab_size)
 
-        self.use_mmrl = config.USE_MMRL
+        self.use_mmrl = config.mmrl_config["USE_MMRL"]
         self.tax_loss = None
         self.alpha_loss = None
         ###################
@@ -77,11 +82,12 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
             raise ValueError("v_r_token_list must be specified")
         elif self.use_mmrl and v_r_token_list is not None:
             pixel_values = pixel_values.type(self.visual.dtype)
-            image_embeds, deepstack_image_embeds, k = self.visual(pixel_values,
-                                                               grid_thw=image_grid_thw,
-                                                               v_r_token_list=v_r_token_list,
-                                                               embedding=embedding,
-                                                               images_per_sample=images_per_sample)
+            image_embeds, deepstack_image_embeds, k, alpha_loss = self.visual(pixel_values,
+                                                                              grid_thw=image_grid_thw,
+                                                                              v_r_token_list=v_r_token_list,
+                                                                              embedding=embedding,
+                                                                              images_per_sample=images_per_sample)
+            self.alpha_loss = alpha_loss
             split_sizes = (image_grid_thw.prod(-1) // self.visual.spatial_merge_size ** 2).tolist()
             image_embeds = torch.split(image_embeds, split_sizes)
             return image_embeds, deepstack_image_embeds, k
@@ -129,7 +135,7 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
         images_per_sample = []
         if input_ids is not None:
             for seq_input_ids in input_ids:
-                count = (seq_input_ids == self.config.image_token_id).sum().item()
+                count = (seq_input_ids == self.vision_end_token_id).sum().item()
                 images_per_sample.append(count)
         # todo：优化无mmrl流程
         # todo：假设只有文字没有图片？
@@ -149,13 +155,14 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
                     # [b] [1]
                     k_sums, tax_loss = k_results
                     self.tax_loss = tax_loss
-                    self.alpha_loss = torch.mean(torch.sigmoid(self.alpha_list)) * 0.1
                 else:
                     k_sums = k_results
                 placeholder_cumsum = is_placeholder.cumsum(dim=-1)  # [Batch, Seq]
                 placeholder_idx = (placeholder_cumsum - 1).clamp(min=0)
                 target_embeds = t_r_tokens[placeholder_idx]  # [Batch, Seq, Dim]
-                gate_soft_mask = torch.clamp(k_sums.unsqueeze(-1) - placeholder_idx.float(), min=0, max=1).unsqueeze(-1)
+                gate_soft_mask = torch.clamp(k_sums.unsqueeze(-1) - placeholder_idx.to(inputs_embeds.dtype), min=0,
+                                             max=1).unsqueeze(-1)
+                gate_soft_mask = gate_soft_mask.to(inputs_embeds.dtype)
                 inputs_embeds = torch.where(is_placeholder.unsqueeze(-1), target_embeds * gate_soft_mask, inputs_embeds)
                 dynamic_gate_mask = (gate_soft_mask.squeeze(-1) > 1e-3)  # [Batch, Seq]
                 attention_mask = attention_mask & ((~is_placeholder) | dynamic_gate_mask)

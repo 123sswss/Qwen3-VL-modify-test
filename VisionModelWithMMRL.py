@@ -29,10 +29,12 @@ class MMRLVitBlock(qwen3_vl.Qwen3VLVisionBlock):
         num_r_tokens = r_token.shape[0]
         full_seq_lengths = (cu_seqlens[1:] - cu_seqlens[:-1]).cpu().tolist()
         if first_insert:
-            split_lengths = [l - num_r_tokens for l in full_seq_lengths]
-            hidden_states_split = torch.split(hidden_states, split_lengths, dim=0)
+            hidden_states_split = torch.split(hidden_states, full_seq_lengths, dim=0)
             new_hidden_states_list = [torch.cat([r_token, s], dim=0) for s in hidden_states_split]
             hidden_states = torch.cat(new_hidden_states_list, dim=0)
+            position_embeddings, cu_seqlens, rotary_pos_emb = _resize_cu_and_pos(
+                r_token, cu_seqlens, position_embeddings, rotary_pos_emb
+            )
         else:
             hidden_states_split = torch.split(hidden_states, full_seq_lengths, dim=0)
             new_hidden_states_list = []
@@ -46,7 +48,8 @@ class MMRLVitBlock(qwen3_vl.Qwen3VLVisionBlock):
                     updated_seq = torch.cat([prefix, suffix], dim=0)
                 new_hidden_states_list.append(updated_seq)
             hidden_states = torch.cat(new_hidden_states_list, dim=0)
-
+        print(f"hidden_states shape: {hidden_states.shape}")
+        print(f"cu_seqlens:{cu_seqlens}")
         hidden_states = hidden_states + self.attn(self.norm1(hidden_states),
                                                   cu_seqlens=cu_seqlens,
                                                   rotary_pos_emb=rotary_pos_emb,
@@ -122,7 +125,7 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
                                      for _ in range(config.depth)])
         self.blocks_with_rep = nn.ModuleList([MMRLVitBlock(config)
                                               for _ in self.cfg.INSERT_LAYER])
-        self.embedding_pooling = utils.attention_pooling(self.cfg.vision_token_dim,
+        self.embedding_pooling = utils.attention_pooling(self.cfg.text_token_dim,
                                                          self.cfg.POOLING_DIM)
         self.Task_classifier = MMRLGating.Task_classifier(self.cfg)
         self.visionGating = MMRLGating.HardConcreteGate(self.cfg.gating_temperature)
@@ -225,27 +228,36 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
                                         cu_seqlens=cu_seqlens,
                                         position_embeddings=position_embeddings,
                                         **kwargs)
-                if first_insert:
-                    cu_seqlens_with_rep, position_embeddings_with_rep, rotary_pos_emb_with_rep = \
-                        _resize_cu_and_pos(r_tokens_input,
-                                           cu_seqlens,
-                                           position_embeddings,
-                                           rotary_pos_emb)
-                else:
-                    assert cu_seqlens_with_rep is not None
-                    assert position_embeddings_with_rep is not None
                 # todo：推理支路？
                 if self.training:
-                    hidden_states_with_rep = self.blocks_with_rep[idx](
-                        hidden_states if first_insert else hidden_states_with_rep,
-                        cu_seqlens=cu_seqlens_with_rep,
-                        position_embeddings=position_embeddings_with_rep,
-                        r_token=r_tokens_input,
-                        r_token_idx=idx,
-                        rotary_pos_emb=rotary_pos_emb_with_rep,
-                        **kwargs
-                    )
-                first_insert = False
+                    if first_insert:
+                        hidden_states_with_rep = self.blocks_with_rep[idx](
+                            hidden_states,
+                            cu_seqlens=cu_seqlens,
+                            position_embeddings=position_embeddings,
+                            r_token=r_tokens_input,
+                            rotary_pos_emb=rotary_pos_emb,
+                            first_insert=True,
+                            **kwargs
+                        )
+                        position_embeddings_with_rep, cu_seqlens_with_rep, rotary_pos_emb_with_rep = \
+                            _resize_cu_and_pos(r_tokens_input,
+                                               cu_seqlens,
+                                               position_embeddings,
+                                               rotary_pos_emb)
+                    else:
+                        assert cu_seqlens_with_rep is not None
+                        assert position_embeddings_with_rep is not None
+                        hidden_states_with_rep = self.blocks_with_rep[idx](
+                            hidden_states_with_rep,
+                            cu_seqlens=cu_seqlens_with_rep,
+                            position_embeddings=position_embeddings_with_rep,
+                            r_token=r_tokens_input,
+                            rotary_pos_emb=rotary_pos_emb_with_rep,
+                            first_insert=False,
+                            **kwargs
+                        )
+                    first_insert = False
                 # 规定这里输出的都是没移除rep的
 
             if layer_num in self.deepstack_visual_indexes:
@@ -301,5 +313,6 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
         else:
             k_sums = out.sum(dim=-1)
             k_results = k_sums.round().int()
-        return hidden_states, deepstack_feature_lists, k_results
+        alpha_loss = torch.mean(torch.sigmoid(self.alpha_list)) * 0.1
+        return hidden_states, deepstack_feature_lists, k_results, alpha_loss
 

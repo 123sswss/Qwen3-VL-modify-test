@@ -8,6 +8,7 @@ from transformers.tokenization_utils_base import PreTokenizedInput, TextInput
 from transformers.video_utils import VideoInput
 from transformers.models.qwen3_vl.processing_qwen3_vl import Qwen3VLProcessorKwargs, Qwen3VLProcessor
 
+import config as modcfg
 
 class Qwen3ProcessorWithMMRL(Qwen3VLProcessor):
     attributes = ["image_processor", "tokenizer"]
@@ -18,9 +19,37 @@ class Qwen3ProcessorWithMMRL(Qwen3VLProcessor):
                  cfg = None,
                  **kwargs):
         super().__init__(image_processor, tokenizer, video_processor=None, **kwargs)
-        self.rep_tokens = [f"<|REP_placeholder{i}|>" for i in range(40)]
+        self.rep_tokens = [f"<|REP_placeholder{i}|>" for i in range(len(modcfg.INSERT_LAYER))]
         self.rep_type_id = 3
         self.rep_token_ids = tokenizer.convert_tokens_to_ids(self.rep_tokens)
+
+        def apply_chat_template(self,
+                                conversation,
+                                chat_template=None,
+                                tokenize=True,
+                                return_tensors=None,
+                                **kwargs
+        ):
+            prompt = super().apply_chat_template(
+                conversation,
+                chat_template=chat_template,
+                tokenize=False,
+                add_generation_prompt=kwargs.get("add_generation_prompt", False)
+            )
+            rep_str = "".join(self.rep_tokens)
+            if isinstance(prompt, list):
+                prompt = [rep_str + p for p in prompt]
+            elif isinstance(prompt, str):
+                prompt = rep_str + prompt
+            if tokenize:
+                return self.tokenizer(
+                    prompt,
+                    return_tensors=return_tensors,
+                    **kwargs
+                )
+            else:
+                return prompt
+
     def __call__(
             self,
             images: ImageInput = None,
@@ -32,6 +61,8 @@ class Qwen3ProcessorWithMMRL(Qwen3VLProcessor):
         if videos is not None:
             raise ValueError("暂不支持视频输入，请移除 `videos` 参数。")
 
+        if text is not None and isinstance(text, list) and len(text) > 0 and isinstance(text[0], dict):
+            text = self.apply_chat_template(text, tokenize=False, **kwargs)
         output_kwargs = self._merge_kwargs(
             Qwen3VLProcessorKwargs,
             tokenizer_init_kwargs=self.tokenizer.init_kwargs,
@@ -64,6 +95,9 @@ class Qwen3ProcessorWithMMRL(Qwen3VLProcessor):
                 text[i] = text[i].replace("<|placeholder|>", self.image_token)
 
         ######## mmrl ########
+        if not isinstance(text, list):
+            text = [text]
+        text = text.copy()
         rep_str = "".join(self.rep_tokens)
         text = [rep_str + t for t in text] # [rep_placeholder*40, ...]
         ######## mmrl ########

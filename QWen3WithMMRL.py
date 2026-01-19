@@ -37,7 +37,7 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
             self.vision_end_token_id = (
                 tokenizer.vision_end_token_id
                 if getattr(tokenizer, "vision_end_token_id", None)
-                else tokenizer.convert_tokens_to_ids(self.vision_end_token)
+                else tokenizer.convert_tokens_to_ids("<|vision_end|>")
             )
             self.rep_placeholder_ids = [
                 tokenizer.convert_tokens_to_ids(f"<|REP_placeholder{i}|>") for i in range(40)
@@ -45,17 +45,26 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
         else:
             raise ValueError("tokenizer must be specified")
         ###################
+        vision_config = getattr(config, "vision_config", config)
+        if not hasattr(vision_config, "mmrl_config"):
+            vision_config.mmrl_config = config.mmrl_config
         original_visual = self.visual
-        self.visual = vmmrl.VisionWithMMRL(config)
+        self.visual = vmmrl.VisionWithMMRL(vision_config)
         self.visual.load_state_dict(original_visual.state_dict(), strict=False)
         del original_visual
         torch.cuda.empty_cache()
         self.MMRL = MMRL.MMRL(config)
         self.post_init()
+        if tokenizer is not None:
+            vocab_size = len(tokenizer)
+            curr_embedding_size = self.get_input_embeddings().weight.shape[0]
+            if vocab_size != curr_embedding_size:
+                print(f"[Warning] Resizing token embeddings from {curr_embedding_size} to {vocab_size}")
+                self.resize_token_embeddings(vocab_size)
 
         self.use_mmrl = config.USE_MMRL
-        self.visual = vmmrl.VisionWithMMRL(config, self.use_mmrl)
         self.tax_loss = None
+        self.alpha_loss = None
         ###################
 
     def get_image_features(self,
@@ -115,6 +124,7 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
             v_r_token_list, t_r_token_list = self.MMRL()
             t_r_tokens = torch.cat(t_r_token_list, dim=0)
         self.tax_loss = 0.0
+        self.alpha_loss = 0.0
         #### MMRL ####
         images_per_sample = []
         if input_ids is not None:
@@ -139,6 +149,7 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
                     # [b] [1]
                     k_sums, tax_loss = k_results
                     self.tax_loss = tax_loss
+                    self.alpha_loss = torch.mean(torch.sigmoid(self.alpha_list)) * 0.1
                 else:
                     k_sums = k_results
                 placeholder_cumsum = is_placeholder.cumsum(dim=-1)  # [Batch, Seq]
@@ -149,10 +160,12 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
                 dynamic_gate_mask = (gate_soft_mask.squeeze(-1) > 1e-3)  # [Batch, Seq]
                 attention_mask = attention_mask & ((~is_placeholder) | dynamic_gate_mask)
                 if not self.training:
-                    # 推理时，关闭 gated < 0.5 的占位符
                     hard_gate = (gate_soft_mask.squeeze(-1) > 0.5)
-                    # 只有当它是占位符且 gate 开启时才为 1，或者是原本的 normal token
                     attention_mask = attention_mask & ((~is_placeholder) | hard_gate)
+                    embed_mask = torch.ones_like(attention_mask, dtype=inputs_embeds.dtype)
+                    tokens_to_zero = is_placeholder & (~hard_gate)
+                    embed_mask = embed_mask.masked_fill(tokens_to_zero, 0.0)
+                    inputs_embeds = inputs_embeds * embed_mask.unsqueeze(-1)
             else:
                 image_embeds_raw, deepstack_image_embeds = self.get_image_features(
                     pixel_values=pixel_values,

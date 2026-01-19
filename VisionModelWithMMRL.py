@@ -55,54 +55,43 @@ class MMRLVitBlock(qwen3_vl.Qwen3VLVisionBlock):
         hidden_states = hidden_states + self.mlp(self.norm2(hidden_states))
         return hidden_states
 
+
 def _resize_cu_and_pos(r_token, cu_seqlens, position_embeddings, rotary_pos_emb):
     num_r_tokens = r_token.shape[0]
     total_pic_num = cu_seqlens.shape[0] - 1
     seq_lengths = (cu_seqlens[1:] - cu_seqlens[:-1]).cpu().tolist()
-
     original_cos, original_sin = position_embeddings
     dtype = original_cos.dtype
     device = original_cos.device
     pos_emb_dim = original_cos.shape[-1]
-
-    # r_token_cos = torch.ones(num_r_tokens, pos_emb_dim, device=device, dtype=dtype)
-    # r_token_sin = torch.zeros(num_r_tokens, pos_emb_dim, device=device, dtype=dtype)
-
+    rotary_dim = rotary_pos_emb.shape[-1]
+    r_token_cos = torch.ones(num_r_tokens, pos_emb_dim, device=device, dtype=dtype)
+    r_token_sin = torch.zeros(num_r_tokens, pos_emb_dim, device=device, dtype=dtype)
+    r_token_rotary = torch.zeros(num_r_tokens, rotary_dim, device=device, dtype=rotary_pos_emb.dtype)
     cos_split = torch.split(original_cos, seq_lengths, dim=0)
     sin_split = torch.split(original_sin, seq_lengths, dim=0)
-
-    rotary_dim = rotary_pos_emb.shape[-1]
-    r_token_rotary = torch.zeros(num_r_tokens, rotary_dim, device=device, dtype=rotary_pos_emb.dtype)
     rotary_split = torch.split(rotary_pos_emb, seq_lengths, dim=0)
-
     new_cos_list = []
     new_sin_list = []
     new_rotary_list = []
-
     for i in range(total_pic_num):
         current_img_cos = cos_split[i]  # [Seq_Len_i, Dim]
         current_img_sin = sin_split[i]  # [Seq_Len_i, Dim]
         current_img_rot = rotary_split[i]  # [Seq_Len_i, Dim]
-        anchor_cos = current_img_cos[0:1].expand(num_r_tokens, -1)
-        anchor_sin = current_img_sin[0:1].expand(num_r_tokens, -1)
-        anchor_rot = current_img_rot[0:1].expand(num_r_tokens, -1)
-        new_cos_list.append(torch.cat([anchor_cos, current_img_cos], dim=0))
-        new_sin_list.append(torch.cat([anchor_sin, current_img_sin], dim=0))
-        new_rotary_list.append(torch.cat([anchor_rot, current_img_rot], dim=0))
 
+        new_cos_list.append(torch.cat([r_token_cos, current_img_cos], dim=0))
+        new_sin_list.append(torch.cat([r_token_sin, current_img_sin], dim=0))
+        new_rotary_list.append(torch.cat([r_token_rotary, current_img_rot], dim=0))
     new_cos = torch.cat(new_cos_list, dim=0)
     new_sin = torch.cat(new_sin_list, dim=0)
     new_rotary = torch.cat(new_rotary_list, dim=0)
-
     updated_position_embeddings = (new_cos, new_sin)
-
     if total_pic_num > 0:
         offsets = torch.arange(total_pic_num + 1, device=cu_seqlens.device,
                                dtype=cu_seqlens.dtype) * num_r_tokens
         updated_cu_seqlens = cu_seqlens + offsets
     else:
         updated_cu_seqlens = cu_seqlens
-
     return updated_position_embeddings, updated_cu_seqlens, new_rotary
 
 def _strip_r_token(hidden_states, original_lens, num_r_token):
@@ -245,6 +234,7 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
                 else:
                     assert cu_seqlens_with_rep is not None
                     assert position_embeddings_with_rep is not None
+                # todo：推理支路？
                 if self.training:
                     hidden_states_with_rep = self.blocks_with_rep[idx](
                         hidden_states if first_insert else hidden_states_with_rep,
@@ -259,7 +249,10 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
                 # 规定这里输出的都是没移除rep的
 
             if layer_num in self.deepstack_visual_indexes:
-                feature_to_save = org_hidden_states
+                if layer_num not in self.cfg.INSERT_LAYER:
+                    feature_to_save = hidden_states
+                else:
+                    feature_to_save = org_hidden_states
                 deepstack_feature = self.deepstack_merger_list[
                     self.deepstack_visual_indexes.index(layer_num)
                 ](feature_to_save)
@@ -307,6 +300,6 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
             k_results = (k_sums, tax_loss)
         else:
             k_sums = out.sum(dim=-1)
-            k_results = k_sums.round().int().tolist()
+            k_results = k_sums.round().int()
         return hidden_states, deepstack_feature_lists, k_results
 

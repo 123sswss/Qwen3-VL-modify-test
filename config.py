@@ -1,5 +1,5 @@
 ##################################### init #####################################
-USE_MMRL = False
+USE_MMRL = True
 
 SPECIAL_TOKENS = {"additional_special_tokens":
                       [f"<|REP_placeholder{i}|>" for i in range(40)]}
@@ -11,7 +11,7 @@ RP_SPACE_DIM = 512 # 一千二百万参数左右
 # V:5*DIM -(DIM*1024)> 5*1024
 # T:5*DIM -(DIM*2560)> 5*2560
 
-INSERT_LAYER = range(17,23)
+INSERT_LAYER = range(17,24)
 
 INSERT_METHOD = "replace"
 # INSERT_METHOD = "add"

@@ -48,6 +48,8 @@ class MMRLVitBlock(qwen3_vl.Qwen3VLVisionBlock):
                     updated_seq = torch.cat([prefix, suffix], dim=0)
                 new_hidden_states_list.append(updated_seq)
             hidden_states = torch.cat(new_hidden_states_list, dim=0)
+        print(f"hidden_states shape: {hidden_states.shape}")
+        print(f"cu_seqlens:{cu_seqlens}")
         hidden_states = hidden_states + self.attn(self.norm1(hidden_states),
                                                   cu_seqlens=cu_seqlens,
                                                   rotary_pos_emb=rotary_pos_emb,

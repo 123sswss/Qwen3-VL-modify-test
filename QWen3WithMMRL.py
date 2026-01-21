@@ -162,8 +162,8 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
                     k_sums = k_results
                 placeholder_cumsum = is_placeholder.cumsum(dim=-1)  # [Batch, Seq]
                 placeholder_idx = (placeholder_cumsum - 1).clamp(min=0)
-                if k_sums.ndim == 1:
-                    k_sums = k_sums.unsqueeze(-1)
+                # if k_sums.ndim == 1:
+                #     k_sums = k_sums.unsqueeze(-1)
                 target_embeds = t_r_tokens[placeholder_idx]  # [Batch, Seq, Dim]
                 gate_soft_mask = torch.clamp(k_sums.unsqueeze(-1) - placeholder_idx.to(inputs_embeds.dtype), min=0,
                                              max=1).unsqueeze(-1)
@@ -240,7 +240,7 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
         # if self.use_mmrl:
         #     shift = is_placeholder.cumsum(dim=-1)  # [Batch, Seq]
         #     new_position_ids = position_ids.clone()
-        #     # new_position_ids[0] = position_ids[0] - shift
+        #     new_position_ids[0] = position_ids[0] - shift
         #     position_ids = new_position_ids
 
         outputs = self.language_model(

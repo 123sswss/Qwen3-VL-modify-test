@@ -326,7 +326,7 @@ def train_overfit():
         num_train_epochs=1,             # 跑 10 个 epoch (其实 dataset 长度伪装成了 1000，所以步数很多)
         per_device_train_batch_size=1,   # 单卡 Batch 1
         gradient_accumulation_steps=1,
-        learning_rate=1e-4,              # 较大的 LR 以便快速过拟合
+        learning_rate=5e-4,              # 较大的 LR 以便快速过拟合
         logging_steps=10,
         save_strategy="no",              # 实验不用存 checkpoint
         report_to="none",                # 不用 wandb
@@ -346,11 +346,30 @@ def train_overfit():
     # 6. 推理测试 (看看有没有学会)
     print("\n" + "=" * 20 + " 训练后推理测试 " + "=" * 20)
     model.eval()
+    messages = [
+        {
+            "role": "user", 
+            "content": [
+                {"type": "image", "image": IMAGE_PATH},
+                {"type": "text", "text": PROMPT}
+            ]
+        }
+    ]
+    
+    # 手动应用模板（或者直接传给 processor，但为了保险起见，显式调用）
+    # add_generation_prompt=True 会添加 <|im_start|>assistant...
+    text_prompt = processor.apply_chat_template(
+        messages, 
+        tokenize=False, 
+        add_generation_prompt=True
+    )
+    
     test_input = processor(
-        text=[f"<|image_pad|>{PROMPT}"], # 简化的 prompt 构造
+        text=[text_prompt], 
         images=Image.open(IMAGE_PATH),
         return_tensors="pt"
     ).to(model.device)
+    # =============== 修改结束 ===============
     
     with torch.no_grad():
         generated_ids = model.generate(

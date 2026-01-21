@@ -120,12 +120,15 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
         if inputs_embeds is None:
             inputs_embeds = self.get_input_embeddings()(input_ids)
 
+        self.tax_loss = torch.tensor(0.0, device=inputs_embeds.device)
+        self.alpha_loss = torch.tensor(0.0, device=inputs_embeds.device)
+
         placeholder_ids_tensor = torch.tensor(self.rep_placeholder_ids, device=input_ids.device)
         # [Batch, Seq]
         is_placeholder = (input_ids.unsqueeze(-1) == placeholder_ids_tensor).any(dim=-1)
         #### MMRL ####
         v_r_token_list = None
-        t_r_token_list = None
+        t_r_tokens = None
         if pixel_values is not None and self.use_mmrl:
             v_r_token_list, t_r_token_list = self.MMRL()
             t_r_tokens = torch.cat(t_r_token_list, dim=0)
@@ -159,6 +162,8 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
                     k_sums = k_results
                 placeholder_cumsum = is_placeholder.cumsum(dim=-1)  # [Batch, Seq]
                 placeholder_idx = (placeholder_cumsum - 1).clamp(min=0)
+                if k_sums.ndim == 1:
+                    k_sums = k_sums.unsqueeze(-1)
                 target_embeds = t_r_tokens[placeholder_idx]  # [Batch, Seq, Dim]
                 gate_soft_mask = torch.clamp(k_sums.unsqueeze(-1) - placeholder_idx.to(inputs_embeds.dtype), min=0,
                                              max=1).unsqueeze(-1)
@@ -183,7 +188,9 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
                 )
             image_embeds = torch.cat(image_embeds_raw, dim=0).to(inputs_embeds.device, inputs_embeds.dtype)
             image_mask, _ = self.get_placeholder_mask(
-                input_ids, inputs_embeds=inputs_embeds, image_features=image_embeds
+                input_ids,
+                inputs_embeds=inputs_embeds,
+                image_features=image_embeds
             )
             inputs_embeds = inputs_embeds.masked_scatter(image_mask, image_embeds)
             visual_pos_masks = image_mask[..., 0]
@@ -230,11 +237,11 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
                 position_ids = position_ids.add(delta)
                 position_ids = position_ids.unsqueeze(0).expand(3, -1, -1)
 
-        if self.use_mmrl:
-            shift = is_placeholder.cumsum(dim=-1)  # [Batch, Seq]
-            new_position_ids = position_ids.clone()
-            new_position_ids[0] = position_ids[0] - shift
-            position_ids = new_position_ids
+        # if self.use_mmrl:
+        #     shift = is_placeholder.cumsum(dim=-1)  # [Batch, Seq]
+        #     new_position_ids = position_ids.clone()
+        #     # new_position_ids[0] = position_ids[0] - shift
+        #     position_ids = new_position_ids
 
         outputs = self.language_model(
             input_ids=None,

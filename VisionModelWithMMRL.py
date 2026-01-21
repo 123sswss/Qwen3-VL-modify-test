@@ -170,12 +170,13 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
         cu_seqlens = F.pad(cu_seqlens, (1, 0), value=0)
 
         first_insert = True
-        current_num_r_token = self.cfg.RP_SPACE_LENGTH  # 记录 r_token 的长度
+        current_num_r_token = self.cfg.RP_SPACE_LENGTH
 
         deepstack_feature_lists = []
         cu_seqlens_with_rep, position_embeddings_with_rep = None, None
         hidden_states_with_rep, org_hidden_states= None, None
         total_pic_num = cu_seqlens.size(0) - 1
+        run_mmrl_branch = True
         for layer_num, blk in enumerate(self.blocks):
             if layer_num not in self.cfg.INSERT_LAYER:
                 hidden_states = blk(
@@ -210,24 +211,29 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
                     )
                     self.alpha_list = self.Task_classifier(pooled_vision_states, expanded_text_embedding)
                     # G_list: [Total_Images, 1]
-                    if self.training and gating_temperature_overied is not None:
-                        self.G_list = self.visionGating(self.alpha_list, gating_temperature_overied)
+                    if self.training:
+                        if gating_temperature_overied is not None:
+                            self.G_list = self.visionGating(self.alpha_list, gating_temperature_overied)
+                        else:
+                            self.G_list = self.visionGating(self.alpha_list)
                     else:
-                        self.G_list = self.visionGating(self.alpha_list)
+                        raw_g = self.visionGating(self.alpha_list)
+                        self.G_list = (raw_g > 0.5).to(dtype=hidden_states.dtype)
+                        if self.G_list.sum() == 0:
+                            run_mmrl_branch = False
 
                 ############ N图切分+门控 ############
                 idx = self.cfg.INSERT_LAYER.index(layer_num)
                 assert v_r_token_list[idx] is not None
                 r_tokens_input = v_r_token_list[idx]
                 assert r_tokens_input is not None
-                # todo:训练时无论如何都是双支路，全体hidden_states都要参与计算，但是推理时会关闭G小于阈值的支路
-                #  此处先强制双支路，以后有空再做支路关闭
+
                 org_hidden_states = blk(hidden_states if first_insert else org_hidden_states,
                                         cu_seqlens=cu_seqlens,
                                         position_embeddings=position_embeddings,
                                         **kwargs)
                 # todo：推理支路？
-                if self.training:
+                if self.training or run_mmrl_branch:
                     if first_insert:
                         hidden_states_with_rep = self.blocks_with_rep[idx](
                             hidden_states,
@@ -256,6 +262,8 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
                             **kwargs
                         )
                     first_insert = False
+                else:
+                    pass
                 # 规定这里输出的都是没移除rep的
 
             if layer_num in self.deepstack_visual_indexes:
@@ -268,21 +276,25 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
                 ](feature_to_save)
                 deepstack_feature_lists.append(deepstack_feature)
 
-        hidden_states_with_rep = _strip_r_token(hidden_states_with_rep,
-                                                original_seq_lens_list,
-                                                current_num_r_token)
-        # for i in range(cu_seqlens.size(0) - 1):
-        #     hidden_states_with_rep = hidden_states_with_rep[cu_seqlens[i]:cu_seqlens[i+1]] * self.G_list[i]
-        seqlens = cu_seqlens[1:] - cu_seqlens[:-1]
-        G_stack = self.G_list  # [Batch, 1]
-        G_mask = torch.repeat_interleave(G_stack, seqlens, dim=0)  # [Total_Tokens, 1]
-        hidden_states_with_rep = hidden_states_with_rep * G_mask
+        if run_mmrl_branch and hidden_states_with_rep is not None:
+            hidden_states_with_rep = _strip_r_token(hidden_states_with_rep,
+                                                    original_seq_lens_list,
+                                                    current_num_r_token)
+            # for i in range(cu_seqlens.size(0) - 1):
+            #     hidden_states_with_rep = hidden_states_with_rep[cu_seqlens[i]:cu_seqlens[i+1]] * self.G_list[i]
+            seqlens = cu_seqlens[1:] - cu_seqlens[:-1]
+            G_stack = self.G_list  # [Batch, 1]
+            G_mask = torch.repeat_interleave(G_stack, seqlens, dim=0)  # [Total_Tokens, 1]
+            hidden_states_with_rep = hidden_states_with_rep * G_mask
 
-        delta = hidden_states_with_rep - org_hidden_states
-        G_mask = torch.repeat_interleave(self.G_list, seqlens, dim=0)
-        gated_delta = delta * G_mask
-        final_delta = self.zero_init_layer(gated_delta)
-        hidden_states = org_hidden_states + final_delta
+            delta = hidden_states_with_rep - org_hidden_states
+            G_mask = torch.repeat_interleave(self.G_list, seqlens, dim=0)
+            gated_delta = delta * G_mask
+            final_delta = self.zero_init_layer(gated_delta)
+            hidden_states = org_hidden_states + final_delta
+        else:
+            hidden_states = org_hidden_states
+            final_delta = torch.zeros_like(hidden_states)
 
         hidden_states = self.merger(hidden_states)
         ########### text gating ###########
@@ -310,7 +322,6 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
             k_results = (k_sums, tax_loss)
         else:
             k_sums = out.sum(dim=-1)
-            k_results = k_sums.round().int()
+            k_results = k_sums.round()
         alpha_loss = torch.mean(torch.sigmoid(self.alpha_list)) * 0.1
         return hidden_states, deepstack_feature_lists, k_results, alpha_loss
-

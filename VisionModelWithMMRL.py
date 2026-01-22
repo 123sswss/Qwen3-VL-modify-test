@@ -12,7 +12,6 @@ import utils
 
 from itertools import accumulate
 
-
 class MMRLVitBlock(qwen3_vl.Qwen3VLVisionBlock):
     def __init__(self, config):
         super(MMRLVitBlock, self).__init__(config)
@@ -232,7 +231,6 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
                                         cu_seqlens=cu_seqlens,
                                         position_embeddings=position_embeddings,
                                         **kwargs)
-                # todo：推理支路？
                 if self.training or run_mmrl_branch:
                     if first_insert:
                         hidden_states_with_rep = self.blocks_with_rep[idx](

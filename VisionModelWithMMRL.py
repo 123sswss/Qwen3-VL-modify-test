@@ -133,6 +133,9 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
         self.alpha_list = []
         self.G_list = []
 
+        self.null_image_token = nn.Parameter(torch.zeros(1, self.cfg.vision_token_dim))
+        nn.init.normal_(self.null_image_token, std=0.02)
+
     def forward(self,
                 hidden_states: torch.Tensor,
                 grid_thw: torch.Tensor,
@@ -177,7 +180,7 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
         total_pic_num = cu_seqlens.size(0) - 1
         run_mmrl_branch = True
         for layer_num, blk in enumerate(self.blocks):
-            if layer_num not in self.cfg.INSERT_LAYER:
+            if layer_num not in self.cfg.INSERT_LAYER or v_r_token_list is None:
                 hidden_states = blk(
                     hidden_states,
                     cu_seqlens=cu_seqlens,
@@ -296,6 +299,10 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
 
         hidden_states = self.merger(hidden_states)
         ########### text gating ###########
+        if v_r_token_list is None:
+             k_results = torch.tensor(0.0, device=hidden_states.device)
+             alpha_loss = torch.tensor(0.0, device=hidden_states.device)
+             return hidden_states, deepstack_feature_lists, k_results, alpha_loss
         img_seqlens = cu_seqlens[1:] - cu_seqlens[:-1]
         img_counts = torch.tensor(images_per_sample, device=hidden_states.device)
         batch_indices_img = torch.repeat_interleave(
@@ -323,3 +330,43 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
             k_results = k_sums.round()
         alpha_loss = torch.mean(torch.sigmoid(self.alpha_list)) * 0.1
         return hidden_states, deepstack_feature_lists, k_results, alpha_loss
+
+    def compute_text_only_gating(self, embedding, gating_temperature_overied=None):
+        batch_size = embedding.shape[0]
+        embedding_after_pooling = self.embedding_pooling(embedding)  # [Batch, Pool_Dim]
+        dummy_vision_states = self.null_image_token.expand(batch_size, -1)
+        self.alpha_list = self.Task_classifier(dummy_vision_states, embedding_after_pooling)
+
+        # if self.training:
+        #     if gating_temperature_overied is not None:
+        #         G_list = self.visionGating(self.alpha_list, gating_temperature_overied)
+        #     else:
+        #         G_list = self.visionGating(self.alpha_list)
+        # else:
+        #     raw_g = self.visionGating(self.alpha_list)
+        #     G_list = (raw_g > 0.5).to(dtype=embedding.dtype)
+
+        dummy_delta_batch = torch.zeros(batch_size, self.cfg.vision_token_dim, device=embedding.device,
+                                        dtype=embedding.dtype)
+        batch_indices = torch.arange(batch_size, device=embedding.device)
+
+        out = self.text_gating(
+            dummy_delta_batch,
+            self.alpha_list,
+            batch_indices,
+            batch_indices,
+            batch_size,
+            gating_temperature_overied
+        )
+
+        if self.training:
+            hard_k_logits, tax_loss = out
+            k_sums = hard_k_logits.sum(dim=-1)
+            k_results = (k_sums, tax_loss)
+        else:
+            k_sums = out.sum(dim=-1)
+            k_results = k_sums.round()
+
+        alpha_loss = torch.mean(torch.sigmoid(self.alpha_list)) * 0.1
+
+        return k_results, alpha_loss

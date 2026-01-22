@@ -129,7 +129,7 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
         #### MMRL ####
         v_r_token_list = None
         t_r_tokens = None
-        if pixel_values is not None and self.use_mmrl:
+        if self.use_mmrl:
             v_r_token_list, t_r_token_list = self.MMRL()
             t_r_tokens = torch.cat(t_r_token_list, dim=0)
         self.tax_loss = 0.0
@@ -141,10 +141,10 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
                 count = (seq_input_ids == self.vision_end_token_id).sum().item()
                 images_per_sample.append(count)
         # todo：优化无mmrl流程
-        # todo：假设只有文字没有图片？
-        # todo：多轮对话逻辑？
         visual_pos_masks = None
         deepstack_visual_embeds = None
+        k_results = None
+
         if pixel_values is not None:
             if self.use_mmrl:
                 image_embeds_raw, deepstack_image_embeds, k_results = self.get_image_features(
@@ -154,30 +154,6 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
                     embedding = inputs_embeds,
                     images_per_sample = images_per_sample
                 )
-                if self.training:
-                    # [b] [1]
-                    k_sums, tax_loss = k_results
-                    self.tax_loss = tax_loss
-                else:
-                    k_sums = k_results
-                placeholder_cumsum = is_placeholder.cumsum(dim=-1)  # [Batch, Seq]
-                placeholder_idx = (placeholder_cumsum - 1).clamp(min=0)
-                # if k_sums.ndim == 1:
-                #     k_sums = k_sums.unsqueeze(-1)
-                target_embeds = t_r_tokens[placeholder_idx]  # [Batch, Seq, Dim]
-                gate_soft_mask = torch.clamp(k_sums.unsqueeze(-1) - placeholder_idx.to(inputs_embeds.dtype), min=0,
-                                             max=1).unsqueeze(-1)
-                gate_soft_mask = gate_soft_mask.to(inputs_embeds.dtype)
-                inputs_embeds = torch.where(is_placeholder.unsqueeze(-1), target_embeds * gate_soft_mask, inputs_embeds)
-                dynamic_gate_mask = (gate_soft_mask.squeeze(-1) > 1e-3)  # [Batch, Seq]
-                attention_mask = attention_mask & ((~is_placeholder) | dynamic_gate_mask)
-                if not self.training:
-                    hard_gate = (gate_soft_mask.squeeze(-1) > 0.5)
-                    attention_mask = attention_mask & ((~is_placeholder) | hard_gate)
-                    embed_mask = torch.ones_like(attention_mask, dtype=inputs_embeds.dtype)
-                    tokens_to_zero = is_placeholder & (~hard_gate)
-                    embed_mask = embed_mask.masked_fill(tokens_to_zero, 0.0)
-                    inputs_embeds = inputs_embeds * embed_mask.unsqueeze(-1)
             else:
                 image_embeds_raw, deepstack_image_embeds = self.get_image_features(
                     pixel_values=pixel_values,
@@ -195,7 +171,36 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
             inputs_embeds = inputs_embeds.masked_scatter(image_mask, image_embeds)
             visual_pos_masks = image_mask[..., 0]
             deepstack_visual_embeds = deepstack_image_embeds
+        elif self.use_mmrl:
+            k_results, alpha_loss = self.visual.compute_text_only_gating(
+                embedding=inputs_embeds
+            )
+            self.alpha_loss = alpha_loss
+        ######## text gating ########
+        if self.use_mmrl and k_results is not None:
+            if self.training:
+                k_sums, tax_loss = k_results
+                self.tax_loss = tax_loss
+            else:
+                k_sums = k_results
 
+            placeholder_cumsum = is_placeholder.cumsum(dim=-1)
+            placeholder_idx = (placeholder_cumsum - 1).clamp(min=0)
+            target_embeds = t_r_tokens[placeholder_idx]
+            gate_soft_mask = torch.clamp(k_sums.unsqueeze(-1) - placeholder_idx.to(inputs_embeds.dtype), min=0,
+                                         max=1).unsqueeze(-1)
+            gate_soft_mask = gate_soft_mask.to(inputs_embeds.dtype)
+            inputs_embeds = torch.where(is_placeholder.unsqueeze(-1), target_embeds * gate_soft_mask, inputs_embeds)
+            dynamic_gate_mask = (gate_soft_mask.squeeze(-1) > 1e-3)
+            attention_mask = attention_mask & ((~is_placeholder) | dynamic_gate_mask)
+            if not self.training:
+                hard_gate = (gate_soft_mask.squeeze(-1) > 0.5)
+                attention_mask = attention_mask & ((~is_placeholder) | hard_gate)
+                embed_mask = torch.ones_like(attention_mask, dtype=inputs_embeds.dtype)
+                tokens_to_zero = is_placeholder & (~hard_gate)
+                embed_mask = embed_mask.masked_fill(tokens_to_zero, 0.0)
+                inputs_embeds = inputs_embeds * embed_mask.unsqueeze(-1)
+        ######## text gating ########
         if position_ids is None:
             attention_mask_tensor = (
                 attention_mask if not isinstance(attention_mask, dict) else attention_mask["full_attention"]

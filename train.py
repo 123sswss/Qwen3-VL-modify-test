@@ -210,6 +210,10 @@ class MixedMMRLDataset(Dataset):
             role = "user" if turn["from"] == "human" else "assistant"
             content = turn["value"]
 
+            # 强制截断“检测到：”之后的内容，防止答案泄露
+            if role == "user" and "检测到：" in content:
+                content = content.split("检测到：")[0]
+
             # 处理图片标记
             if "<image>" in content:
                 content = content.replace("<image>", "")  # 移除标记，Processor 会加
@@ -240,6 +244,9 @@ class MixedMMRLDataset(Dataset):
         attention_mask = inputs["attention_mask"].squeeze(0)
         pixel_values = inputs["pixel_values"].squeeze(0)
         image_grid_thw = inputs["image_grid_thw"].squeeze(0)
+        # 【修复】如果只有一张图，squeeze可能会把它压成一维 [3]，需要恢复成 [1, 3]
+        if image_grid_thw.dim() == 1:
+            image_grid_thw = image_grid_thw.unsqueeze(0)
 
         # 简单构造 Labels (全量训练，或者你自己加 masking 逻辑)
         labels = input_ids.clone()
@@ -275,7 +282,10 @@ class MMRLDataCollator:
 
         batch = {}
         for key in features[0].keys():
-            if torch.is_tensor(features[0][key]):
+            # 【修复点】pixel_values 和 image_grid_thw 是变长的，必须拼接(cat)不能堆叠(stack)
+            if key in ["pixel_values", "image_grid_thw"]:
+                batch[key] = torch.cat([f[key] for f in features], dim=0)
+            elif torch.is_tensor(features[0][key]):
                 batch[key] = torch.stack([f[key] for f in features])
             else:
                 batch[key] = [f[key] for f in features]
@@ -298,7 +308,7 @@ def train_gating(
         output_dir: str = "./mmrl_gating_output"
 ):
     print("=" * 20 + " 启动 MMRL 门控混合训练 " + "=" * 20)
-    MODEL_PATH = "../model/qwen3vl"  # 修改为你的路径
+    MODEL_PATH = "/root/autodl-tmp/model"  # 修改为你的路径
 
     # 1. 配置加载
     config = AutoConfig.from_pretrained(MODEL_PATH, trust_remote_code=True)
@@ -365,11 +375,11 @@ def train_gating(
     # 5. Trainer
     training_args = TrainingArguments(
         output_dir=output_dir,
-        num_train_epochs=5,  # 根据数据量调整，数据少可以多跑几个 epoch
+        num_train_epochs=4,  # 根据数据量调整，数据少可以多跑几个 epoch
         per_device_train_batch_size=2,  # 显存允许的话尽量大一点，保证Batch里同时有正负样本
-        gradient_accumulation_steps=4,
+        gradient_accumulation_steps=8,
         learning_rate=5e-4,
-        save_strategy="epoch",
+        save_strategy="no",
         logging_steps=5,
         remove_unused_columns=False,  # 必须 False，否则 alpha_labels 会被过滤
         bf16=True,
@@ -393,8 +403,8 @@ if __name__ == "__main__":
     # 请替换为真实路径
     # general_data 可以直接用 COCO 的 caption 数据，或者 LLaVA 的 instruct 数据
     train_gating(
-        expert_json="path/to/power_grid_train.json",
-        expert_img_dir="path/to/power_grid_images",
-        general_json="path/to/coco_or_llava_generic.json",
-        general_img_dir="path/to/generic_images"
+        expert_json="/root/autodl-tmp/dataset/generated_json.json",
+        expert_img_dir="/root/autodl-tmp/dataset/prof",
+        general_json="/root/autodl-tmp/dataset/llava_instruct_150k.json",
+        general_img_dir="/root/autodl-tmp/dataset/gen/train2017"
     )

@@ -61,7 +61,7 @@ class Qwen3VLMMRLForTrain(Qwen3VLForConditionalGeneration):
         outputs = super().forward(input_ids=input_ids, images_per_sample=images_per_sample, **kwargs)
 
         # 1. 获取 Tax Loss (稀疏性惩罚)
-        mmrl_tax_loss = self.model.tax_loss if self.model.tax_loss is not None else 0.0
+        mmrl_tax_loss = self.model.tax_loss
 
         # 2. 【核心修改】计算动态 Alpha Guide Loss
         # alpha_list shape: [Total_Images_In_Batch, 1]
@@ -115,12 +115,18 @@ class Qwen3VLMMRLForTrain(Qwen3VLForConditionalGeneration):
             # 权重设为 5.0，强力引导
             loss_fct = torch.nn.MSELoss()
             # 都要转成 float32/bfloat16
-            alpha_guide_loss = loss_fct(alpha_probs, expanded_labels.to(alpha_probs.dtype)) * 5.0
+            alpha_guide_loss = loss_fct(alpha_probs, expanded_labels.to(alpha_probs.dtype)) * 2
+
 
         # 3. 合并 Loss
         if outputs.loss is not None:
             total_loss = outputs.loss + mmrl_tax_loss + alpha_guide_loss
             outputs.loss = total_loss
+        if self.training and torch.rand(1).item() < 0.01:  # 1%概率打印
+            print(f"\n[Debug] CE Loss: {outputs.loss.item():.4f} | "
+                f"Tax: {mmrl_tax_loss:.4f} | "
+                f"Alpha Guide: {alpha_guide_loss:.4f} | "
+                f"Alpha Mean: {alpha_probs.mean().item():.4f}")
 
         return outputs
 
@@ -250,17 +256,25 @@ class MixedMMRLDataset(Dataset):
 
         # 简单构造 Labels (全量训练，或者你自己加 masking 逻辑)
         labels = input_ids.clone()
-        labels[attention_mask == 0] = -100
-
-        # 返回字典
+        # 找到assistant开始的位置
+        # Qwen格式: <|im_start|>assistant\n
+        assistant_token_id = self.processor.tokenizer.convert_tokens_to_ids("<|im_start|>")
+        assistant_positions = (input_ids == assistant_token_id).nonzero(as_tuple=True)[0]
+        
+        if len(assistant_positions) >= 2:  # 第二个<|im_start|>是assistant
+            assistant_start = assistant_positions[1].item() + 2  # +2跳过"assistant\n"
+            labels[:assistant_start] = -100  # mask掉user部分
+        
+        labels[attention_mask == 0] = -100  # mask掉padding
+        
         return {
             "input_ids": input_ids,
             "attention_mask": attention_mask,
             "pixel_values": pixel_values,
             "image_grid_thw": image_grid_thw,
             "labels": labels,
-            "alpha_labels": float(alpha_label),  # 关键新增
-            "images_per_sample": 1  # 假设每条数据1张图，复杂情况需自行统计
+            "alpha_labels": float(alpha_label),
+            "images_per_sample": 1
         }
 
 
@@ -305,7 +319,7 @@ def train_gating(
         expert_img_dir: str,
         general_json: str,
         general_img_dir: str,
-        output_dir: str = "./mmrl_gating_output"
+        output_dir: str = "./mmrl_output"
 ):
     print("=" * 20 + " 启动 MMRL 门控混合训练 " + "=" * 20)
     MODEL_PATH = "/root/autodl-tmp/model"  # 修改为你的路径
@@ -375,10 +389,10 @@ def train_gating(
     # 5. Trainer
     training_args = TrainingArguments(
         output_dir=output_dir,
-        num_train_epochs=4,  # 根据数据量调整，数据少可以多跑几个 epoch
+        num_train_epochs=2,  # 根据数据量调整，数据少可以多跑几个 epoch
         per_device_train_batch_size=2,  # 显存允许的话尽量大一点，保证Batch里同时有正负样本
         gradient_accumulation_steps=8,
-        learning_rate=5e-4,
+        learning_rate=2e-4,
         save_strategy="no",
         logging_steps=5,
         remove_unused_columns=False,  # 必须 False，否则 alpha_labels 会被过滤

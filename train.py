@@ -20,6 +20,36 @@ from transformers import GenerationConfig
 import config as cfg
 import QWen3WithMMRL
 import processingWithMMRL
+from transformers import TrainerCallback
+
+
+class MMRLTrainingCallback(TrainerCallback):
+    def __init__(self, dataset, initial_temp=1.0, final_temp=0.5,
+                 total_epochs=5, enable_temp_annealing=True):
+        self.dataset = dataset
+        self.initial_temp = initial_temp
+        self.final_temp = final_temp
+        self.total_epochs = total_epochs
+        self.enable_temp_annealing = enable_temp_annealing
+        self.current_epoch = 0
+
+    def on_epoch_begin(self, args, state, control, **kwargs):
+        """Epoch开始时的操作"""
+        self.current_epoch = state.epoch
+
+        # 1. 重新采样通用数据
+        print(f"\n{'=' * 60}")
+        print(f"[Epoch {int(self.current_epoch)}] Resampling general dataset...")
+        self.dataset.resample_general_data()
+
+        # 2. 更新temperature
+        if self.enable_temp_annealing:
+            progress = min(self.current_epoch / self.total_epochs, 1.0)
+            current_temp = self.initial_temp - (self.initial_temp - self.final_temp) * progress
+            kwargs['model'].temperature_override = current_temp
+            print(f"[Temperature Annealing] Current: {current_temp:.4f} "
+                  f"(Progress: {progress * 100:.1f}%)")
+        print(f"{'=' * 60}\n")
 
 
 # 1. 定义支持 动态 Alpha Loss 的模型包装器
@@ -47,6 +77,8 @@ class Qwen3VLMMRLForTrain(Qwen3VLForConditionalGeneration):
 
         self.post_init()
         self.training_step_counter = 0
+        self.temperature_override = None  # 添加temperature_override属性
+        self.k_sums_history = []  # 记录k值历史
 
     def get_output_embeddings(self):
         return self.lm_head
@@ -55,7 +87,23 @@ class Qwen3VLMMRLForTrain(Qwen3VLForConditionalGeneration):
         self.lm_head = new_embeddings
 
     def forward(self, input_ids=None, alpha_labels=None, images_per_sample=None, **kwargs):
+        # 传递temperature_override到模型
+        if hasattr(self, 'temperature_override') and self.temperature_override is not None:
+            kwargs['gating_temperature_overied'] = self.temperature_override
+
         outputs = super().forward(input_ids=input_ids, images_per_sample=images_per_sample, **kwargs)
+
+        # 获取k_sums（从model.visual中）
+        k_sums_value = None
+        if hasattr(self.model.visual, 'k_results'):
+            k_results = self.model.visual.k_results
+            if k_results is not None:
+                if isinstance(k_results, tuple):
+                    k_sums_value = k_results[0]  # training模式
+                else:
+                    k_sums_value = k_results  # eval模式
+
+
 
         mmrl_tax_loss = self.model.tax_loss
         alpha_logits = self.model.visual.alpha_list
@@ -96,21 +144,37 @@ class Qwen3VLMMRLForTrain(Qwen3VLForConditionalGeneration):
         if outputs.loss is not None:
             total_loss = outputs.loss + mmrl_tax_loss + alpha_guide_loss
             outputs.loss = total_loss
-        
+
         if self.training:
             self.training_step_counter += 1
             if self.training_step_counter % 50 == 0:
-                print("\n" + "="*60)
+                print("\n" + "=" * 60)
                 print(f"[Training Step {self.training_step_counter}] Loss Breakdown:")
                 print(f"  ├─ CE Loss (Language):    {(outputs.loss - mmrl_tax_loss - alpha_guide_loss).item():>8.4f}")
                 print(f"  ├─ Tax Loss (Sparsity):   {mmrl_tax_loss.item():>8.4f}")
                 print(f"  ├─ Alpha Guide Loss:      {alpha_guide_loss.item():>8.4f} (Weight: {self.alpha_loss_weight})")
                 print(f"  └─ Total Loss:            {outputs.loss.item():>8.4f}")
+
+                # 添加K值监控
+                if k_sums_value is not None:
+                    k_mean = k_sums_value.mean().item()
+                    k_max = k_sums_value.max().item()
+                    k_min = k_sums_value.min().item()
+                    print(f"[K Statistics (Activated Tokens)]")
+                    print(f"  ├─ Mean K:                {k_mean:>8.2f}")
+                    print(f"  ├─ Max K:                 {k_max:>8.2f}")
+                    print(f"  └─ Min K:                 {k_min:>8.2f}")
+
                 print(f"[Alpha Statistics]")
                 print(f"  ├─ Mean Probability:      {alpha_probs.mean().item():>8.4f}")
                 print(f"  ├─ Target Mean:           {expanded_labels.float().mean().item():>8.4f}")
-                print(f"  └─ Alpha Logits:          {torch.sigmoid(alpha_logits).squeeze().detach().cpu().tolist()}")
-                print("="*60 + "\n")
+
+                # Temperature信息
+                if hasattr(self, 'temperature_override') and self.temperature_override is not None:
+                    print(f"[Temperature] Current:      {self.temperature_override:>8.4f}")
+
+                print("=" * 60 + "\n")
+
         return outputs
 
 
@@ -120,56 +184,63 @@ class MixedMMRLDataset(Dataset):
                  expert_json, expert_img_dir,
                  general_json, general_img_dir,
                  general_ratio_limit=1.0):
-        """
-        general_ratio_limit: 限制通用数据的数量相对于专业数据的比例。
-        """
         self.processor = processor
+        self.expert_img_dir = expert_img_dir
+        self.general_img_dir = general_img_dir
+        self.general_ratio_limit = general_ratio_limit
+
+        # 加载专业数据
+        with open(expert_json, 'r', encoding='utf-8') as f:
+            self.expert_data_raw = json.load(f)
+
+        # 加载通用数据（保存完整数据）
+        with open(general_json, 'r', encoding='utf-8') as f:
+            self.general_data_raw = json.load(f)
+
+        # 初始化数据列表
+        self._build_data_list()
+
+    def _build_data_list(self):
+        """构建当前epoch的数据列表"""
         self.data_list = []
 
-        # 1. 加载专业数据 (Target Alpha = 1.0)
-        with open(expert_json, 'r', encoding='utf-8') as f:
-            expert_data = json.load(f)
-
-        print(f"[Dataset] 加载专业数据: {len(expert_data)} 条")
-        for item in expert_data:
+        # 添加专业数据
+        for item in self.expert_data_raw:
             image_file = item.get("image", "")
-            full_path = os.path.join(expert_img_dir, image_file)
+            full_path = os.path.join(self.expert_img_dir, image_file)
             if not os.path.exists(full_path):
-                print(f"[Warning] 专业图片丢失跳过: {image_file}")
                 continue
             self.data_list.append({
                 "data": item,
-                "img_root": expert_img_dir,
-                "alpha_label": 1.0,  # 专家模式：全开
+                "img_root": self.expert_img_dir,
+                "alpha_label": 1.0,
                 "type": "expert"
             })
 
-        # 2. 加载通用数据 (Target Alpha = 0.0)
-        with open(general_json, 'r', encoding='utf-8') as f:
-            general_data = json.load(f)
+        # 随机采样通用数据
+        max_general = int(len(self.expert_data_raw) * self.general_ratio_limit)
+        sampled_general = random.sample(self.general_data_raw,
+                                        min(max_general, len(self.general_data_raw)))
 
-        # 根据比例裁剪通用数据
-        max_general = int(len(expert_data) * general_ratio_limit)
-        if len(general_data) > max_general:
-            general_data = random.sample(general_data, max_general)
-
-        print(f"[Dataset] 加载通用数据: {len(general_data)} 条 (Target Alpha=0)")
-        for item in general_data:
+        for item in sampled_general:
             image_file = item.get("image", "")
-            full_path = os.path.join(general_img_dir, image_file)
+            full_path = os.path.join(self.general_img_dir, image_file)
             if not os.path.exists(full_path):
-                print(f"[Warning] 通用图片丢失跳过: {image_file}")
                 continue
             self.data_list.append({
                 "data": item,
-                "img_root": general_img_dir,
-                "alpha_label": 0.0,  # 通用模式：关闭
+                "img_root": self.general_img_dir,
+                "alpha_label": 0.0,
                 "type": "general"
             })
 
-        # 打乱
         random.shuffle(self.data_list)
-        print(f"[Dataset] 总数据量: {len(self.data_list)}")
+        print(f"[Dataset Rebuilt] Expert: {sum(1 for x in self.data_list if x['alpha_label'] == 1.0)}, "
+              f"General: {sum(1 for x in self.data_list if x['alpha_label'] == 0.0)}")
+
+    def resample_general_data(self):
+        """每个epoch调用此方法重新采样通用数据"""
+        self._build_data_list()
 
     def __len__(self):
         return len(self.data_list)

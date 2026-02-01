@@ -302,7 +302,7 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
         if v_r_token_list is None:
              k_results = torch.tensor(0.0, device=hidden_states.device)
             #  alpha_loss = torch.tensor(0.0, device=hidden_states.device)
-             return hidden_states, deepstack_feature_lists, k_results, alpha_loss
+             return hidden_states, deepstack_feature_lists, k_results
         img_seqlens = cu_seqlens[1:] - cu_seqlens[:-1]
         img_counts = torch.tensor(images_per_sample, device=hidden_states.device)
         batch_indices_img = torch.repeat_interleave(
@@ -356,6 +356,7 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
             batch_indices,
             batch_indices,
             batch_size,
+            embedding_after_pooling,
             gating_temperature_overied
         )
 

@@ -22,9 +22,7 @@ import QWen3WithMMRL
 import processingWithMMRL
 
 
-# ==============================================================================
 # 1. 定义支持 动态 Alpha Loss 的模型包装器
-# ==============================================================================
 class Qwen3VLMMRLForTrain(Qwen3VLForConditionalGeneration):
     def __init__(self, config, tokenizer, alpha_loss_weight=1.0):
         import torch.nn as nn
@@ -116,9 +114,7 @@ class Qwen3VLMMRLForTrain(Qwen3VLForConditionalGeneration):
         return outputs
 
 
-# ==============================================================================
 # 2. 混合数据集 (专业 + 通用)
-# ==============================================================================
 class MixedMMRLDataset(Dataset):
     def __init__(self, processor,
                  expert_json, expert_img_dir,
@@ -252,9 +248,7 @@ class MixedMMRLDataset(Dataset):
         }
 
 
-# ==============================================================================
 # 3. 自定义 Collator (处理 alpha_labels)
-# ==============================================================================
 @dataclass
 class MMRLDataCollator:
     processor: Any
@@ -278,19 +272,17 @@ class MMRLDataCollator:
         return batch
 
 
-# ==============================================================================
 # 4. 训练主流程
-# ==============================================================================
 def train_gating(
         expert_json: str,
         expert_img_dir: str,
         general_json: str,
         general_img_dir: str,
         output_dir: str = "./mmrl_output",
-        learning_rate: float = 2e-4,          # 参数化：学习率
-        num_train_epochs: int = 5,            # 参数化：训练轮数
-        general_ratio_limit: float = 0.4,     # 参数化：通用数据比例限制
-        alpha_loss_weight: float = 8.0        # 参数化：Alpha Guide Loss 的权重
+        learning_rate: float = 2e-4,       
+        num_train_epochs: int = 5,         
+        general_ratio_limit: float = 0.4,  
+        alpha_loss_weight: float = 8.0     
 ):
     print("=" * 20 + " 启动 MMRL 门控混合训练 " + "=" * 20)
     MODEL_PATH = "/root/autodl-tmp/model"  # 修改为你的路径

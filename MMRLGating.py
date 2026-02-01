@@ -76,12 +76,18 @@ class textGating(nn.Module):
         self.hard_concrete = HardConcreteGate(temperature)
         self.lambda_ = lambda_
 
+        self.text_relevance_head = nn.Sequential(nn.Linear(config.text_token_dim, config.GATING_MID_DIM),
+                                                 nn.ReLU(),
+                                                 nn.Linear(config.GATING_MID_DIM, 1))
+        nn.init.constant_(self.text_relevance_head[-1].bias, 1.0)
+
     def forward(self,
                 delta_vision_token: torch.Tensor,  # [Total_Tokens, Dim]
-                alpha: torch.Tensor,  # [Total_Images, 1]
-                batch_indices_token: torch.Tensor,  # [Total_Tokens]
-                batch_indices_img: torch.Tensor,  # [Total_Images]
+                alpha: torch.Tensor,               # [Total_Images, 1]
+                batch_indices_token: torch.Tensor, # [Total_Tokens]
+                batch_indices_img: torch.Tensor,   # [Total_Images]
                 batch_size: int,
+                text_embedding: torch.Tensor,      # [Batch_Size, Text_Dim]
                 temperature_overide: Optional[float] = None):
         # [Batch_Size, Dim]
         pooled_vision = self.attention_pooling.forward_vectorized(
@@ -91,17 +97,24 @@ class textGating(nn.Module):
         alpha_logits = torch.sigmoid(alpha)
         batch_alpha = torch.zeros(batch_size, 1, device=alpha_logits.device, dtype=alpha_logits.dtype)
         batch_alpha.index_reduce_(0, batch_indices_img, alpha_logits, reduce="amax", include_self=False)
+        
+        text_relevance_logits = self.text_relevance_head(text_embedding)  # [Batch, 1]
+        text_relevance_prob = torch.sigmoid(text_relevance_logits)  # [0, 1]
+        
         hidden_state = torch.cat([pooled_vision, batch_alpha], dim=-1)
         intensity = torch.sigmoid(self.intensity_mlp(hidden_state)).sum(dim=-1, keepdim=True)
         threshold = self.threshold_mlp(hidden_state)
         threshold = self.softplus(threshold) + self.epsilon
-        K_logits = intensity - torch.cumsum(threshold, -1)
+        modulated_intensity = intensity * text_relevance_prob
+        K_logits = modulated_intensity - torch.cumsum(threshold, -1)
         hard_k_logits = self.hard_concrete(K_logits, temperature_overide)
+
         if self.training:
             batch_alpha_prob = batch_alpha
             dynamic_lambda = self.lambda_ * (1.0 - batch_alpha_prob)
             raw_loss = dynamic_lambda * intensity.sum(dim=-1) / self.total_rep_num
-            tax_loss = raw_loss.mean()
+            text_sparsity_loss = 0.05 * text_relevance_prob.mean()
+            tax_loss = (raw_loss + text_sparsity_loss).mean()
             return hard_k_logits, tax_loss
         return hard_k_logits
 

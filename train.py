@@ -26,10 +26,11 @@ import processingWithMMRL
 # 1. 定义支持 动态 Alpha Loss 的模型包装器
 # ==============================================================================
 class Qwen3VLMMRLForTrain(Qwen3VLForConditionalGeneration):
-    def __init__(self, config, tokenizer):
+    def __init__(self, config, tokenizer, alpha_loss_weight=1.0):
         import torch.nn as nn
         nn.Module.__init__(self)
         self.config = config
+        self.alpha_loss_weight = alpha_loss_weight  # 保存 Alpha Loss 权重
         current_vocab_size = len(tokenizer)
 
         # 初始化魔改 Base Model
@@ -47,6 +48,7 @@ class Qwen3VLMMRLForTrain(Qwen3VLForConditionalGeneration):
             self.generation_config.eos_token_id = tokenizer.eos_token_id
 
         self.post_init()
+        self.training_step_counter = 0
 
     def get_output_embeddings(self):
         return self.lm_head
@@ -55,47 +57,24 @@ class Qwen3VLMMRLForTrain(Qwen3VLForConditionalGeneration):
         self.lm_head = new_embeddings
 
     def forward(self, input_ids=None, alpha_labels=None, images_per_sample=None, **kwargs):
-        # 注意：Trainer 会把 dataset 返回的 extra fields 传到 kwargs 或者直接传参
-        # 这里我们需要显式接收 alpha_labels
-
         outputs = super().forward(input_ids=input_ids, images_per_sample=images_per_sample, **kwargs)
 
-        # 1. 获取 Tax Loss (稀疏性惩罚)
         mmrl_tax_loss = self.model.tax_loss
-
-        # 2. 【核心修改】计算动态 Alpha Guide Loss
-        # alpha_list shape: [Total_Images_In_Batch, 1]
         alpha_logits = self.model.visual.alpha_list
-
         alpha_guide_loss = 0.0
 
         if alpha_logits is not None and alpha_labels is not None:
-            # alpha_labels shape: [Batch_Size]
-            # images_per_sample: List[int] or Tensor, 记录每个样本包含几张图
-
-            # 我们需要把 Batch 粒度的 label 对齐到 Image 粒度
-            # 例如 Batch=2, Sample1有2图(label=1), Sample2有1图(label=0)
-            # alpha_logits 有 3 个值
-            # 扩展后的 labels 应该是 [1, 1, 0]
-
-            # 确保 alpha_labels 是 Tensor
-            if not isinstance(alpha_labels, torch.Tensor):
-                alpha_labels = torch.tensor(alpha_labels, device=alpha_logits.device)
-            else:
-                alpha_labels = alpha_labels.to(alpha_logits.device)
-
-            # 这里的 images_per_sample 通常在 kwargs 或者 processor 处理后会传进来
-            # QWen3WithMMRL 的 forward 内部处理了 images_per_sample，这里我们需要拿到它
-            # 如果 input_ids 存在，我们可以重新计算一下，或者信任 dataset/collator 传进来的
+            if isinstance(alpha_logits, list):
+                if len(alpha_logits) == 0:
+                    print("[Warning] alpha_list is empty, skipping alpha loss")
+                    alpha_guide_loss = torch.tensor(0.0, device=outputs.loss.device)
+                else:
+                    alpha_logits = torch.stack(alpha_logits)
 
             if images_per_sample is None:
-                # 兜底策略：假设每条数据只有1张图 (学术验证阶段通常如此)
-                # 此时 Batch_Size == Total_Images
                 expanded_labels = alpha_labels.view(-1, 1)
             else:
-                # 如果有 images_per_sample (list 或 tensor)
                 expanded_labels_list = []
-                # 假设 images_per_sample 是一个列表，长度等于 batch_size
                 for idx, count in enumerate(images_per_sample):
                     label = alpha_labels[idx]
                     expanded_labels_list.append(label.repeat(count))
@@ -106,28 +85,34 @@ class Qwen3VLMMRLForTrain(Qwen3VLForConditionalGeneration):
 
             # 确保维度匹配
             if alpha_probs.shape[0] != expanded_labels.shape[0]:
-                # 极端情况防崩：截断或Padding，或者只取第一维
                 min_len = min(alpha_probs.shape[0], expanded_labels.shape[0])
                 alpha_probs = alpha_probs[:min_len]
                 expanded_labels = expanded_labels[:min_len]
 
             # MSE Loss: 让预测的概率逼近 Target (0 或 1)
-            # 权重设为 5.0，强力引导
-            loss_fct = torch.nn.MSELoss()
-            # 都要转成 float32/bfloat16
-            alpha_guide_loss = loss_fct(alpha_probs, expanded_labels.to(alpha_probs.dtype)) * 2
-
+            loss_fct = torch.nn.BCEWithLogitsLoss()
+            # 使用传入的权重参数
+            alpha_guide_loss = loss_fct(alpha_logits, expanded_labels.to(alpha_logits.dtype)) * self.alpha_loss_weight
 
         # 3. 合并 Loss
         if outputs.loss is not None:
             total_loss = outputs.loss + mmrl_tax_loss + alpha_guide_loss
             outputs.loss = total_loss
-        if self.training and torch.rand(1).item() < 0.01:  # 1%概率打印
-            print(f"\n[Debug] CE Loss: {outputs.loss.item():.4f} | "
-                f"Tax: {mmrl_tax_loss:.4f} | "
-                f"Alpha Guide: {alpha_guide_loss:.4f} | "
-                f"Alpha Mean: {alpha_probs.mean().item():.4f}")
-
+        
+        if self.training:
+            self.training_step_counter += 1
+            if self.training_step_counter % 50 == 0:
+                print("\n" + "="*60)
+                print(f"[Training Step {self.training_step_counter}] Loss Breakdown:")
+                print(f"  ├─ CE Loss (Language):    {(outputs.loss - mmrl_tax_loss - alpha_guide_loss).item():>8.4f}")
+                print(f"  ├─ Tax Loss (Sparsity):   {mmrl_tax_loss.item():>8.4f}")
+                print(f"  ├─ Alpha Guide Loss:      {alpha_guide_loss.item():>8.4f} (Weight: {self.alpha_loss_weight})")
+                print(f"  └─ Total Loss:            {outputs.loss.item():>8.4f}")
+                print(f"[Alpha Statistics]")
+                print(f"  ├─ Mean Probability:      {alpha_probs.mean().item():>8.4f}")
+                print(f"  ├─ Target Mean:           {expanded_labels.float().mean().item():>8.4f}")
+                print(f"  └─ Alpha Logits:          {torch.sigmoid(alpha_logits).squeeze().detach().cpu().tolist()}")
+                print("="*60 + "\n")
         return outputs
 
 
@@ -141,7 +126,6 @@ class MixedMMRLDataset(Dataset):
                  general_ratio_limit=1.0):
         """
         general_ratio_limit: 限制通用数据的数量相对于专业数据的比例。
-                             例如 1.0 表示通用数据最多和专业数据一样多。
         """
         self.processor = processor
         self.data_list = []
@@ -200,29 +184,23 @@ class MixedMMRLDataset(Dataset):
         img_root = item_wrapper["img_root"]
         alpha_label = item_wrapper["alpha_label"]
 
-        # 解析 LLaVA 格式
-        # item: {"image": "xxx.jpg", "conversations": [...]}
         image_file = item.get("image")
         conversations = item.get("conversations")
 
         image_path = os.path.join(img_root, image_file)
         image = Image.open(image_path).convert("RGB")
 
-        # 构造 Prompt
-        # 假设 conversations[0] 是 human, [1] 是 gpt
         # Qwen 格式处理
         qwen_conv = []
         for turn in conversations:
             role = "user" if turn["from"] == "human" else "assistant"
             content = turn["value"]
 
-            # 强制截断“检测到：”之后的内容，防止答案泄露
             if role == "user" and "检测到：" in content:
                 content = content.split("检测到：")[0]
 
-            # 处理图片标记
             if "<image>" in content:
-                content = content.replace("<image>", "")  # 移除标记，Processor 会加
+                content = content.replace("<image>", "")
                 msg_content = [
                     {"type": "image", "image": image},
                     {"type": "text", "text": content.strip()}
@@ -232,7 +210,6 @@ class MixedMMRLDataset(Dataset):
 
             qwen_conv.append({"role": role, "content": msg_content})
 
-        # Apply Template
         text_inputs = self.processor.apply_chat_template(
             qwen_conv, tokenize=False, add_generation_prompt=False
         )
@@ -241,7 +218,7 @@ class MixedMMRLDataset(Dataset):
             images=image,
             text=text_inputs,
             padding="max_length",
-            max_length=1024,  # 根据显存调整
+            max_length=1024,
             truncation=True,
             return_tensors="pt",
         )
@@ -250,22 +227,19 @@ class MixedMMRLDataset(Dataset):
         attention_mask = inputs["attention_mask"].squeeze(0)
         pixel_values = inputs["pixel_values"].squeeze(0)
         image_grid_thw = inputs["image_grid_thw"].squeeze(0)
-        # 【修复】如果只有一张图，squeeze可能会把它压成一维 [3]，需要恢复成 [1, 3]
+        
         if image_grid_thw.dim() == 1:
             image_grid_thw = image_grid_thw.unsqueeze(0)
 
-        # 简单构造 Labels (全量训练，或者你自己加 masking 逻辑)
         labels = input_ids.clone()
-        # 找到assistant开始的位置
-        # Qwen格式: <|im_start|>assistant\n
         assistant_token_id = self.processor.tokenizer.convert_tokens_to_ids("<|im_start|>")
         assistant_positions = (input_ids == assistant_token_id).nonzero(as_tuple=True)[0]
         
-        if len(assistant_positions) >= 2:  # 第二个<|im_start|>是assistant
-            assistant_start = assistant_positions[1].item() + 2  # +2跳过"assistant\n"
-            labels[:assistant_start] = -100  # mask掉user部分
+        if len(assistant_positions) >= 2:
+            assistant_start = assistant_positions[1].item() + 2
+            labels[:assistant_start] = -100
         
-        labels[attention_mask == 0] = -100  # mask掉padding
+        labels[attention_mask == 0] = -100
         
         return {
             "input_ids": input_ids,
@@ -286,17 +260,11 @@ class MMRLDataCollator:
     processor: Any
 
     def __call__(self, features: List[Dict[str, Any]]) -> Dict[str, Any]:
-        # 提取 alpha_labels 和 images_per_sample
         alpha_labels = [f.pop("alpha_labels") for f in features]
         images_per_sample = [f.pop("images_per_sample") for f in features]
 
-        # 使用 transformer 默认的 pad 逻辑处理 tensors
-        # 因为 features 里的 tensors 长度可能不一样 (如果 padding=False)
-        # 但我们在 dataset 里已经 padding="max_length" 了，所以可以直接 stack
-
         batch = {}
         for key in features[0].keys():
-            # 【修复点】pixel_values 和 image_grid_thw 是变长的，必须拼接(cat)不能堆叠(stack)
             if key in ["pixel_values", "image_grid_thw"]:
                 batch[key] = torch.cat([f[key] for f in features], dim=0)
             elif torch.is_tensor(features[0][key]):
@@ -304,7 +272,6 @@ class MMRLDataCollator:
             else:
                 batch[key] = [f[key] for f in features]
 
-        # 补充自定义字段
         batch["alpha_labels"] = torch.tensor(alpha_labels, dtype=torch.float32)
         batch["images_per_sample"] = images_per_sample
 
@@ -319,7 +286,11 @@ def train_gating(
         expert_img_dir: str,
         general_json: str,
         general_img_dir: str,
-        output_dir: str = "./mmrl_output"
+        output_dir: str = "./mmrl_output",
+        learning_rate: float = 2e-4,          # 参数化：学习率
+        num_train_epochs: int = 5,            # 参数化：训练轮数
+        general_ratio_limit: float = 0.4,     # 参数化：通用数据比例限制
+        alpha_loss_weight: float = 8.0        # 参数化：Alpha Guide Loss 的权重
 ):
     print("=" * 20 + " 启动 MMRL 门控混合训练 " + "=" * 20)
     MODEL_PATH = "/root/autodl-tmp/model"  # 修改为你的路径
@@ -338,7 +309,8 @@ def train_gating(
     original_model.resize_token_embeddings(len(tokenizer))
 
     with torch.device("cuda"):
-        model = Qwen3VLMMRLForTrain(config, tokenizer)
+        # 传入 alpha_loss_weight 参数
+        model = Qwen3VLMMRLForTrain(config, tokenizer, alpha_loss_weight=alpha_loss_weight)
         model.to(torch.bfloat16)
 
     print("-> 权重迁移...")
@@ -348,7 +320,6 @@ def train_gating(
     torch.cuda.empty_cache()
 
     # 3. 冻结参数 & 激活 MMRL
-    # 逻辑同 overfit.py，略微简化
     for param in model.parameters():
         param.requires_grad = False
 
@@ -356,7 +327,7 @@ def train_gating(
         model.model.MMRL,
         model.model.visual.blocks_with_rep,
         model.model.visual.embedding_pooling,
-        model.model.visual.Task_classifier,  # 重点训练这个
+        model.model.visual.Task_classifier,
         model.model.visual.visionGating,
         model.model.visual.text_gating,
         model.model.visual.zero_init_layer
@@ -376,12 +347,12 @@ def train_gating(
         image_processor=image_processor, tokenizer=tokenizer, cfg=cfg
     )
 
-    # general_ratio_limit=0.8 表示通用数据量最多是专业数据的 80%
+    # 使用传入的 general_ratio_limit 参数
     dataset = MixedMMRLDataset(
         processor,
         expert_json, expert_img_dir,
         general_json, general_img_dir,
-        general_ratio_limit=1.0  # 建议 1:1 用于训练判别器
+        general_ratio_limit=general_ratio_limit
     )
 
     collator = MMRLDataCollator(processor)
@@ -389,13 +360,13 @@ def train_gating(
     # 5. Trainer
     training_args = TrainingArguments(
         output_dir=output_dir,
-        num_train_epochs=2,  # 根据数据量调整，数据少可以多跑几个 epoch
-        per_device_train_batch_size=2,  # 显存允许的话尽量大一点，保证Batch里同时有正负样本
+        num_train_epochs=num_train_epochs,  # 使用参数
+        per_device_train_batch_size=2,
         gradient_accumulation_steps=8,
-        learning_rate=2e-4,
+        learning_rate=learning_rate,        # 使用参数
         save_strategy="no",
         logging_steps=5,
-        remove_unused_columns=False,  # 必须 False，否则 alpha_labels 会被过滤
+        remove_unused_columns=False,
         bf16=True,
         dataloader_pin_memory=False
     )
@@ -406,7 +377,10 @@ def train_gating(
         train_dataset=dataset,
         data_collator=collator
     )
-
+    print(f"Expert samples: {sum(1 for x in dataset.data_list if x['alpha_label']==1.0)}")
+    print(f"General samples: {sum(1 for x in dataset.data_list if x['alpha_label']==0.0)}")
+    print(f"Training Config: LR={learning_rate}, Epochs={num_train_epochs}, AlphaWeight={alpha_loss_weight}")
+    
     print("-> 开始训练...")
     trainer.train()
     trainer.save_model(output_dir)
@@ -414,11 +388,13 @@ def train_gating(
 
 
 if __name__ == "__main__":
-    # 请替换为真实路径
-    # general_data 可以直接用 COCO 的 caption 数据，或者 LLaVA 的 instruct 数据
     train_gating(
         expert_json="/root/autodl-tmp/dataset/generated_json.json",
         expert_img_dir="/root/autodl-tmp/dataset/prof",
         general_json="/root/autodl-tmp/dataset/llava_instruct_150k.json",
-        general_img_dir="/root/autodl-tmp/dataset/gen/train2017"
+        general_img_dir="/root/autodl-tmp/dataset/gen/train2017",
+        learning_rate=2e-4,       
+        num_train_epochs=3,       
+        general_ratio_limit=1.0,  
+        alpha_loss_weight=4.0     
     )

@@ -55,14 +55,16 @@ def inference():
     # 配置路径 (请确保这些路径真实存在)
     # --------------------------------------------------------------------------
     # 1. 训练好的模型权重目录
-    TRAINED_MODEL_PATH = "/root/autodl-tmp/Qwen3-VL-modify-test/mmrl_gating_output"  
+    TRAINED_MODEL_PATH = "/root/autodl-tmp/Qwen3-VL-modify-test/mmrl_output"  
     
     # 2. 原始基座模型路径 (用于读取 Config 和 Processor，防止训练后 Config 缺失)
     BASE_MODEL_PATH = "/root/autodl-tmp/model" 
     
     # 3. 输入图片和文本
-    IMAGE_PATH = "/root/autodl-tmp/dataset/prof/DJI_20230927091642_0008_V_JPG.rf.cc1032e1f0827963cb3142649bf74402.jpg"
+    IMAGE_PATH = "/root/autodl-tmp/dataset/prof/DJI_20230926081916_0007_V_JPG.rf.1fa4fe9940fad62f8aa9221adeb3739a.jpg"
     PROMPT_TEXT = "\n分析设备状态并输出JSON。"
+    # IMAGE_PATH = "/root/autodl-tmp/Qwen3-VL-modify-test/test.png"
+    # PROMPT_TEXT = "描述一下这张图片。"
     
     # --------------------------------------------------------------------------
     # 加载模型
@@ -192,10 +194,15 @@ def inference():
         print(f"Output: {output_text}")
         print("="*40)
 
-        # 可选：打印门控状态 Debug
         if hasattr(model.model.visual, "alpha_list") and model.model.visual.alpha_list is not None:
-             alpha = model.model.visual.alpha_list.mean().item()
-             print(f"[Debug] 门控 Alpha 激活值: {alpha:.4f} (接近1表示专家模式，接近0表示通用模式)")
+            alpha_logits = model.model.visual.alpha_list  # [Total_Images, 1]
+            alpha_probs = torch.sigmoid(alpha_logits)
+            
+            print(f"[Debug] 门控状态:")
+            print(f"  ├─ Alpha Logits (原始): {alpha_logits.squeeze().detach().cpu().tolist()}")
+            print(f"  ├─ Alpha Probs (sigmoid): {alpha_probs.squeeze().detach().cpu().tolist()}")
+            print(f"  └─ 平均激活值: {alpha_probs.mean().item():.4f}")
+            print(f"     (>0.5=专家模式, <0.5=通用模式)")
 
 if __name__ == "__main__":
     inference()

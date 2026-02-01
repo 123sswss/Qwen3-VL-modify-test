@@ -148,7 +148,7 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
         batch_size = embedding.shape[0]
         pic_seqlens = [0] + list(accumulate(images_per_sample))
 
-        self.alpha_list = []
+        self.alpha_list = None 
         self.G_list = []
         rotary_pos_emb_with_rep = None
         embedding_after_pooling = self.embedding_pooling(embedding)
@@ -301,7 +301,7 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
         ########### text gating ###########
         if v_r_token_list is None:
              k_results = torch.tensor(0.0, device=hidden_states.device)
-             alpha_loss = torch.tensor(0.0, device=hidden_states.device)
+            #  alpha_loss = torch.tensor(0.0, device=hidden_states.device)
              return hidden_states, deepstack_feature_lists, k_results, alpha_loss
         img_seqlens = cu_seqlens[1:] - cu_seqlens[:-1]
         img_counts = torch.tensor(images_per_sample, device=hidden_states.device)
@@ -328,8 +328,8 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
         else:
             k_sums = out.sum(dim=-1)
             k_results = k_sums.round()
-        alpha_loss = torch.mean(torch.sigmoid(self.alpha_list)) * 0.1
-        return hidden_states, deepstack_feature_lists, k_results, alpha_loss
+        # alpha_loss = torch.mean(torch.sigmoid(self.alpha_list)) * 0.1
+        return hidden_states, deepstack_feature_lists, k_results
 
     def compute_text_only_gating(self, embedding, gating_temperature_overied=None):
         batch_size = embedding.shape[0]
@@ -367,6 +367,6 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
             k_sums = out.sum(dim=-1)
             k_results = k_sums.round()
 
-        alpha_loss = torch.mean(torch.sigmoid(self.alpha_list)) * 0.1
+        # alpha_loss = torch.mean(torch.sigmoid(self.alpha_list)) * 0.1
 
-        return k_results, alpha_loss
+        return k_results

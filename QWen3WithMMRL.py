@@ -69,7 +69,7 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
 
         self.use_mmrl = config.mmrl_config["USE_MMRL"]
         self.tax_loss = None
-        self.alpha_loss = None
+        # self.alpha_loss = None
         ###################
 
     def get_image_features(self,
@@ -82,12 +82,12 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
             raise ValueError("v_r_token_list must be specified")
         elif self.use_mmrl and v_r_token_list is not None:
             pixel_values = pixel_values.type(self.visual.dtype)
-            image_embeds, deepstack_image_embeds, k, alpha_loss = self.visual(pixel_values,
+            image_embeds, deepstack_image_embeds, k = self.visual(pixel_values,
                                                                               grid_thw=image_grid_thw,
                                                                               v_r_token_list=v_r_token_list,
                                                                               embedding=embedding,
                                                                               images_per_sample=images_per_sample)
-            self.alpha_loss = alpha_loss
+            # self.alpha_loss = alpha_loss
             split_sizes = (image_grid_thw.prod(-1) // self.visual.spatial_merge_size ** 2).tolist()
             image_embeds = torch.split(image_embeds, split_sizes)
             return image_embeds, deepstack_image_embeds, k
@@ -113,6 +113,7 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
             image_grid_thw: Optional[torch.LongTensor] = None,
             cache_position: Optional[torch.LongTensor] = None,
             img_path: Optional[list[str]] = None,
+            images_per_sample=None,
             **kwargs: Unpack[TransformersKwargs],
     ) -> Union[tuple, Qwen3VLModelOutputWithPast]:
         if (input_ids is None) ^ (inputs_embeds is not None):
@@ -121,7 +122,7 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
             inputs_embeds = self.get_input_embeddings()(input_ids)
 
         self.tax_loss = torch.tensor(0.0, device=inputs_embeds.device)
-        self.alpha_loss = torch.tensor(0.0, device=inputs_embeds.device)
+        # self.alpha_loss = torch.tensor(0.0, device=inputs_embeds.device)
 
         placeholder_ids_tensor = torch.tensor(self.rep_placeholder_ids, device=input_ids.device)
         # [Batch, Seq]
@@ -133,7 +134,7 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
             v_r_token_list, t_r_token_list = self.MMRL()
             t_r_tokens = torch.cat(t_r_token_list, dim=0)
         self.tax_loss = 0.0
-        self.alpha_loss = 0.0
+        # self.alpha_loss = 0.0
         #### MMRL ####
         images_per_sample = []
         if input_ids is not None:
@@ -144,6 +145,12 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
         visual_pos_masks = None
         deepstack_visual_embeds = None
         k_results = None
+
+        if images_per_sample is None and input_ids is not None:
+            images_per_sample = []
+            for seq_input_ids in input_ids:
+                count = (seq_input_ids == self.vision_end_token_id).sum().item()
+                images_per_sample.append(count)
 
         if pixel_values is not None:
             if self.use_mmrl:
@@ -172,10 +179,10 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
             visual_pos_masks = image_mask[..., 0]
             deepstack_visual_embeds = deepstack_image_embeds
         elif self.use_mmrl:
-            k_results, alpha_loss = self.visual.compute_text_only_gating(
+            k_results = self.visual.compute_text_only_gating(
                 embedding=inputs_embeds
             )
-            self.alpha_loss = alpha_loss
+            # self.alpha_loss = alpha_loss
         ######## text gating ########
         if self.use_mmrl and k_results is not None:
             if self.training:

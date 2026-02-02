@@ -24,7 +24,7 @@ from transformers import TrainerCallback
 
 
 class MMRLTrainingCallback(TrainerCallback):
-    def __init__(self, dataset, initial_temp=1.0, final_temp=0.5,
+    def __init__(self, dataset, initial_temp=1.0, final_temp=0.1,
                  total_epochs=5, enable_temp_annealing=True):
         self.dataset = dataset
         self.initial_temp = initial_temp
@@ -372,7 +372,6 @@ def train_gating(
     original_model.resize_token_embeddings(len(tokenizer))
 
     with torch.device("cuda"):
-        # 传入 alpha_loss_weight 参数
         model = Qwen3VLMMRLForTrain(config, tokenizer, alpha_loss_weight=alpha_loss_weight)
         model.to(torch.bfloat16)
 
@@ -382,7 +381,6 @@ def train_gating(
     del original_model
     torch.cuda.empty_cache()
 
-    # 3. 冻结参数 & 激活 MMRL
     for param in model.parameters():
         param.requires_grad = False
 
@@ -405,12 +403,10 @@ def train_gating(
 
     print(f"-> 可训练参数量: {trainable_num}")
 
-    # 4. 数据准备
     processor = processingWithMMRL.Qwen3ProcessorWithMMRL(
         image_processor=image_processor, tokenizer=tokenizer, cfg=cfg
     )
 
-    # 使用传入的 general_ratio_limit 参数
     dataset = MixedMMRLDataset(
         processor,
         expert_json, expert_img_dir,
@@ -423,15 +419,19 @@ def train_gating(
     # 5. Trainer
     training_args = TrainingArguments(
         output_dir=output_dir,
-        num_train_epochs=num_train_epochs,  # 使用参数
+        num_train_epochs=num_train_epochs,
         per_device_train_batch_size=2,
-        gradient_accumulation_steps=8,
-        learning_rate=learning_rate,        # 使用参数
+        gradient_accumulation_steps=16,
+        weight_decay=0.01,
+        warmup_ratio=0.05,
+        lr_scheduler_type="cosine",
+        learning_rate=learning_rate,
         save_strategy="no",
         logging_steps=5,
         remove_unused_columns=False,
         bf16=True,
-        dataloader_pin_memory=False
+        dataloader_pin_memory=False,
+        max_grad_norm=1.0
     )
 
     trainer = Trainer(
@@ -456,8 +456,8 @@ if __name__ == "__main__":
         expert_img_dir="/root/autodl-tmp/dataset/prof",
         general_json="/root/autodl-tmp/dataset/llava_instruct_150k.json",
         general_img_dir="/root/autodl-tmp/dataset/gen/train2017",
-        learning_rate=2e-4,       
-        num_train_epochs=3,       
+        learning_rate=5e-5,
+        num_train_epochs=5,
         general_ratio_limit=1.0,  
-        alpha_loss_weight=4.0     
+        alpha_loss_weight=2.0
     )

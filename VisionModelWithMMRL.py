@@ -139,6 +139,7 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
         self.zero_init_layer = zeroInit(self.cfg.vision_token_dim)
         self.alpha_list = []
         self.G_list = []
+        self.k_results = None
 
         self.null_image_token = nn.Parameter(torch.zeros(1, self.cfg.vision_token_dim))
         nn.init.normal_(self.null_image_token, std=0.02)
@@ -308,6 +309,7 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
         ########### text gating ###########
         if v_r_token_list is None:
              k_results = torch.tensor(0.0, device=hidden_states.device)
+             self.k_results = k_results
             #  alpha_loss = torch.tensor(0.0, device=hidden_states.device)
              return hidden_states, deepstack_feature_lists, k_results
         img_seqlens = cu_seqlens[1:] - cu_seqlens[:-1]
@@ -326,6 +328,7 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
             batch_indices_token,
             batch_indices_img,
             batch_size,
+            embedding_after_pooling,
             gating_temperature_overied
         )
         if self.training:
@@ -335,6 +338,7 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
         else:
             k_sums = out.sum(dim=-1)
             k_results = k_sums.round()
+        self.k_results = k_results
         # alpha_loss = torch.mean(torch.sigmoid(self.alpha_list)) * 0.1
         return hidden_states, deepstack_feature_lists, k_results
 

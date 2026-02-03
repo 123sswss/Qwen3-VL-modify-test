@@ -60,7 +60,7 @@ class textGating(nn.Module):
                  config,
                  epsilon: float = 0.1,
                  temperature: float = 1.0,
-                 lambda_=0.01):
+                 lambda_=0.2):
         super().__init__()
         self.total_rep_num = config.RP_SPACE_LENGTH * 8
         self.attention_pooling = attention_pooling(config.vision_token_dim, config.GATING_MID_DIM)
@@ -71,6 +71,12 @@ class textGating(nn.Module):
         self.threshold_mlp = nn.Sequential(nn.Linear(config.vision_token_dim + 1, config.GATING_MID_DIM),  # 注意维度变化
                                            nn.ReLU(),
                                            nn.Linear(config.GATING_MID_DIM, self.total_rep_num))
+        
+        nn.init.constant_(self.intensity_mlp[-1].bias, -3.0)
+        nn.init.normal_(self.intensity_mlp[-1].weight, std=0.01)
+        nn.init.constant_(self.threshold_mlp[-1].bias, 3.0)
+        nn.init.normal_(self.threshold_mlp[-1].weight, std=0.01)
+        
         self.epsilon = epsilon
         self.softplus = nn.Softplus()
         self.hard_concrete = HardConcreteGate(temperature)
@@ -79,7 +85,7 @@ class textGating(nn.Module):
         self.text_relevance_head = nn.Sequential(nn.Linear(config.text_token_dim, config.GATING_MID_DIM),
                                                  nn.ReLU(),
                                                  nn.Linear(config.GATING_MID_DIM, 1))
-        nn.init.constant_(self.text_relevance_head[-1].bias, 1.0)
+        nn.init.constant_(self.text_relevance_head[-1].bias, -2.0)
 
     def forward(self,
                 delta_vision_token: torch.Tensor,  # [Total_Tokens, Dim]

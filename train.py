@@ -54,10 +54,11 @@ class MMRLTrainingCallback(TrainerCallback):
 
 # 1. 定义支持 动态 Alpha Loss 的模型包装器
 class Qwen3VLMMRLForTrain(Qwen3VLForConditionalGeneration):
-    def __init__(self, config, tokenizer, alpha_loss_weight=1.0):
+    def __init__(self, config, tokenizer, tax_loss_weight=1.0, alpha_loss_weight=1.0):
         import torch.nn as nn
         nn.Module.__init__(self)
         self.config = config
+        self.tax_loss_weight = tax_loss_weight  # 保存 Tax Loss 权重
         self.alpha_loss_weight = alpha_loss_weight  # 保存 Alpha Loss 权重
         current_vocab_size = len(tokenizer)
 
@@ -95,17 +96,17 @@ class Qwen3VLMMRLForTrain(Qwen3VLForConditionalGeneration):
 
         # 获取k_sums（从model.visual中）
         k_sums_value = None
-        if hasattr(self.model.visual, 'k_results'):
-            k_results = self.model.visual.k_results
-            if k_results is not None:
-                if isinstance(k_results, tuple):
-                    k_sums_value = k_results[0]  # training模式
-                else:
-                    k_sums_value = k_results  # eval模式
+        # if hasattr(self.model.visual, 'k_results'):
+        k_results = self.model.visual.k_results
+        assert k_results is not None, f"Expected k_results to be not None, got {k_results}"
+        if isinstance(k_results, tuple):
+            k_sums_value = k_results[0]  # training模式
+        else:
+            k_sums_value = k_results  # eval模式
 
 
 
-        mmrl_tax_loss = self.model.tax_loss
+        mmrl_tax_loss = self.model.tax_loss * self.tax_loss_weight
         alpha_logits = self.model.visual.alpha_list
         alpha_guide_loss = 0.0
 
@@ -140,9 +141,37 @@ class Qwen3VLMMRLForTrain(Qwen3VLForConditionalGeneration):
             # 使用传入的权重参数
             alpha_guide_loss = loss_fct(alpha_logits, expanded_labels.to(alpha_logits.dtype)) * self.alpha_loss_weight
 
+        k_sparsity_loss = 0.0
+        if k_sums_value is not None and alpha_labels is not None:
+            if images_per_sample is None:
+                expanded_labels = alpha_labels
+            else:
+                expanded_labels_list = []
+                for idx, count in enumerate(images_per_sample):
+                    label = alpha_labels[idx] # [1]
+                    expanded_labels_list.append(label.repeat(count)) # [Count]
+                expanded_labels = torch.cat(expanded_labels_list) # [Total_Images]
+
+            # 确保维度对齐
+            if k_sums_value.shape[0] == expanded_labels.shape[0]:
+                is_general = (expanded_labels < 0.1) # Mask
+                
+                if is_general.any():
+                    # 选出通用数据的 K 值
+                    general_k = k_sums_value[is_general]
+
+                    k_loss_weight = 0.1
+                    k_sparsity_loss = torch.nn.functional.smooth_l1_loss(
+                        general_k, 
+                        torch.zeros_like(general_k), 
+                        beta=1.0
+                    ) * k_loss_weight
+            else:
+                print(f"[Warning] K values ({k_sums_value.shape}) and Labels ({expanded_labels.shape}) shape mismatch.")
+
         # 3. 合并 Loss
         if outputs.loss is not None:
-            total_loss = outputs.loss + mmrl_tax_loss + alpha_guide_loss
+            total_loss = outputs.loss + mmrl_tax_loss + alpha_guide_loss + k_sparsity_loss
             outputs.loss = total_loss
 
         if self.training:
@@ -153,6 +182,7 @@ class Qwen3VLMMRLForTrain(Qwen3VLForConditionalGeneration):
                 print(f"  ├─ CE Loss (Language):    {(outputs.loss - mmrl_tax_loss - alpha_guide_loss).item():>8.4f}")
                 print(f"  ├─ Tax Loss (Sparsity):   {mmrl_tax_loss.item():>8.4f}")
                 print(f"  ├─ Alpha Guide Loss:      {alpha_guide_loss.item():>8.4f} (Weight: {self.alpha_loss_weight})")
+                print(f"  ├─ K Sparsity Loss:       {k_sparsity_loss if isinstance(k_sparsity_loss, float) else k_sparsity_loss.item():>8.4f}")
                 print(f"  └─ Total Loss:            {outputs.loss.item():>8.4f}")
 
                 # 添加K值监控
@@ -223,20 +253,46 @@ class MixedMMRLDataset(Dataset):
             self.expert_img_dir = expert_img_dir
             self.use_img_mapping = False
 
-
-
-
-
-
-
-
-
-
-
-
         self.expert_img_dir = expert_img_dir
         self.general_img_dir = general_img_dir
         self.general_ratio_limit = general_ratio_limit
+        if isinstance(expert_json, list):
+            self.expert_data_raw = []
+            for json_path in expert_json:
+                with open(json_path, 'r', encoding='utf-8') as f:
+                    self.expert_data_raw.extend(json.load(f))
+            print(f"[Dataset] 合并了 {len(expert_json)} 个专业JSON文件，共 {len(self.expert_data_raw)} 条数据")
+        else:
+            with open(expert_json, 'r', encoding='utf-8') as f:
+                self.expert_data_raw = json.load(f)
+        if isinstance(expert_img_dir, list):
+            self.img_path_mapping = {}
+            seen_files = {}
+            
+            for img_dir in expert_img_dir:
+                if not os.path.exists(img_dir):
+                    print(f"[Warning] 图片目录不存在: {img_dir}")
+                    continue
+                
+                files = [f for f in os.listdir(img_dir) if os.path.isfile(os.path.join(img_dir, f))]
+                for filename in files:
+                    if filename in seen_files:
+                        raise ValueError(
+                            f"文件名冲突！'{filename}' 同时存在于:\n"
+                            f"  - {seen_files[filename]}\n"
+                            f"  - {img_dir}\n"
+                            f"请重命名文件后重试。"
+                        )
+                    seen_files[filename] = img_dir
+                    self.img_path_mapping[filename] = os.path.join(img_dir, filename)
+            
+            print(f"[Dataset] 合并了 {len(expert_img_dir)} 个专业图片文件夹，共 {len(self.img_path_mapping)} 张图片")
+            self.use_img_mapping = True
+            self.expert_img_dir = None  # 标记为使用映射模式
+        else:
+            self.expert_img_dir = expert_img_dir
+            self.use_img_mapping = False
+            self.img_path_mapping = None
 
         # 加载专业数据
         # with open(expert_json, 'r', encoding='utf-8') as f:
@@ -256,12 +312,18 @@ class MixedMMRLDataset(Dataset):
         # 添加专业数据
         for item in self.expert_data_raw:
             image_file = item.get("image", "")
-            full_path = os.path.join(self.expert_img_dir, image_file)
-            if not os.path.exists(full_path):
-                continue
+            if self.use_img_mapping:
+                if image_file not in self.img_path_mapping:
+                    continue
+                full_path = self.img_path_mapping[image_file]
+            else:
+                full_path = os.path.join(self.expert_img_dir, image_file)
+                if not os.path.exists(full_path):
+                    continue
+            
             self.data_list.append({
                 "data": item,
-                "img_root": self.expert_img_dir,
+                "img_root": self.expert_img_dir,  # 这个字段在映射模式下不使用
                 "alpha_label": 1.0,
                 "type": "expert"
             })
@@ -309,6 +371,7 @@ class MixedMMRLDataset(Dataset):
                 raise FileNotFoundError(f"图片文件 '{image_file}' 不在任何专业数据集文件夹中")
         else:
             image_path = os.path.join(img_root, image_file)
+        
         image = Image.open(image_path).convert("RGB")
 
         # Qwen 格式处理
@@ -407,7 +470,8 @@ def train_gating(
         learning_rate: float = 2e-4,       
         num_train_epochs: int = 5,         
         general_ratio_limit: float = 0.4,  
-        alpha_loss_weight: float = 8.0     
+        alpha_loss_weight: float = 8.0,     
+        tax_loss_weight: float = 1.0
 ):
     print("=" * 20 + " 启动 MMRL 门控混合训练 " + "=" * 20)
     MODEL_PATH = "/root/autodl-tmp/model"  # 修改为你的路径
@@ -426,7 +490,7 @@ def train_gating(
     original_model.resize_token_embeddings(len(tokenizer))
 
     with torch.device("cuda"):
-        model = Qwen3VLMMRLForTrain(config, tokenizer, alpha_loss_weight=alpha_loss_weight)
+        model = Qwen3VLMMRLForTrain(config, tokenizer, tax_loss_weight=tax_loss_weight, alpha_loss_weight=alpha_loss_weight)
         model.to(torch.bfloat16)
 
     print("-> 权重迁移...")
@@ -506,12 +570,15 @@ def train_gating(
 
 if __name__ == "__main__":
     train_gating(
-        expert_json="/root/autodl-tmp/dataset/generated_json.json",
-        expert_img_dir="/root/autodl-tmp/dataset/prof",
+        expert_json=["/root/autodl-tmp/dataset/1json.json",
+                     "/root/autodl-tmp/dataset/14json.json"],
+        expert_img_dir=["/root/autodl-tmp/dataset/1/train",
+                        "/root/autodl-tmp/dataset/14"],
         general_json="/root/autodl-tmp/dataset/llava_instruct_150k.json",
         general_img_dir="/root/autodl-tmp/dataset/gen/train2017",
         learning_rate=5e-5,
-        num_train_epochs=5,
+        num_train_epochs=3,
         general_ratio_limit=1.0,  
-        alpha_loss_weight=2.0
+        alpha_loss_weight=2.0,
+        tax_loss_weight=10.0
     )

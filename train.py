@@ -185,13 +185,62 @@ class MixedMMRLDataset(Dataset):
                  general_json, general_img_dir,
                  general_ratio_limit=1.0):
         self.processor = processor
+        # 处理expert_json列表合并
+        if isinstance(expert_json, list):
+            self.expert_data_raw = []
+            for json_path in expert_json:
+                with open(json_path, 'r', encoding='utf-8') as f:
+                    self.expert_data_raw.extend(json.load(f))
+            print(f"[Dataset] 合并了 {len(expert_json)} 个专业JSON文件，共 {len(self.expert_data_raw)} 条数据")
+        else:
+            with open(expert_json, 'r', encoding='utf-8') as f:
+                self.expert_data_raw = json.load(f)
+        # 处理expert_img_dir列表合并（创建文件名到路径的映射）
+        if isinstance(expert_img_dir, list):
+            self.img_path_mapping = {}  # 文件名 -> 完整路径
+            seen_files = {}  # 用于检测冲突：文件名 -> 来源目录
+
+            for img_dir in expert_img_dir:
+                if not os.path.exists(img_dir):
+                    print(f"[Warning] 图片目录不存在: {img_dir}")
+                    continue
+
+                files = [f for f in os.listdir(img_dir) if os.path.isfile(os.path.join(img_dir, f))]
+                for filename in files:
+                    if filename in seen_files:
+                        raise ValueError(
+                            f"文件名冲突！'{filename}' 同时存在于:\n"
+                            f"  - {seen_files[filename]}\n"
+                            f"  - {img_dir}\n"
+                            f"请重命名文件后重试。"
+                        )
+                    seen_files[filename] = img_dir
+                    self.img_path_mapping[filename] = os.path.join(img_dir, filename)
+
+            print(f"[Dataset] 合并了 {len(expert_img_dir)} 个专业图片文件夹，共 {len(self.img_path_mapping)} 张图片")
+            self.use_img_mapping = True
+        else:
+            self.expert_img_dir = expert_img_dir
+            self.use_img_mapping = False
+
+
+
+
+
+
+
+
+
+
+
+
         self.expert_img_dir = expert_img_dir
         self.general_img_dir = general_img_dir
         self.general_ratio_limit = general_ratio_limit
 
         # 加载专业数据
-        with open(expert_json, 'r', encoding='utf-8') as f:
-            self.expert_data_raw = json.load(f)
+        # with open(expert_json, 'r', encoding='utf-8') as f:
+        #     self.expert_data_raw = json.load(f)
 
         # 加载通用数据（保存完整数据）
         with open(general_json, 'r', encoding='utf-8') as f:
@@ -254,7 +303,12 @@ class MixedMMRLDataset(Dataset):
         image_file = item.get("image")
         conversations = item.get("conversations")
 
-        image_path = os.path.join(img_root, image_file)
+        if self.use_img_mapping and item_wrapper["type"] == "expert":
+            image_path = self.img_path_mapping.get(image_file)
+            if image_path is None:
+                raise FileNotFoundError(f"图片文件 '{image_file}' 不在任何专业数据集文件夹中")
+        else:
+            image_path = os.path.join(img_root, image_file)
         image = Image.open(image_path).convert("RGB")
 
         # Qwen 格式处理

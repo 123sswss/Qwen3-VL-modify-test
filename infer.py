@@ -61,10 +61,10 @@ def inference():
     BASE_MODEL_PATH = "/root/autodl-tmp/model" 
     
     # 3. 输入图片和文本
-    IMAGE_PATH = "/root/autodl-tmp/dataset/prof/DJI_20230926081916_0007_V_JPG.rf.1fa4fe9940fad62f8aa9221adeb3739a.jpg"
-    PROMPT_TEXT = "\n分析设备状态并输出JSON。"
-    # IMAGE_PATH = "/root/autodl-tmp/Qwen3-VL-modify-test/test.png"
-    # PROMPT_TEXT = "描述一下这张图片。"
+    # IMAGE_PATH = "/root/autodl-tmp/dataset/14/DJI_20231023073909_0114_V_JPG.rf.16c125c28c5e6deaf7e9b1525ee0188c.jpg"
+    # PROMPT_TEXT = "\n分析设备状态并输出JSON。"
+    IMAGE_PATH = "/root/autodl-tmp/Qwen3-VL-modify-test/test.png"
+    PROMPT_TEXT = "描述一下这张图片。"
     
     # --------------------------------------------------------------------------
     # 加载模型
@@ -125,10 +125,6 @@ def inference():
     processor = processingWithMMRL.Qwen3ProcessorWithMMRL(
         image_processor=image_processor, tokenizer=tokenizer, cfg=cfg
     )
-
-    if not os.path.exists(IMAGE_PATH):
-        # 如果没有图，生成一张纯色图防止报错
-        Image.new('RGB', (100, 100), color='red').save(IMAGE_PATH)
     
     image = Image.open(IMAGE_PATH).convert("RGB")
 

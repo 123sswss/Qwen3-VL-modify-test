@@ -502,6 +502,14 @@ def train_gating(
     for param in model.parameters():
         param.requires_grad = False
 
+    for idx, layer_num in enumerate(model.model.visual.cfg.INSERT_LAYER):
+        if layer_num < len(model.model.visual.blocks):
+            model.model.visual.blocks_with_rep[idx].load_state_dict(
+                model.model.visual.blocks[layer_num].state_dict(),
+                strict=False
+            )
+            print(f"[Init] Copied weights from blocks[{layer_num}] to blocks_with_rep[{idx}]")
+
     modules_to_train = [
         model.model.MMRL,
         model.model.visual.blocks_with_rep,

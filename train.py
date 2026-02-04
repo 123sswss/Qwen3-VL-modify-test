@@ -588,5 +588,5 @@ if __name__ == "__main__":
         num_train_epochs=3,
         general_ratio_limit=1.0,  
         alpha_loss_weight=2.0,
-        tax_loss_weight=10.0
+        tax_loss_weight=8.0
     )

@@ -114,9 +114,12 @@ def inference():
 
     # 加载权重
     msg = model.load_state_dict(state_dict, strict=False)
+    print(f"Missing keys: {msg.missing_keys}")
+    print(f"Unexpected keys: {msg.unexpected_keys}")
     print(f"    -> 权重加载完成。")
     
     model.eval()
+    # model.temperature_override = 0.1
 
     # --------------------------------------------------------------------------
     # 下面保持不变
@@ -153,9 +156,9 @@ def inference():
     inputs = processor(
         text=[text_prompt], 
         images=image,
-        padding="max_length",  # 【关键修改】强制填充
-        max_length=4096,       # 【关键修改】设定一个足够大的长度(需 > 图片token数 + 文本数)
-        truncation=True,
+        padding=False,
+        max_length=False,
+        truncation=False,
         return_tensors="pt"
     ).to(model.device)
 
@@ -164,7 +167,7 @@ def inference():
     with torch.no_grad():
         generated_ids = model.generate(
             **inputs, 
-            max_new_tokens=128,
+            max_new_tokens=256,
             do_sample=True,
             temperature=0.1,
             # Qwen-VL 处理 pad token 的习惯

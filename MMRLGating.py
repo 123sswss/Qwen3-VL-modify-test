@@ -3,6 +3,7 @@ from typing import Optional
 import torch
 from torch import nn
 from utils import attention_pooling
+import random
 
 
 class Task_classifier(nn.Module):
@@ -21,6 +22,15 @@ class Task_classifier(nn.Module):
                 text_embedding_after_pooling: torch.Tensor):
         v_feat = self.relu(self.vision_proj(vision_token_after_pooling))
         t_feat = self.relu(self.text_proj(text_embedding_after_pooling))
+        if self.training:
+            ss = random.random()
+            if ss < 0.1:
+                t_feat = torch.zeros_like(t_feat)
+            elif ss < 0.2 and ss >= 0.1:
+                v_feat = torch.zeros_like(v_feat)
+            else:
+                pass
+
         # [Batch, MID_DIM*2]
         combined = torch.cat((v_feat, t_feat), dim=-1)
         combined = self.relu(self.fc_fusion(combined))

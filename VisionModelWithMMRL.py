@@ -1,3 +1,4 @@
+from multiprocessing import pool
 from typing import Optional
 
 import torch
@@ -122,13 +123,8 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
                                      for _ in range(config.depth)])
         self.blocks_with_rep = nn.ModuleList([MMRLVitBlock(config)
                                               for _ in self.cfg.INSERT_LAYER])
-        for idx, layer_num in enumerate(self.cfg.INSERT_LAYER):
-            if layer_num < len(self.blocks):
-                self.blocks_with_rep[idx].load_state_dict(
-                    self.blocks[layer_num].state_dict(),
-                    strict=False
-                )
-                print(f"[Init] Copied weights from blocks[{layer_num}] to blocks_with_rep[{idx}]")
+        self.hidden_state_pooling = utils.attention_pooling(self.cfg.vision_token_dim,
+                                                            self.cfg.POOLING_DIM)
         self.embedding_pooling = utils.attention_pooling(self.cfg.text_token_dim,
                                                          self.cfg.POOLING_DIM)
         self.Task_classifier = MMRLGating.Task_classifier(self.cfg)
@@ -205,14 +201,20 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
                         torch.arange(total_pic_num, device=hidden_states.device),
                         img_seqlens
                     )
-                    pooled_vision_states = torch.zeros(
-                        total_pic_num,
-                        hidden_states.shape[-1],
-                        dtype=hidden_states.dtype,
-                        device=hidden_states.device
-                    )
-                    pooled_vision_states.index_add_(0, img_indices, hidden_states)
-                    pooled_vision_states = pooled_vision_states / img_seqlens.unsqueeze(-1)
+                    # pooled_vision_states = torch.zeros(
+                    #     total_pic_num,
+                    #     hidden_states.shape[-1],
+                    #     dtype=hidden_states.dtype,
+                    #     device=hidden_states.device
+                    # )
+                    # pooled_vision_states.index_add_(0, img_indices, hidden_states)
+                    # pooled_vision_states = pooled_vision_states / img_seqlens.unsqueeze(-1)
+                    pooled_vision_states = self.hidden_state_pooling.forward_vectorized(
+                        hidden_states,
+                        img_indices,
+                        total_pic_num
+                    )  # [Total_Images, Dim]
+
                     images_per_sample_tensor = torch.tensor(images_per_sample, device=hidden_states.device)
                     expanded_text_embedding = torch.repeat_interleave(
                         embedding_after_pooling,

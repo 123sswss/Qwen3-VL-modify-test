@@ -25,13 +25,37 @@ from transformers import TrainerCallback
 
 class MMRLTrainingCallback(TrainerCallback):
     def __init__(self, dataset, initial_temp=1.0, final_temp=0.1,
-                 total_epochs=5, enable_temp_annealing=True):
+                 total_epochs=5, enable_temp_annealing=True,target_tax=5.0,tax_warmup_epochs=1):
         self.dataset = dataset
         self.initial_temp = initial_temp
         self.final_temp = final_temp
         self.total_epochs = total_epochs
         self.enable_temp_annealing = enable_temp_annealing
+        self.target_tax = target_tax
+        self.tax_warmup_epochs = tax_warmup_epochs
         self.current_epoch = 0
+    
+    def on_step_begin(self, args, state, control, **kwargs):
+        """在每个 step 开始时平滑更新参数"""
+        model = kwargs['model']
+        # 计算当前精确的 epoch（含小数部分）
+        current_epoch = state.epoch 
+        
+        # --- 1. Temperature 退火逻辑 (保持原有) ---
+        if self.enable_temp_annealing:
+            progress = min(current_epoch / self.total_epochs, 1.0)
+            current_temp = self.initial_temp - (self.initial_temp - self.final_temp) * progress
+            model.temperature_override = current_temp
+
+        # --- 2. 动态加税逻辑 (新增强调) ---
+        if current_epoch < self.tax_warmup_epochs:
+            # 免税期
+            model.tax_loss_weight = 0.0
+        else:
+            # 从免税期结束到训练结束，线性加税到 target_tax
+            tax_progress = min((current_epoch - self.tax_warmup_epochs) / 
+                               (self.total_epochs - self.tax_warmup_epochs), 1.0)
+            model.tax_loss_weight = self.target_tax * tax_progress
 
     def on_epoch_begin(self, args, state, control, **kwargs):
         """Epoch开始时的操作"""
@@ -41,6 +65,13 @@ class MMRLTrainingCallback(TrainerCallback):
         print(f"\n{'=' * 60}")
         print(f"[Epoch {int(self.current_epoch)}] Resampling general dataset...")
         self.dataset.resample_general_data()
+
+        model = kwargs['model']
+        tax_w = getattr(model, 'tax_loss_weight', 0.0)
+        temp = getattr(model, 'temperature_override', 1.0)
+        temp = temp if temp is not None else -1.0
+        print(f"[Schedule Update] Current Tax Weight: {tax_w:.4f}, Temperature: {temp:.4f}")
+        print(f"{'=' * 60}\n")
 
         # 2. 更新temperature
         if self.enable_temp_annealing:
@@ -200,8 +231,8 @@ class Qwen3VLMMRLForTrain(Qwen3VLForConditionalGeneration):
                 print(f"  ├─ Target Mean:           {expanded_labels.float().mean().item():>8.4f}")
 
                 # Temperature信息
-                if hasattr(self, 'temperature_override') and self.temperature_override is not None:
-                    print(f"[Temperature] Current:      {self.temperature_override:>8.4f}")
+                assert hasattr(self, 'temperature_override') and self.temperature_override is not None
+                print(f"[Temperature] Current:      {self.temperature_override:>8.4f}")
 
                 print("=" * 60 + "\n")
 
@@ -542,6 +573,16 @@ def train_gating(
 
     collator = MMRLDataCollator(processor)
 
+    mmrl_callback = MMRLTrainingCallback(
+    dataset=dataset,
+    initial_temp=1.0,
+    final_temp=0.1,
+    target_tax=tax_loss_weight, # 这里传入你想要的目标值，比如 8.0
+    tax_warmup_epochs=1,        # 设定前 1 个 epoch 免税
+    total_epochs=num_train_epochs,
+    enable_temp_annealing=True
+    )
+
     # 5. Trainer
     training_args = TrainingArguments(
         output_dir=output_dir,
@@ -564,7 +605,8 @@ def train_gating(
         model=model,
         args=training_args,
         train_dataset=dataset,
-        data_collator=collator
+        data_collator=collator,
+        callbacks=[mmrl_callback]
     )
     print(f"Expert samples: {sum(1 for x in dataset.data_list if x['alpha_label']==1.0)}")
     print(f"General samples: {sum(1 for x in dataset.data_list if x['alpha_label']==0.0)}")

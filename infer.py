@@ -61,10 +61,10 @@ def inference():
     BASE_MODEL_PATH = "/root/autodl-tmp/model" 
     
     # 3. 输入图片和文本
-    # IMAGE_PATH = "/root/autodl-tmp/dataset/14/DJI_20231023073909_0114_V_JPG.rf.16c125c28c5e6deaf7e9b1525ee0188c.jpg"
-    # PROMPT_TEXT = "\n分析设备状态并输出JSON。"
-    IMAGE_PATH = "/root/autodl-tmp/Qwen3-VL-modify-test/test.png"
-    PROMPT_TEXT = "描述一下这张图片。"
+    IMAGE_PATH = "/root/autodl-tmp/dataset/14/DJI_20231023073909_0114_V_JPG.rf.16c125c28c5e6deaf7e9b1525ee0188c.jpg"
+    PROMPT_TEXT = "\n分析设备状态并输出JSON。"
+    # IMAGE_PATH = "/root/autodl-tmp/Qwen3-VL-modify-test/test.png"
+    # PROMPT_TEXT = "描述一下这张图片。"
     
     # --------------------------------------------------------------------------
     # 加载模型

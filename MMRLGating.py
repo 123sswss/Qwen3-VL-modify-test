@@ -82,7 +82,7 @@ class textGating(nn.Module):
                                            nn.ReLU(),
                                            nn.Linear(config.GATING_MID_DIM, self.total_rep_num))
         
-        nn.init.constant_(self.intensity_mlp[-1].bias, -3.0)
+        nn.init.constant_(self.intensity_mlp[-1].bias, 1.0)
         nn.init.normal_(self.intensity_mlp[-1].weight, std=0.01)
         nn.init.constant_(self.threshold_mlp[-1].bias, 3.0)
         nn.init.normal_(self.threshold_mlp[-1].weight, std=0.01)
@@ -127,7 +127,10 @@ class textGating(nn.Module):
 
         if self.training:
             batch_alpha_prob = batch_alpha
-            dynamic_lambda = self.lambda_ * (1.0 - batch_alpha_prob)
+            penalty_mask = torch.where(batch_alpha_prob > 0.5, 
+                           torch.zeros_like(batch_alpha_prob), 
+                           1.0 - batch_alpha_prob)
+            dynamic_lambda = self.lambda_ * penalty_mask
             raw_loss = dynamic_lambda * intensity.sum(dim=-1) / self.total_rep_num
             text_sparsity_loss = 0.05 * text_relevance_prob.mean()
             tax_loss = (raw_loss + text_sparsity_loss).mean()

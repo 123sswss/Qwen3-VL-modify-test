@@ -69,7 +69,7 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
 
         self.use_mmrl = config.mmrl_config["USE_MMRL"]
         self.tax_loss = None
-        # self.alpha_loss = None
+        self.temperature_override = None
         ###################
 
     def get_image_features(self,
@@ -86,6 +86,7 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
                                                                               grid_thw=image_grid_thw,
                                                                               v_r_token_list=v_r_token_list,
                                                                               embedding=embedding,
+                                                                              gating_temperature_overied=self.temperature_override,
                                                                               images_per_sample=images_per_sample)
             # self.alpha_loss = alpha_loss
             split_sizes = (image_grid_thw.prod(-1) // self.visual.spatial_merge_size ** 2).tolist()

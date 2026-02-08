@@ -61,10 +61,10 @@ def inference():
     BASE_MODEL_PATH = "/root/autodl-tmp/model" 
     
     # 3. 输入图片和文本
-    IMAGE_PATH = "/root/autodl-tmp/dataset/14/DJI_20231023073909_0114_V_JPG.rf.16c125c28c5e6deaf7e9b1525ee0188c.jpg"
-    PROMPT_TEXT = "\n分析设备状态并输出JSON。"
-    # IMAGE_PATH = "/root/autodl-tmp/Qwen3-VL-modify-test/test.png"
-    # PROMPT_TEXT = "描述一下这张图片。"
+    # IMAGE_PATH = "/root/autodl-tmp/dataset/14/DJI_20231023073909_0114_V_JPG.rf.16c125c28c5e6deaf7e9b1525ee0188c.jpg"
+    # PROMPT_TEXT = "\n分析设备状态并输出JSON。"
+    IMAGE_PATH = "/root/autodl-tmp/Qwen3-VL-modify-test/test2.png"
+    PROMPT_TEXT = "描述一下这张图片。"
     
     # --------------------------------------------------------------------------
     # 加载模型
@@ -169,7 +169,7 @@ def inference():
             **inputs, 
             max_new_tokens=256,
             do_sample=True,
-            temperature=0.1,
+            temperature=0.2,
             # Qwen-VL 处理 pad token 的习惯
             pad_token_id=tokenizer.pad_token_id,
             eos_token_id=tokenizer.eos_token_id,

@@ -121,6 +121,18 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
             raise ValueError("You must specify exactly one of input_ids or inputs_embeds")
         if inputs_embeds is None:
             inputs_embeds = self.get_input_embeddings()(input_ids)
+        
+        # 为门控准备无答案的embedding
+        mmrl_gating_mask = kwargs.pop('mmrl_gating_mask', None)
+        
+        if self.training and mmrl_gating_mask is not None:
+            if mmrl_gating_mask.dim() == 2:
+                mask_expanded = mmrl_gating_mask.unsqueeze(-1)
+            else:
+                mask_expanded = mmrl_gating_mask
+            embedding_for_gating = inputs_embeds * mask_expanded
+        else:
+            embedding_for_gating = inputs_embeds
 
         self.tax_loss = torch.tensor(0.0, device=inputs_embeds.device)
         # self.alpha_loss = torch.tensor(0.0, device=inputs_embeds.device)
@@ -142,7 +154,6 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
             for seq_input_ids in input_ids:
                 count = (seq_input_ids == self.vision_end_token_id).sum().item()
                 images_per_sample.append(count)
-        # todo：优化无mmrl流程
         visual_pos_masks = None
         deepstack_visual_embeds = None
         k_results = None
@@ -159,7 +170,7 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
                     pixel_values=pixel_values,
                     image_grid_thw=image_grid_thw,
                     v_r_token_list=v_r_token_list,
-                    embedding = inputs_embeds,
+                    embedding = embedding_for_gating,
                     images_per_sample = images_per_sample
                 )
             else:
@@ -181,13 +192,13 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
             deepstack_visual_embeds = deepstack_image_embeds
         elif self.use_mmrl:
             k_results = self.visual.compute_text_only_gating(
-                embedding=inputs_embeds
+                embedding=embedding_for_gating
             )
             # self.alpha_loss = alpha_loss
         ######## text gating ########
         if self.use_mmrl and k_results is not None:
             if self.training:
-                k_sums, tax_loss = k_results
+                k_sums, tax_loss = k_results #todo:删掉tax loss
                 self.tax_loss = tax_loss
             else:
                 k_sums = k_results

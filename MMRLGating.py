@@ -82,9 +82,9 @@ class textGating(nn.Module):
                                            nn.ReLU(),
                                            nn.Linear(config.GATING_MID_DIM, self.total_rep_num))
         
-        nn.init.constant_(self.intensity_mlp[-1].bias, 1.0)
+        nn.init.constant_(self.intensity_mlp[-1].bias, 3.0)
         nn.init.normal_(self.intensity_mlp[-1].weight, std=0.01)
-        nn.init.constant_(self.threshold_mlp[-1].bias, 3.0)
+        nn.init.constant_(self.threshold_mlp[-1].bias, 1.0)
         nn.init.normal_(self.threshold_mlp[-1].weight, std=0.01)
         
         self.epsilon = epsilon

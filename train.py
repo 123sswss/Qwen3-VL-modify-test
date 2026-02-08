@@ -123,6 +123,29 @@ class Qwen3VLMMRLForTrain(Qwen3VLForConditionalGeneration):
         if hasattr(self, 'temperature_override') and self.temperature_override is not None:
             kwargs['gating_temperature_overied'] = self.temperature_override
 
+        labels = kwargs.get('labels', None)
+        gating_mask = None
+        # 逻辑：
+        # labels == -100 的位置是 Prompt (指令+图片)，这对门控是可见的。
+        # labels != -100 的位置是 Answer (答案)，这对门控必须通过抹零来隐藏。
+        # 注意：attention_mask 为 0 的位置 (Padding) 也要处理
+        
+        # 1. 找出 Prompt 部分 (labels 为 -100)
+        is_prompt = (labels == -100)
+        
+        # 2. 确保不是 Padding (attention_mask 必须为 1)
+        if 'attention_mask' in kwargs:
+            att_mask = kwargs['attention_mask']
+            # 保持维度对齐
+            if att_mask.dim() == 2 and is_prompt.dim() == 2:
+                is_prompt = is_prompt & (att_mask == 1)
+        
+        # 3. 转换为 float mask (1.0 = 保留, 0.0 = 抹除)
+        gating_mask = is_prompt.to(dtype=self.model.dtype)
+        
+        # 将这个 mask 放入 kwargs 传给底层模型
+        kwargs['mmrl_gating_mask'] = gating_mask
+
         outputs = super().forward(input_ids=input_ids, images_per_sample=images_per_sample, **kwargs)
 
         # 获取k_sums（从model.visual中）

@@ -340,6 +340,26 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
         else:
             k_sums = out.sum(dim=-1)
             k_results = k_sums.round()
+            ############ debug ############
+            # debug_info = self.text_gating.debug_context            
+            # alpha_val = debug_info.get("alpha_val", torch.tensor(0.0))
+            # k_val = debug_info.get("gate_sum_raw", torch.tensor(0.0))
+
+            # if alpha_val.ndim == 0: alpha_val = alpha_val.unsqueeze(0)
+            # if k_val.ndim == 0: k_val = k_val.unsqueeze(0)
+
+            # for i in range(len(alpha_val)):
+            #     print(f"\n[MMRL DEBUG WARNING] Anomaly Detected in Sample {i}:")
+            #     print(f"  Alpha (Professionalism): {alpha_val[i]:.4f} (Should be low)")
+            #     print(f"  Text Relevance:          {debug_info['text_rel']:.4f}")
+            #     print(f"  Raw Intensity Sum:       {debug_info['intensity_sum']:.4f} (Is bias too high?)")
+            #     print(f"  Modulated Intensity:     {debug_info['modulated_intensity']:.4f}")
+            #     print(f"  Calculated K (Gates):    {k_val[i]:.2f}")
+            #     print("-" * 30)
+            ############ debug ############
+
+
+
         self.k_results = k_results
         # alpha_loss = torch.mean(torch.sigmoid(self.alpha_list)) * 0.1
         return hidden_states, deepstack_feature_lists, k_results
@@ -349,15 +369,6 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
         embedding_after_pooling = self.embedding_pooling(embedding)  # [Batch, Pool_Dim]
         dummy_vision_states = self.null_image_token.expand(batch_size, -1)
         self.alpha_list = self.Task_classifier(dummy_vision_states, embedding_after_pooling)
-
-        # if self.training:
-        #     if gating_temperature_overied is not None:
-        #         G_list = self.visionGating(self.alpha_list, gating_temperature_overied)
-        #     else:
-        #         G_list = self.visionGating(self.alpha_list)
-        # else:
-        #     raw_g = self.visionGating(self.alpha_list)
-        #     G_list = (raw_g > 0.5).to(dtype=embedding.dtype)
 
         dummy_delta_batch = torch.zeros(batch_size, self.cfg.vision_token_dim, device=embedding.device,
                                         dtype=embedding.dtype)

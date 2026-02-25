@@ -87,6 +87,7 @@ class textGating(nn.Module):
         nn.init.constant_(self.threshold_mlp[-1].bias, 1.0)
         nn.init.normal_(self.threshold_mlp[-1].weight, std=0.01)
         
+        self.threshold_root = torch.random([1,1])
         self.epsilon = epsilon
         self.softplus = nn.Softplus()
         self.hard_concrete = HardConcreteGate(temperature)
@@ -96,6 +97,8 @@ class textGating(nn.Module):
                                                  nn.ReLU(),
                                                  nn.Linear(config.GATING_MID_DIM, 1))
         nn.init.constant_(self.text_relevance_head[-1].bias, -2.0)
+
+        self.debug_context = {}
 
     def forward(self,
                 delta_vision_token: torch.Tensor,  # [Total_Tokens, Dim]
@@ -124,6 +127,19 @@ class textGating(nn.Module):
         modulated_intensity = intensity * text_relevance_prob
         K_logits = modulated_intensity - torch.cumsum(threshold, -1)
         hard_k_logits = self.hard_concrete(K_logits, temperature_overide)
+
+        ############ debug ############
+        # if not self.training:
+        #     self.debug_context = {
+        #         "alpha_val": batch_alpha.detach().cpu().squeeze(),           # 当前Batch的Alpha值
+        #         "text_rel": text_relevance_prob.detach().cpu().squeeze(),    # 文本相关性概率
+        #         "intensity_sum": intensity.detach().cpu().squeeze(),         # 原始强度总和
+        #         "modulated_intensity": modulated_intensity.detach().cpu().squeeze(), # 被文本加权后的强度
+        #         "threshold_mean": threshold.mean().detach().cpu().item(),    # 阈值均值
+        #         "gate_sum_raw": hard_k_logits.sum(dim=-1).detach().cpu().squeeze() # 具体激活了多少个门
+        #     }
+        ############ debug ############
+
 
         if self.training:
             batch_alpha_prob = batch_alpha

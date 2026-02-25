@@ -61,10 +61,14 @@ def inference():
     BASE_MODEL_PATH = "/root/autodl-tmp/model" 
     
     # 3. 输入图片和文本
+    IMAGE_PATH = "/root/autodl-tmp/dataset/14/DJI_20231023073909_0114_V_JPG.rf.16c125c28c5e6deaf7e9b1525ee0188c.jpg"
+    PROMPT_TEXT = "\n分析设备状态并输出JSON。"
+
     # IMAGE_PATH = "/root/autodl-tmp/dataset/14/DJI_20231023073909_0114_V_JPG.rf.16c125c28c5e6deaf7e9b1525ee0188c.jpg"
-    # PROMPT_TEXT = "\n分析设备状态并输出JSON。"
-    IMAGE_PATH = "/root/autodl-tmp/Qwen3-VL-modify-test/test2.png"
-    PROMPT_TEXT = "描述一下这张图片。"
+    # PROMPT_TEXT = "描述一下这张图片中的设备状态。"
+
+    # IMAGE_PATH = "/root/autodl-tmp/Qwen3-VL-modify-test/test.png"
+    # PROMPT_TEXT = "图片中的这三个人是谁？"
     
     # --------------------------------------------------------------------------
     # 加载模型
@@ -196,10 +200,12 @@ def inference():
         if hasattr(model.model.visual, "alpha_list") and model.model.visual.alpha_list is not None:
             alpha_logits = model.model.visual.alpha_list  # [Total_Images, 1]
             alpha_probs = torch.sigmoid(alpha_logits)
+            k = model.model.k_results  # [Batch, Total_Experts]
             
             print(f"[Debug] 门控状态:")
             print(f"  ├─ Alpha Logits (原始): {alpha_logits.squeeze().detach().cpu().tolist()}")
             print(f"  ├─ Alpha Probs (sigmoid): {alpha_probs.squeeze().detach().cpu().tolist()}")
+            print(f"  ├─ K 值: {k.squeeze().detach().cpu().tolist()}")
             print(f"  └─ 平均激活值: {alpha_probs.mean().item():.4f}")
             print(f"     (>0.5=专家模式, <0.5=通用模式)")
 

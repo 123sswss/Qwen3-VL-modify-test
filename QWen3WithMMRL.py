@@ -70,6 +70,7 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
         self.use_mmrl = config.mmrl_config["USE_MMRL"]
         self.tax_loss = None
         self.temperature_override = None
+        self.k_results = None
         ###################
 
     def get_image_features(self,
@@ -202,7 +203,7 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
                 self.tax_loss = tax_loss
             else:
                 k_sums = k_results
-
+            self.k_results = k_sums
             placeholder_cumsum = is_placeholder.cumsum(dim=-1)
             placeholder_idx = (placeholder_cumsum - 1).clamp(min=0)
             target_embeds = t_r_tokens[placeholder_idx]

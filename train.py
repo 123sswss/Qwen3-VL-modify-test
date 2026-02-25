@@ -1,3 +1,4 @@
+from operator import is_
 import os
 import json
 import torch
@@ -148,18 +149,6 @@ class Qwen3VLMMRLForTrain(Qwen3VLForConditionalGeneration):
 
         outputs = super().forward(input_ids=input_ids, images_per_sample=images_per_sample, **kwargs)
 
-        # 获取k_sums（从model.visual中）
-        k_sums_value = None
-        # if hasattr(self.model.visual, 'k_results'):
-        k_results = self.model.visual.k_results
-        assert k_results is not None, f"Expected k_results to be not None, got {k_results}"
-        if isinstance(k_results, tuple):
-            k_sums_value = k_results[0]  # training模式
-        else:
-            k_sums_value = k_results  # eval模式
-
-
-
         mmrl_tax_loss = self.model.tax_loss * self.tax_loss_weight
         alpha_logits = self.model.visual.alpha_list
         alpha_guide_loss = 0.0
@@ -195,67 +184,146 @@ class Qwen3VLMMRLForTrain(Qwen3VLForConditionalGeneration):
             # 使用传入的权重参数
             alpha_guide_loss = loss_fct(alpha_logits, expanded_labels.to(alpha_logits.dtype)) * self.alpha_loss_weight
 
-        k_sparsity_loss = 0.0
-        if k_sums_value is not None and alpha_labels is not None:
+        # 获取 k_sums (从 model.visual 中)
+        k_sums_value = None
+        k_results = self.model.visual.k_results
+        internal_raw_tax_loss = getattr(self.model, 'tax_loss', torch.tensor(0.0, device=outputs.loss.device))
+        assert k_results is not None, f"Expected k_results to be not None, got {k_results}"
+        if isinstance(k_results, tuple):
+            k_sums_value = k_results[0]  # training模式
+        else:
+            k_sums_value = k_results  # eval模式
+
+        # 1. 计算 Alpha Guide Loss (保持不变)
+        alpha_logits = self.model.visual.alpha_list
+        alpha_guide_loss = 0.0
+
+        if alpha_logits is not None and alpha_labels is not None:
+            if isinstance(alpha_logits, list):
+                if len(alpha_logits) == 0:
+                    alpha_guide_loss = torch.tensor(0.0, device=outputs.loss.device)
+                else:
+                    alpha_logits = torch.stack(alpha_logits)
+
             if images_per_sample is None:
-                expanded_labels = alpha_labels
+                expanded_labels = alpha_labels.view(-1, 1)
             else:
                 expanded_labels_list = []
                 for idx, count in enumerate(images_per_sample):
-                    label = alpha_labels[idx] # [1]
-                    expanded_labels_list.append(label.repeat(count)) # [Count]
-                expanded_labels = torch.cat(expanded_labels_list) # [Total_Images]
+                    label = alpha_labels[idx]
+                    expanded_labels_list.append(label.repeat(count))
+                expanded_labels = torch.cat(expanded_labels_list).view(-1, 1)
+            
+            # 对齐维度
+            min_len = min(alpha_logits.shape[0], expanded_labels.shape[0])
+            alpha_logits = alpha_logits[:min_len]
+            expanded_labels = expanded_labels[:min_len]
+            
+            alpha_probs = torch.sigmoid(alpha_logits)
+            loss_fct = torch.nn.BCEWithLogitsLoss()
+            alpha_guide_loss = loss_fct(alpha_logits, expanded_labels.to(alpha_logits.dtype)) * self.alpha_loss_weight
+
+        # 2. 新的 K Loss 调度策略 (核心修改)
+        k_general_loss = 0.0
+        k_expert_loss = 0.0
+        
+        # 统计变量初始化
+        mean_k_general = 0.0
+        mean_k_expert = 0.0
+
+        if k_sums_value is not None and alpha_labels is not None:
+            # 展平 labels 以对齐每张图片的 K 值
+            if images_per_sample is None:
+                k_expanded_labels = alpha_labels
+            else:
+                k_expanded_labels_list = []
+                for idx, count in enumerate(images_per_sample):
+                    label = alpha_labels[idx]
+                    k_expanded_labels_list.append(label.repeat(count))
+                k_expanded_labels = torch.cat(k_expanded_labels_list)
 
             # 确保维度对齐
-            if k_sums_value.shape[0] == expanded_labels.shape[0]:
-                is_general = (expanded_labels < 0.1) # Mask
-                
-                if is_general.any():
-                    # 选出通用数据的 K 值
-                    general_k = k_sums_value[is_general]
+            if k_sums_value.shape[0] == k_expanded_labels.shape[0]:
+                # --- A. 区分通用数据与专业数据 ---
+                is_general = (k_expanded_labels < 0.1) # General (Alpha=0)
+                is_expert = (k_expanded_labels > 0.9)  # Expert (Alpha=1)
 
-                    k_loss_weight = 0.1
-                    k_sparsity_loss = torch.nn.functional.smooth_l1_loss(
-                        general_k, 
-                        torch.zeros_like(general_k), 
-                        beta=1.0
-                    ) * k_loss_weight
+                # --- B. 通用数据策略：强力镇压 (Strict Inhibition) ---
+                if is_general.any():
+                    general_k = k_sums_value[is_general]
+                    mean_k_general = general_k.mean().item()
+                    
+                    # [关键点 1]: 通用数据必须严厉镇压，这里可以使用固定的高权重，或者跟随 tax_loss_weight (如果它很大的话)
+                    # 建议：直接给一个固定的强惩罚，比如 5.0
+                    suppression_weight = max(self.tax_loss_weight, 5.0) 
+                    k_general_loss = torch.mean(general_k) * suppression_weight / 40.0 * 5.0 
+                    # 注意：如果你的 K 是求和(sum)，值可能很大(0~40)，除以40归一化后再乘权重比较好控制
+
+                # --- C. 专业数据策略：激励 vs 惩罚 (Dynamic Schedule) ---
+                if is_expert.any():
+                    expert_k = k_sums_value[is_expert]
+                    mean_k_expert = expert_k.mean().item()
+
+                    # 判断当前阶段
+                    if self.tax_loss_weight < 1e-6:
+                        # [阶段 1: 强力激励期 (Wake Up Phase)]
+                        # 问题：如果 expert_k 已经是 0，普通的 -mean(expert_k) 会遭遇梯度死亡。
+                        # 解决：使用内部的 internal_tax_loss (它基于 intensity，没有 clamp，梯度依然存在)。
+                        # 我们给它一个巨大的负权重，强制模型增大 intensity，从而把门顶开。
+                        
+                        # 注意：internal_tax_loss 默认是正的（惩罚），我们取负号变成激励。
+                        # 权重建议给大一点 (例如 2.0)，因为我们要从 0 把它拉回来。
+                        k_expert_loss = -internal_raw_tax_loss * 5.0 
+                        
+                        # (可选) 也可以保留原来的 K Loss 作为辅助，万一 K 没死透呢
+                        # k_expert_loss += -torch.mean(expert_k) * 0.1
+                        
+                    else:
+                        # [阶段 2: 稀疏期]
+                        # 此时门已经开了，我们收取微小的过路费
+                        # 归一化 K 值 (假设总数是 40)
+                        k_normalized = expert_k / 40.0
+                        sparsity_cost = 0.1
+                        k_expert_loss = torch.mean(k_normalized ** 2) * sparsity_cost
             else:
-                print(f"[Warning] K values ({k_sums_value.shape}) and Labels ({expanded_labels.shape}) shape mismatch.")
+                print(f"[Warning] K values mismatch...")
 
         # 3. 合并 Loss
+        # total_k_loss 包含了对通用的惩罚 和 对专业的(激励/惩罚)
+        total_mmrl_loss = k_general_loss + k_expert_loss + alpha_guide_loss
+        
         if outputs.loss is not None:
-            total_loss = outputs.loss + mmrl_tax_loss + alpha_guide_loss + k_sparsity_loss
+            total_loss = outputs.loss + total_mmrl_loss
             outputs.loss = total_loss
 
+        # 4. 日志打印修改
         if self.training:
             self.training_step_counter += 1
             if self.training_step_counter % 50 == 0:
                 print("\n" + "=" * 60)
                 print(f"[Training Step {self.training_step_counter}] Loss Breakdown:")
-                print(f"  ├─ CE Loss (Language):    {(outputs.loss - mmrl_tax_loss - alpha_guide_loss).item():>8.4f}")
-                print(f"  ├─ Tax Loss (Sparsity):   {mmrl_tax_loss.item():>8.4f}")
-                print(f"  ├─ Alpha Guide Loss:      {alpha_guide_loss.item():>8.4f} (Weight: {self.alpha_loss_weight})")
-                print(f"  ├─ K Sparsity Loss:       {k_sparsity_loss if isinstance(k_sparsity_loss, float) else k_sparsity_loss.item():>8.4f}")
+                print(f"  ├─ CE Loss (Language):    {(outputs.loss - total_mmrl_loss).item():>8.4f}")
+                print(f"  ├─ Alpha Guide Loss:      {alpha_guide_loss.item():>8.4f}")
+                print(f"  ├─ K Loss (General):      {k_general_loss if isinstance(k_general_loss, float) else k_general_loss.item():>8.4f} (Strict Suppress)")
+                # 根据当前阶段显示 Loss 说明
+                k_exp_loss_val = k_expert_loss if isinstance(k_expert_loss, float) else k_expert_loss.item()
+                loss_type = "Incentive" if self.tax_loss_weight < 1e-6 else f"Tax(W={self.tax_loss_weight:.2f})"
+                print(f"  ├─ K Loss (Expert):       {k_exp_loss_val:>8.4f} ({loss_type})")
                 print(f"  └─ Total Loss:            {outputs.loss.item():>8.4f}")
 
-                # 添加K值监控
                 if k_sums_value is not None:
-                    k_mean = k_sums_value.mean().item()
-                    k_max = k_sums_value.max().item()
-                    k_min = k_sums_value.min().item()
-                    print(f"[K Statistics (Activated Tokens)]")
-                    print(f"  ├─ Mean K:                {k_mean:>8.2f}")
-                    print(f"  ├─ Max K:                 {k_max:>8.2f}")
-                    print(f"  └─ Min K:                 {k_min:>8.2f}")
+                    print(f"[K Statistics]")
+                    print(f"  ├─ General Mean K:        {mean_k_general:>8.2f} (Should -> 0)")
+                    print(f"  ├─ Expert Mean K:         {mean_k_expert:>8.2f} (Should be Active)")
+                    print(f"  ├─ Max K (Batch):         {k_sums_value.max().item():>8.2f}")
+                    print(f"  └─ Min K (Batch):         {k_sums_value.min().item():>8.2f}")
 
                 print(f"[Alpha Statistics]")
                 print(f"  ├─ Mean Probability:      {alpha_probs.mean().item():>8.4f}")
                 print(f"  ├─ Target Mean:           {expanded_labels.float().mean().item():>8.4f}")
-
-                # Temperature信息
-                assert hasattr(self, 'temperature_override') and self.temperature_override is not None
-                print(f"[Temperature] Current:      {self.temperature_override:>8.4f}")
+                
+                assert hasattr(self, 'temperature_override')
+                print(f"[Temperature] Current:      {self.temperature_override if self.temperature_override else -1:>8.4f}")
 
                 print("=" * 60 + "\n")
 
@@ -267,7 +335,8 @@ class MixedMMRLDataset(Dataset):
     def __init__(self, processor,
                  expert_json, expert_img_dir,
                  general_json, general_img_dir,
-                 general_ratio_limit=1.0):
+                 general_ratio_limit=1.0,
+                 expert_limit=None):
         self.processor = processor
         # 处理expert_json列表合并
         if isinstance(expert_json, list):
@@ -356,6 +425,9 @@ class MixedMMRLDataset(Dataset):
         with open(general_json, 'r', encoding='utf-8') as f:
             self.general_data_raw = json.load(f)
 
+        if expert_limit is not None and expert_limit < len(self.expert_data_raw):
+            self.expert_data_raw = random.sample(self.expert_data_raw, expert_limit)
+            print(f"[Dataset] 专业数据集限制为 {expert_limit} 条（随机采样）")
         # 初始化数据列表
         self._build_data_list()
 
@@ -644,8 +716,13 @@ def train_gating(
 if __name__ == "__main__":
     train_gating(
         expert_json=["/root/autodl-tmp/dataset/1json.json",
+                     "/root/autodl-tmp/dataset/2conv_c.json",
+                     "/root/autodl-tmp/dataset/1conv_c.json",
+                     "/root/autodl-tmp/dataset/4conv_c.json",
                      "/root/autodl-tmp/dataset/14json.json"],
         expert_img_dir=["/root/autodl-tmp/dataset/1/train",
+                        "/root/autodl-tmp/dataset/2/train",
+                        "/root/autodl-tmp/dataset/4/train",
                         "/root/autodl-tmp/dataset/14"],
         general_json="/root/autodl-tmp/dataset/llava_instruct_150k.json",
         general_img_dir="/root/autodl-tmp/dataset/gen/train2017",

@@ -75,19 +75,16 @@ class textGating(nn.Module):
         self.total_rep_num = config.RP_SPACE_LENGTH * 8
         self.attention_pooling = attention_pooling(config.vision_token_dim, config.GATING_MID_DIM)
 
-        self.intensity_mlp = nn.Sequential(nn.Linear(config.vision_token_dim + 1, config.GATING_MID_DIM),  # 注意维度变化
-                                           nn.ReLU(),
-                                           nn.Linear(config.GATING_MID_DIM, self.total_rep_num))
-        self.threshold_mlp = nn.Sequential(nn.Linear(config.vision_token_dim + 1, config.GATING_MID_DIM),  # 注意维度变化
+        self.intensity_mlp = nn.Sequential(nn.Linear(config.vision_token_dim, config.GATING_MID_DIM),  # 注意维度变化
                                            nn.ReLU(),
                                            nn.Linear(config.GATING_MID_DIM, self.total_rep_num))
         
         nn.init.constant_(self.intensity_mlp[-1].bias, 3.0)
         nn.init.normal_(self.intensity_mlp[-1].weight, std=0.01)
-        nn.init.constant_(self.threshold_mlp[-1].bias, 1.0)
-        nn.init.normal_(self.threshold_mlp[-1].weight, std=0.01)
         
-        self.threshold_root = torch.random([1,1])
+        self.threshold_root = nn.Parameter(torch.zeros([1, self.total_rep_num]))
+        nn.init.constant_(self.threshold_root, 3.0)
+
         self.epsilon = epsilon
         self.softplus = nn.Softplus()
         self.hard_concrete = HardConcreteGate(temperature)
@@ -119,13 +116,14 @@ class textGating(nn.Module):
         
         text_relevance_logits = self.text_relevance_head(text_embedding)  # [Batch, 1]
         text_relevance_prob = torch.sigmoid(text_relevance_logits)  # [0, 1]
-        
-        hidden_state = torch.cat([pooled_vision, batch_alpha], dim=-1)
-        intensity = torch.sigmoid(self.intensity_mlp(hidden_state)).sum(dim=-1, keepdim=True)
-        threshold = self.threshold_mlp(hidden_state)
-        threshold = self.softplus(threshold) + self.epsilon
-        modulated_intensity = intensity * text_relevance_prob
-        K_logits = modulated_intensity - torch.cumsum(threshold, -1)
+
+        raw_intensity = torch.sigmoid(self.intensity_mlp(pooled_vision)) # [Batch, 1]
+        master_gate = batch_alpha * text_relevance_prob # [Batch, 1]
+        modulated_intensity = raw_intensity * master_gate 
+        total_intensity = modulated_intensity.sum(dim=-1, keepdim=True) # [Batch, 1]
+        threshold = self.softplus(self.threshold_root) + self.epsilon # [1, Rep_Num]
+
+        K_logits = total_intensity - torch.cumsum(threshold, -1)
         hard_k_logits = self.hard_concrete(K_logits, temperature_overide)
 
         ############ debug ############
@@ -147,7 +145,7 @@ class textGating(nn.Module):
                            torch.zeros_like(batch_alpha_prob), 
                            1.0 - batch_alpha_prob)
             dynamic_lambda = self.lambda_ * penalty_mask
-            raw_loss = dynamic_lambda * intensity.sum(dim=-1) / self.total_rep_num
+            raw_loss = dynamic_lambda * total_intensity.sum(dim=-1) / self.total_rep_num
             text_sparsity_loss = 0.05 * text_relevance_prob.mean()
             tax_loss = (raw_loss + text_sparsity_loss).mean()
             return hard_k_logits, tax_loss

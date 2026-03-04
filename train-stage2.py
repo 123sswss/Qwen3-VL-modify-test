@@ -22,6 +22,8 @@ import config as cfg
 import QWen3WithMMRL
 import processingWithMMRL
 from transformers import TrainerCallback
+from safetensors.torch import load_file
+import os
 
 
 class MMRLTrainingCallback(TrainerCallback):
@@ -417,18 +419,13 @@ class MixedMMRLDataset(Dataset):
             self.use_img_mapping = False
             self.img_path_mapping = None
 
+        # 加载专业数据
+        # with open(expert_json, 'r', encoding='utf-8') as f:
+        #     self.expert_data_raw = json.load(f)
+
         # 加载通用数据（保存完整数据）
-        # with open(general_json, 'r', encoding='utf-8') as f:
-        #     self.general_data_raw = json.load(f)
-        if isinstance(general_json, list):
-            self.general_data_raw = []
-            for json_path in general_json:
-                with open(json_path, 'r', encoding='utf-8') as f:
-                    self.general_data_raw.extend(json.load(f))
-            print(f"[Dataset] 合并了 {len(general_json)} 个专业JSON文件，共 {len(self.general_data_raw)} 条数据")
-        else:
-            with open(general_json, 'r', encoding='utf-8') as f:
-                self.general_data_raw = json.load(f)
+        with open(general_json, 'r', encoding='utf-8') as f:
+            self.general_data_raw = json.load(f)
 
         if expert_limit is not None and expert_limit < len(self.expert_data_raw):
             self.expert_data_raw = random.sample(self.expert_data_raw, expert_limit)
@@ -597,67 +594,73 @@ def train_gating(
         expert_img_dir: str,
         general_json: str,
         general_img_dir: str,
-        output_dir: str = "./mmrl_output",
-        resume_path: str = None, # 新增一个参数接收 checkpoint 路径
+        output_dir: str = "./mmrl_output_stage2",
+        task_a_checkpoint_dir: str = "./mmrl_output", 
         learning_rate: float = 2e-4,       
         num_train_epochs: int = 5,         
         general_ratio_limit: float = 0.4,  
         alpha_loss_weight: float = 8.0,     
         tax_loss_weight: float = 1.0
 ):
-    print("=" * 20 + " 启动 MMRL 门控混合训练 " + "=" * 20)
-    MODEL_PATH = "/root/autodl-tmp/model"  # 修改为你的路径
+    print("=" * 20 + " 启动任务 B 迁移训练 " + "=" * 20)
 
-    # 1. 配置加载
-    config = AutoConfig.from_pretrained(MODEL_PATH, trust_remote_code=True)
-    tokenizer = AutoTokenizer.from_pretrained(MODEL_PATH, trust_remote_code=True)
-    image_processor = AutoImageProcessor.from_pretrained(MODEL_PATH, trust_remote_code=True)
-    tokenizer.add_special_tokens(cfg.SPECIAL_TOKENS)
-
-    # 2. 模型初始化 (GPU 加速)
-    print("-> 正在初始化模型...")
-    print(f"-> 正在从 {resume_path if resume_path else MODEL_PATH} 初始化模型...")
+    # 1. 配置加载（必须包含任务 A 增加的特殊 Token）
+    config = AutoConfig.from_pretrained(task_a_checkpoint_dir, trust_remote_code=True)
+    tokenizer = AutoTokenizer.from_pretrained(task_a_checkpoint_dir, trust_remote_code=True)
+    image_processor = AutoImageProcessor.from_pretrained(task_a_checkpoint_dir, trust_remote_code=True)
     
-    if resume_path:
-        # 如果有 checkpoint，直接加载训练好的模型
-        # 注意：这里假设你的 Qwen3VLMMRLForTrain 实现了标准的 from_pretrained 或者能直接 load_state_dict
-        model = Qwen3VLMMRLForTrain.from_pretrained(
-            resume_path, 
-            config=config, 
-            tokenizer=tokenizer,
+    # 【重要】检查点 1：必须重新添加特殊 Token，确保 len(tokenizer) 是 151709
+    # 即使你从 task_a 加载，有时也需要显式调用这一步，取决于 added_tokens.json 是否完整
+    tokenizer.add_special_tokens(cfg.SPECIAL_TOKENS) 
+    print(f"-> 当前词表大小 (len(tokenizer)): {len(tokenizer)}") # 这里预期应该是 151709
+
+    # 2. 模型初始化
+    print(f"-> 正在初始化模型结构...")
+    with torch.device("cuda"):
+        model = Qwen3VLMMRLForTrain(
+            config, 
+            tokenizer, 
             tax_loss_weight=tax_loss_weight, 
-            alpha_loss_weight=alpha_loss_weight,
-            torch_dtype=torch.bfloat16
-        ).to("cuda")
-        print("-> 已加载 checkpoint 权重，跳过权重迁移步骤。")
-    else:
-        # 原始的加载逻辑：从原始模型迁移权重
-        original_model = Qwen3VLForConditionalGeneration.from_pretrained(
-            MODEL_PATH, device_map="cpu", torch_dtype=torch.bfloat16, trust_remote_code=True
+            alpha_loss_weight=alpha_loss_weight
         )
-        original_model.resize_token_embeddings(len(tokenizer))
+        # 先移到 bf16
+        model.to(torch.bfloat16)
 
-        with torch.device("cuda"):
-            model = Qwen3VLMMRLForTrain(config, tokenizer, tax_loss_weight=tax_loss_weight, alpha_loss_weight=alpha_loss_weight)
-            model.to(torch.bfloat16)
+    # 【重要】检查点 2：显式强制调整 Embedding 层
+    # 如果 model.resize_token_embeddings 没生效，我们直接针对内部的 language_model 操作
+    print(f"-> 强制调整模型词表大小至: {len(tokenizer)}")
+    model.resize_token_embeddings(len(tokenizer))
+    
+    # 验证一下调整是否成功
+    current_vocab_size = model.model.language_model.embed_tokens.weight.shape[0]
+    print(f"-> 调整后模型内部 Embedding 形状: {current_vocab_size}")
 
-        print("-> 权重迁移...")
-        model.model.load_state_dict(original_model.model.state_dict(), strict=False)
-        model.lm_head.load_state_dict(original_model.lm_head.state_dict())
-        del original_model
-        torch.cuda.empty_cache()
+    # 3. 加载任务 A 的 safetensors 权重
+    safetensors_path = os.path.join(task_a_checkpoint_dir, "model.safetensors")
+    if not os.path.exists(safetensors_path):
+        # 如果是分片模型，或者是别的文件名，请检查
+        print(f"错误：在 {task_a_checkpoint_dir} 找不到 model.safetensors")
+        return
 
+    print(f"-> 正在从 {safetensors_path} 加载权重...")
+    state_dict = load_file(safetensors_path, device="cuda")
+
+    # 【重要】检查点 3：使用 strict=False 加载，并删除后面那段重复加载的代码
+    # 必须用 strict=False，因为 Qwen 的 lm_head.weight 通常与 embed_tokens 共享，不保存在文件里
+    msg = model.load_state_dict(state_dict, strict=False)
+    
+    print(f"-> 权重加载结果: {msg}")
+
+    # 检查你魔改的模块（如 MMRL）是否在 Missing Keys 里
+    mmrl_missing = [k for k in msg.missing_keys if "MMRL" in k]
+    if mmrl_missing:
+        print(f"[Warning] 警告！以下 MMRL 权重未找到: {mmrl_missing}")
+    else:
+        print("-> [Success] 所有魔改模块权重已成功加载。")
+
+    model.train()
     for param in model.parameters():
-        param.requires_grad = False
-
-    for idx, layer_num in enumerate(model.model.visual.cfg.INSERT_LAYER):
-        if layer_num < len(model.model.visual.blocks):
-            model.model.visual.blocks_with_rep[idx].load_state_dict(
-                model.model.visual.blocks[layer_num].state_dict(),
-                strict=False
-            )
-            print(f"[Init] Copied weights from blocks[{layer_num}] to blocks_with_rep[{idx}]")
-
+        param.requires_grad = False    
     modules_to_train = [
         model.model.MMRL,
         model.model.visual.blocks_with_rep,
@@ -729,24 +732,22 @@ def train_gating(
     print(f"General samples: {sum(1 for x in dataset.data_list if x['alpha_label']==0.0)}")
     print(f"Training Config: LR={learning_rate}, Epochs={num_train_epochs}, AlphaWeight={alpha_loss_weight}")
 
-    # print("-> 正在调试第一个 Batch 的数据...")
-    # for batch in trainer.get_train_dataloader():
-    #     input_ids = batch['input_ids']
-    #     print(f"-> Batch input_ids 形状: {input_ids.shape}")
+    print("-> 正在调试第一个 Batch 的数据...")
+    for batch in trainer.get_train_dataloader():
+        input_ids = batch['input_ids']
+        print(f"-> Batch input_ids 形状: {input_ids.shape}")
         
-    #     # 假设你用来定位的 special token 是 cfg.SPECIAL_TOKENS 里的某个值
-    #     # 这里打印出 input_ids 里是否有自定义的 token
-    #     # （假设新加的 special token ID 都在 151643 之后）
-    #     special_tokens_in_batch = (input_ids >= 151643).sum().item()
-    #     print(f"-> 本批次中包含的大于 151643 的特殊 Token 数量: {special_tokens_in_batch}")
+        # 假设你用来定位的 special token 是 cfg.SPECIAL_TOKENS 里的某个值
+        # 这里打印出 input_ids 里是否有自定义的 token
+        # （假设新加的 special token ID 都在 151643 之后）
+        special_tokens_in_batch = (input_ids >= 151643).sum().item()
+        print(f"-> 本批次中包含的大于 151643 的特殊 Token 数量: {special_tokens_in_batch}")
         
-    #     if special_tokens_in_batch == 0:
-    #         print("❌ 警告：在这个 Batch 中没有找到特殊 Token，这可能就是 t_feat 为 0 的原因！")
-    #         # 打印解码后的文本，看看错在哪
-    #     print("-> 解码后的文本: ", tokenizer.decode(input_ids[0][:])) 
-    #     break # 只检查第一个 batch
-    
-    print("-> 开始训练...")
+        if special_tokens_in_batch == 0:
+            print("❌ 警告：在这个 Batch 中没有找到特殊 Token，这可能就是 t_feat 为 0 的原因！")
+            # 打印解码后的文本，看看错在哪
+        print("-> 解码后的文本: ", tokenizer.decode(input_ids[0][:])) 
+        break # 只检查第一个 batch
     
     print("-> 开始训练...")
     trainer.train()
@@ -756,20 +757,11 @@ def train_gating(
 
 if __name__ == "__main__":
     train_gating(
-        expert_json=["/root/autodl-tmp/dataset/1json.json",
-                     "/root/autodl-tmp/dataset/2conv_c.json",
-                     "/root/autodl-tmp/dataset/1conv_c.json",
-                     "/root/autodl-tmp/dataset/4conv_c.json",
-                     "/root/autodl-tmp/dataset/14json.json",
-                     "/root/autodl-tmp/dataset/prof_test.json"],
-        expert_img_dir=["/root/autodl-tmp/dataset/1/train",
-                        "/root/autodl-tmp/dataset/2/train",
-                        "/root/autodl-tmp/dataset/4/train",
-                        "/root/autodl-tmp/dataset/14"],
-        general_json=["/root/autodl-tmp/dataset/llava_instruct_150k.json",
-                      "/root/autodl-tmp/dataset/gen_test.json"],
-        general_img_dir="/root/autodl-tmp/dataset/gen/train2017",
-        learning_rate=5e-5,
+        expert_json=["/root/autodl-tmp/dataset/prof_test.json"],
+        expert_img_dir=["/root/autodl-tmp/dataset/1/train"],
+        general_json="/root/autodl-tmp/dataset/gen_test.json",
+        general_img_dir="/root/autodl-tmp/dataset/gen/val2017",
+        learning_rate=1e-5,
         num_train_epochs=3,
         general_ratio_limit=1.0,  
         alpha_loss_weight=2.0,

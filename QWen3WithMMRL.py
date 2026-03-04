@@ -20,22 +20,22 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
         # todo：研究一下处理训练保存与加载
         vision_dim = getattr(config.vision_config, "hidden_size")  # 默认值防报错
         text_dim = getattr(config.text_config, "hidden_size")
-        if not hasattr(config, "mmrl_config"):
-            config.mmrl_config = {
-                "USE_MMRL": cfg.USE_MMRL,
-                "INSERT_LAYER": list(cfg.INSERT_LAYER),
-                "POOLING_DIM": cfg.POOLING_DIM,
-                "RP_SPACE_LENGTH": cfg.RP_SPACE_LENGTH,
-                "RP_SPACE_DIM": cfg.RP_SPACE_DIM,
-                "INSERT_METHOD": cfg.INSERT_METHOD,
-                "GATING_MID_DIM": cfg.GATING_MID_DIM,
-                "stretching_length": cfg.stretching_length,
-                "gating_temperature": cfg.gating_temperature,
-                "text_gating_epsilon": cfg.text_gating_epsilon,
-                "insert_method": cfg.INSERT_METHOD,
-                "vision_token_dim": vision_dim,
-                "text_token_dim": text_dim
-            }
+        # if not hasattr(config, "mmrl_config"):
+        config.mmrl_config = {
+            "USE_MMRL": cfg.USE_MMRL,
+            "INSERT_LAYER": list(cfg.INSERT_LAYER),
+            "POOLING_DIM": cfg.POOLING_DIM,
+            "RP_SPACE_LENGTH": cfg.RP_SPACE_LENGTH,
+            "RP_SPACE_DIM": cfg.RP_SPACE_DIM,
+            "INSERT_METHOD": cfg.INSERT_METHOD,
+            "GATING_MID_DIM": cfg.GATING_MID_DIM,
+            "stretching_length": cfg.stretching_length,
+            "gating_temperature": cfg.gating_temperature,
+            "text_gating_epsilon": cfg.text_gating_epsilon,
+            "insert_method": cfg.INSERT_METHOD,
+            "vision_token_dim": vision_dim,
+            "text_token_dim": text_dim
+        }
 
         super().__init__(config)
         if tokenizer is not None:
@@ -146,6 +146,8 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
         t_r_tokens = None
         if self.use_mmrl:
             v_r_token_list, t_r_token_list = self.MMRL()
+            for _ in range(10):  # debug
+                print("t_r_token_list:", len(t_r_token_list), t_r_token_list[0].shape)
             t_r_tokens = torch.cat(t_r_token_list, dim=0)
         self.tax_loss = 0.0
         # self.alpha_loss = 0.0
@@ -195,11 +197,10 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
             k_results = self.visual.compute_text_only_gating(
                 embedding=embedding_for_gating
             )
-            # self.alpha_loss = alpha_loss
         ######## text gating ########
         if self.use_mmrl and k_results is not None:
             if self.training:
-                k_sums, tax_loss = k_results #todo:删掉tax loss
+                k_sums, tax_loss = k_results
                 self.tax_loss = tax_loss
             else:
                 k_sums = k_results
@@ -231,6 +232,11 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
                     attention_mask_tensor = attention_mask_tensor / torch.finfo(attention_mask_tensor.dtype).min
                     attention_mask_tensor = (1.0 - attention_mask_tensor).int()
 
+            # fix 3/4
+            rope_input_ids = input_ids.clone()
+            rope_input_ids = rope_input_ids.masked_fill(is_placeholder, 0)
+            # #######
+
             prefill_compiled_stage = is_torchdynamo_compiling() and (
                     (input_ids is not None and input_ids.shape[1] != 1)
                     or (inputs_embeds is not None and inputs_embeds.shape[1] != 1)
@@ -242,7 +248,7 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
 
             if (prefill_compiled_stage or prefill_noncompiled_stage) or self.rope_deltas is None:
                 position_ids, rope_deltas = self.get_rope_index(
-                    input_ids,
+                    rope_input_ids,
                     image_grid_thw,
                     None,
                     attention_mask=attention_mask_tensor,

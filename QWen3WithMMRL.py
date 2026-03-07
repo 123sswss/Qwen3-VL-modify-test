@@ -66,7 +66,7 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
             if vocab_size != curr_embedding_size:
                 print(f"[Warning] Resizing token embeddings from {curr_embedding_size} to {vocab_size}")
                 self.resize_token_embeddings(vocab_size)
-
+        self.tokenizer = tokenizer
         self.use_mmrl = config.mmrl_config["USE_MMRL"]
         self.tax_loss = None
         self.temperature_override = None
@@ -146,8 +146,6 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
         t_r_tokens = None
         if self.use_mmrl:
             v_r_token_list, t_r_token_list = self.MMRL()
-            for _ in range(10):  # debug
-                print("t_r_token_list:", len(t_r_token_list), t_r_token_list[0].shape)
             t_r_tokens = torch.cat(t_r_token_list, dim=0)
         self.tax_loss = 0.0
         # self.alpha_loss = 0.0
@@ -207,6 +205,7 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
             self.k_results = k_sums
             placeholder_cumsum = is_placeholder.cumsum(dim=-1)
             placeholder_idx = (placeholder_cumsum - 1).clamp(min=0)
+            
             target_embeds = t_r_tokens[placeholder_idx]
             gate_soft_mask = torch.clamp(k_sums.unsqueeze(-1) - placeholder_idx.to(inputs_embeds.dtype), min=0,
                                          max=1).unsqueeze(-1)
@@ -232,11 +231,6 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
                     attention_mask_tensor = attention_mask_tensor / torch.finfo(attention_mask_tensor.dtype).min
                     attention_mask_tensor = (1.0 - attention_mask_tensor).int()
 
-            # fix 3/4
-            rope_input_ids = input_ids.clone()
-            rope_input_ids = rope_input_ids.masked_fill(is_placeholder, 0)
-            # #######
-
             prefill_compiled_stage = is_torchdynamo_compiling() and (
                     (input_ids is not None and input_ids.shape[1] != 1)
                     or (inputs_embeds is not None and inputs_embeds.shape[1] != 1)
@@ -248,7 +242,7 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
 
             if (prefill_compiled_stage or prefill_noncompiled_stage) or self.rope_deltas is None:
                 position_ids, rope_deltas = self.get_rope_index(
-                    rope_input_ids,
+                    input_ids,
                     image_grid_thw,
                     None,
                     attention_mask=attention_mask_tensor,

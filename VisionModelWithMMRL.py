@@ -201,20 +201,11 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
                         torch.arange(total_pic_num, device=hidden_states.device),
                         img_seqlens
                     )
-                    # pooled_vision_states = torch.zeros(
-                    #     total_pic_num,
-                    #     hidden_states.shape[-1],
-                    #     dtype=hidden_states.dtype,
-                    #     device=hidden_states.device
-                    # )
-                    # pooled_vision_states.index_add_(0, img_indices, hidden_states)
-                    # pooled_vision_states = pooled_vision_states / img_seqlens.unsqueeze(-1)
                     pooled_vision_states = self.hidden_state_pooling.forward_vectorized(
                         hidden_states,
                         img_indices,
                         total_pic_num
                     )  # [Total_Images, Dim]
-
                     images_per_sample_tensor = torch.tensor(images_per_sample, device=hidden_states.device)
                     expanded_text_embedding = torch.repeat_interleave(
                         embedding_after_pooling,

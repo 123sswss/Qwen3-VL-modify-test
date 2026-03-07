@@ -14,16 +14,19 @@ class attention_pooling(nn.Module):
 
     def forward(self, input_embeds):
         # input_embeds: [B, S, D] 或 [S, D]
-        qq = self.projector_q(self.query)
-        kk = self.projector_e(input_embeds)
-        d_k = self.proj_dim
+        B, S, D = input_embeds.shape
+        qq_raw = self.projector_q(self.query)
+        qq = qq_raw.expand(B, 1, -1)
 
-        score = torch.matmul(qq, kk.transpose(-1, -2)) / math.sqrt(d_k)
+        kk = self.projector_e(input_embeds)
+
+        score = torch.bmm(qq, kk.transpose(1, 2)) / math.sqrt(self.proj_dim)
         score = torch.nn.functional.softmax(score, dim=-1)
 
-        g = torch.matmul(score, input_embeds)
+        g = torch.bmm(score, input_embeds)
 
-        return self.ln(g.squeeze(-2))
+        g = g.view(B, D)
+        return self.ln(g)
 
     def forward_vectorized(self, x, batch_indices, batch_size):
         # qq: [1, Proj_Dim]

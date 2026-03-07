@@ -38,11 +38,13 @@ class Qwen3ProcessorWithMMRL(Qwen3VLProcessor):
             tokenize=False,
             add_generation_prompt=kwargs.get("add_generation_prompt", False)
         )
+        ######## mmrl ########
         rep_str = "".join(self.rep_tokens)
         if isinstance(prompt, list):
             prompt = [rep_str + p for p in prompt]
         elif isinstance(prompt, str):
             prompt = rep_str + prompt
+        ######## mmrl ########
         if tokenize:
             return self.tokenizer(
                 prompt,
@@ -97,11 +99,13 @@ class Qwen3ProcessorWithMMRL(Qwen3VLProcessor):
                 text[i] = text[i].replace("<|placeholder|>", self.image_token)
 
         ######## mmrl ########
-        if not isinstance(text, list):
-            text = [text]
-        text = text.copy()
-        rep_str = "".join(self.rep_tokens)
-        text = [rep_str + t for t in text] # [rep_placeholder*40, ...]
+        # if not isinstance(text, list):
+        #     text = [text]
+        # text = text.copy()
+        # rep_str = "".join(self.rep_tokens)
+        # # text = [rep_str + t for t in text] # [rep_placeholder*40, ...]
+        # if len(text) > 0:
+        #     text[0] = rep_str + text[0]
         ######## mmrl ########
         return_tensors = output_kwargs["text_kwargs"].pop("return_tensors", None)
         return_mm_token_type_ids = output_kwargs["text_kwargs"].pop("return_mm_token_type_ids", None)

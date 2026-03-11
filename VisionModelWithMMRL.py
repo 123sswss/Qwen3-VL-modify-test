@@ -145,7 +145,7 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
                 grid_thw: torch.Tensor,
                 v_r_token_list: Optional[list[torch.Tensor]] = None,
                 embedding: Optional[torch.Tensor] = None,
-                gating_temperature_overied: float = None,
+                gating_temperature_override: float = None,
                 images_per_sample: Optional[list[int]] = None,
                 **kwargs):
         assert len(images_per_sample) == embedding.shape[0]
@@ -192,8 +192,10 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
                     rotary_pos_emb=rotary_pos_emb,
                     **kwargs,
                 )
+                org_hidden_states = hidden_states
             else:
                 ############ N图切分+门控 ############
+                org_input_states = hidden_states if first_insert else org_hidden_states
                 if first_insert:
                     # cu_seqlens: [0, len0, len0+len1, ...]
                     img_seqlens = cu_seqlens[1:] - cu_seqlens[:-1]  # [Total_Images]
@@ -215,10 +217,14 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
                     self.alpha_list = self.Task_classifier(pooled_vision_states, expanded_text_embedding)
                     # G_list: [Total_Images, 1]
                     if self.training:
-                        if gating_temperature_overied is not None:
-                            self.G_list = self.visionGating(self.alpha_list, gating_temperature_overied)
+                        if gating_temperature_override is not None:
+                            soft_g = self.visionGating(self.alpha_list, gating_temperature_override)
+                            hard_g = (soft_g > 0.5).to(dtype=soft_g.dtype)
+                            self.G_list = hard_g
                         else:
-                            self.G_list = self.visionGating(self.alpha_list)
+                            soft_g = self.visionGating(self.alpha_list)
+                            hard_g = (soft_g > 0.5).to(dtype=soft_g.dtype)
+                            self.G_list = hard_g
                     else:
                         raw_g = self.visionGating(self.alpha_list)
                         self.G_list = (raw_g > 0.5).to(dtype=hidden_states.dtype)
@@ -234,11 +240,13 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
                 org_hidden_states = blk(hidden_states if first_insert else org_hidden_states,
                                         cu_seqlens=cu_seqlens,
                                         position_embeddings=position_embeddings,
+                                        rotary_pos_emb=rotary_pos_emb,
                                         **kwargs)
+                hidden_states = org_hidden_states
                 if self.training or run_mmrl_branch:
                     if first_insert:
                         hidden_states_with_rep = self.blocks_with_rep[idx](
-                            hidden_states,
+                            org_input_states,
                             cu_seqlens=cu_seqlens,
                             position_embeddings=position_embeddings,
                             r_token=r_tokens_input,
@@ -267,6 +275,8 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
                 else:
                     pass
                 # 规定这里输出的都是没移除rep的
+                if first_insert:
+                    first_insert = False    
 
             if layer_num in self.deepstack_visual_indexes:
                 if layer_num not in self.cfg.INSERT_LAYER:
@@ -322,15 +332,17 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
             batch_indices_img,
             batch_size,
             embedding_after_pooling,
-            gating_temperature_overied
+            gating_temperature_override
         )
         if self.training:
             hard_k_logits, tax_loss = out  # hard_k_logits: [Batch, 40]
             k_sums = hard_k_logits.sum(dim=-1)
             k_results = (k_sums, tax_loss)
         else:
-            k_sums = out.sum(dim=-1)
-            k_results = k_sums.round()
+            # 修复：按阈值计数，避免 sum().round() 的碎片误激活
+            k_hard = (out > 0.5).to(out.dtype)
+            k_sums = k_hard.sum(dim=-1)
+            k_results = k_sums
             ############ debug ############
             # debug_info = self.text_gating.debug_context            
             # alpha_val = debug_info.get("alpha_val", torch.tensor(0.0))
@@ -355,7 +367,7 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
         # alpha_loss = torch.mean(torch.sigmoid(self.alpha_list)) * 0.1
         return hidden_states, deepstack_feature_lists, k_results
 
-    def compute_text_only_gating(self, embedding, gating_temperature_overied=None):
+    def compute_text_only_gating(self, embedding, gating_temperature_override=None):
         batch_size = embedding.shape[0]
         embedding_after_pooling = self.embedding_pooling(embedding)  # [Batch, Pool_Dim]
         dummy_vision_states = self.null_image_token.expand(batch_size, -1)
@@ -372,7 +384,7 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
             batch_indices,
             batch_size,
             embedding_after_pooling,
-            gating_temperature_overied
+            gating_temperature_override
         )
 
         if self.training:
@@ -380,9 +392,6 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
             k_sums = hard_k_logits.sum(dim=-1)
             k_results = (k_sums, tax_loss)
         else:
-            k_sums = out.sum(dim=-1)
-            k_results = k_sums.round()
-
-        # alpha_loss = torch.mean(torch.sigmoid(self.alpha_list)) * 0.1
-
+            k_hard = (out > 0.5).to(out.dtype)
+            k_results = k_hard.sum(dim=-1)  
         return k_results

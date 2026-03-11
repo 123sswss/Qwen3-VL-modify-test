@@ -83,13 +83,14 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
             raise ValueError("v_r_token_list must be specified")
         elif self.use_mmrl and v_r_token_list is not None:
             pixel_values = pixel_values.type(self.visual.dtype)
-            image_embeds, deepstack_image_embeds, k = self.visual(pixel_values,
-                                                                              grid_thw=image_grid_thw,
-                                                                              v_r_token_list=v_r_token_list,
-                                                                              embedding=embedding,
-                                                                              gating_temperature_overied=self.temperature_override,
-                                                                              images_per_sample=images_per_sample)
-            # self.alpha_loss = alpha_loss
+            image_embeds, deepstack_image_embeds, k = self.visual(
+                pixel_values,
+                grid_thw=image_grid_thw,
+                v_r_token_list=v_r_token_list,
+                embedding=embedding,
+                gating_temperature_override=self.temperature_override,  # 修复温度透传
+                images_per_sample=images_per_sample
+            )
             split_sizes = (image_grid_thw.prod(-1) // self.visual.spatial_merge_size ** 2).tolist()
             image_embeds = torch.split(image_embeds, split_sizes)
             return image_embeds, deepstack_image_embeds, k
@@ -122,6 +123,12 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
             raise ValueError("You must specify exactly one of input_ids or inputs_embeds")
         if inputs_embeds is None:
             inputs_embeds = self.get_input_embeddings()(input_ids)
+        # 修复：兼容新旧参数名，并写回 self.temperature_override
+        temp_from_kwargs = kwargs.pop("gating_temperature_override", None)
+        if kwargs.pop("gating_temperature_overied", None) is not None:
+            raise RuntimeError
+        if temp_from_kwargs is not None:
+            self.temperature_override = temp_from_kwargs
         
         # 为门控准备无答案的embedding
         mmrl_gating_mask = kwargs.pop('mmrl_gating_mask', None)
@@ -150,20 +157,22 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
         self.tax_loss = 0.0
         # self.alpha_loss = 0.0
         #### MMRL ####
-        images_per_sample = []
-        if input_ids is not None:
-            for seq_input_ids in input_ids:
-                count = (seq_input_ids == self.vision_end_token_id).sum().item()
-                images_per_sample.append(count)
+        # images_per_sample = []
+        # if input_ids is not None:
+        #     for seq_input_ids in input_ids:
+        #         count = (seq_input_ids == self.vision_end_token_id).sum().item()
+        #         images_per_sample.append(count)
         visual_pos_masks = None
         deepstack_visual_embeds = None
         k_results = None
 
-        if images_per_sample is None and input_ids is not None:
+        if images_per_sample is None:
             images_per_sample = []
             for seq_input_ids in input_ids:
                 count = (seq_input_ids == self.vision_end_token_id).sum().item()
                 images_per_sample.append(count)
+        assert sum(images_per_sample) == image_grid_thw.shape[0], \
+            f"but got sum {sum(images_per_sample)} and image_grid_thw.shape[0] {image_grid_thw.shape[0]}"
 
         if pixel_values is not None:
             if self.use_mmrl:
@@ -193,8 +202,10 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
             deepstack_visual_embeds = deepstack_image_embeds
         elif self.use_mmrl:
             k_results = self.visual.compute_text_only_gating(
-                embedding=embedding_for_gating
+                embedding=embedding_for_gating,
+                gating_temperature_override=self.temperature_override
             )
+
         ######## text gating ########
         if self.use_mmrl and k_results is not None:
             if self.training:
@@ -207,11 +218,10 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
             placeholder_idx = (placeholder_cumsum - 1).clamp(min=0)
             
             target_embeds = t_r_tokens[placeholder_idx]
-            gate_soft_mask = torch.clamp(k_sums.unsqueeze(-1) - placeholder_idx.to(inputs_embeds.dtype), min=0,
-                                         max=1).unsqueeze(-1)
+            gate_soft_mask = torch.clamp(k_sums.unsqueeze(-1) - placeholder_idx.to(inputs_embeds.dtype), min=0, max=1).unsqueeze(-1)
             gate_soft_mask = gate_soft_mask.to(inputs_embeds.dtype)
             inputs_embeds = torch.where(is_placeholder.unsqueeze(-1), target_embeds * gate_soft_mask, inputs_embeds)
-            dynamic_gate_mask = (gate_soft_mask.squeeze(-1) > 1e-3)
+            dynamic_gate_mask = (gate_soft_mask.squeeze(-1) > 0.5)
             attention_mask = attention_mask & ((~is_placeholder) | dynamic_gate_mask)
             if not self.training:
                 hard_gate = (gate_soft_mask.squeeze(-1) > 0.5)

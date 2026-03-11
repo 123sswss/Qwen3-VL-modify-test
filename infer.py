@@ -61,14 +61,14 @@ def inference():
     BASE_MODEL_PATH = "/root/autodl-tmp/model" 
     
     # 3. 输入图片和文本
-    # IMAGE_PATH = "/root/autodl-tmp/dataset/14/DJI_20231023073909_0114_V_JPG.rf.16c125c28c5e6deaf7e9b1525ee0188c.jpg"
-    # PROMPT_TEXT = "\n分析设备状态并输出JSON。"
+    IMAGE_PATH = "/root/autodl-tmp/dataset/14/DJI_20231023073909_0114_V_JPG.rf.16c125c28c5e6deaf7e9b1525ee0188c.jpg"
+    PROMPT_TEXT = "\n分析设备状态并输出JSON。"
 
     # IMAGE_PATH = "/root/autodl-tmp/dataset/14/DJI_20231023073909_0114_V_JPG.rf.16c125c28c5e6deaf7e9b1525ee0188c.jpg"
     # PROMPT_TEXT = "详细描述一下这张图片中的设备状态。"
 
-    IMAGE_PATH = "/root/autodl-tmp/Qwen3-VL-modify-test/test.png"
-    PROMPT_TEXT = "图片中的这三个人是谁？"
+    # IMAGE_PATH = "/root/autodl-tmp/Qwen3-VL-modify-test/test.png"
+    # PROMPT_TEXT = "描述一下图片中的这三个人"
 
     # IMAGE_PATH = "/root/autodl-tmp/Qwen3-VL-modify-test/test2.png"
     # PROMPT_TEXT = "描述一下这张图片。"
@@ -120,7 +120,7 @@ def inference():
         raise FileNotFoundError(f"在 {TRAINED_MODEL_PATH} 中未找到权重文件")
 
     # 加载权重
-    msg = model.load_state_dict(state_dict, strict=True)
+    msg = model.load_state_dict(state_dict, strict=False)
     print(f"Missing keys: {msg.missing_keys}")
     print(f"Unexpected keys: {msg.unexpected_keys}")
     print(f"    -> 权重加载完成。")

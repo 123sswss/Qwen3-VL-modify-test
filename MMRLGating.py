@@ -15,21 +15,21 @@ class Task_classifier(nn.Module):
         self.output_head = nn.Linear(config.GATING_MID_DIM, 1)
         self.relu = nn.ReLU()
         # 默认让 alpha 趋近于 0，只有看到强烈的专业特征才激活
-        nn.init.constant_(self.output_head.bias, -2.0)
+        nn.init.constant_(self.output_head.bias, 0.0)
 
     def forward(self,
                 vision_token_after_pooling: torch.Tensor,
                 text_embedding_after_pooling: torch.Tensor):
         v_feat = self.relu(self.vision_proj(vision_token_after_pooling))
         t_feat = self.relu(self.text_proj(text_embedding_after_pooling))
-        if self.training:
-            ss = random.random()
-            if ss < 0.1:
-                t_feat = torch.zeros_like(t_feat)
-            elif ss < 0.2 and ss >= 0.1:
-                v_feat = torch.zeros_like(v_feat)
-            else:
-                pass
+        # if self.training:
+        #     ss = random.random()
+        #     if ss < 0.1:
+        #         t_feat = torch.zeros_like(t_feat)
+        #     elif ss < 0.2 and ss >= 0.1:
+        #         v_feat = torch.zeros_like(v_feat)
+        #     else:
+        #         pass
 
         # [Batch, MID_DIM*2]
         combined = torch.cat((v_feat, t_feat), dim=-1)
@@ -74,80 +74,67 @@ class textGating(nn.Module):
         super().__init__()
         self.total_rep_num = config.RP_SPACE_LENGTH * 8
         self.attention_pooling = attention_pooling(config.vision_token_dim, config.GATING_MID_DIM)
-
-        self.intensity_mlp = nn.Sequential(nn.Linear(config.vision_token_dim, config.GATING_MID_DIM),  # 注意维度变化
-                                           nn.ReLU(),
-                                           nn.Linear(config.GATING_MID_DIM, self.total_rep_num))
+        self.intensity_mlp = nn.Sequential(
+            nn.Linear(config.vision_token_dim, config.GATING_MID_DIM),
+            nn.ReLU(),
+            nn.Linear(config.GATING_MID_DIM, self.total_rep_num)
+        )
         
-        nn.init.constant_(self.intensity_mlp[-1].bias, 3.0)
+        nn.init.constant_(self.intensity_mlp[-1].bias, 2.0) 
         nn.init.normal_(self.intensity_mlp[-1].weight, std=0.01)
         
         self.threshold_root = nn.Parameter(torch.zeros([1, self.total_rep_num]))
-        nn.init.constant_(self.threshold_root, 3.0)
-
+        nn.init.constant_(self.threshold_root, -2.0)
         self.epsilon = epsilon
         self.softplus = nn.Softplus()
         self.hard_concrete = HardConcreteGate(temperature)
         self.lambda_ = lambda_
-
-        self.text_relevance_head = nn.Sequential(nn.Linear(config.text_token_dim, config.GATING_MID_DIM),
-                                                 nn.ReLU(),
-                                                 nn.Linear(config.GATING_MID_DIM, 1))
-        nn.init.constant_(self.text_relevance_head[-1].bias, -2.0)
-
+        self.text_relevance_head = nn.Sequential(
+            nn.Linear(config.text_token_dim, config.GATING_MID_DIM),
+            nn.ReLU(),
+            nn.Linear(config.GATING_MID_DIM, 1)
+        )
+        nn.init.constant_(self.text_relevance_head[-1].bias, 0.0)
         self.debug_context = {}
-
     def forward(self,
-                delta_vision_token: torch.Tensor,  # [Total_Tokens, Dim]
-                alpha: torch.Tensor,               # [Total_Images, 1]
-                batch_indices_token: torch.Tensor, # [Total_Tokens]
-                batch_indices_img: torch.Tensor,   # [Total_Images]
+                delta_vision_token: torch.Tensor,
+                alpha: torch.Tensor,
+                batch_indices_token: torch.Tensor,
+                batch_indices_img: torch.Tensor,
                 batch_size: int,
-                text_embedding: torch.Tensor,      # [Batch_Size, Text_Dim]
-                temperature_overide: Optional[float] = None):
-        # [Batch_Size, Dim]
+                text_embedding: torch.Tensor,
+                temperature_override: Optional[float] = None):
         pooled_vision = self.attention_pooling.forward_vectorized(
             delta_vision_token, batch_indices_token, batch_size
         )
-
         alpha_logits = torch.sigmoid(alpha)
         batch_alpha = torch.zeros(batch_size, 1, device=alpha_logits.device, dtype=alpha_logits.dtype)
         batch_alpha.index_reduce_(0, batch_indices_img, alpha_logits, reduce="amax", include_self=False)
         
-        text_relevance_logits = self.text_relevance_head(text_embedding)  # [Batch, 1]
-        text_relevance_prob = torch.sigmoid(text_relevance_logits)  # [0, 1]
-
-        raw_intensity = torch.sigmoid(self.intensity_mlp(pooled_vision)) # [Batch, 1]
-        master_gate = batch_alpha * text_relevance_prob # [Batch, 1]
-        modulated_intensity = raw_intensity * master_gate 
-        total_intensity = modulated_intensity.sum(dim=-1, keepdim=True) # [Batch, 1]
-        threshold = self.softplus(self.threshold_root) + self.epsilon # [1, Rep_Num]
-
+        text_relevance_logits = self.text_relevance_head(text_embedding)
+        text_relevance_prob = torch.sigmoid(text_relevance_logits)
+        raw_intensity = torch.sigmoid(self.intensity_mlp(pooled_vision))
+        master_gate = batch_alpha * text_relevance_prob
+        modulated_intensity = raw_intensity * master_gate
+        total_intensity = modulated_intensity.sum(dim=-1, keepdim=True)
+        threshold = self.softplus(self.threshold_root) + self.epsilon
         K_logits = total_intensity - torch.cumsum(threshold, -1)
-        hard_k_logits = self.hard_concrete(K_logits, temperature_overide)
-
-        ############ debug ############
-        # if not self.training:
-        #     self.debug_context = {
-        #         "alpha_val": batch_alpha.detach().cpu().squeeze(),           # 当前Batch的Alpha值
-        #         "text_rel": text_relevance_prob.detach().cpu().squeeze(),    # 文本相关性概率
-        #         "intensity_sum": intensity.detach().cpu().squeeze(),         # 原始强度总和
-        #         "modulated_intensity": modulated_intensity.detach().cpu().squeeze(), # 被文本加权后的强度
-        #         "threshold_mean": threshold.mean().detach().cpu().item(),    # 阈值均值
-        #         "gate_sum_raw": hard_k_logits.sum(dim=-1).detach().cpu().squeeze() # 具体激活了多少个门
-        #     }
-        ############ debug ############
-
-
+        hard_k_logits = self.hard_concrete(K_logits, temperature_override)
         if self.training:
-            batch_alpha_prob = batch_alpha
-            penalty_mask = torch.where(batch_alpha_prob > 0.5, 
-                           torch.zeros_like(batch_alpha_prob), 
-                           1.0 - batch_alpha_prob)
+            hard_k_logits = hard_k_logits * batch_alpha
+        else:
+            alpha_hard_mask = (batch_alpha > 0.5).to(dtype=hard_k_logits.dtype)
+            hard_k_logits = hard_k_logits * alpha_hard_mask
+        if self.training:
+            batch_alpha_prob = batch_alpha.detach()
+            penalty_mask = torch.where(
+                batch_alpha_prob > 0.5,
+                torch.zeros_like(batch_alpha_prob),
+                1.0 - batch_alpha_prob
+            )
             dynamic_lambda = self.lambda_ * penalty_mask
-            raw_loss = dynamic_lambda * total_intensity.sum(dim=-1) / self.total_rep_num
-            text_sparsity_loss = 0.05 * text_relevance_prob.mean()
-            tax_loss = (raw_loss + text_sparsity_loss).mean()
+            raw_loss = (dynamic_lambda * total_intensity / self.total_rep_num).squeeze(-1)
+            tax_loss = raw_loss.mean()
             return hard_k_logits, tax_loss
         return hard_k_logits
 

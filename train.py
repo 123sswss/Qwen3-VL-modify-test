@@ -44,7 +44,7 @@ class MMRLTrainingCallback(TrainerCallback):
         """训练结束时绘制曲线"""
         model = kwargs['model']
         if hasattr(model, 'metrics_logger') and model.metrics_logger is not None:
-            model.metrics_logger.plot_curves(args.output_dir)
+            model.metrics_logger.plot_curves(args.output_dir, 10000)
     
     def on_step_begin(self, args, state, control, **kwargs):
         """在每个 step 开始时平滑更新参数"""
@@ -371,7 +371,7 @@ def train_gating(
         processor,
         expert_json, expert_img_dir,
         general_json, general_img_dir,
-        general_ratio_limit=general_ratio_limit
+        total_limit=10000, mode="mixed", general_ratio_limit=1.0
     )
 
     collator = MMRLDataCollator(processor)

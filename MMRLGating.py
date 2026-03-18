@@ -96,6 +96,13 @@ class textGating(nn.Module):
         )
         nn.init.constant_(self.text_relevance_head[-1].bias, 0.0)
         self.debug_context = {}
+        self.th_scale_mlp = nn.Sequential(
+            nn.Linear(config.vision_token_dim + config.text_token_dim + 1, config.GATING_MID_DIM),
+            nn.ReLU(),
+            nn.Linear(config.GATING_MID_DIM, 1)
+        )
+        nn.init.constant_(self.th_scale_mlp[-1].bias, 0.0)
+
     def forward(self,
                 delta_vision_token: torch.Tensor,
                 alpha: torch.Tensor,
@@ -111,15 +118,23 @@ class textGating(nn.Module):
         batch_alpha = torch.zeros(batch_size, 1, device=alpha_logits.device, dtype=alpha_logits.dtype)
         batch_alpha.index_reduce_(0, batch_indices_img, alpha_logits, reduce="amax", include_self=False)
         
+        # text relevance
         text_relevance_logits = self.text_relevance_head(text_embedding)
-        text_relevance_prob = torch.sigmoid(text_relevance_logits)
-        raw_intensity = torch.sigmoid(self.intensity_mlp(pooled_vision))
-        master_gate = batch_alpha * text_relevance_prob
-        modulated_intensity = raw_intensity * master_gate
-        total_intensity = modulated_intensity.sum(dim=-1, keepdim=True)
-        threshold = self.softplus(self.threshold_root) + self.epsilon
-        K_logits = total_intensity - torch.cumsum(threshold, -1)
-        hard_k_logits = self.hard_concrete(K_logits, temperature_override)
+        text_relevance_prob = torch.sigmoid(text_relevance_logits)  # [B, 1]
+        # master gate
+        master_gate = batch_alpha * text_relevance_prob             # [B, 1]
+        # --- intensity: softplus (avoid sigmoid saturation) ---
+        raw_intensity = self.softplus(self.intensity_mlp(pooled_vision))     # [B, K]
+        modulated_intensity = raw_intensity * master_gate                    # [B, K]
+        total_intensity = modulated_intensity.sum(dim=-1, keepdim=True)      # [B, 1]
+        # --- context-adaptive threshold scaling ---
+        feat = torch.cat([pooled_vision, text_embedding, batch_alpha], dim=-1)  # [B, Dv+Dt+1]
+        scale = torch.sigmoid(self.th_scale_mlp(feat))                          # [B, 1]
+        scale = 0.5 + scale                                                     # [B, 1] in [0.5, 1.5]
+        threshold_base = self.softplus(self.threshold_root) + self.epsilon      # [1, K]
+        threshold = threshold_base * scale                                       # [B, K] 关键：不要 unsqueeze(-1)
+        K_logits = total_intensity - torch.cumsum(threshold, dim=-1)            # [B, K]
+        hard_k_logits = self.hard_concrete(K_logits, temperature_override)      # [B, K]
         if self.training:
             hard_k_logits = hard_k_logits * batch_alpha
         else:
@@ -133,8 +148,18 @@ class textGating(nn.Module):
                 1.0 - batch_alpha_prob
             )
             dynamic_lambda = self.lambda_ * penalty_mask
+            
+            # hard_k_logits: [B, total_rep_num]  (soft/hard gate)
+            k_soft = hard_k_logits.sum(dim=-1)  # [B], soft K 值
+            # 防塌缩正则：如果 K 方差太小，就惩罚
+            target_var = 4.0  # 可调，建议 2~6 之间
+            k_var = k_soft.var(unbiased=False)
+            collapse_loss = torch.relu(target_var - k_var)  # 方差太小就惩罚
+            collapse_loss = 0.05 * collapse_loss            # 乘一个很小的权重
+            
             raw_loss = (dynamic_lambda * total_intensity / self.total_rep_num).squeeze(-1)
             tax_loss = raw_loss.mean()
+            tax_loss = tax_loss + collapse_loss
             return hard_k_logits, tax_loss
         return hard_k_logits
 

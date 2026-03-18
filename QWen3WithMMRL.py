@@ -154,7 +154,6 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
         if self.use_mmrl:
             v_r_token_list, t_r_token_list = self.MMRL()
             t_r_tokens = torch.cat(t_r_token_list, dim=0)
-        self.tax_loss = 0.0
         # self.alpha_loss = 0.0
         #### MMRL ####
         # images_per_sample = []

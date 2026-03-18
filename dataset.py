@@ -6,32 +6,42 @@ from torch.utils.data import Dataset
 from PIL import Image
 
 class MixedMMRLDataset(Dataset):
+    # 混合模式，总共10000条，按1:1比例
+    # dataset = MixedMMRLDataset(..., total_limit=10000, mode="mixed", general_ratio_limit=1.0)
+    # 仅专业数据，5000条
+    # dataset = MixedMMRLDataset(..., total_limit=5000, mode="expert")
+    # 仅通用数据，8000条
+    # dataset = MixedMMRLDataset(..., total_limit=8000, mode="general")
     def __init__(self, processor,
-                 expert_json, expert_img_dir,
-                 general_json, general_img_dir,
+                 expert_json=None, expert_img_dir=None,
+                 general_json=None, general_img_dir=None,
                  general_ratio_limit=1.0,
-                 expert_limit=None):
+                 total_limit=10000,
+                 mode="mixed"):  # mode: "mixed", "expert", "general"
         self.processor = processor
         self.general_ratio_limit = general_ratio_limit
-
-        # 1. 加载专家数据 JSON
-        self.expert_data_raw = self._load_json(expert_json, "专业")
-        if expert_limit is not None and expert_limit < len(self.expert_data_raw):
-            self.expert_data_raw = random.sample(self.expert_data_raw, expert_limit)
-            print(f"[Dataset] 专业数据集限制为 {expert_limit} 条（随机采样）")
-
-        # 2. 处理专家图片目录
-        self.expert_img_mapping, self.expert_img_dir = self._process_img_dirs(expert_img_dir, "专业")
-        self.use_expert_mapping = self.expert_img_mapping is not None
-
-        # 3. 加载通用数据 JSON
-        self.general_data_raw = self._load_json(general_json, "通用")
-
-        # 4. 处理通用图片目录 (新增逻辑)
-        self.general_img_mapping, self.general_img_dir = self._process_img_dirs(general_img_dir, "通用")
-        self.use_general_mapping = self.general_img_mapping is not None
-
-        # 5. 初始化数据列表
+        self.total_limit = total_limit
+        self.mode = mode
+    
+        # 根据模式决定加载哪些数据
+        if mode in ["mixed", "expert"]:
+            self.expert_data_raw = self._load_json(expert_json, "专业")
+            self.expert_img_mapping, self.expert_img_dir = self._process_img_dirs(expert_img_dir, "专业")
+            self.use_expert_mapping = self.expert_img_mapping is not None
+        else:
+            self.expert_data_raw = []
+            self.expert_img_mapping, self.expert_img_dir = None, None
+            self.use_expert_mapping = False
+    
+        if mode in ["mixed", "general"]:
+            self.general_data_raw = self._load_json(general_json, "通用")
+            self.general_img_mapping, self.general_img_dir = self._process_img_dirs(general_img_dir, "通用")
+            self.use_general_mapping = self.general_img_mapping is not None
+        else:
+            self.general_data_raw = []
+            self.general_img_mapping, self.general_img_dir = None, None
+            self.use_general_mapping = False
+    
         self._build_data_list()
 
     def _load_json(self, json_input, tag):
@@ -72,71 +82,75 @@ class MixedMMRLDataset(Dataset):
             return None, img_input
 
     def _build_data_list(self):
-        """修正后的逻辑：先筛选有效数据池，再按比例抽样"""
+        """根据模式构建数据列表，total_limit 控制最终输出数量"""
         self.data_list = []
         
-        # 1. 筛选出所有有效的专业数据
+        # 1. 筛选有效专业数据
         valid_experts = []
         expert_skipped = 0
         for item in self.expert_data_raw:
             image_file = item.get("image", "")
             exists = False
             if self.use_expert_mapping:
-                if image_file in self.expert_img_mapping:
-                    exists = True
-            else:
-                if os.path.exists(os.path.join(self.expert_img_dir, image_file)): # 修正了变量名
-                    exists = True
-            
+                exists = image_file in self.expert_img_mapping
+            elif self.expert_img_dir:
+                exists = os.path.exists(os.path.join(self.expert_img_dir, image_file))
             if exists:
                 valid_experts.append(item)
             else:
                 expert_skipped += 1
-
-        # 2. 筛选出所有有效的通用数据池
-        valid_generals_pool = []
-        general_skipped_in_pool = 0
+    
+        # 2. 筛选有效通用数据
+        valid_generals = []
+        general_skipped = 0
         for item in self.general_data_raw:
             image_file = item.get("image", "")
             exists = False
             if self.use_general_mapping:
-                if image_file in self.general_img_mapping:
-                    exists = True
-            else:
-                if os.path.exists(os.path.join(self.general_img_dir, image_file)): # 修正了变量名
-                    exists = True
-            
+                exists = image_file in self.general_img_mapping
+            elif self.general_img_dir:
+                exists = os.path.exists(os.path.join(self.general_img_dir, image_file))
             if exists:
-                valid_generals_pool.append(item)
+                valid_generals.append(item)
             else:
-                general_skipped_in_pool += 1
-
-        # 3. 基于有效专家数据的数量，从有效通用数据池中进行抽样
-        num_expert = len(valid_experts)
-        max_general_needed = int(num_expert * self.general_ratio_limit)
-        
-        # 执行抽样
-        sampled_generals = random.sample(
-            valid_generals_pool, 
-            min(max_general_needed, len(valid_generals_pool))
-        )
-
-        # 4. 组装最终的 data_list
-        for item in valid_experts:
+                general_skipped += 1
+    
+        # 3. 根据模式计算采样数量
+        if self.mode == "expert":
+            target_expert = min(self.total_limit, len(valid_experts))
+            target_general = 0
+        elif self.mode == "general":
+            target_expert = 0
+            target_general = min(self.total_limit, len(valid_generals))
+        else:  # mixed
+            # total = expert + general = expert * (1 + ratio)
+            target_expert = int(self.total_limit / (1 + self.general_ratio_limit))
+            target_general = self.total_limit - target_expert
+            target_expert = min(target_expert, len(valid_experts))
+            target_general = min(target_general, len(valid_generals))
+    
+        # 4. 执行采样
+        sampled_experts = random.sample(valid_experts, target_expert) if target_expert > 0 else []
+        sampled_generals = random.sample(valid_generals, target_general) if target_general > 0 else []
+    
+        # 5. 组装 data_list
+        for item in sampled_experts:
             self.data_list.append({"data": item, "type": "expert", "alpha_label": 1.0})
-        
         for item in sampled_generals:
             self.data_list.append({"data": item, "type": "general", "alpha_label": 0.0})
-
+    
         random.shuffle(self.data_list)
-        
-        # 打印统计
-        print(f"\n[Dataset Status] 数据过滤与平衡完成:")
-        print(f"  - 有效数据总数: {len(self.data_list)}")
-        print(f"  - 专业数据: {len(valid_experts)} (因图片缺失跳过 {expert_skipped})")
-        print(f"  - 通用数据: {len(sampled_generals)} (从 {len(valid_generals_pool)} 条有效数据中采样，原始缺失 {general_skipped_in_pool})")
-        if len(sampled_generals) < max_general_needed:
-            print(f"  [Warning] 通用数据储备不足，当前实际比例为 1 : {len(sampled_generals)/len(valid_experts):.2f}")
+    
+        # 6. 打印统计
+        print(f"\n[Dataset Status] 模式: {self.mode}, 目标总数: {self.total_limit}")
+        print(f"  - 实际输出: {len(self.data_list)}")
+        if self.mode != "general":
+            print(f"  - 专业数据: {len(sampled_experts)} (有效池 {len(valid_experts)}, 缺失 {expert_skipped})")
+        if self.mode != "expert":
+            print(f"  - 通用数据: {len(sampled_generals)} (有效池 {len(valid_generals)}, 缺失 {general_skipped})")
+        if self.mode == "mixed" and len(sampled_experts) > 0:
+            actual_ratio = len(sampled_generals) / len(sampled_experts)
+            print(f"  - 实际比例 expert:general = 1:{actual_ratio:.2f}")
 
     def resample_general_data(self):
         self._build_data_list()

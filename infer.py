@@ -61,8 +61,11 @@ def inference():
     BASE_MODEL_PATH = "/root/autodl-tmp/model" 
     
     # 3. 输入图片和文本
+    # IMAGE_PATH = "/root/autodl-tmp/dataset/14/DJI_20231023073909_0114_V_JPG.rf.16c125c28c5e6deaf7e9b1525ee0188c.jpg"
+    # PROMPT_TEXT = "\n分析设备状态并输出JSON。"
+
     IMAGE_PATH = "/root/autodl-tmp/dataset/14/DJI_20231023073909_0114_V_JPG.rf.16c125c28c5e6deaf7e9b1525ee0188c.jpg"
-    PROMPT_TEXT = "\n分析设备状态并输出JSON。"
+    PROMPT_TEXT = "上海有哪些鸟的鸟巢比较常见？"
 
     # IMAGE_PATH = "/root/autodl-tmp/dataset/14/DJI_20231023073909_0114_V_JPG.rf.16c125c28c5e6deaf7e9b1525ee0188c.jpg"
     # PROMPT_TEXT = "详细描述一下这张图片中的设备状态。"
@@ -137,12 +140,13 @@ def inference():
     )
     
     image = Image.open(IMAGE_PATH).convert("RGB")
+    image = None
 
     messages = [
         {
             "role": "user", 
             "content": [
-                {"type": "image", "image": image},
+                # {"type": "image", "image": image},
                 {"type": "text", "text": PROMPT_TEXT}
             ]
         }

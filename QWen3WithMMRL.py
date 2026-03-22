@@ -123,14 +123,13 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
             raise ValueError("You must specify exactly one of input_ids or inputs_embeds")
         if inputs_embeds is None:
             inputs_embeds = self.get_input_embeddings()(input_ids)
-        # 修复：兼容新旧参数名，并写回 self.temperature_override
+        
         temp_from_kwargs = kwargs.pop("gating_temperature_override", None)
         if kwargs.pop("gating_temperature_overied", None) is not None:
             raise RuntimeError
         if temp_from_kwargs is not None:
             self.temperature_override = temp_from_kwargs
         
-        # 为门控准备无答案的embedding
         mmrl_gating_mask = kwargs.pop('mmrl_gating_mask', None)
         
         if self.training and mmrl_gating_mask is not None:
@@ -141,46 +140,37 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
             embedding_for_gating = inputs_embeds * mask_expanded
         else:
             embedding_for_gating = inputs_embeds
-
         self.tax_loss = torch.tensor(0.0, device=inputs_embeds.device)
-        # self.alpha_loss = torch.tensor(0.0, device=inputs_embeds.device)
-
         placeholder_ids_tensor = torch.tensor(self.rep_placeholder_ids, device=input_ids.device)
-        # [Batch, Seq]
         is_placeholder = (input_ids.unsqueeze(-1) == placeholder_ids_tensor).any(dim=-1)
-        #### MMRL ####
+        
         v_r_token_list = None
         t_r_tokens = None
         if self.use_mmrl:
             v_r_token_list, t_r_token_list = self.MMRL()
             t_r_tokens = torch.cat(t_r_token_list, dim=0)
-        # self.alpha_loss = 0.0
-        #### MMRL ####
-        # images_per_sample = []
-        # if input_ids is not None:
-        #     for seq_input_ids in input_ids:
-        #         count = (seq_input_ids == self.vision_end_token_id).sum().item()
-        #         images_per_sample.append(count)
         visual_pos_masks = None
         deepstack_visual_embeds = None
         k_results = None
-
-        if images_per_sample is None:
-            images_per_sample = []
-            for seq_input_ids in input_ids:
-                count = (seq_input_ids == self.vision_end_token_id).sum().item()
-                images_per_sample.append(count)
-        assert sum(images_per_sample) == image_grid_thw.shape[0], \
-            f"but got sum {sum(images_per_sample)} and image_grid_thw.shape[0] {image_grid_thw.shape[0]}"
-
-        if pixel_values is not None:
+        has_images = pixel_values is not None and image_grid_thw is not None and image_grid_thw.numel() > 0
+        
+        if has_images:
+            # 仅在有图像时计算 images_per_sample
+            if images_per_sample is None:
+                images_per_sample = []
+                for seq_input_ids in input_ids:
+                    count = (seq_input_ids == self.vision_end_token_id).sum().item()
+                    images_per_sample.append(count)
+            assert sum(images_per_sample) == image_grid_thw.shape[0], \
+                f"but got sum {sum(images_per_sample)} and image_grid_thw.shape[0] {image_grid_thw.shape[0]}"
+            
             if self.use_mmrl:
                 image_embeds_raw, deepstack_image_embeds, k_results = self.get_image_features(
                     pixel_values=pixel_values,
                     image_grid_thw=image_grid_thw,
                     v_r_token_list=v_r_token_list,
-                    embedding = embedding_for_gating,
-                    images_per_sample = images_per_sample
+                    embedding=embedding_for_gating,
+                    images_per_sample=images_per_sample
                 )
             else:
                 image_embeds_raw, deepstack_image_embeds = self.get_image_features(
@@ -204,7 +194,6 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
                 embedding=embedding_for_gating,
                 gating_temperature_override=self.temperature_override
             )
-
         ######## text gating ########
         if self.use_mmrl and k_results is not None:
             if self.training:
@@ -230,6 +219,7 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
                 embed_mask = embed_mask.masked_fill(tokens_to_zero, 0.0)
                 inputs_embeds = inputs_embeds * embed_mask.unsqueeze(-1)
         ######## text gating ########
+        
         if position_ids is None:
             attention_mask_tensor = (
                 attention_mask if not isinstance(attention_mask, dict) else attention_mask["full_attention"]
@@ -239,7 +229,6 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
                 if attention_mask_tensor.dtype.is_floating_point:
                     attention_mask_tensor = attention_mask_tensor / torch.finfo(attention_mask_tensor.dtype).min
                     attention_mask_tensor = (1.0 - attention_mask_tensor).int()
-
             prefill_compiled_stage = is_torchdynamo_compiling() and (
                     (input_ids is not None and input_ids.shape[1] != 1)
                     or (inputs_embeds is not None and inputs_embeds.shape[1] != 1)
@@ -248,11 +237,11 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
                     (cache_position is not None and cache_position[0] == 0)
                     or (past_key_values is None or past_key_values.get_seq_length() == 0)
             )
-
             if (prefill_compiled_stage or prefill_noncompiled_stage) or self.rope_deltas is None:
+                # ========== 修复：纯文本时 image_grid_thw 传 None ==========
                 position_ids, rope_deltas = self.get_rope_index(
                     input_ids,
-                    image_grid_thw,
+                    image_grid_thw if has_images else None,
                     None,
                     attention_mask=attention_mask_tensor,
                 )
@@ -270,13 +259,6 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
                     delta = delta.repeat_interleave(batch_size // delta.shape[0], dim=0)
                 position_ids = position_ids.add(delta)
                 position_ids = position_ids.unsqueeze(0).expand(3, -1, -1)
-
-        # if self.use_mmrl:
-        #     shift = is_placeholder.cumsum(dim=-1)  # [Batch, Seq]
-        #     new_position_ids = position_ids.clone()
-        #     new_position_ids[0] = position_ids[0] - shift
-        #     position_ids = new_position_ids
-
         outputs = self.language_model(
             input_ids=None,
             position_ids=position_ids,

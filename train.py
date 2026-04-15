@@ -115,9 +115,9 @@ class Qwen3VLMMRLForTrain(Qwen3VLForConditionalGeneration):
         self.temperature_override = None
         self.k_sums_history = []
         # 新增：K损失目标与权重
-        self.k_target_expert = 6.0
+        self.k_min_expert = 2.0
         self.k_general_weight = 8.0
-        self.k_expert_weight = 2.0
+        self.k_expert_weight = 0.5
         self.metrics_logger = None
     def forward(self, input_ids=None, alpha_labels=None, images_per_sample=None, **kwargs):
         # 修复：显式同步温度到内部模型，并传入兼容参数名
@@ -169,12 +169,12 @@ class Qwen3VLMMRLForTrain(Qwen3VLForConditionalGeneration):
                 ) * self.alpha_loss_weight
                 
                 alpha_probs = torch.sigmoid(sliced_logits).detach()
-        # C. K Loss 策略（改为：General -> 0；Expert -> 至少达到目标）
+        # C. K Loss：General -> 尽量低；Expert -> 仅保持弱下界，不再推到固定常数
         k_general_loss = torch.tensor(0.0, device=outputs.loss.device)
         k_expert_loss = torch.tensor(0.0, device=outputs.loss.device)
         mean_k_general = 0.0
         mean_k_expert = 0.0
-        
+
         k_results = self.model.visual.k_results
         k_sums_value = k_results[0] if isinstance(k_results, tuple) else k_results
         if k_sums_value is not None and alpha_labels is not None:
@@ -186,22 +186,25 @@ class Qwen3VLMMRLForTrain(Qwen3VLForConditionalGeneration):
                     label = alpha_labels[idx]
                     k_expanded_labels_list.append(label.repeat(count))
                 k_expanded_labels = torch.cat(k_expanded_labels_list)
+
             if k_sums_value.shape[0] == k_expanded_labels.shape[0]:
                 is_general = (k_expanded_labels < 0.1)
                 is_expert = (k_expanded_labels > 0.9)
                 k_norm_factor = float(getattr(self.model.visual.text_gating, "total_rep_num", 40.0))
                 if k_norm_factor <= 0:
                     k_norm_factor = 40.0
+
                 if is_general.any():
                     general_k = k_sums_value[is_general]
                     mean_k_general = general_k.mean().item()
                     k_general_loss = ((general_k / k_norm_factor) ** 2).mean() * self.k_general_weight
+
                 if is_expert.any():
                     expert_k = k_sums_value[is_expert]
                     mean_k_expert = expert_k.mean().item()
-                    target_k = min(self.k_target_expert, k_norm_factor)
-                    gap = torch.relu(target_k - expert_k)
-                    k_expert_loss = ((gap / max(target_k, 1.0)) ** 2).mean() * self.k_expert_weight
+                    min_k = min(self.k_min_expert, k_norm_factor)
+                    gap = torch.relu(min_k - expert_k)
+                    k_expert_loss = ((gap / max(min_k, 1.0)) ** 2).mean() * self.k_expert_weight
         total_mmrl_loss = k_general_loss + k_expert_loss + alpha_guide_loss + mmrl_tax_loss
         
         if outputs.loss is not None:
@@ -225,13 +228,13 @@ class Qwen3VLMMRLForTrain(Qwen3VLForConditionalGeneration):
                 print(f"  ├─ CE Loss (Language):    {(outputs.loss - total_mmrl_loss).item():>8.4f}")
                 print(f"  ├─ Alpha Guide Loss:      {alpha_guide_loss.item():>8.4f}")
                 print(f"  ├─ K Loss (General):      {k_general_loss.item():>8.4f} (Target K=0)")
-                print(f"  ├─ K Loss (Expert):       {k_expert_loss.item():>8.4f} (Target K>={self.k_target_expert:.1f})")
+                print(f"  ├─ K Loss (Expert):       {k_expert_loss.item():>8.4f} (Weak Min-K={self.k_min_expert:.1f})")
                 print(f"  ├─ Tax Loss:              {mmrl_tax_loss.item():>8.4f} (W={self.tax_loss_weight:.2f})")
                 print(f"  └─ Total Loss:            {outputs.loss.item():>8.4f}")
                 if k_sums_value is not None:
                     print(f"[K Statistics]")
                     print(f"  ├─ General Mean K:        {mean_k_general:>8.2f} (Should -> 0)")
-                    print(f"  ├─ Expert Mean K:         {mean_k_expert:>8.2f} (Should >= {self.k_target_expert:.1f})")
+                    print(f"  ├─ Expert Mean K:         {mean_k_expert:>8.2f} (Weak lower bound {self.k_min_expert:.1f})")
                     print(f"  ├─ Max K (Batch):         {k_sums_value.max().item():>8.2f}")
                     print(f"  └─ Min K (Batch):         {k_sums_value.min().item():>8.2f}")
                 if alpha_probs is not None and expanded_labels is not None:
@@ -371,8 +374,10 @@ def train_gating(
         processor,
         expert_json, expert_img_dir,
         general_json, general_img_dir,
-        total_limit=10000, mode="mixed", general_ratio_limit=1.0
-    )
+        total_limit=100000,
+        mode="mixed",
+        general_ratio_limit=general_ratio_limit
+        )
 
     collator = MMRLDataCollator(processor)
 
@@ -445,20 +450,33 @@ if __name__ == "__main__":
                      "/root/autodl-tmp/dataset/1conv_c.json",
                      "/root/autodl-tmp/dataset/4conv_c.json",
                      "/root/autodl-tmp/dataset/14json.json",
-                     "/root/autodl-tmp/dataset/prof_test.json"],
+                     "/root/autodl-tmp/dataset/prof_test.json",
+                     "/root/autodl-tmp/dataset/test2_train.json",
+                     "/root/autodl-tmp/dataset/test7_train.json",
+                     
+                    "/root/autodl-tmp/dataset/1json.translated.json",
+                     "/root/autodl-tmp/dataset/2conv_c.translated.json",
+                     "/root/autodl-tmp/dataset/1conv_c.translated.json",
+                     "/root/autodl-tmp/dataset/4conv_c.translated.json",
+                     "/root/autodl-tmp/dataset/14json.translated.json",
+                     "/root/autodl-tmp/dataset/prof_test.translated.json",
+                     "/root/autodl-tmp/dataset/test2_train.translated.json",
+                     "/root/autodl-tmp/dataset/test7_train.translated.json",],
         expert_img_dir=["/root/autodl-tmp/dataset/1/train",
                         "/root/autodl-tmp/dataset/2/train",
                         "/root/autodl-tmp/dataset/4/train",
                         "/root/autodl-tmp/dataset/14"],
         general_json=["/root/autodl-tmp/dataset/llava_instruct_150k.json",
-                      "/root/autodl-tmp/dataset/gen_test.json"],
+                      "/root/autodl-tmp/dataset/gen_test.json",
+                      "/root/autodl-tmp/dataset/gen_test.translated.json",
+                      "/root/autodl-tmp/dataset/conversation_58k.json"],
         general_img_dir=["/root/autodl-tmp/dataset/gen/train2017",
                          "/root/autodl-tmp/dataset/gen/val2017"],
         learning_rate=1e-4,
-        num_train_epochs=3,
+        num_train_epochs=2,
         general_ratio_limit=1.0,  
         alpha_loss_weight=2.0,
         tax_loss_weight=4.0,
-        per_device_train_batch_size=8,
+        per_device_train_batch_size=2,
         gradient_accumulation_steps=16,
     )# todo:训练策略大改 无需抑制通用任务的K  另外alpha辅助调值改成G值调制

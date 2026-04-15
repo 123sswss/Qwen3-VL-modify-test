@@ -325,14 +325,20 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
             batch_indices_img,
             img_seqlens
         )
+        has_image = torch.ones(
+            batch_size, 1,
+            device=hidden_states.device,
+            dtype=embedding_after_pooling.dtype
+        )
         out = self.text_gating(
-            final_delta,  # [Total_Tokens, Dim]
-            self.alpha_list,  # [Total_Images, 1]
+            final_delta,
+            self.alpha_list,
             batch_indices_token,
             batch_indices_img,
             batch_size,
             embedding_after_pooling,
-            gating_temperature_override
+            has_image=has_image,
+            temperature_override=gating_temperature_override
         )
         if self.training:
             hard_k_logits, tax_loss = out  # hard_k_logits: [Batch, 40]
@@ -369,13 +375,22 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
 
     def compute_text_only_gating(self, embedding, gating_temperature_override=None):
         batch_size = embedding.shape[0]
-        embedding_after_pooling = self.embedding_pooling(embedding)  # [Batch, Pool_Dim]
+        embedding_after_pooling = self.embedding_pooling(embedding)  # [B, Dt]
         dummy_vision_states = self.null_image_token.expand(batch_size, -1)
         self.alpha_list = self.Task_classifier(dummy_vision_states, embedding_after_pooling)
 
-        dummy_delta_batch = torch.zeros(batch_size, self.cfg.vision_token_dim, device=embedding.device,
-                                        dtype=embedding.dtype)
+        dummy_delta_batch = torch.zeros(
+            batch_size,
+            self.cfg.vision_token_dim,
+            device=embedding.device,
+            dtype=embedding.dtype
+        )
         batch_indices = torch.arange(batch_size, device=embedding.device)
+        has_image = torch.zeros(
+            batch_size, 1,
+            device=embedding.device,
+            dtype=embedding_after_pooling.dtype
+        )
 
         out = self.text_gating(
             dummy_delta_batch,
@@ -384,7 +399,8 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
             batch_indices,
             batch_size,
             embedding_after_pooling,
-            gating_temperature_override
+            has_image=has_image,
+            temperature_override=gating_temperature_override
         )
 
         if self.training:
@@ -393,5 +409,6 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
             k_results = (k_sums, tax_loss)
         else:
             k_hard = (out > 0.5).to(out.dtype)
-            k_results = k_hard.sum(dim=-1)  
+            k_results = k_hard.sum(dim=-1)
+
         return k_results

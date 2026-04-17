@@ -112,31 +112,11 @@ def inference():
     current_image = None    # 当前加载的 PIL Image
     image_pending = False   # 标记：下一条文本消息是否要附带图片
 
-    BANNER = """
-╔══════════════════════════════════════════════════════════════╗
-║                   交互式对话模式已启动                        ║
-╠══════════════════════════════════════════════════════════════╣
-║  指令:                                                       ║
-║    /image <路径>   加载图片（支持相对路径），附到下一条消息      ║
-║    /clear          清除全部对话上下文和已加载的图片             ║
-║    /exit           退出程序                                   ║
-║                                                              ║
-║  用法示例:                                                    ║
-║    /image ./test.png                                         ║
-║    描述一下这张图片                                           ║
-║    图中有几个人？          （追问，自动携带上文图片上下文）     ║
-║    /image ./other.jpg      （切换新图片）                     ║
-║    这张图是什么？                                             ║
-║    /clear                  （重新开始）                       ║
-╚══════════════════════════════════════════════════════════════╝"""
-    print(BANNER)
-
     while True:
         # ---- 读取用户输入 ----
         try:
             user_input = input("\nYou> ").strip()
         except (EOFError, KeyboardInterrupt):
-            print("\n再见！")
             break
         
         if not user_input:
@@ -144,7 +124,6 @@ def inference():
 
         # ---- /exit ----
         if user_input.lower() == "/exit":
-            print("再见！")
             break
 
         # ---- /clear ----

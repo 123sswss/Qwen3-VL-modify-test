@@ -55,14 +55,14 @@ def inference():
     # 配置路径 (请确保这些路径真实存在)
     # --------------------------------------------------------------------------
     # 1. 训练好的模型权重目录
-    TRAINED_MODEL_PATH = "/root/autodl-tmp/Qwen3-VL-modify-test/mmrl_output"  
+    TRAINED_MODEL_PATH = "/root/autodl-tmp/Qwen3-VL-modify-test/train/output/stage4"  
     
     # 2. 原始基座模型路径 (用于读取 Config 和 Processor，防止训练后 Config 缺失)
     BASE_MODEL_PATH = "/root/autodl-tmp/model" 
     
     # 3. 输入图片和文本
-    # IMAGE_PATH = "/root/autodl-tmp/dataset/14/DJI_20231023073909_0114_V_JPG.rf.16c125c28c5e6deaf7e9b1525ee0188c.jpg"
-    # PROMPT_TEXT = "\n分析设备状态并输出JSON。"
+    IMAGE_PATH = "/root/autodl-tmp/dataset/14/DJI_20231023073909_0114_V_JPG.rf.16c125c28c5e6deaf7e9b1525ee0188c.jpg"
+    PROMPT_TEXT = "\n分析设备状态并输出JSON。"
 
     # IMAGE_PATH = "/root/autodl-tmp/dataset/14/DJI_20231023073909_0114_V_JPG.rf.16c125c28c5e6deaf7e9b1525ee0188c.jpg"
     # PROMPT_TEXT = "上海有哪些鸟的鸟巢比较常见？"
@@ -73,17 +73,17 @@ def inference():
     # IMAGE_PATH = "/root/autodl-tmp/dataset/14/DJI_20231023073909_0114_V_JPG.rf.16c125c28c5e6deaf7e9b1525ee0188c.jpg"
     # PROMPT_TEXT = "Analyze device status and output JSON. "
 
-    # IMAGE_PATH = "/root/autodl-tmp/Qwen3-VL-modify-test/test.png"
+    # IMAGE_PATH = "/root/autodl-tmp/Qwen3-VL-modify-test/testimg/test.png"
     # PROMPT_TEXT = "描述一下图片中的这三个人"
 
-    # IMAGE_PATH = "/root/autodl-tmp/Qwen3-VL-modify-test/test2.png"
+    # IMAGE_PATH = "/root/autodl-tmp/Qwen3-VL-modify-test/testimg/test2.png"
     # PROMPT_TEXT = "描述一下这张图片。"
 
-    # IMAGE_PATH = "/root/autodl-tmp/Qwen3-VL-modify-test/test2.png"
+    # IMAGE_PATH = "/root/autodl-tmp/Qwen3-VL-modify-test/testimg/test2.png"
     # PROMPT_TEXT = "**题目**：图中的这是什么动物？ **选项**： A. 猫 B. 猪 C. 松鼠 D. 钝角 请结合图像内容，展示完整的思考和分析过程。 "
 
-    IMAGE_PATH = "/root/autodl-tmp/dataset/2/train/202107131415546185208_jpg.rf.3e0e829ff15ad8a3925667dfdedd9e62.jpg"
-    PROMPT_TEXT = "请根据图像内容回答下面的单项选择题，并结合可见特征做简要判断。 **题目**：根据图像内容，画面的顶部右侧位置对应的电力设备是什么？ **选项**： A. 三极隔离开关 B. 断路器 C. 断开状态双连隔离开关 D. 闭合状态双连隔离开关 请严格按以下格式作答： **最终答案**：[[选项字母]] **简要依据**：用1到2句话说明图中关键视觉特征，并简要说明为什么正确选项成立、其他选项不符。"
+    # IMAGE_PATH = "/root/autodl-tmp/dataset/2/train/202107131415546185208_jpg.rf.3e0e829ff15ad8a3925667dfdedd9e62.jpg"
+    # PROMPT_TEXT = "请根据图像内容回答下面的单项选择题，并结合可见特征做简要判断。 **题目**：根据图像内容，画面的顶部右侧位置对应的电力设备是什么？ **选项**： A. 三极隔离开关 B. 断路器 C. 断开状态双连隔离开关 D. 闭合状态双连隔离开关 请严格按以下格式作答： **最终答案**：[[选项字母]] **简要依据**：用1到2句话说明图中关键视觉特征，并简要说明为什么正确选项成立、其他选项不符。"
     
     # --------------------------------------------------------------------------
     # 加载模型

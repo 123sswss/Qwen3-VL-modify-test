@@ -74,11 +74,12 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
         ###################
 
     def get_image_features(self,
-                           pixel_values: torch.FloatTensor,
-                           image_grid_thw: Optional[torch.LongTensor] = None,
-                           v_r_token_list: Optional[list[torch.Tensor]] = None,
-                           embedding: Optional[torch.nn.Module] = None,
-                           images_per_sample: Optional[list[int]] = None,):
+                        pixel_values: torch.FloatTensor,
+                        image_grid_thw: Optional[torch.LongTensor] = None,
+                        v_r_token_list: Optional[list[torch.Tensor]] = None,
+                        embedding: Optional[torch.nn.Module] = None,
+                        images_per_sample: Optional[list[int]] = None,
+                        text_pooling_mask: Optional[torch.Tensor] = None,):
         if self.use_mmrl and v_r_token_list is None:
             raise ValueError("v_r_token_list must be specified")
         elif self.use_mmrl and v_r_token_list is not None:
@@ -88,7 +89,8 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
                 grid_thw=image_grid_thw,
                 v_r_token_list=v_r_token_list,
                 embedding=embedding,
-                gating_temperature_override=self.temperature_override,  # 修复温度透传
+                text_pooling_mask=text_pooling_mask,
+                gating_temperature_override=self.temperature_override,
                 images_per_sample=images_per_sample
             )
             split_sizes = (image_grid_thw.prod(-1) // self.visual.spatial_merge_size ** 2).tolist()
@@ -96,7 +98,11 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
             return image_embeds, deepstack_image_embeds, k
         elif not self.use_mmrl:
             pixel_values = pixel_values.type(self.visual.dtype)
-            image_embeds, deepstack_image_embeds = self.visual(pixel_values, grid_thw=image_grid_thw)
+            image_embeds, deepstack_image_embeds = self.visual(
+                pixel_values,
+                grid_thw=image_grid_thw,
+                text_pooling_mask=text_pooling_mask
+            )
             split_sizes = (image_grid_thw.prod(-1) // self.visual.spatial_merge_size ** 2).tolist()
             image_embeds = torch.split(image_embeds, split_sizes)
             return image_embeds, deepstack_image_embeds
@@ -130,19 +136,37 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
         if temp_from_kwargs is not None:
             self.temperature_override = temp_from_kwargs
         
-        mmrl_gating_mask = kwargs.pop('mmrl_gating_mask', None)
-        
-        if self.training and mmrl_gating_mask is not None:
-            if mmrl_gating_mask.dim() == 2:
-                mask_expanded = mmrl_gating_mask.unsqueeze(-1)
-            else:
-                mask_expanded = mmrl_gating_mask
-            embedding_for_gating = inputs_embeds * mask_expanded
-        else:
-            embedding_for_gating = inputs_embeds
+        mmrl_gating_mask = kwargs.pop("mmrl_gating_mask", None)
         self.tax_loss = torch.tensor(0.0, device=inputs_embeds.device)
-        placeholder_ids_tensor = torch.tensor(self.rep_placeholder_ids, device=input_ids.device)
+        if self.use_mmrl and input_ids is None:
+            raise ValueError("MMRL path currently requires input_ids for placeholder detection.")
+        placeholder_ids_tensor = torch.tensor(self.rep_placeholder_ids, device=inputs_embeds.device)
         is_placeholder = (input_ids.unsqueeze(-1) == placeholder_ids_tensor).any(dim=-1)
+        # ---- 构造显式 text pooling mask ----
+        base_text_mask = None
+        if torch.is_tensor(attention_mask) and attention_mask.ndim == 2:
+            base_text_mask = attention_mask.bool()
+        elif isinstance(attention_mask, dict):
+            full_attention = attention_mask.get("full_attention", None)
+            if torch.is_tensor(full_attention) and full_attention.ndim == 2:
+                base_text_mask = full_attention.bool()
+        if base_text_mask is None:
+            text_pooling_mask = torch.ones(
+                inputs_embeds.shape[:2],
+                device=inputs_embeds.device,
+                dtype=torch.bool
+            )
+        else:
+            text_pooling_mask = base_text_mask.to(inputs_embeds.device)
+        if mmrl_gating_mask is not None:
+            if mmrl_gating_mask.dim() == 3 and mmrl_gating_mask.size(-1) == 1:
+                mmrl_gating_mask = mmrl_gating_mask.squeeze(-1)
+            if mmrl_gating_mask.dim() != 2:
+                raise ValueError("mmrl_gating_mask must be [B, S] or [B, S, 1]")
+            text_pooling_mask = text_pooling_mask & mmrl_gating_mask.to(inputs_embeds.device).bool()
+        # placeholder 不能参与 text gating pooling
+        text_pooling_mask = text_pooling_mask & (~is_placeholder)
+        embedding_for_gating = inputs_embeds
         
         v_r_token_list = None
         t_r_tokens = None
@@ -170,7 +194,8 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
                     image_grid_thw=image_grid_thw,
                     v_r_token_list=v_r_token_list,
                     embedding=embedding_for_gating,
-                    images_per_sample=images_per_sample
+                    images_per_sample=images_per_sample,
+                    text_pooling_mask=text_pooling_mask
                 )
             else:
                 image_embeds_raw, deepstack_image_embeds = self.get_image_features(
@@ -192,6 +217,7 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
         elif self.use_mmrl:
             k_results = self.visual.compute_text_only_gating(
                 embedding=embedding_for_gating,
+                text_pooling_mask=text_pooling_mask,
                 gating_temperature_override=self.temperature_override
             )
         ######## text gating ########

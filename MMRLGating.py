@@ -5,7 +5,6 @@ from torch import nn
 from utils import attention_pooling
 import random
 
-
 class Task_classifier(nn.Module):
     def __init__(self,config):
         super().__init__()
@@ -14,7 +13,8 @@ class Task_classifier(nn.Module):
         self.fc_fusion = nn.Linear(config.GATING_MID_DIM * 2, config.GATING_MID_DIM)
         self.output_head = nn.Linear(config.GATING_MID_DIM, 1)
         self.relu = nn.ReLU()
-        nn.init.constant_(self.output_head.bias, -2.0)
+
+        nn.init.constant_(self.output_head.bias, -0.5)
 
     def forward(self,
                 vision_token_after_pooling: torch.Tensor,
@@ -30,11 +30,9 @@ class Task_classifier(nn.Module):
         #     else:
         #         pass
 
-        # [Batch, MID_DIM*2]
         combined = torch.cat((v_feat, t_feat), dim=-1)
         combined = self.relu(self.fc_fusion(combined))
         alpha = self.output_head(combined)
-        # alpha = torch.sigmoid(alpha)
         return alpha
 
 class HardConcreteGate(nn.Module):
@@ -79,15 +77,14 @@ class textGating(nn.Module):
             nn.ReLU(),
             nn.Linear(config.GATING_MID_DIM, 1)
         )
-        nn.init.constant_(self.text_relevance_head[-1].bias, -1.0)
+        nn.init.constant_(self.text_relevance_head[-1].bias, 0.0)
 
-        # K 主体由 vision/text 特征预测；alpha 只做放行/抑制，不再主导 K 本体
         self.k_budget_head = nn.Sequential(
             nn.Linear(config.vision_token_dim + config.text_token_dim + 2, config.GATING_MID_DIM),
             nn.ReLU(),
             nn.Linear(config.GATING_MID_DIM, 1)
         )
-        nn.init.constant_(self.k_budget_head[-1].bias, -2.0)
+        nn.init.constant_(self.k_budget_head[-1].bias, -0.5)
 
         self.hard_concrete = HardConcreteGate(temperature)
         self.lambda_ = lambda_

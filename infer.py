@@ -55,7 +55,7 @@ def inference():
     # 配置路径 (请确保这些路径真实存在)
     # --------------------------------------------------------------------------
     # 1. 训练好的模型权重目录
-    TRAINED_MODEL_PATH = "/root/autodl-tmp/Qwen3-VL-modify-test/train/output/stage4"  
+    TRAINED_MODEL_PATH = "/root/autodl-tmp/Qwen3-VL-modify-test/train/output/final"  
     
     # 2. 原始基座模型路径 (用于读取 Config 和 Processor，防止训练后 Config 缺失)
     BASE_MODEL_PATH = "/root/autodl-tmp/model" 
@@ -217,10 +217,12 @@ def inference():
             alpha_logits = model.model.visual.alpha_list  # [Total_Images, 1]
             alpha_probs = torch.sigmoid(alpha_logits)
             k = model.model.k_results  # [Batch, Total_Experts]
-            
+            G = model.model.visual.G_list  # [Total_Images, 1]
+
             print(f"[Debug] 门控状态:")
             print(f"  ├─ Alpha Logits (原始): {alpha_logits.squeeze().detach().cpu().tolist()}")
             print(f"  ├─ Alpha Probs (sigmoid): {alpha_probs.squeeze().detach().cpu().tolist()}")
+            print(f"  ├─ G 值: {G.squeeze().detach().cpu().tolist()}")
             print(f"  ├─ K 值: {k.squeeze().detach().cpu().tolist()}")
             print(f"  └─ 平均激活值: {alpha_probs.mean().item():.4f}")
             print(f"     (>0.5=专家模式, <0.5=通用模式)")

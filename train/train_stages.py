@@ -16,6 +16,25 @@ from train_utils import focal_bce_with_logits
 import QWen3WithMMRL
 from transformers import TrainerCallback
 
+from logger import StageMetricLogger, TrainerMetricsCallback
+
+def _dbg_tensor_stats(name, x):
+    if x is None:
+        return f"{name}=None"
+    if not torch.is_tensor(x):
+        return f"{name}=<{type(x).__name__}>"
+    with torch.no_grad():
+        shape = tuple(x.shape)
+        dtype = x.dtype
+        device = x.device
+        if x.numel() == 0:
+            return f"{name}: shape={shape} dtype={dtype} device={device} numel=0"
+        xf = x.detach().float()
+        return (
+            f"{name}: shape={shape} dtype={dtype} device={device} "
+            f"min={xf.min().item():.4f} max={xf.max().item():.4f} mean={xf.mean().item():.4f}"
+        )
+
 class StageScheduleCallback(TrainerCallback):
     def __init__(self, dataset, total_epochs, init_temp=1.0, final_temp=0.1, target_tax=4.0, tax_warmup_epochs=1):
         self.dataset = dataset
@@ -69,6 +88,9 @@ class Qwen3VLMMRLForStages(Qwen3VLForConditionalGeneration):
         self.use_k_loss = False
         self.temperature_override = None
 
+        self.debug_mode = True
+        self.debug_loss_threshold = 20.0
+
     def forward(self, input_ids=None, alpha_labels=None, images_per_sample=None, **kwargs):
         if hasattr(self, "temperature_override") and self.temperature_override is not None:
             self.model.temperature_override = self.temperature_override
@@ -82,23 +104,47 @@ class Qwen3VLMMRLForStages(Qwen3VLForConditionalGeneration):
             kwargs["mmrl_gating_mask"] = is_prompt.to(dtype=self.model.dtype)
         
         outputs = super().forward(input_ids=input_ids, images_per_sample=images_per_sample, **kwargs)
-        ce_loss = outputs.loss if outputs.loss is not None else torch.tensor(0.0, device=input_ids.device)
+        logits = outputs.logits
+        labels = kwargs.get("labels", None)
+        if labels is None:
+            ce_loss = torch.tensor(0.0, device=logits.device)
+        else:
+            ce_loss = outputs.loss if outputs.loss is not None else torch.tensor(0.0, device=input_ids.device)
         # 1) alpha guide
         alpha_guide_loss = torch.tensor(0.0, device=input_ids.device)
         alpha_logits = self.model.visual.alpha_list
         expanded_labels = None
+
+        if isinstance(alpha_logits, list):
+            if len(alpha_logits) > 0:
+                alpha_logits = torch.stack(alpha_logits)
+            else:
+                alpha_logits = None
+
         if alpha_logits is not None and alpha_labels is not None:
             if images_per_sample is None:
                 expanded_labels = alpha_labels.view(-1, 1)
             else:
                 tmp = []
                 for i, c in enumerate(images_per_sample):
-                    tmp.append(alpha_labels[i].repeat(c))
-                expanded_labels = torch.cat(tmp).view(-1, 1)
-            n = min(alpha_logits.shape[0], expanded_labels.shape[0])
-            alpha_guide_loss = torch.nn.functional.binary_cross_entropy_with_logits(
-                alpha_logits[:n], expanded_labels[:n].to(alpha_logits.dtype)
-            ) * self.alpha_loss_weight
+                    c = int(c)
+                    if c > 0:
+                        tmp.append(alpha_labels[i].repeat(c))
+                if len(tmp) > 0:
+                    expanded_labels = torch.cat(tmp).view(-1, 1)
+                else:
+                    expanded_labels = None
+
+            if expanded_labels is not None and expanded_labels.numel() > 0:
+                if alpha_logits.dim() == 1:
+                    alpha_logits = alpha_logits.unsqueeze(-1)
+
+                n = min(alpha_logits.shape[0], expanded_labels.shape[0])
+                if n > 0:
+                    alpha_guide_loss = torch.nn.functional.binary_cross_entropy_with_logits(
+                        alpha_logits[:n], expanded_labels[:n].to(alpha_logits.dtype)
+                    ) * self.alpha_loss_weight
+
         # 2) K loss (optional, stage4再开)
         k_general_loss = torch.tensor(0.0, device=input_ids.device)
         k_expert_loss = torch.tensor(0.0, device=input_ids.device)
@@ -121,59 +167,120 @@ class Qwen3VLMMRLForStages(Qwen3VLForConditionalGeneration):
         tax_raw = getattr(self.model, "tax_loss", torch.tensor(0.0, device=input_ids.device))
         tax_loss = tax_raw * self.tax_loss_weight if self.use_tax else torch.tensor(0.0, device=input_ids.device)
         outputs.loss = self.ce_loss_weight * ce_loss + alpha_guide_loss + k_general_loss + k_expert_loss + tax_loss
+
+        # ---- cache metrics for external logger ----
+        with torch.no_grad():
+            alpha_std = torch.tensor(float("nan"), device=input_ids.device)
+            label_alpha_std = torch.tensor(float("nan"), device=input_ids.device)
+            k_general_mean = torch.tensor(float("nan"), device=input_ids.device)
+            k_expert_mean = torch.tensor(float("nan"), device=input_ids.device)
+
+            if alpha_logits is not None and torch.is_tensor(alpha_logits) and alpha_logits.numel() > 0:
+                a = torch.sigmoid(alpha_logits.detach().float().view(-1))
+                if a.numel() > 1:
+                    alpha_std = a.std(unbiased=False)
+
+            if expanded_labels is not None and torch.is_tensor(expanded_labels) and expanded_labels.numel() > 0:
+                l = expanded_labels.detach().float().view(-1)
+                if l.numel() > 1:
+                    label_alpha_std = l.std(unbiased=False)
+
+            if expanded_labels is not None and self.use_k_loss:
+                k_results = self.model.visual.k_results
+                k_sums = k_results[0] if isinstance(k_results, tuple) else k_results
+                if k_sums is not None and k_sums.shape[0] == expanded_labels.shape[0]:
+                    lbl = expanded_labels.squeeze(-1)
+                    is_general = (lbl < 0.1)
+                    is_expert = (lbl > 0.9)
+                    if is_general.any():
+                        k_general_mean = k_sums[is_general].detach().float().mean()
+                    if is_expert.any():
+                        k_expert_mean = k_sums[is_expert].detach().float().mean()
+
+            self._last_metrics = {
+                "total_loss": outputs.loss.detach(),
+                "ce_loss": ce_loss.detach(),
+                "alpha_guide_loss": alpha_guide_loss.detach(),
+                "k_general_loss": k_general_loss.detach(),
+                "k_expert_loss": k_expert_loss.detach(),
+                "tax_loss": tax_loss.detach(),
+                "alpha_std": alpha_std.detach(),
+                "label_alpha_std": label_alpha_std.detach(),
+                "k_general_mean": k_general_mean.detach(),
+                "k_expert_mean": k_expert_mean.detach(),
+                "temperature": torch.tensor(float(self.temperature_override) if self.temperature_override is not None else float("nan"), device=input_ids.device),
+                "tax_weight": torch.tensor(float(self.tax_loss_weight), device=input_ids.device),
+            }
+
+        if self.debug_mode and torch.is_tensor(outputs.loss):
+            loss_val = outputs.loss.detach().float().item()
+            if loss_val > self.debug_loss_threshold or not torch.isfinite(outputs.loss):
+                print("\n!!!! [HIGH-LOSS-DBG] abnormal loss detected !!!!")
+                print(f"!!!! [HIGH-LOSS-DBG] final_loss={loss_val:.6f}")
+                print(f"!!!! [HIGH-LOSS-DBG] manual_ce={ce_loss.detach().float().item():.6f}")
+                print(f"!!!! [HIGH-LOSS-DBG] alpha_loss={alpha_guide_loss.detach().float().item():.6f}")
+                print(f"!!!! [HIGH-LOSS-DBG] k_general={k_general_loss.detach().float().item():.6f}")
+                print(f"!!!! [HIGH-LOSS-DBG] k_expert={k_expert_loss.detach().float().item():.6f}")
+                print(f"!!!! [HIGH-LOSS-DBG] use_tax={self.use_tax} tax_w={float(self.tax_loss_weight):.6f}")
+                if torch.is_tensor(tax_raw):
+                    print(f"!!!! [HIGH-LOSS-DBG] tax_raw={tax_raw.detach().float().item():.6f}")
+                else:
+                    print(f"!!!! [HIGH-LOSS-DBG] tax_raw={float(tax_raw):.6f}")
+                print(f"!!!! [HIGH-LOSS-DBG] tax_scaled={tax_loss.detach().float().item():.6f}")
+
+                if labels is not None:
+                    valid_per_sample = (labels != -100).sum(dim=1)
+                    print(f"!!!! [HIGH-LOSS-DBG] valid_tokens_per_sample={valid_per_sample.tolist()}")
+                    print(f"!!!! [HIGH-LOSS-DBG] total_valid_tokens={(labels != -100).sum().item()}/{labels.numel()}")
+
+                print(f"!!!! [HIGH-LOSS-DBG] images_per_sample={images_per_sample}")
+                print(f"!!!! [HIGH-LOSS-DBG] {_dbg_tensor_stats('alpha_labels', alpha_labels)}")
+                print(f"!!!! [HIGH-LOSS-DBG] {_dbg_tensor_stats('alpha_logits', alpha_logits)}")
+                print(f"!!!! [HIGH-LOSS-DBG] {_dbg_tensor_stats('expanded_labels', expanded_labels)}")
+
+                if input_ids is not None:
+                    print(f"!!!! [HIGH-LOSS-DBG] input_ids_shape={tuple(input_ids.shape)}")
+                    print(f"!!!! [HIGH-LOSS-DBG] first_32_ids_sample0={input_ids[0, :32].detach().cpu().tolist()}")
+
+                print("!!!! [HIGH-LOSS-DBG] abnormal loss end !!!!\n")
+
         return outputs
 
 
 def build_model_and_processor(model_path):
-    print("start to build_model_and_processor")
     config = AutoConfig.from_pretrained(model_path, trust_remote_code=True)
     tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
     image_processor = AutoImageProcessor.from_pretrained(model_path, trust_remote_code=True)
     tokenizer.add_special_tokens(cfg.SPECIAL_TOKENS)
-    print("1. model components loaded")
-
     base = Qwen3VLForConditionalGeneration.from_pretrained(
-        model_path, torch_dtype=torch.bfloat16, trust_remote_code=True
+        model_path, device_map="cpu", torch_dtype=torch.bfloat16, trust_remote_code=True
     )
-    base.resize_token_embeddings(len(tokenizer))
-    print("2. base model loaded and resized")
-
-    # 用 meta device 初始化骨架，跳过真实内存分配和随机初始化
-    with torch.device("meta"):
-        model = Qwen3VLMMRLForStages(config, tokenizer)
-    # 从 base 拷贝共享权重
-    model.model.load_state_dict(base.model.state_dict(), strict=False, assign=True)
-    model.lm_head.load_state_dict(base.lm_head.state_dict(), strict=False, assign=True)
+    print("Base model loaded. ")
+    emb = base.get_input_embeddings().weight.shape[0]
+    tok = len(tokenizer)
+    if tok > emb:
+        base.resize_token_embeddings(tok)
+        print(f"[Resize] expand embedding: {emb} -> {tok}")
+    else:
+        print(f"[Resize] skip (tokenizer={tok}, embedding={emb})")
+    print("Tokenizer resized. Now building MMRL model...")
+    model = Qwen3VLMMRLForStages(config, tokenizer).to("cuda").to(torch.bfloat16)
+    model.model.load_state_dict(base.model.state_dict(), strict=False)
+    model.lm_head.load_state_dict(base.lm_head.state_dict(), strict=False)
     del base
     torch.cuda.empty_cache()
-    # 将仍在 meta 上的参数和buffer实际初始化到 cuda
-    def _materialize_meta(module, prefix=""):
-        for name, param in module.named_parameters(recurse=False):
-            if param.device == torch.device("meta"):
-                new_p = torch.empty(param.shape, dtype=torch.bfloat16, device="cuda")
-                nn.init.normal_(new_p, std=0.02)
-                setattr(module, name, nn.Parameter(new_p, requires_grad=param.requires_grad))
-        for name, buf in module.named_buffers(recurse=False):
-            if buf is not None and buf.device == torch.device("meta"):
-                new_buf = torch.zeros(buf.shape, dtype=buf.dtype, device="cuda")
-                module.register_buffer(name, new_buf)
-        for child_name, child in module.named_children():
-            _materialize_meta(child, prefix=f"{prefix}{child_name}.")
-    _materialize_meta(model)
-    model = model.to("cuda").to(torch.bfloat16)
-    print("3. Qwen3VLMMRLForStages initialized with base weights")
-
+    print("MMRL model built and loaded with base weights.")
+    print(f"[DBG] blocks={len(model.model.visual.blocks)}, blocks_with_rep={len(model.model.visual.blocks_with_rep)}, INSERT_LAYER={list(model.model.visual.cfg.INSERT_LAYER)}")
+    with torch.no_grad():
+        for idx, layer_num in enumerate(model.model.visual.cfg.INSERT_LAYER):
+            model.model.visual.blocks_with_rep[idx].load_state_dict(
+                model.model.visual.blocks[layer_num-1].state_dict(),
+                strict=False
+            )
     processor = processingWithMMRL.Qwen3ProcessorWithMMRL(
         image_processor=image_processor, tokenizer=tokenizer, cfg=cfg
     )
-    with torch.no_grad():
-    for idx, layer_num in enumerate(model.model.visual.cfg.INSERT_LAYER):
-        model.model.visual.blocks_with_rep[idx].load_state_dict(
-            model.model.visual.blocks[layer_num].state_dict(),
-            strict=False
-        )
-        print(f"[Init] Copied blocks[{layer_num}] -> blocks_with_rep[{idx}]")
-    print("build_model_and_processor is done")
+    print("Processor built.")
     return model, processor
 
 
@@ -233,6 +340,14 @@ def run_stage12_light(stage_id, model, processor, data_cfg, train_cfg, output_di
     assert stage_id in [1, 2]
     set_trainable_stage(model, stage_id)
     model.train()
+
+    metric_logger = StageMetricLogger(
+        save_dir=f"{output_dir}/stage{stage_id}/metrics",
+        stage_name=f"stage{stage_id}",
+        smooth_window=train_cfg.get("metric_smooth_window", 30),
+        ema_alpha=train_cfg.get("metric_ema_alpha", 0.15),
+        scatter_stride=train_cfg.get("metric_scatter_stride", 3),
+    )
 
     # 数据：四视图都开，CE关
     ds = FourViewMMRLDataset(
@@ -320,8 +435,24 @@ def run_stage12_light(stage_id, model, processor, data_cfg, train_cfg, output_di
                 opt.step()
                 opt.zero_grad(set_to_none=True)
                 global_step += 1
+                with torch.no_grad():
+                    alpha_prob = torch.sigmoid(alpha_logits.detach().float().view(-1))
+                    alpha_std = alpha_prob.std(unbiased=False) if alpha_prob.numel() > 1 else torch.tensor(float("nan"), device=alpha_prob.device)
+                    label_std = alpha_labels.detach().float().view(-1).std(unbiased=False) if alpha_labels.numel() > 1 else torch.tensor(float("nan"), device=alpha_labels.device)
+
+                    metric_logger.log(
+                        step=global_step,
+                        total_loss=(cls_loss.detach() + gate_loss.detach()),
+                        cls_loss=cls_loss.detach(),
+                        gate_loss=gate_loss.detach(),
+                        alpha_std=alpha_std,
+                        label_alpha_std=label_std,
+                        temperature=getattr(model, "temperature_override", float("nan")),
+                        learning_rate=opt.param_groups[0]["lr"],
+                    )
                 if global_step % 20 == 0:
                     print(f"[Stage{stage_id}] ep={ep} step={global_step} cls={cls_loss.item():.4f} gate={gate_loss.item():.4f}")
+    metric_logger.finalize()
 
     # save_path = f"{output_dir}/stage{stage_id}"
     # model.save_pretrained(save_path)
@@ -359,9 +490,9 @@ def run_stage34_full(stage_id, model, processor, data_cfg, train_cfg, output_dir
         general_json=data_cfg["general_json"],
         general_img_dir=data_cfg["general_img_dir"],
         total_limit=data_cfg["total_limit"],
-        enable_views=("expert-mm", "expert-text", "general-mm", "general-text"),
+        enable_views=("expert-mm","general-mm"),
         mode=f"stage{stage_id}",
-        ce_enabled=ce_enabled,
+        ce_enabled=True,
         seed=train_cfg["seed"],
     )
     collator = MMRLDataCollator(processor)
@@ -388,8 +519,22 @@ def run_stage34_full(stage_id, model, processor, data_cfg, train_cfg, output_dir
         dataloader_pin_memory=False,
         dataloader_num_workers=train_cfg.get("dataloader_num_workers", 4),
     )
+    metric_logger = StageMetricLogger(
+        save_dir=f"{output_dir}/stage{stage_id}/metrics",
+        stage_name=f"stage{stage_id}",
+        smooth_window=train_cfg.get("metric_smooth_window", 30),
+        ema_alpha=train_cfg.get("metric_ema_alpha", 0.15),
+        scatter_stride=train_cfg.get("metric_scatter_stride", 3),
+    )
+    metrics_cb = TrainerMetricsCallback(metric_logger)
 
-    trainer = Trainer(model=model, args=args, train_dataset=ds, data_collator=collator, callbacks=[cb])
+    trainer = Trainer(
+        model=model,
+        args=args,
+        train_dataset=ds,
+        data_collator=collator,
+        callbacks=[cb, metrics_cb]
+    )
     trainer.train()
     # trainer.save_model(f"{output_dir}/stage{stage_id}")
 

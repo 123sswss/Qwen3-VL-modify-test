@@ -63,9 +63,7 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
         if tokenizer is not None:
             vocab_size = len(tokenizer)
             curr_embedding_size = self.get_input_embeddings().weight.shape[0]
-            if vocab_size != curr_embedding_size:
-                print(f"[Warning] Resizing token embeddings from {curr_embedding_size} to {vocab_size}")
-                self.resize_token_embeddings(vocab_size)
+            print(f"[Info] tokenizer={vocab_size}, embedding={curr_embedding_size}")
         self.tokenizer = tokenizer
         self.use_mmrl = config.mmrl_config["USE_MMRL"]
         self.tax_loss = None

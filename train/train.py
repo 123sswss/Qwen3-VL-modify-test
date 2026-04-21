@@ -41,7 +41,7 @@ CFG = {
             "/root/autodl-tmp/dataset/gen/train2017",
             "/root/autodl-tmp/dataset/gen/val2017",
         ],
-        "total_limit": 500,
+        "total_limit": 100000,
     },
     "train": {
         "seed": 42,

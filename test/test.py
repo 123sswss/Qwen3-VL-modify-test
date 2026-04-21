@@ -32,7 +32,7 @@ def extract_gt_answer(gpt_value: str):
     return None
 
 
-def run_evaluation(json_path: str, model, image_dir: str = None, max_new_tokens=256, temperature=0.05):
+def run_evaluation(json_path: str, model, image_dir: str = None, max_new_tokens=256, temperature=0.2):
     """
     Args:
         json_path: 数据集json路径
@@ -169,7 +169,7 @@ def run_evaluation(json_path: str, model, image_dir: str = None, max_new_tokens=
 if __name__ == "__main__":
     #################### ours ###########################
     from inferEngine import ModelInterface
-    TRAINED_MODEL_PATH = "/root/autodl-tmp/Qwen3-VL-modify-test/mmrl_output"
+    TRAINED_MODEL_PATH = "/root/autodl-tmp/Qwen3-VL-modify-test/train/output/final"
     BASE_MODEL_PATH = "/root/autodl-tmp/model"
     JSON_PATH = sys.argv[1] if len(sys.argv) > 1 else "/root/autodl-tmp/dataset/test2_val.json"
     IMAGE_DIR = sys.argv[2] if len(sys.argv) > 2 else "/root/autodl-tmp/dataset/2/train"

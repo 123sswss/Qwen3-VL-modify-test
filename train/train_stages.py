@@ -6,6 +6,7 @@ from transformers import (
     Qwen3VLForConditionalGeneration, AutoConfig, AutoTokenizer, AutoImageProcessor,
     Trainer, TrainingArguments
 )
+import numpy as np
 
 import sys
 sys.path.append("..")
@@ -17,6 +18,67 @@ import QWen3WithMMRL
 from transformers import TrainerCallback
 
 from logger import StageMetricLogger, TrainerMetricsCallback
+
+def print_stage_step_summary(stage_name, step, row):
+    def _fmt(x, nd=4):
+        try:
+            if x is None:
+                return "nan"
+            if hasattr(x, "detach"):
+                x = x.detach().float().item()
+            x = float(x)
+            if not np.isfinite(x):
+                return "nan"
+            return f"{x:.{nd}f}"
+        except Exception:
+            return "nan"
+
+    print("\n" + "=" * 72)
+    print(f"[{stage_name} | Training Step {step}] Loss Breakdown")
+
+    if "total_loss" in row:
+        print(f"  ├─ Total Loss:            {_fmt(row.get('total_loss')):>10}")
+    if "cls_loss" in row:
+        print(f"  ├─ Cls Loss:              {_fmt(row.get('cls_loss')):>10}")
+    if "gate_loss" in row:
+        print(f"  ├─ Gate Loss:             {_fmt(row.get('gate_loss')):>10}")
+    if "ce_loss" in row:
+        print(f"  ├─ CE Loss:               {_fmt(row.get('ce_loss')):>10}")
+    if "alpha_guide_loss" in row:
+        print(f"  ├─ Alpha Guide Loss:      {_fmt(row.get('alpha_guide_loss')):>10}")
+    if "k_general_loss" in row:
+        print(f"  ├─ K Loss (General):      {_fmt(row.get('k_general_loss')):>10}")
+    if "k_expert_loss" in row:
+        print(f"  ├─ K Loss (Expert):       {_fmt(row.get('k_expert_loss')):>10}")
+    if "tax_loss" in row:
+        print(f"  ├─ Tax Loss:              {_fmt(row.get('tax_loss')):>10}")
+
+    if "alpha_std" in row or "label_alpha_std" in row:
+        print(f"[Alpha Statistics]")
+        if "alpha_std" in row:
+            print(f"  ├─ Alpha Std:             {_fmt(row.get('alpha_std')):>10}")
+        if "label_alpha_std" in row:
+            print(f"  └─ Label Alpha Std:       {_fmt(row.get('label_alpha_std')):>10}")
+
+    if "k_general_mean" in row or "k_expert_mean" in row:
+        print(f"[K Statistics]")
+        if "k_general_mean" in row:
+            print(f"  ├─ General Mean K:        {_fmt(row.get('k_general_mean'), 3):>10}")
+        if "k_expert_mean" in row:
+            print(f"  ├─ Expert Mean K:         {_fmt(row.get('k_expert_mean'), 3):>10}")
+        if "dynamic_k_lambda_general" in row:
+            print(f"  ├─ Lambda General:        {_fmt(row.get('dynamic_k_lambda_general'), 4):>10}")
+        if "dynamic_k_lambda_expert" in row:
+            print(f"  └─ Lambda Expert:         {_fmt(row.get('dynamic_k_lambda_expert'), 4):>10}")
+
+    print(f"[Schedule]")
+    if "temperature" in row:
+        print(f"  ├─ Temperature:           {_fmt(row.get('temperature'), 4):>10}")
+    if "tax_weight" in row:
+        print(f"  ├─ Tax Weight:            {_fmt(row.get('tax_weight'), 4):>10}")
+    if "learning_rate" in row:
+        print(f"  └─ Learning Rate:         {_fmt(row.get('learning_rate'), 8):>10}")
+    print("=" * 72 + "\n")
 
 def _dbg_tensor_stats(name, x):
     if x is None:
@@ -81,9 +143,20 @@ class Qwen3VLMMRLForStages(Qwen3VLForConditionalGeneration):
         self.ce_loss_weight = 1.0
         self.alpha_loss_weight = 0.5   # Stage3建议0.3~1.0，Stage4可0.5
         self.tax_loss_weight = 0.0     # Stage3=0, Stage4由调度升到目标
-        self.k_general_weight = 0.0    # Stage3=0, Stage4可小值(如1.0~2.0)
-        self.k_expert_weight = 0.0     # Stage3=0, Stage4可小值(如0.2~0.5)
-        self.k_min_expert = 2.0
+        
+        self.k_general_weight = 0.0
+        self.k_expert_weight = 0.0
+        # ===== dynamic lambda for K control =====
+        self.use_dynamic_k_lambda = False
+        self.k_general_target = 0.0
+        self.k_expert_target = 8.0
+        self.k_general_lambda = 0.0
+        self.k_expert_lambda = 0.0
+        self.k_lambda_lr_general = 0.02
+        self.k_lambda_lr_expert = 0.01
+        self.k_lambda_max_general = 5.0
+        self.k_lambda_max_expert = 5.0
+
         self.use_tax = False
         self.use_k_loss = False
         self.temperature_override = None
@@ -148,21 +221,46 @@ class Qwen3VLMMRLForStages(Qwen3VLForConditionalGeneration):
         # 2) K loss (optional, stage4再开)
         k_general_loss = torch.tensor(0.0, device=input_ids.device)
         k_expert_loss = torch.tensor(0.0, device=input_ids.device)
+        k_general_mean = torch.tensor(float("nan"), device=input_ids.device)
+        k_expert_mean = torch.tensor(float("nan"), device=input_ids.device)
+
         if self.use_k_loss and expanded_labels is not None:
             k_results = self.model.visual.k_results
             k_sums = k_results[0] if isinstance(k_results, tuple) else k_results
+
             if k_sums is not None and k_sums.shape[0] == expanded_labels.shape[0]:
                 lbl = expanded_labels.squeeze(-1)
                 is_general = (lbl < 0.1)
                 is_expert = (lbl > 0.9)
                 k_norm = float(getattr(self.model.visual.text_gating, "total_rep_num", 40.0))
+
+                # ===== general =====
                 if is_general.any():
-                    kg = k_sums[is_general]
-                    k_general_loss = ((kg / k_norm) ** 2).mean() * self.k_general_weight
+                    kg = k_sums[is_general].float()
+                    k_general_mean = kg.mean()
+
+                    if self.use_dynamic_k_lambda and self.training:
+                        with torch.no_grad():
+                            err_g = (k_general_mean.item() - self.k_general_target) / k_norm
+                            self.k_general_lambda = self.k_general_lambda + self.k_lambda_lr_general * err_g
+                            self.k_general_lambda = max(0.0, min(self.k_general_lambda, self.k_lambda_max_general))
+
+                    current_lambda_g = self.k_general_lambda if self.use_dynamic_k_lambda else self.k_general_weight
+                    k_general_loss = current_lambda_g * (kg / k_norm).mean()
+
+                # ===== expert =====
                 if is_expert.any():
-                    ke = k_sums[is_expert]
-                    gap = torch.relu(self.k_min_expert - ke)
-                    k_expert_loss = ((gap / max(self.k_min_expert, 1.0)) ** 2).mean() * self.k_expert_weight
+                    ke = k_sums[is_expert].float()
+                    k_expert_mean = ke.mean()
+
+                    if self.use_dynamic_k_lambda and self.training:
+                        with torch.no_grad():
+                            err_e = (k_expert_mean.item() - self.k_expert_target) / k_norm
+                            self.k_expert_lambda = self.k_expert_lambda + self.k_lambda_lr_expert * err_e
+                            self.k_expert_lambda = max(0.0, min(self.k_expert_lambda, self.k_lambda_max_expert))
+
+                    current_lambda_e = self.k_expert_lambda if self.use_dynamic_k_lambda else self.k_expert_weight
+                    k_expert_loss = current_lambda_e * ((ke - self.k_expert_target) / k_norm).pow(2).mean()
         # 3) tax (optional, stage4再开)
         tax_raw = getattr(self.model, "tax_loss", torch.tensor(0.0, device=input_ids.device))
         tax_loss = tax_raw * self.tax_loss_weight if self.use_tax else torch.tensor(0.0, device=input_ids.device)
@@ -172,8 +270,8 @@ class Qwen3VLMMRLForStages(Qwen3VLForConditionalGeneration):
         with torch.no_grad():
             alpha_std = torch.tensor(float("nan"), device=input_ids.device)
             label_alpha_std = torch.tensor(float("nan"), device=input_ids.device)
-            k_general_mean = torch.tensor(float("nan"), device=input_ids.device)
-            k_expert_mean = torch.tensor(float("nan"), device=input_ids.device)
+            cache_k_general_mean = torch.tensor(float("nan"), device=input_ids.device)
+            cache_k_expert_mean = torch.tensor(float("nan"), device=input_ids.device)
 
             if alpha_logits is not None and torch.is_tensor(alpha_logits) and alpha_logits.numel() > 0:
                 a = torch.sigmoid(alpha_logits.detach().float().view(-1))
@@ -201,8 +299,8 @@ class Qwen3VLMMRLForStages(Qwen3VLForConditionalGeneration):
                 "total_loss": outputs.loss.detach(),
                 "ce_loss": ce_loss.detach(),
                 "alpha_guide_loss": alpha_guide_loss.detach(),
-                "k_general_loss": k_general_loss.detach(),
-                "k_expert_loss": k_expert_loss.detach(),
+                "cache_k_general_loss": k_general_loss.detach(),
+                "cache_k_expert_loss": k_expert_loss.detach(),
                 "tax_loss": tax_loss.detach(),
                 "alpha_std": alpha_std.detach(),
                 "label_alpha_std": label_alpha_std.detach(),
@@ -210,6 +308,8 @@ class Qwen3VLMMRLForStages(Qwen3VLForConditionalGeneration):
                 "k_expert_mean": k_expert_mean.detach(),
                 "temperature": torch.tensor(float(self.temperature_override) if self.temperature_override is not None else float("nan"), device=input_ids.device),
                 "tax_weight": torch.tensor(float(self.tax_loss_weight), device=input_ids.device),
+                "dynamic_k_lambda_general": torch.tensor(float(self.k_general_lambda), device=input_ids.device),
+                "dynamic_k_lambda_expert": torch.tensor(float(self.k_expert_lambda), device=input_ids.device),
             }
 
         if self.debug_mode and torch.is_tensor(outputs.loss):
@@ -347,6 +447,7 @@ def run_stage12_light(stage_id, model, processor, data_cfg, train_cfg, output_di
         smooth_window=train_cfg.get("metric_smooth_window", 30),
         ema_alpha=train_cfg.get("metric_ema_alpha", 0.15),
         scatter_stride=train_cfg.get("metric_scatter_stride", 3),
+        save_debug_figure=train_cfg.get("save_debug_figure", False),
     )
 
     # 数据：四视图都开，CE关
@@ -450,8 +551,18 @@ def run_stage12_light(stage_id, model, processor, data_cfg, train_cfg, output_di
                         temperature=getattr(model, "temperature_override", float("nan")),
                         learning_rate=opt.param_groups[0]["lr"],
                     )
-                if global_step % 20 == 0:
-                    print(f"[Stage{stage_id}] ep={ep} step={global_step} cls={cls_loss.item():.4f} gate={gate_loss.item():.4f}")
+                print_every = train_cfg.get("console_log_every", 50)
+                if global_step % print_every == 0:
+                    row = {
+                        "total_loss": (cls_loss.detach() + gate_loss.detach()),
+                        "cls_loss": cls_loss.detach(),
+                        "gate_loss": gate_loss.detach(),
+                        "alpha_std": alpha_std,
+                        "label_alpha_std": label_std,
+                        "temperature": getattr(model, "temperature_override", float("nan")),
+                        "learning_rate": opt.param_groups[0]["lr"],
+                    }
+                    print_stage_step_summary(f"stage{stage_id}", global_step, row)
     metric_logger.finalize()
 
     # save_path = f"{output_dir}/stage{stage_id}"
@@ -478,10 +589,17 @@ def run_stage34_full(stage_id, model, processor, data_cfg, train_cfg, output_dir
         model.ce_loss_weight = 1.0
         model.alpha_loss_weight = train_cfg.get("alpha_loss_weight_s4", 0.5)
         model.use_tax = True
-        model.tax_loss_weight = 0.0  # 由callback warmup拉升
+        model.tax_loss_weight = 0.0
         model.use_k_loss = train_cfg.get("enable_k_loss_s4", True)
-        model.k_general_weight = train_cfg.get("k_general_weight_s4", 1.5)
-        model.k_expert_weight = train_cfg.get("k_expert_weight_s4", 0.3)
+        model.use_dynamic_k_lambda = True
+        model.k_general_target = train_cfg.get("k_general_target_s4", 0.0)
+        model.k_expert_target = train_cfg.get("k_expert_target_s4", 8.0)
+        model.k_general_lambda = train_cfg.get("k_general_lambda_init_s4", 0.0)
+        model.k_expert_lambda = train_cfg.get("k_expert_lambda_init_s4", 0.0)
+        model.k_lambda_lr_general = train_cfg.get("k_lambda_lr_general_s4", 0.02)
+        model.k_lambda_lr_expert = train_cfg.get("k_lambda_lr_expert_s4", 0.01)
+        model.k_lambda_max_general = train_cfg.get("k_lambda_max_general_s4", 5.0)
+        model.k_lambda_max_expert = train_cfg.get("k_lambda_max_expert_s4", 5.0)
 
     ds = FourViewMMRLDataset(
         processor=processor,
@@ -525,8 +643,13 @@ def run_stage34_full(stage_id, model, processor, data_cfg, train_cfg, output_dir
         smooth_window=train_cfg.get("metric_smooth_window", 30),
         ema_alpha=train_cfg.get("metric_ema_alpha", 0.15),
         scatter_stride=train_cfg.get("metric_scatter_stride", 3),
+        save_debug_figure=train_cfg.get("save_debug_figure", False),
     )
-    metrics_cb = TrainerMetricsCallback(metric_logger)
+    metrics_cb = TrainerMetricsCallback(
+        metric_logger=metric_logger,
+        print_every=train_cfg.get("console_log_every", 50),
+        stage_name=f"stage{stage_id}",
+    )
 
     trainer = Trainer(
         model=model,

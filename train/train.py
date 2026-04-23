@@ -48,6 +48,13 @@ CFG = {
         "per_device_train_batch_size": 2,
         "gradient_accumulation_steps": 16,
         "tax_loss_weight": 4.0,
+
+        "console_log_every": 50,
+        "metric_smooth_window": 30,
+        "metric_ema_alpha": 0.12,
+        "metric_scatter_stride": 5,
+        "save_debug_figure": False,
+
         "learning_rate": {
             1: 1e-4,  # 仅分类器
             2: 1e-4,  # 分类器+门控预热
@@ -59,7 +66,16 @@ CFG = {
             2: 1,
             3: 2,
             4: 1,
-        }
+        },
+        "enable_k_loss_s4": True,
+        "k_general_target_s4": 0.0,
+        "k_expert_target_s4": 8.0,
+        "k_general_lambda_init_s4": 0.0,
+        "k_expert_lambda_init_s4": 0.0,
+        "k_lambda_lr_general_s4": 0.02,
+        "k_lambda_lr_expert_s4": 0.01,
+        "k_lambda_max_general_s4": 5.0,
+        "k_lambda_max_expert_s4": 5.0,
     },
     "ablation_order": [1, 2, 3, 4]
 }

@@ -84,12 +84,17 @@ class textGating(nn.Module):
             nn.ReLU(),
             nn.Linear(config.GATING_MID_DIM, 1)
         )
-        nn.init.constant_(self.k_budget_head[-1].bias, -0.5)
 
         self.hard_concrete = HardConcreteGate(temperature)
         self.lambda_ = lambda_
         self.epsilon = epsilon
         self.debug_context = {}
+
+        nn.init.constant_(self.k_budget_head[-1].bias, -1.5)  # 原来 -0.5 太激进
+        self.lambda_general = 1.0
+        self.lambda_expert = 0.25
+        self.k_cap_expert = 14.0
+        self.k_min_expert = 2.0
 
     def forward(self,
                 delta_vision_token: torch.Tensor,

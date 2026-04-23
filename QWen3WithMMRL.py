@@ -1,3 +1,4 @@
+# QWen3WithMMRL.py
 from typing import Optional, Union
 
 import torch
@@ -69,6 +70,7 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
         self.tax_loss = None
         self.temperature_override = None
         self.k_results = None
+        self.text_selected_mask = None
         ###################
 
     def get_image_features(self,
@@ -220,28 +222,45 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
             )
         ######## text gating ########
         if self.use_mmrl and k_results is not None:
-            if self.training:
-                k_sums, tax_loss = k_results
-                self.tax_loss = tax_loss
-            else:
-                k_sums = k_results
+            # 4/23修改，修改原因：占位符注入从“按前缀开前 K 个”改为“依据 selector 输出的 token-wise mask 精确选择 slot”。
+            selected_mask = k_results["selected_mask"].to(inputs_embeds.dtype)
+            k_sums = k_results["k_selected"]
+            self.tax_loss = k_results.get("tax_loss", None)
+            if self.tax_loss is None:
+                self.tax_loss = torch.tensor(0.0, device=inputs_embeds.device, dtype=inputs_embeds.dtype)
             self.k_results = k_sums
+            self.text_selected_mask = selected_mask
             placeholder_cumsum = is_placeholder.cumsum(dim=-1)
             placeholder_idx = (placeholder_cumsum - 1).clamp(min=0)
-            
+            valid_placeholder = is_placeholder & (placeholder_idx < selected_mask.size(-1))
+
             target_embeds = t_r_tokens[placeholder_idx]
-            gate_soft_mask = torch.clamp(k_sums.unsqueeze(-1) - placeholder_idx.to(inputs_embeds.dtype), min=0, max=1).unsqueeze(-1)
-            gate_soft_mask = gate_soft_mask.to(inputs_embeds.dtype)
-            inputs_embeds = torch.where(is_placeholder.unsqueeze(-1), target_embeds * gate_soft_mask, inputs_embeds)
-            dynamic_gate_mask = (gate_soft_mask.squeeze(-1) > 0.5)
-            attention_mask = attention_mask & ((~is_placeholder) | dynamic_gate_mask)
-            if not self.training:
-                hard_gate = (gate_soft_mask.squeeze(-1) > 0.5)
-                attention_mask = attention_mask & ((~is_placeholder) | hard_gate)
-                embed_mask = torch.ones_like(attention_mask, dtype=inputs_embeds.dtype)
-                tokens_to_zero = is_placeholder & (~hard_gate)
-                embed_mask = embed_mask.masked_fill(tokens_to_zero, 0.0)
-                inputs_embeds = inputs_embeds * embed_mask.unsqueeze(-1)
+            gathered_slot_mask = torch.gather(
+                selected_mask,
+                dim=1,
+                index=placeholder_idx.clamp(max=selected_mask.size(-1) - 1)
+            )
+            gate_soft_mask = (gathered_slot_mask * valid_placeholder.to(inputs_embeds.dtype)).unsqueeze(-1)
+            inputs_embeds = torch.where(valid_placeholder.unsqueeze(-1), target_embeds * gate_soft_mask, inputs_embeds)
+            dynamic_gate_mask = valid_placeholder & (gate_soft_mask.squeeze(-1) > 0.5)
+
+            # 4/23修改，修改原因：无论训练/推理，未选中的 placeholder 都不能继续参与注意力，否则会退化回无选择的前缀放行。
+            if isinstance(attention_mask, dict):
+                updated_attention_mask = {}
+                for k, v in attention_mask.items():
+                    if torch.is_tensor(v) and v.ndim == 2:
+                        updated_attention_mask[k] = v & ((~is_placeholder) | dynamic_gate_mask)
+                    else:
+                        updated_attention_mask[k] = v
+                attention_mask = updated_attention_mask
+            elif torch.is_tensor(attention_mask):
+                attention_mask = attention_mask & ((~is_placeholder) | dynamic_gate_mask)
+
+            hard_gate = dynamic_gate_mask
+            embed_mask = torch.ones_like(is_placeholder, dtype=inputs_embeds.dtype)
+            tokens_to_zero = is_placeholder & (~hard_gate)
+            embed_mask = embed_mask.masked_fill(tokens_to_zero, 0.0)
+            inputs_embeds = inputs_embeds * embed_mask.unsqueeze(-1)
         ######## text gating ########
         
         if position_ids is None:

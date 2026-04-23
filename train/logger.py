@@ -327,6 +327,18 @@ class TrainerMetricsCallback(TrainerCallback):
             print(f"  └─ Learning Rate:         {_fmt(row.get('learning_rate'), nd=8):>10}")
         print("=" * 72 + "\n")
 
+        if "k_dataset_loss" in row:
+            print(f"  ├─ K Loss (Dataset):      {_fmt(row.get('k_dataset_loss')):>10}")
+        if "slot_collapse_loss" in row:
+            print(f"  ├─ Slot Collapse Loss:    {_fmt(row.get('slot_collapse_loss')):>10}")
+
+            if "k_mean_report" in row:
+                print(f"  ├─ Report Mean K:         {_fmt(row.get('k_mean_report'), nd=3):>10}")
+            if "k_mean_vqa" in row:
+                print(f"  ├─ VQA Mean K:            {_fmt(row.get('k_mean_vqa'), nd=3):>10}")
+            if "k_mean_test" in row:
+                print(f"  ├─ Test Mean K:           {_fmt(row.get('k_mean_test'), nd=3):>10}")
+
     def on_step_end(self, args, state, control, **kwargs):
         step = int(state.global_step)
         if step <= 0 or step == self.last_logged_step:

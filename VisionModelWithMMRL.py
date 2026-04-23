@@ -1,3 +1,4 @@
+# VisionModelWithMMRL.py
 from multiprocessing import pool
 from typing import Optional
 
@@ -136,9 +137,35 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
         self.alpha_list = []
         self.G_list = []
         self.k_results = None
+        self.text_selector_outputs = None
 
         self.null_image_token = nn.Parameter(torch.zeros(1, self.cfg.vision_token_dim))
         nn.init.normal_(self.null_image_token, std=0.02)
+
+    def _build_visual_confidence_features(self,
+                                          branch_delta: torch.Tensor,
+                                          branch_semantic: torch.Tensor,
+                                          image_token_indices: torch.Tensor,
+                                          batch_indices_token: torch.Tensor,
+                                          batch_indices_img: torch.Tensor,
+                                          batch_size: int):
+        # 4/23修改，修改原因：文本门控需要“支路语义主体 + 残差强度统计”的双路径视觉证据，而不是直接拿 delta 语义做决策。
+        delta_norm = branch_delta.norm(dim=-1, keepdim=True)
+        semantic_norm = branch_semantic.norm(dim=-1, keepdim=True)
+        ratio = delta_norm / (semantic_norm + 1e-6)
+        token_stats = torch.cat([delta_norm, ratio], dim=-1)
+
+        total_images = int(batch_indices_img.size(0))
+        img_mean = utils.segment_mean(token_stats, image_token_indices, total_images)
+        img_max = utils.segment_max(token_stats, image_token_indices, total_images)
+
+        sample_mean = utils.segment_mean(img_mean, batch_indices_img, batch_size)
+        sample_max = utils.segment_max(img_max, batch_indices_img, batch_size)
+        centered = img_mean - sample_mean[batch_indices_img]
+        sample_std = torch.sqrt(
+            utils.segment_mean(centered.pow(2), batch_indices_img, batch_size).clamp_min(1e-6)
+        )
+        return torch.cat([sample_mean, sample_max, sample_std, sample_std[:, :2]], dim=-1)
 
     def forward(self,
                 hidden_states: torch.Tensor,
@@ -155,6 +182,7 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
 
         self.alpha_list = None 
         self.G_list = []
+        self.text_selector_outputs = None
         rotary_pos_emb_with_rep = None
         embedding_after_pooling = self.embedding_pooling(embedding, mask=text_pooling_mask)
         hidden_states = self.patch_embed(hidden_states)
@@ -289,6 +317,9 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
                 ](feature_to_save)
                 deepstack_feature_lists.append(deepstack_feature)
 
+        pooled_branch_mean = None
+        pooled_branch_max = None
+        confidence_stats = None
         if run_mmrl_branch and hidden_states_with_rep is not None:
             hidden_states_with_rep = _strip_r_token(hidden_states_with_rep,
                                                     original_seq_lens_list,
@@ -303,6 +334,30 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
             delta = hidden_states_with_rep - org_hidden_states
             G_mask = torch.repeat_interleave(self.G_list, seqlens, dim=0)
             gated_delta = delta * G_mask
+            # 4/23修改，修改原因：语义主体使用未残差的专家支路输出聚合，残差只保留为强度/置信度统计来源。
+            branch_semantic = hidden_states_with_rep
+            img_counts = torch.tensor(images_per_sample, device=hidden_states.device)
+            batch_indices_img = torch.repeat_interleave(
+                torch.arange(batch_size, device=hidden_states.device),
+                img_counts
+            )
+            batch_indices_token = torch.repeat_interleave(batch_indices_img, seqlens)
+            image_token_indices = torch.arange(total_pic_num, device=hidden_states.device).repeat_interleave(seqlens)
+            pooled_per_image = self.hidden_state_pooling.forward_vectorized(
+                branch_semantic,
+                image_token_indices,
+                total_pic_num
+            )
+            pooled_branch_mean = utils.segment_mean(pooled_per_image, batch_indices_img, batch_size)
+            pooled_branch_max = utils.segment_max(pooled_per_image, batch_indices_img, batch_size)
+            confidence_stats = self._build_visual_confidence_features(
+                gated_delta,
+                branch_semantic,
+                image_token_indices,
+                batch_indices_token,
+                batch_indices_img,
+                batch_size,
+            )
             final_delta = self.zero_init_layer(gated_delta)
             hidden_states = org_hidden_states + final_delta
         else:
@@ -312,8 +367,11 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
         hidden_states = self.merger(hidden_states)
         ########### text gating ###########
         if v_r_token_list is None:
-             k_results = torch.tensor(0.0, device=hidden_states.device)
+             k_results = {"k_selected": torch.zeros(batch_size, device=hidden_states.device, dtype=hidden_states.dtype),
+                          "selected_mask": torch.zeros(batch_size, self.cfg.RP_SPACE_LENGTH * 8, device=hidden_states.device, dtype=hidden_states.dtype),
+                          "tax_loss": torch.tensor(0.0, device=hidden_states.device, dtype=hidden_states.dtype)}
              self.k_results = k_results
+             self.text_selector_outputs = k_results
             #  alpha_loss = torch.tensor(0.0, device=hidden_states.device)
              return hidden_states, deepstack_feature_lists, k_results
         img_seqlens = cu_seqlens[1:] - cu_seqlens[:-1]
@@ -338,38 +396,14 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
             batch_indices_img,
             batch_size,
             embedding_after_pooling,
+            pooled_semantic_mean=pooled_branch_mean,
+            pooled_semantic_max=pooled_branch_max,
+            confidence_stats=confidence_stats,
             has_image=has_image,
             temperature_override=gating_temperature_override
         )
-        if self.training:
-            hard_k_logits, tax_loss = out  # hard_k_logits: [Batch, 40]
-            k_sums = hard_k_logits.sum(dim=-1)
-            k_results = (k_sums, tax_loss)
-        else:
-            # 修复：按阈值计数，避免 sum().round() 的碎片误激活
-            k_hard = (out > 0.5).to(out.dtype)
-            k_sums = k_hard.sum(dim=-1)
-            k_results = k_sums
-            ############ debug ############
-            # debug_info = self.text_gating.debug_context            
-            # alpha_val = debug_info.get("alpha_val", torch.tensor(0.0))
-            # k_val = debug_info.get("gate_sum_raw", torch.tensor(0.0))
-
-            # if alpha_val.ndim == 0: alpha_val = alpha_val.unsqueeze(0)
-            # if k_val.ndim == 0: k_val = k_val.unsqueeze(0)
-
-            # for i in range(len(alpha_val)):
-            #     print(f"\n[MMRL DEBUG WARNING] Anomaly Detected in Sample {i}:")
-            #     print(f"  Alpha (Professionalism): {alpha_val[i]:.4f} (Should be low)")
-            #     print(f"  Text Relevance:          {debug_info['text_rel']:.4f}")
-            #     print(f"  Raw Intensity Sum:       {debug_info['intensity_sum']:.4f} (Is bias too high?)")
-            #     print(f"  Modulated Intensity:     {debug_info['modulated_intensity']:.4f}")
-            #     print(f"  Calculated K (Gates):    {k_val[i]:.2f}")
-            #     print("-" * 30)
-            ############ debug ############
-
-
-
+        k_results = out
+        self.text_selector_outputs = out
         self.k_results = k_results
         # alpha_loss = torch.mean(torch.sigmoid(self.alpha_list)) * 0.1
         return hidden_states, deepstack_feature_lists, k_results
@@ -400,16 +434,11 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
             batch_indices,
             batch_size,
             embedding_after_pooling,
+            pooled_semantic_mean=dummy_vision_states,
+            pooled_semantic_max=dummy_vision_states,
+            confidence_stats=torch.zeros(batch_size, 8, device=embedding.device, dtype=embedding.dtype),
             has_image=has_image,
             temperature_override=gating_temperature_override
         )
-
-        if self.training:
-            hard_k_logits, tax_loss = out
-            k_sums = hard_k_logits.sum(dim=-1)
-            k_results = (k_sums, tax_loss)
-        else:
-            k_hard = (out > 0.5).to(out.dtype)
-            k_results = k_hard.sum(dim=-1)
-
-        return k_results
+        self.text_selector_outputs = out
+        return out

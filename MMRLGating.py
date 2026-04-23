@@ -1,9 +1,9 @@
+# MMRLGating.PY
 from typing import Optional
 
 import torch
 from torch import nn
 from utils import attention_pooling
-import random
 
 class Task_classifier(nn.Module):
     def __init__(self,config):
@@ -70,7 +70,21 @@ class textGating(nn.Module):
                  lambda_=0.2):
         super().__init__()
         self.total_rep_num = config.RP_SPACE_LENGTH * 8
+        # 4/23修改，修改原因：文本门控从“前缀式 K 控制”升级为“预算控制 + slot 内容选择”，
+        # 需要显式区分视觉语义主体与残差强度统计两类证据。
         self.attention_pooling = attention_pooling(config.vision_token_dim, config.GATING_MID_DIM)
+        self.visual_semantic_proj = nn.Sequential(
+            nn.Linear(config.vision_token_dim * 2, config.GATING_MID_DIM),
+            nn.ReLU(),
+        )
+        self.confidence_proj = nn.Sequential(
+            nn.Linear(8, config.GATING_MID_DIM // 2),
+            nn.ReLU(),
+        )
+        self.text_proj = nn.Sequential(
+            nn.Linear(config.text_token_dim, config.GATING_MID_DIM),
+            nn.ReLU(),
+        )
 
         self.text_relevance_head = nn.Sequential(
             nn.Linear(config.text_token_dim, config.GATING_MID_DIM),
@@ -80,9 +94,14 @@ class textGating(nn.Module):
         nn.init.constant_(self.text_relevance_head[-1].bias, 0.0)
 
         self.k_budget_head = nn.Sequential(
-            nn.Linear(config.vision_token_dim + config.text_token_dim + 2, config.GATING_MID_DIM),
+            nn.Linear(config.GATING_MID_DIM * 2 + config.GATING_MID_DIM // 2 + 2, config.GATING_MID_DIM),
             nn.ReLU(),
             nn.Linear(config.GATING_MID_DIM, 1)
+        )
+        self.slot_score_head = nn.Sequential(
+            nn.Linear(config.GATING_MID_DIM * 2 + config.GATING_MID_DIM // 2 + 2, config.GATING_MID_DIM),
+            nn.ReLU(),
+            nn.Linear(config.GATING_MID_DIM, self.total_rep_num)
         )
 
         self.hard_concrete = HardConcreteGate(temperature)
@@ -96,6 +115,24 @@ class textGating(nn.Module):
         self.k_cap_expert = 14.0
         self.k_min_expert = 2.0
 
+    def _build_hard_topk_mask(self, slot_logits: torch.Tensor, k_budget: torch.Tensor) -> torch.Tensor:
+        # 4/23修改，修改原因：推理阶段必须从 40 个 slot 中按分数选择 Top-K，而不是再按前缀放行。
+        batch_size = slot_logits.size(0)
+        hard_mask = torch.zeros_like(slot_logits)
+        k_hard = torch.clamp(torch.round(k_budget.squeeze(-1)), min=0, max=self.total_rep_num).to(torch.long)
+        for i in range(batch_size):
+            current_k = int(k_hard[i].item())
+            if current_k <= 0:
+                continue
+            topk_idx = torch.topk(slot_logits[i], k=current_k, dim=-1).indices
+            hard_mask[i, topk_idx] = 1.0
+        return hard_mask
+
+    def _build_soft_topk_mask(self, slot_logits: torch.Tensor, k_budget: torch.Tensor) -> torch.Tensor:
+        slot_probs = torch.softmax(slot_logits, dim=-1)
+        scaled = slot_probs * k_budget
+        return torch.clamp(scaled, min=0.0, max=1.0)
+
     def forward(self,
                 delta_vision_token: torch.Tensor,
                 alpha: torch.Tensor,
@@ -103,6 +140,9 @@ class textGating(nn.Module):
                 batch_indices_img: torch.Tensor,
                 batch_size: int,
                 text_embedding: torch.Tensor,
+                pooled_semantic_mean: Optional[torch.Tensor] = None,
+                pooled_semantic_max: Optional[torch.Tensor] = None,
+                confidence_stats: Optional[torch.Tensor] = None,
                 has_image: Optional[torch.Tensor] = None,
                 temperature_override: Optional[float] = None):
         pooled_vision = self.attention_pooling.forward_vectorized(
@@ -115,31 +155,39 @@ class textGating(nn.Module):
 
         if has_image is None:
             has_image = torch.ones(batch_size, 1, device=text_embedding.device, dtype=text_embedding.dtype)
+        if pooled_semantic_mean is None:
+            pooled_semantic_mean = pooled_vision
+        if pooled_semantic_max is None:
+            pooled_semantic_max = pooled_vision
+        if confidence_stats is None:
+            confidence_stats = torch.zeros(batch_size, 8, device=text_embedding.device, dtype=text_embedding.dtype)
 
         text_relevance_prob = torch.sigmoid(self.text_relevance_head(text_embedding))  # [B, 1]
+        visual_semantic = torch.cat([pooled_semantic_mean, pooled_semantic_max], dim=-1)
+        visual_semantic = self.visual_semantic_proj(visual_semantic)
+        confidence_feat = self.confidence_proj(confidence_stats)
+        text_feat = self.text_proj(text_embedding)
 
-        # K 预算主体：由 vision/text/alpha/has_image 联合决定
-        feat = torch.cat([pooled_vision, text_embedding, batch_alpha, has_image], dim=-1)
+        # 4/23修改，修改原因：预算头仍保留总量控制，但改为由“语义主体 + 强度统计 + 文本语义”共同决定。
+        feat = torch.cat([visual_semantic, text_feat, confidence_feat, batch_alpha, has_image], dim=-1)
         raw_budget = self.total_rep_num * torch.sigmoid(self.k_budget_head(feat))     # [B, 1]
 
-        # text-only 显式抑制；但不归零，保留 text-only expert 能力
+        # 4/23修改，修改原因：保留 text-only expert 能力，但在无图时显式缩小预算上限。
         image_scale = 0.5 + 0.5 * has_image                                            # 无图=0.5，有图=1.0
         k_budget = raw_budget * image_scale * (0.25 + 0.75 * text_relevance_prob)      # [B, 1]
 
-        # 由连续 budget 构造 slot gate
-        slot_idx = torch.arange(
-            self.total_rep_num, device=k_budget.device, dtype=k_budget.dtype
-        ).view(1, -1)  # [1, K]
-
-        K_logits = k_budget - slot_idx                                                  # [B, K]
-        hard_k_logits = self.hard_concrete(K_logits, temperature_override)
+        # 4/23修改，修改原因：新增 slot 打分头，对每个文本专家 token 单独评分，支持 token-wise Top-K 内容选择。
+        slot_logits = self.slot_score_head(feat)
+        hard_topk_mask = self._build_hard_topk_mask(slot_logits, k_budget)
 
         # alpha 只负责放行/抑制
         if self.training:
-            hard_k_logits = hard_k_logits * batch_alpha
+            soft_topk_mask = self._build_soft_topk_mask(slot_logits, k_budget)
+            selected_mask = hard_topk_mask + soft_topk_mask - soft_topk_mask.detach()
+            selected_mask = selected_mask * batch_alpha
         else:
-            alpha_hard_mask = (batch_alpha > 0.5).to(dtype=hard_k_logits.dtype)
-            hard_k_logits = hard_k_logits * alpha_hard_mask
+            alpha_hard_mask = (batch_alpha > 0.5).to(dtype=hard_topk_mask.dtype)
+            selected_mask = hard_topk_mask * alpha_hard_mask
 
         if self.training:
             batch_alpha_prob = batch_alpha.detach()
@@ -150,15 +198,33 @@ class textGating(nn.Module):
             )
             dynamic_lambda = self.lambda_ * penalty_mask
 
-            k_soft = hard_k_logits.sum(dim=-1)  # [B]
-            target_var = hard_k_logits.new_tensor(4.0)
+            k_soft = selected_mask.sum(dim=-1)  # [B]
+            target_var = selected_mask.new_tensor(4.0)
             k_var = k_soft.var(unbiased=False)
             collapse_loss = 0.05 * torch.relu(target_var - k_var)
 
-            raw_loss = dynamic_lambda.squeeze(-1) * (k_soft / self.total_rep_num)
-            tax_loss = raw_loss.mean() + collapse_loss
-            return hard_k_logits, tax_loss
+            slot_usage = selected_mask.mean(dim=0)
+            slot_collapse_loss = 0.01 * torch.sum(slot_usage.pow(2))
 
-        return hard_k_logits
+            raw_loss = dynamic_lambda.squeeze(-1) * (k_soft / self.total_rep_num)
+            tax_loss = raw_loss.mean() + collapse_loss + slot_collapse_loss
+        else:
+            tax_loss = None
+
+        self.debug_context = {
+            "batch_alpha": batch_alpha.detach(),
+            "k_budget": k_budget.detach(),
+            "slot_logits": slot_logits.detach(),
+            "selected_mask": selected_mask.detach(),
+        }
+
+        return {
+            "selected_mask": selected_mask,
+            "hard_topk_mask": hard_topk_mask,
+            "slot_logits": slot_logits,
+            "k_budget": k_budget.squeeze(-1),
+            "k_selected": selected_mask.sum(dim=-1),
+            "tax_loss": tax_loss,
+        }
 
 

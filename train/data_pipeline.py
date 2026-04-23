@@ -9,6 +9,34 @@ from PIL import Image
 import torch
 from torch.utils.data import Dataset
 
+# ===== 新增：数据集分组 =====
+DATASET_GROUP_TO_ID = {
+    "general": 0,  # 通用
+    "report": 1,   # *json（固定格式报告）
+    "vqa": 2,      # *conv
+    "test": 3,     # *test（做题适配）
+}
+ID_TO_DATASET_GROUP = {v: k for k, v in DATASET_GROUP_TO_ID.items()}
+
+
+def _normalize_dataset_name(path: str) -> str:
+    name = os.path.basename(path or "").lower()
+    name = name.replace(".translated.json", ".json")
+    name = name.replace(".translated", "")
+    return name
+
+
+def infer_dataset_group(source_json_path: str, is_expert: bool) -> str:
+    if not is_expert:
+        return "general"
+    n = _normalize_dataset_name(source_json_path)
+    # 优先 test，再 conv，剩余归 report
+    if "test" in n:
+        return "test"
+    if "conv" in n:
+        return "vqa"
+    return "report"
+
 
 VISUAL_HINT_PATTERNS = [
     r"根据图片",
@@ -40,15 +68,31 @@ def is_semantic_collapsed(text: str, min_len: int = 4) -> bool:
     return False
 
 
-def load_jsons(json_input):
+def load_jsons(json_input, attach_source=False):
     data = []
+
+    def _append_records(arr, src_path):
+        if not isinstance(arr, list):
+            return
+        if not attach_source:
+            data.extend(arr)
+            return
+        for x in arr:
+            if isinstance(x, dict):
+                y = dict(x)
+                y["_source_json"] = src_path
+                data.append(y)
+
     if isinstance(json_input, list):
         for path in json_input:
             with open(path, "r", encoding="utf-8") as f:
-                data.extend(json.load(f))
+                arr = json.load(f)
+            _append_records(arr, path)
     else:
         with open(json_input, "r", encoding="utf-8") as f:
-            data = json.load(f)
+            arr = json.load(f)
+        _append_records(arr, json_input)
+
     return data
 
 
@@ -92,8 +136,8 @@ class FourViewMMRLDataset(Dataset):
         self.mode = mode
         random.seed(seed)
 
-        self.expert_raw = load_jsons(expert_json) if expert_json else []
-        self.general_raw = load_jsons(general_json) if general_json else []
+        self.expert_raw = load_jsons(expert_json, attach_source=True) if expert_json else []
+        self.general_raw = load_jsons(general_json, attach_source=True) if general_json else []
 
         self.expert_map, self.expert_dir = build_image_mapping(expert_img_dir)
         self.general_map, self.general_dir = build_image_mapping(general_img_dir)
@@ -121,6 +165,8 @@ class FourViewMMRLDataset(Dataset):
     def _build_views_from_item(self, item, task_type: str):
         is_expert = task_type == "expert"
         img_path = self._resolve_img(item, is_expert)
+        dataset_group = infer_dataset_group(item.get("_source_json", ""), is_expert=is_expert)
+        dataset_group_id = DATASET_GROUP_TO_ID.get(dataset_group, 0 if not is_expert else 1)
         conv = item.get("conversations", [])
 
         mm_key = f"{task_type}-mm"
@@ -133,7 +179,9 @@ class FourViewMMRLDataset(Dataset):
                 "view_type": "mm",
                 "image_path": img_path,
                 "conversations": conv,
-                "alpha_label": 1.0 if is_expert else 0.0
+                "alpha_label": 1.0 if is_expert else 0.0,
+                "dataset_group": dataset_group,
+                "dataset_group_id": dataset_group_id,
             })
 
         if text_key in self.enable_views:
@@ -152,7 +200,9 @@ class FourViewMMRLDataset(Dataset):
                     "view_type": "text",
                     "image_path": None,  # text-only
                     "conversations": cleaned_conv,
-                    "alpha_label": 1.0 if is_expert else 0.0
+                    "alpha_label": 1.0 if is_expert else 0.0,
+                    "dataset_group": dataset_group,
+                    "dataset_group_id": dataset_group_id,
                 })
         return out
 
@@ -282,6 +332,7 @@ class MMRLDataCollator:
         # 单独处理 pixel_values 和 image_grid_thw（变长，仅 mm 样本有值）
         pixel_values_list = [f.pop("pixel_values") for f in features]
         image_grid_thw_list = [f.pop("image_grid_thw") for f in features]
+        dataset_group_ids = [f.pop("dataset_group_id", 0) for f in features]
 
         mm_pixels = [pv for pv in pixel_values_list if pv is not None]
         mm_grids = [g for g in image_grid_thw_list if g is not None]
@@ -305,4 +356,5 @@ class MMRLDataCollator:
         batch["alpha_labels"] = torch.tensor(alpha_labels, dtype=torch.float32)
         batch["images_per_sample"] = images_per_sample
         batch["is_mm"] = torch.tensor(is_mm, dtype=torch.long)
+        batch["dataset_group_ids"] = torch.tensor(dataset_group_ids, dtype=torch.long)
         return batch

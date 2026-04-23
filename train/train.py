@@ -41,7 +41,7 @@ CFG = {
             "/root/autodl-tmp/dataset/gen/train2017",
             "/root/autodl-tmp/dataset/gen/val2017",
         ],
-        "total_limit": 100000,
+        "total_limit": 100,
     },
     "train": {
         "seed": 42,
@@ -76,6 +76,24 @@ CFG = {
         "k_lambda_lr_expert_s4": 0.01,
         "k_lambda_max_general_s4": 5.0,
         "k_lambda_max_expert_s4": 5.0,
+        "enable_dataset_k_loss_s4": True,
+        "k_group_constraints_s4": {
+            "general": {"k_min": 0.0, "k_max": 1.5, "range_weight": 1.0, "mean_weight": 0.02, "mean_anchor": 0.3},
+            "vqa":     {"k_min": 0.0, "k_max": 6.0, "range_weight": 1.0, "mean_weight": 0.01, "mean_anchor": 2.0},
+            "report":  {"k_min": 6.0, "k_max": 18.0, "range_weight": 1.0, "mean_weight": 0.02, "mean_anchor": 10.0},
+            "test":    {"k_min": 2.0, "k_max": 28.0, "range_weight": 0.6, "mean_weight": 0.005, "mean_anchor": 12.0},
+        },
+        "k_range_global_weight_s4": 1.0,
+        "k_reg_start_scale_s4": 0.25,
+        "k_reg_target_scale_s4": 1.0,
+        "enable_slot_collapse_s4": True,
+        "slot_collapse_weight_s4": 0.02,
+        "slot_neff_min_s4": 6.0,
+        "slot_top1_max_s4": 0.35,
+        "slot_top1_weight_s4": 0.2,
+        "slot_collapse_expert_only_s4": True,
+        "collapse_reg_start_scale_s4": 0.1,
+        "collapse_reg_target_scale_s4": 1.0,
     },
     "ablation_order": [1, 2, 3, 4]
 }

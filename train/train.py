@@ -41,13 +41,25 @@ CFG = {
             "/root/autodl-tmp/dataset/gen/train2017",
             "/root/autodl-tmp/dataset/gen/val2017",
         ],
-        "total_limit": 100,
+        "total_limit": 50000,
     },
     "train": {
         "seed": 42,
         "per_device_train_batch_size": 2,
         "gradient_accumulation_steps": 16,
+        # Stage4 的预算正则请显式配置，不再依赖 tax_loss_weight 回退。
+        # 之前 stage4 只有 1 个 epoch，同时 warmup=1，导致整个 stage4 的 budget_weight 始终为 0。
+        "budget_loss_weight": 3.0,
+        "budget_warmup_epochs": 0,
         "tax_loss_weight": 4.0,
+
+        # 让 selector 更早进入相对离散的决策区，避免长期高温下“全开更安全”的解。
+        "initial_temp": 0.7,
+        "final_temp": 0.2,
+
+        # 加强 stage4 中 alpha 监督，避免预算头和 alpha 脱钩。
+        "alpha_loss_weight_s3": 0.5,
+        "alpha_loss_weight_s4": 1.5,
 
         "console_log_every": 50,
         "metric_smooth_window": 30,
@@ -58,14 +70,14 @@ CFG = {
         "learning_rate": {
             1: 1e-4,  # 仅分类器
             2: 1e-4,  # 分类器+门控预热
-            3: 1e-4,  # 联合训练无tax
-            4: 8e-5,  # 联合训练+tax/K
+            3: 1e-4,  # 联合训练无budget，主要做对齐与过渡
+            4: 6e-5,  # 联合训练+budget，略微回升 LR，让主知识学习更多落在 stage4
         },
         "epochs": {
             1: 1,
             2: 1,
-            3: 2,
-            4: 1,
+            3: 1,
+            4: 2,
         },
         "enable_k_loss_s4": True,
         "k_general_target_s4": 0.0,
@@ -94,6 +106,13 @@ CFG = {
         "slot_collapse_expert_only_s4": True,
         "collapse_reg_start_scale_s4": 0.1,
         "collapse_reg_target_scale_s4": 1.0,
+
+        "enable_dataset_slot_loss_s4": True,
+        "slot_group_constraints_s4": {
+            "report": {"entropy_min": 2.20, "entropy_max": 3.60, "weight": 0.020},
+            "vqa":    {"entropy_min": 0.80, "entropy_max": 2.00, "weight": 0.015},
+            "test":   {"entropy_min": 1.20, "entropy_max": 2.80, "weight": 0.010},
+        },
     },
     "ablation_order": [1, 2, 3, 4]
 }

@@ -318,6 +318,7 @@ class FourViewMMRLDataset(Dataset):
             "alpha_labels": float(alpha_label),
             "images_per_sample": images_per_sample,
             "is_mm": is_mm,
+            "dataset_group_id": s.get("dataset_group_id", 0),
         }
 
 

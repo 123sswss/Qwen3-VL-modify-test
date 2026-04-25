@@ -114,6 +114,7 @@ class textGating(nn.Module):
         self.lambda_expert = 0.25
         self.k_cap_expert = 14.0
         self.k_min_expert = 2.0
+        self.infer_alpha_threshold = 0.5
 
     def _build_hard_topk_mask(self, slot_logits: torch.Tensor, k_budget: torch.Tensor) -> torch.Tensor:
         # 4/23修改，修改原因：推理阶段必须从 40 个 slot 中按分数选择 Top-K，而不是再按前缀放行。
@@ -174,7 +175,20 @@ class textGating(nn.Module):
 
         # 4/23修改，修改原因：保留 text-only expert 能力，但在无图时显式缩小预算上限。
         image_scale = 0.5 + 0.5 * has_image                                            # 无图=0.5，有图=1.0
-        k_budget = raw_budget * image_scale * (0.25 + 0.75 * text_relevance_prob)      # [B, 1]
+        relevance_scale = (0.25 + 0.75 * text_relevance_prob)
+
+        base_budget = raw_budget * image_scale * relevance_scale
+
+        # 修复策略改为“负样本强关断、正样本尽量保持原行为”：
+        # - 训练时仍用连续 alpha 调制预算，帮助预算头和 alpha 对齐；
+        # - 推理时若 alpha 未通过阈值，直接把预算清零；若通过，则完整保留原预算。
+        # 这样能抑制通用样本的软提示泄露，同时避免破坏原本已学好的专家 prompt 结构。
+        if self.training:
+            alpha_scale = batch_alpha.clamp(0.0, 1.0)
+            k_budget = base_budget * alpha_scale
+        else:
+            alpha_scale = (batch_alpha > self.infer_alpha_threshold).to(dtype=raw_budget.dtype)
+            k_budget = torch.where(alpha_scale > 0, base_budget, torch.zeros_like(base_budget))
 
         # 4/23修改，修改原因：新增 slot 打分头，对每个文本专家 token 单独评分，支持 token-wise Top-K 内容选择。
         slot_logits = self.slot_score_head(feat)
@@ -186,7 +200,7 @@ class textGating(nn.Module):
             selected_mask = hard_topk_mask + soft_topk_mask - soft_topk_mask.detach()
             selected_mask = selected_mask * batch_alpha
         else:
-            alpha_hard_mask = (batch_alpha > 0.5).to(dtype=hard_topk_mask.dtype)
+            alpha_hard_mask = (batch_alpha > self.infer_alpha_threshold).to(dtype=hard_topk_mask.dtype)
             selected_mask = hard_topk_mask * alpha_hard_mask
 
         if self.training:
@@ -214,6 +228,9 @@ class textGating(nn.Module):
         self.debug_context = {
             "batch_alpha": batch_alpha.detach(),
             "k_budget": k_budget.detach(),
+            "raw_budget": raw_budget.detach(),
+            "base_budget": base_budget.detach(),
+            "alpha_scale": alpha_scale.detach(),
             "slot_logits": slot_logits.detach(),
             "selected_mask": selected_mask.detach(),
         }

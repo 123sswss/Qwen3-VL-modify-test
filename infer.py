@@ -13,6 +13,30 @@ import config as cfg
 import QWen3WithMMRL
 import processingWithMMRL
 
+
+def _to_debug_list(x, digits=4):
+    if x is None:
+        return None
+    if not torch.is_tensor(x):
+        return x
+    x = x.detach().float().cpu()
+    if x.numel() == 1:
+        return round(float(x.item()), digits)
+    flat = x.view(-1).tolist()
+    return [round(float(v), digits) for v in flat]
+
+
+def _extract_selected_slots(mask_tensor):
+    if mask_tensor is None or not torch.is_tensor(mask_tensor):
+        return None
+    mask_tensor = mask_tensor.detach().float().cpu()
+    selected = []
+    for row in mask_tensor:
+        idx = (row > 0.5).nonzero(as_tuple=True)[0].tolist()
+        selected.append(idx)
+    return selected
+
+
 # ==============================================================================
 # 1. 模型包装器 (保持与 overfit.py 一致，确保结构对齐)
 # ==============================================================================
@@ -67,8 +91,8 @@ def inference():
     # IMAGE_PATH = "/root/autodl-tmp/dataset/14/DJI_20231023073909_0114_V_JPG.rf.16c125c28c5e6deaf7e9b1525ee0188c.jpg"
     # PROMPT_TEXT = "上海有哪些鸟的鸟巢比较常见？"
 
-    # IMAGE_PATH = "/root/autodl-tmp/dataset/14/DJI_20231023073909_0114_V_JPG.rf.16c125c28c5e6deaf7e9b1525ee0188c.jpg"
-    # PROMPT_TEXT = "详细描述一下这张图片中的设备状态。"
+    IMAGE_PATH = "/root/autodl-tmp/dataset/14/DJI_20231023073909_0114_V_JPG.rf.16c125c28c5e6deaf7e9b1525ee0188c.jpg"
+    PROMPT_TEXT = "详细描述一下这张图片中的设备状态。"
 
     # IMAGE_PATH = "/root/autodl-tmp/dataset/14/DJI_20231023073909_0114_V_JPG.rf.16c125c28c5e6deaf7e9b1525ee0188c.jpg"
     # PROMPT_TEXT = "Analyze device status and output JSON. "
@@ -218,6 +242,11 @@ def inference():
             alpha_probs = torch.sigmoid(alpha_logits)
             k = model.model.k_results  # [Batch, Total_Experts]
             G = model.model.visual.G_list  # [Total_Images, 1]
+            selector_debug = getattr(model.model.visual.text_gating, "debug_context", {}) or {}
+            raw_budget = selector_debug.get("raw_budget")
+            alpha_scale = selector_debug.get("alpha_scale")
+            selected_mask = selector_debug.get("selected_mask", getattr(model.model, "text_selected_mask", None))
+            selected_slots = _extract_selected_slots(selected_mask)
 
             print(f"[Debug] 门控状态:")
             print(f"  ├─ Alpha Logits (原始): {alpha_logits.squeeze().detach().cpu().tolist()}")
@@ -226,6 +255,16 @@ def inference():
             print(f"  ├─ K 值: {k.squeeze().detach().cpu().tolist()}")
             print(f"  └─ 平均激活值: {alpha_probs.mean().item():.4f}")
             print(f"     (>0.5=专家模式, <0.5=通用模式)")
+
+            print(f"[Debug] Text Gating 细节:")
+            print(f"  ├─ Raw Budget: {_to_debug_list(raw_budget)}")
+            print(f"  ├─ Alpha Scale: {_to_debug_list(alpha_scale)}")
+            print(f"  ├─ Selected Slots: {selected_slots}")
+            if torch.is_tensor(selected_mask):
+                selected_counts = selected_mask.detach().float().sum(dim=-1)
+                print(f"  └─ Selected Slot Count: {_to_debug_list(selected_counts)}")
+            else:
+                print(f"  └─ Selected Slot Count: None")
 
 if __name__ == "__main__":
     inference()

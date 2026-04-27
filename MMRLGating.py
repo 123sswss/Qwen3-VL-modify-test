@@ -69,9 +69,16 @@ class textGating(nn.Module):
                  temperature: float = 1.0,
                  lambda_=0.2):
         super().__init__()
-        self.total_rep_num = config.RP_SPACE_LENGTH * 8
-        # 4/23修改，修改原因：文本门控从“前缀式 K 控制”升级为“预算控制 + slot 内容选择”，
-        # 需要显式区分视觉语义主体与残差强度统计两类证据。
+        insert_layers = getattr(config, "INSERT_LAYER", None)
+        default_total_rep_num = config.RP_SPACE_LENGTH * (len(insert_layers) if insert_layers is not None else 8)
+        text_expand_factor = int(getattr(config, "TEXT_REP_EXPAND_FACTOR", 1))
+        self.total_rep_num = int(
+            getattr(
+                config,
+                "TOTAL_TEXT_REP_TOKENS",
+                getattr(config, "TOTAL_REP_TOKENS", default_total_rep_num) * text_expand_factor,
+            )
+        )
         self.attention_pooling = attention_pooling(config.vision_token_dim, config.GATING_MID_DIM)
         self.visual_semantic_proj = nn.Sequential(
             nn.Linear(config.vision_token_dim * 2, config.GATING_MID_DIM),

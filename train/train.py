@@ -1,10 +1,11 @@
 # new_train.py
+import os
 from train_stages import build_model_and_processor, run_stage
 
 # ===== 可调参数统一字典（不使用 argparse）=====
 CFG = {
     "model_path": "/root/autodl-tmp/model",
-    "output_dir": "./output",
+    "output_dir": os.getenv("MMRL_OUTPUT_DIR", "./output"),
     "data": {
         "expert_json": [
             "/root/autodl-tmp/dataset/1json.json",
@@ -41,7 +42,7 @@ CFG = {
             "/root/autodl-tmp/dataset/gen/train2017",
             "/root/autodl-tmp/dataset/gen/val2017",
         ],
-        "total_limit": 50000,
+        "total_limit": 20000,
     },
     "train": {
         "seed": 42,
@@ -81,7 +82,7 @@ CFG = {
         },
         "enable_k_loss_s4": True,
         "k_general_target_s4": 0.0,
-        "k_expert_target_s4": 8.0,
+        "k_expert_target_s4": float(os.getenv("MMRL_K_EXPERT_TARGET_S4", "30.0")),
         "k_general_lambda_init_s4": 0.0,
         "k_expert_lambda_init_s4": 0.0,
         "k_lambda_lr_general_s4": 0.02,

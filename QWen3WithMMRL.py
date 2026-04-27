@@ -22,12 +22,16 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
         vision_dim = getattr(config.vision_config, "hidden_size")  # 默认值防报错
         text_dim = getattr(config.text_config, "hidden_size")
         # if not hasattr(config, "mmrl_config"):
+        total_rep_tokens = int(getattr(cfg, "TOTAL_TEXT_REP_TOKENS", cfg.RP_SPACE_LENGTH * len(cfg.INSERT_LAYER)))
         config.mmrl_config = {
             "USE_MMRL": cfg.USE_MMRL,
             "INSERT_LAYER": list(cfg.INSERT_LAYER),
             "POOLING_DIM": cfg.POOLING_DIM,
             "RP_SPACE_LENGTH": cfg.RP_SPACE_LENGTH,
             "RP_SPACE_DIM": cfg.RP_SPACE_DIM,
+            "TOTAL_REP_TOKENS": int(getattr(cfg, "TOTAL_REP_TOKENS", cfg.RP_SPACE_LENGTH * len(cfg.INSERT_LAYER))),
+            "TOTAL_TEXT_REP_TOKENS": total_rep_tokens,
+            "TEXT_REP_EXPAND_FACTOR": int(getattr(cfg, "TEXT_REP_EXPAND_FACTOR", 1)),
             "INSERT_METHOD": cfg.INSERT_METHOD,
             "GATING_MID_DIM": cfg.GATING_MID_DIM,
             "stretching_length": cfg.stretching_length,
@@ -45,9 +49,15 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
                 if getattr(tokenizer, "vision_end_token_id", None)
                 else tokenizer.convert_tokens_to_ids("<|vision_end|>")
             )
+            self.total_rep_tokens = int(config.mmrl_config["TOTAL_TEXT_REP_TOKENS"])
             self.rep_placeholder_ids = [
-                tokenizer.convert_tokens_to_ids(f"<|REP_placeholder{i}|>") for i in range(40)
+                tokenizer.convert_tokens_to_ids(f"<|REP_placeholder{i}|>") for i in range(self.total_rep_tokens)
             ]
+            if any(token_id is None or token_id < 0 for token_id in self.rep_placeholder_ids):
+                raise ValueError(
+                    f"REP placeholder tokens are not fully registered in tokenizer. "
+                    f"Expected {self.total_rep_tokens} placeholders from config.SPECIAL_TOKENS."
+                )
         else:
             raise ValueError("tokenizer must be specified")
         ###################
@@ -173,6 +183,11 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
         if self.use_mmrl:
             v_r_token_list, t_r_token_list = self.MMRL()
             t_r_tokens = torch.cat(t_r_token_list, dim=0)
+            if t_r_tokens.shape[0] != self.total_rep_tokens:
+                raise RuntimeError(
+                    f"Mismatch between generated text rep tokens ({t_r_tokens.shape[0]}) "
+                    f"and configured placeholder count ({self.total_rep_tokens})."
+                )
         visual_pos_masks = None
         deepstack_visual_embeds = None
         k_results = None

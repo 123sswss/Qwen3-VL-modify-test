@@ -19,7 +19,11 @@ class Qwen3ProcessorWithMMRL(Qwen3VLProcessor):
                  cfg = None,
                  **kwargs):
         super().__init__(image_processor=image_processor, tokenizer=tokenizer, video_processor=None, **kwargs)
-        self.rep_tokens = [f"<|REP_placeholder{i}|>" for i in range(40)]
+        active_cfg = cfg if cfg is not None else modcfg
+        total_rep_tokens = int(
+            getattr(active_cfg, "TOTAL_TEXT_REP_TOKENS", active_cfg.RP_SPACE_LENGTH * len(active_cfg.INSERT_LAYER))
+        )
+        self.rep_tokens = [f"<|REP_placeholder{i}|>" for i in range(total_rep_tokens)]
         self.rep_type_id = 3
         self.rep_token_ids = tokenizer.convert_tokens_to_ids(self.rep_tokens)
 

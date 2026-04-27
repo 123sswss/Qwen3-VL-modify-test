@@ -316,14 +316,93 @@ class Qwen3VLMMRLForStages(Qwen3VLForConditionalGeneration):
 
         expanded_labels = self._expand_alpha_labels(alpha_labels, images_per_sample)
         alpha_logits = self.model.visual.alpha_list
-        alpha_logits, alpha_guide_loss = self._compute_alpha_guide_loss(alpha_logits, expanded_labels, device)
+        expanded_labels = None
 
-        budget_loss = self._compute_budget_loss(device)
-        dataset_group_ids = kwargs.get("dataset_group_ids", None)
-        slot_dataset_loss, slot_dataset_metrics = self._compute_dataset_slot_loss(dataset_group_ids, device)
+        if isinstance(alpha_logits, list):
+            if len(alpha_logits) > 0:
+                alpha_logits = torch.stack(alpha_logits)
+            else:
+                alpha_logits = None
 
-        outputs.loss = self.ce_loss_weight * ce_loss + alpha_guide_loss + budget_loss + slot_dataset_loss
+        if alpha_logits is not None and alpha_labels is not None:
+            if images_per_sample is None:
+                expanded_labels = alpha_labels.view(-1, 1)
+            else:
+                tmp = []
+                for i, c in enumerate(images_per_sample):
+                    c = int(c)
+                    if c > 0:
+                        tmp.append(alpha_labels[i].repeat(c))
+                if len(tmp) > 0:
+                    expanded_labels = torch.cat(tmp).view(-1, 1)
+                else:
+                    expanded_labels = None
 
+            if expanded_labels is not None and expanded_labels.numel() > 0:
+                if alpha_logits.dim() == 1:
+                    alpha_logits = alpha_logits.unsqueeze(-1)
+
+                n = min(alpha_logits.shape[0], expanded_labels.shape[0])
+                if n > 0:
+                    alpha_guide_loss = torch.nn.functional.binary_cross_entropy_with_logits(
+                        alpha_logits[:n], expanded_labels[:n].to(alpha_logits.dtype)
+                    ) * self.alpha_loss_weight
+
+        # 2) K loss (optional, stage4再开)
+        k_general_loss = torch.tensor(0.0, device=input_ids.device)
+        k_expert_loss = torch.tensor(0.0, device=input_ids.device)
+        k_general_mean = torch.tensor(float("nan"), device=input_ids.device)
+        k_expert_mean = torch.tensor(float("nan"), device=input_ids.device)
+
+        if self.use_k_loss and expanded_labels is not None:
+            k_results = self.model.visual.k_results
+            k_sums = k_results[0] if isinstance(k_results, tuple) else k_results
+
+            if k_sums is not None and k_sums.shape[0] == expanded_labels.shape[0]:
+                lbl = expanded_labels.squeeze(-1)
+                is_general = (lbl < 0.1)
+                is_expert = (lbl > 0.9)
+                k_norm = float(
+                    getattr(
+                        self.model.visual.text_gating,
+                        "total_rep_num",
+                        getattr(cfg, "TOTAL_TEXT_REP_TOKENS", 40.0)
+                    )
+                )
+
+                # ===== general =====
+                if is_general.any():
+                    kg = k_sums[is_general].float()
+                    k_general_mean = kg.mean()
+
+                    if self.use_dynamic_k_lambda and self.training:
+                        with torch.no_grad():
+                            err_g = (k_general_mean.item() - self.k_general_target) / k_norm
+                            self.k_general_lambda = self.k_general_lambda + self.k_lambda_lr_general * err_g
+                            self.k_general_lambda = max(0.0, min(self.k_general_lambda, self.k_lambda_max_general))
+
+                    current_lambda_g = self.k_general_lambda if self.use_dynamic_k_lambda else self.k_general_weight
+                    k_general_loss = current_lambda_g * (kg / k_norm).mean()
+
+                # ===== expert =====
+                if is_expert.any():
+                    ke = k_sums[is_expert].float()
+                    k_expert_mean = ke.mean()
+
+                    if self.use_dynamic_k_lambda and self.training:
+                        with torch.no_grad():
+                            err_e = (k_expert_mean.item() - self.k_expert_target) / k_norm
+                            self.k_expert_lambda = self.k_expert_lambda + self.k_lambda_lr_expert * err_e
+                            self.k_expert_lambda = max(0.0, min(self.k_expert_lambda, self.k_lambda_max_expert))
+
+                    current_lambda_e = self.k_expert_lambda if self.use_dynamic_k_lambda else self.k_expert_weight
+                    k_expert_loss = current_lambda_e * ((ke - self.k_expert_target) / k_norm).pow(2).mean()
+        # 3) tax (optional, stage4再开)
+        tax_raw = getattr(self.model, "tax_loss", torch.tensor(0.0, device=input_ids.device))
+        tax_loss = tax_raw * self.tax_loss_weight if self.use_tax else torch.tensor(0.0, device=input_ids.device)
+        outputs.loss = self.ce_loss_weight * ce_loss + alpha_guide_loss + k_general_loss + k_expert_loss + tax_loss
+
+        # ---- cache metrics for external logger ----
         with torch.no_grad():
             alpha_std = torch.tensor(float("nan"), device=device)
             label_alpha_std = torch.tensor(float("nan"), device=device)

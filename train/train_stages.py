@@ -232,7 +232,13 @@ class Qwen3VLMMRLForStages(Qwen3VLForConditionalGeneration):
                 lbl = expanded_labels.squeeze(-1)
                 is_general = (lbl < 0.1)
                 is_expert = (lbl > 0.9)
-                k_norm = float(getattr(self.model.visual.text_gating, "total_rep_num", 40.0))
+                k_norm = float(
+                    getattr(
+                        self.model.visual.text_gating,
+                        "total_rep_num",
+                        getattr(cfg, "TOTAL_TEXT_REP_TOKENS", 40.0)
+                    )
+                )
 
                 # ===== general =====
                 if is_general.any():

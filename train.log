@@ -1,6 +1,0 @@
-Traceback (most recent call last):
-  File "/root/autodl-tmp/Qwen3-VL-modify-test/train/train.py", line 2, in <module>
-    from train_stages import build_model_and_processor, run_stage
-  File "/root/autodl-tmp/Qwen3-VL-modify-test/train/train_stages.py", line 9, in <module>
-    import config as cfg
-ModuleNotFoundError: No module named 'config'

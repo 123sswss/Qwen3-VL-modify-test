@@ -342,7 +342,7 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
             temperature_override=gating_temperature_override
         )
         if self.training:
-            hard_k_logits, tax_loss = out  # hard_k_logits: [Batch, 40]
+            hard_k_logits, tax_loss = out  # hard_k_logits: [Batch, TOTAL_REP_TOKENS]
             k_sums = hard_k_logits.sum(dim=-1)
             k_results = (k_sums, tax_loss)
         else:

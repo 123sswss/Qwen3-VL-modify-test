@@ -20,12 +20,15 @@ NUM_INSERT_LAYERS = len(INSERT_LAYER)
 
 # 控制变量实验：视觉侧 rep token 数保持不变；仅扩展文本侧 soft prompt 总量。
 # 默认 1 表示与视觉保持一一对应；设为 2 时，文本侧总量从 40 扩到 80。
-TEXT_REP_EXPAND_FACTOR = int(os.getenv("MMRL_TEXT_REP_EXPAND_FACTOR", "1"))
-TOTAL_REP_TOKENS = RP_SPACE_LENGTH * NUM_INSERT_LAYERS
-TOTAL_TEXT_REP_TOKENS = TOTAL_REP_TOKENS * TEXT_REP_EXPAND_FACTOR
+TEXT_REP_EXPAND_FACTOR = 1  # 固定为1，40 tokens = 8 spans × 5
+TOTAL_REP_TOKENS = RP_SPACE_LENGTH * NUM_INSERT_LAYERS  # 40
+TOTAL_TEXT_REP_TOKENS = TOTAL_REP_TOKENS  # 40 (不再缩放)
+MULTI_SPAN_NUM_SELECT = int(os.getenv("MMRL_MULTI_SPAN_NUM_SELECT", "4"))  # 从8个span中选4个
+TEXT_PLACEHOLDER_TOKENS = RP_SPACE_LENGTH * MULTI_SPAN_NUM_SELECT  # 20 = 5*4
+START_EXPLORATION_SCALE = float(os.getenv("MMRL_START_EXPLORATION_SCALE", "0.0"))
 
 SPECIAL_TOKENS = {
-    "additional_special_tokens": [f"<|REP_placeholder{i}|>" for i in range(TOTAL_TEXT_REP_TOKENS)]
+    "additional_special_tokens": [f"<|REP_placeholder{i}|>" for i in range(TEXT_PLACEHOLDER_TOKENS)]
 }
 
 GATING_MID_DIM = 512

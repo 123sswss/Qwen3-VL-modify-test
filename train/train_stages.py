@@ -66,8 +66,10 @@ def print_stage_step_summary(stage_name, step, row):
     if "k_selected_mean" in row:
         print("[Selector Statistics]")
         print(f"  ├─ Mean Selected K:       {_fmt(row.get('k_selected_mean'), 3):>10}")
-        if "k_budget_mean" in row:
-            print(f"  ├─ Mean Budget K:         {_fmt(row.get('k_budget_mean'), 3):>10}")
+        if "span_gates_mean" in row:
+            print(f"  ├─ Spans Selected (avg):  {_fmt(row.get('span_gates_mean'), 3):>10}")
+        if "span_budget_loss" in row:
+            print(f"  ├─ Span Budget Loss:      {_fmt(row.get('span_budget_loss'), 4):>10}")
         if "alpha_open_rate" in row:
             print(f"  └─ Alpha Open Rate:       {_fmt(row.get('alpha_open_rate'), 4):>10}")
 
@@ -110,6 +112,9 @@ class StageScheduleCallback(TrainerCallback):
         final_temp=0.1,
         target_budget=0.05,
         budget_warmup_epochs=1,
+        selector_explore_init=0.0,
+        selector_explore_final=0.0,
+        selector_two_phase_split=0.0,
     ):
         self.dataset = dataset
         self.total_epochs = total_epochs
@@ -117,6 +122,9 @@ class StageScheduleCallback(TrainerCallback):
         self.final_temp = final_temp
         self.target_budget = target_budget
         self.budget_warmup_epochs = budget_warmup_epochs
+        self.selector_explore_init = float(selector_explore_init)
+        self.selector_explore_final = float(selector_explore_final)
+        self.selector_two_phase_split = float(selector_two_phase_split)
 
     def on_epoch_begin(self, args, state, control, **kwargs):
         self.dataset.resample_general_data()
@@ -127,6 +135,17 @@ class StageScheduleCallback(TrainerCallback):
 
         progress = min(ep / max(self.total_epochs, 1e-6), 1.0)
         model.temperature_override = self.init_temp - (self.init_temp - self.final_temp) * progress
+
+        if progress < self.selector_two_phase_split:
+            explore_scale = self.selector_explore_init
+        else:
+            denom = max(1.0 - self.selector_two_phase_split, 1e-6)
+            phase_progress = min(max((progress - self.selector_two_phase_split) / denom, 0.0), 1.0)
+            explore_scale = self.selector_explore_init - (
+                self.selector_explore_init - self.selector_explore_final
+            ) * phase_progress
+        model.selector_exploration_scale = float(explore_scale)
+        model.model.visual.text_gating.start_exploration_scale = float(explore_scale)
 
         if ep < self.budget_warmup_epochs:
             model.budget_loss_weight = 0.0
@@ -155,6 +174,21 @@ class Qwen3VLMMRLForStages(Qwen3VLForConditionalGeneration):
         self.alpha_loss_weight = 0.5
         self.budget_loss_weight = 0.0
         self.temperature_override = None
+        self.selector_exploration_scale = 0.0
+        self.use_k_loss = False
+        self.use_tax = False
+        self.tax_loss_weight = 0.0
+        self.use_dynamic_k_lambda = False
+        self.k_general_target = 0.0
+        self.k_expert_target = 0.0
+        self.k_general_weight = 0.0
+        self.k_expert_weight = 0.0
+        self.k_general_lambda = 0.0
+        self.k_expert_lambda = 0.0
+        self.k_lambda_lr_general = 0.0
+        self.k_lambda_lr_expert = 0.0
+        self.k_lambda_max_general = 0.0
+        self.k_lambda_max_expert = 0.0
         self.enable_dataset_slot_loss_s4 = False
         self.slot_group_constraints_s4 = {}
 
@@ -198,17 +232,21 @@ class Qwen3VLMMRLForStages(Qwen3VLForConditionalGeneration):
 
     def _collect_selector_metrics(self, device):
         k_selected_mean = torch.tensor(float("nan"), device=device)
-        k_budget_mean = torch.tensor(float("nan"), device=device)
+        span_gates_mean = torch.tensor(float("nan"), device=device)
+        span_budget_loss_val = torch.tensor(float("nan"), device=device)
         alpha_open_rate = torch.tensor(float("nan"), device=device)
 
         selector = getattr(self.model.visual, "text_selector_outputs", None)
         if isinstance(selector, dict):
             k_selected = selector.get("k_selected")
-            k_budget = selector.get("k_budget")
             if torch.is_tensor(k_selected) and k_selected.numel() > 0:
                 k_selected_mean = k_selected.detach().float().mean()
-            if torch.is_tensor(k_budget) and k_budget.numel() > 0:
-                k_budget_mean = k_budget.detach().float().mean()
+            span_gates = selector.get("span_gates")
+            if torch.is_tensor(span_gates) and span_gates.numel() > 0:
+                span_gates_mean = span_gates.detach().float().sum(dim=-1).mean()  # 平均选了多少个 span
+            sbl = selector.get("span_budget_loss")
+            if torch.is_tensor(sbl):
+                span_budget_loss_val = sbl.detach().float()
 
         alpha_logits = self.model.visual.alpha_list
         if isinstance(alpha_logits, list):
@@ -216,24 +254,19 @@ class Qwen3VLMMRLForStages(Qwen3VLForConditionalGeneration):
         if torch.is_tensor(alpha_logits) and alpha_logits.numel() > 0:
             alpha_open_rate = (torch.sigmoid(alpha_logits.detach().float()) > 0.5).float().mean()
 
-        return k_selected_mean, k_budget_mean, alpha_open_rate
+        return k_selected_mean, span_gates_mean, span_budget_loss_val, alpha_open_rate
 
     def _compute_budget_loss(self, device):
+        """使用 multi-span selector 的 span_budget_loss（鼓励恰好选4个span）"""
         selector = getattr(self.model.visual, "text_selector_outputs", None)
         if not isinstance(selector, dict):
             return torch.tensor(0.0, device=device)
 
-        k_budget = selector.get("k_budget")
-        if not torch.is_tensor(k_budget) or k_budget.numel() == 0:
+        span_budget_loss = selector.get("span_budget_loss")
+        if not torch.is_tensor(span_budget_loss):
             return torch.tensor(0.0, device=device)
 
-        total_rep_num = float(getattr(self.model.visual.text_gating, "total_rep_num", 1.0))
-        total_rep_num = max(total_rep_num, 1.0)
-        usage_ratio = (k_budget.float() / total_rep_num).clamp(min=0.0)
-
-        # 预算头单独承担一个最小可用的“二次型使用惩罚”：
-        # K 很小时惩罚近似可忽略，K 越大惩罚增长越快。
-        return usage_ratio.pow(2).mean() * self.budget_loss_weight
+        return span_budget_loss * self.budget_loss_weight
 
     def _compute_dataset_slot_loss(self, dataset_group_ids, device):
         zero = torch.tensor(0.0, device=device)
@@ -296,6 +329,7 @@ class Qwen3VLMMRLForStages(Qwen3VLForConditionalGeneration):
         if self.temperature_override is not None:
             self.model.temperature_override = self.temperature_override
             kwargs["gating_temperature_override"] = self.temperature_override
+        self.model.visual.text_gating.start_exploration_scale = float(getattr(self, "selector_exploration_scale", 0.0))
 
         labels = kwargs.get("labels", None)
         if labels is not None and "attention_mask" in kwargs:
@@ -316,7 +350,11 @@ class Qwen3VLMMRLForStages(Qwen3VLForConditionalGeneration):
 
         expanded_labels = self._expand_alpha_labels(alpha_labels, images_per_sample)
         alpha_logits = self.model.visual.alpha_list
-        expanded_labels = None
+        alpha_guide_loss = torch.tensor(0.0, device=device)
+        budget_loss = self._compute_budget_loss(device)
+        slot_dataset_loss, slot_dataset_metrics = self._compute_dataset_slot_loss(
+            kwargs.get("dataset_group_ids", None), device
+        )
 
         if isinstance(alpha_logits, list):
             if len(alpha_logits) > 0:
@@ -325,19 +363,6 @@ class Qwen3VLMMRLForStages(Qwen3VLForConditionalGeneration):
                 alpha_logits = None
 
         if alpha_logits is not None and alpha_labels is not None:
-            if images_per_sample is None:
-                expanded_labels = alpha_labels.view(-1, 1)
-            else:
-                tmp = []
-                for i, c in enumerate(images_per_sample):
-                    c = int(c)
-                    if c > 0:
-                        tmp.append(alpha_labels[i].repeat(c))
-                if len(tmp) > 0:
-                    expanded_labels = torch.cat(tmp).view(-1, 1)
-                else:
-                    expanded_labels = None
-
             if expanded_labels is not None and expanded_labels.numel() > 0:
                 if alpha_logits.dim() == 1:
                     alpha_logits = alpha_logits.unsqueeze(-1)
@@ -356,9 +381,14 @@ class Qwen3VLMMRLForStages(Qwen3VLForConditionalGeneration):
 
         if self.use_k_loss and expanded_labels is not None:
             k_results = self.model.visual.k_results
-            k_sums = k_results[0] if isinstance(k_results, tuple) else k_results
+            if isinstance(k_results, dict):
+                k_sums = k_results.get("k_selected", None)
+            elif isinstance(k_results, tuple):
+                k_sums = k_results[0]
+            else:
+                k_sums = k_results
 
-            if k_sums is not None and k_sums.shape[0] == expanded_labels.shape[0]:
+            if torch.is_tensor(k_sums) and k_sums.shape[0] == expanded_labels.shape[0]:
                 lbl = expanded_labels.squeeze(-1)
                 is_general = (lbl < 0.1)
                 is_expert = (lbl > 0.9)
@@ -400,7 +430,15 @@ class Qwen3VLMMRLForStages(Qwen3VLForConditionalGeneration):
         # 3) tax (optional, stage4再开)
         tax_raw = getattr(self.model, "tax_loss", torch.tensor(0.0, device=input_ids.device))
         tax_loss = tax_raw * self.tax_loss_weight if self.use_tax else torch.tensor(0.0, device=input_ids.device)
-        outputs.loss = self.ce_loss_weight * ce_loss + alpha_guide_loss + k_general_loss + k_expert_loss + tax_loss
+        outputs.loss = (
+            self.ce_loss_weight * ce_loss
+            + alpha_guide_loss
+            + k_general_loss
+            + k_expert_loss
+            + tax_loss
+            + budget_loss
+            + slot_dataset_loss
+        )
 
         # ---- cache metrics for external logger ----
         with torch.no_grad():
@@ -415,24 +453,34 @@ class Qwen3VLMMRLForStages(Qwen3VLForConditionalGeneration):
                 if l.numel() > 1:
                     label_alpha_std = l.std(unbiased=False)
 
-            k_selected_mean, k_budget_mean, alpha_open_rate = self._collect_selector_metrics(device)
+            k_selected_mean, span_gates_mean, span_budget_loss_val, alpha_open_rate = self._collect_selector_metrics(device)
 
             self._last_metrics = {
                 "total_loss": outputs.loss.detach(),
                 "ce_loss": ce_loss.detach(),
                 "alpha_guide_loss": alpha_guide_loss.detach(),
+                "k_general_loss": k_general_loss.detach(),
+                "k_expert_loss": k_expert_loss.detach(),
+                "tax_loss": tax_loss.detach(),
                 "budget_loss": budget_loss.detach(),
                 "slot_dataset_loss": slot_dataset_loss.detach(),
                 "alpha_std": alpha_std.detach(),
                 "label_alpha_std": label_alpha_std.detach(),
                 "k_selected_mean": k_selected_mean.detach(),
-                "k_budget_mean": k_budget_mean.detach(),
+                "span_gates_mean": span_gates_mean.detach(),
+                "span_budget_loss": span_budget_loss_val.detach(),
+                "k_general_mean": k_general_mean.detach(),
+                "k_expert_mean": k_expert_mean.detach(),
                 "alpha_open_rate": alpha_open_rate.detach(),
+                "dynamic_k_lambda_general": torch.tensor(float(self.k_general_lambda), device=device),
+                "dynamic_k_lambda_expert": torch.tensor(float(self.k_expert_lambda), device=device),
                 "temperature": torch.tensor(
                     float(self.temperature_override) if self.temperature_override is not None else float("nan"),
                     device=device,
                 ),
                 "budget_weight": torch.tensor(float(self.budget_loss_weight), device=device),
+                "tax_weight": torch.tensor(float(self.tax_loss_weight), device=device),
+                "selector_explore": torch.tensor(float(self.selector_exploration_scale), device=device),
             }
             self._last_metrics.update(slot_dataset_metrics)
 
@@ -682,6 +730,21 @@ def run_stage34_full(stage_id, model, processor, data_cfg, train_cfg, output_dir
     model.ce_loss_weight = 1.0
     model.alpha_loss_weight = train_cfg.get(f"alpha_loss_weight_s{stage_id}", 0.5)
     model.budget_loss_weight = 0.0
+    model.selector_exploration_scale = float(train_cfg.get(f"selector_explore_init_s{stage_id}", 0.0))
+    model.use_tax = bool(stage_id == 4)
+    model.tax_loss_weight = float(train_cfg.get("tax_loss_weight", 0.0))
+    model.use_k_loss = bool(stage_id == 4 and train_cfg.get("enable_k_loss_s4", False))
+    model.use_dynamic_k_lambda = bool(model.use_k_loss)
+    model.k_general_target = float(train_cfg.get("k_general_target_s4", 0.0))
+    model.k_expert_target = float(train_cfg.get("k_expert_target_s4", 0.0))
+    model.k_general_weight = float(train_cfg.get("k_general_lambda_init_s4", 0.0))
+    model.k_expert_weight = float(train_cfg.get("k_expert_lambda_init_s4", 0.0))
+    model.k_general_lambda = float(train_cfg.get("k_general_lambda_init_s4", 0.0))
+    model.k_expert_lambda = float(train_cfg.get("k_expert_lambda_init_s4", 0.0))
+    model.k_lambda_lr_general = float(train_cfg.get("k_lambda_lr_general_s4", 0.0))
+    model.k_lambda_lr_expert = float(train_cfg.get("k_lambda_lr_expert_s4", 0.0))
+    model.k_lambda_max_general = float(train_cfg.get("k_lambda_max_general_s4", 0.0))
+    model.k_lambda_max_expert = float(train_cfg.get("k_lambda_max_expert_s4", 0.0))
     model.enable_dataset_slot_loss_s4 = bool(stage_id == 4 and train_cfg.get("enable_dataset_slot_loss_s4", False))
     model.slot_group_constraints_s4 = train_cfg.get("slot_group_constraints_s4", {}) if stage_id == 4 else {}
 
@@ -709,6 +772,11 @@ def run_stage34_full(stage_id, model, processor, data_cfg, train_cfg, output_dir
             else train_cfg.get("budget_loss_weight", train_cfg.get("tax_loss_weight", 0.05))
         ),
         budget_warmup_epochs=train_cfg.get("budget_warmup_epochs", train_cfg.get("tax_warmup_epochs", 1)),
+        selector_explore_init=train_cfg.get(f"selector_explore_init_s{stage_id}", 0.0),
+        selector_explore_final=train_cfg.get(f"selector_explore_final_s{stage_id}", 0.0),
+        selector_two_phase_split=(
+            train_cfg.get("selector_two_phase_split_s4", 0.0) if stage_id == 4 else 0.0
+        ),
     )
     args = TrainingArguments(
         output_dir=f"{output_dir}/stage{stage_id}",

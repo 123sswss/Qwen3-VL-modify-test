@@ -119,12 +119,12 @@ class StageMetricLogger:
         }
 
         is_stage4 = (
+            self.stage_name.lower().endswith("stage4") or
             ("k_general_mean" in df.columns and df["k_general_mean"].notna().any()) or
+            ("k_expert_mean" in df.columns and df["k_expert_mean"].notna().any()) or
             ("k_selected_mean" in df.columns and df["k_selected_mean"].notna().any()) or
-            ("budget_loss" in df.columns and df["budget_loss"].notna().any()) or
-            ("budget_weight" in df.columns and df["budget_weight"].notna().any()) or
-            ("tax_loss" in df.columns and df["tax_loss"].notna().any()) or
-            ("dynamic_k_lambda_general" in df.columns and df["dynamic_k_lambda_general"].notna().any())
+            ("dynamic_k_lambda_general" in df.columns and df["dynamic_k_lambda_general"].notna().any()) or
+            ("dynamic_k_lambda_expert" in df.columns and df["dynamic_k_lambda_expert"].notna().any())
         )
 
         # Stage1/2/3: 1x3；Stage4: 2x2
@@ -152,9 +152,6 @@ class StageMetricLogger:
         plotted = 0
         for k, label, color in loss_candidates:
             if k in df.columns and df[k].notna().any():
-                # 避免 stage4 的 loss panel 太花：只保留最核心几个
-                if is_stage4 and k in ("k_general_loss", "k_expert_loss") and "tax_loss" in df.columns:
-                    continue
                 self._plot_series(ax, x, df[k], label, color)
                 plotted += 1
         ax.set_title("Loss Dynamics")
@@ -167,13 +164,12 @@ class StageMetricLogger:
         # ---------------- Panel 2 ----------------
         ax = axes[1]
         if is_stage4:
-            # selector statistics
             plotted = 0
             if "k_selected_mean" in df.columns and df["k_selected_mean"].notna().any():
-                self._plot_series(ax, x, df["k_selected_mean"], "Selected K", C["kg"])
+                self._plot_series(ax, x, df["k_selected_mean"], "Selected K (tokens)", C["kg"])
                 plotted += 1
-            if "k_budget_mean" in df.columns and df["k_budget_mean"].notna().any():
-                self._plot_series(ax, x, df["k_budget_mean"], "Budget K", C["ke"])
+            if "span_gates_mean" in df.columns and df["span_gates_mean"].notna().any():
+                self._plot_series(ax, x, df["span_gates_mean"], "Spans Selected", C["ke"])
                 plotted += 1
             if "k_general_mean" in df.columns and df["k_general_mean"].notna().any():
                 self._plot_series(ax, x, df["k_general_mean"], "General K", C["kg"])
@@ -184,9 +180,12 @@ class StageMetricLogger:
             if "alpha_open_rate" in df.columns and df["alpha_open_rate"].notna().any():
                 self._plot_series(ax, x, df["alpha_open_rate"], "Alpha Open Rate", C["alpha"])
                 plotted += 1
-            ax.set_title("Selector Statistics")
+            if "selector_explore" in df.columns and df["selector_explore"].notna().any():
+                self._plot_series(ax, x, df["selector_explore"], "Explore Scale", C["temp"])
+                plotted += 1
+            ax.set_title("Multi-Span Selector Behavior")
             ax.set_xlabel("Global Step")
-            ax.set_ylabel("K")
+            ax.set_ylabel("Value")
             ax.grid(alpha=0.25, linestyle="--")
             if plotted > 0:
                 ax.legend(frameon=False)
@@ -219,10 +218,13 @@ class StageMetricLogger:
             if "dynamic_k_lambda_expert" in df.columns and df["dynamic_k_lambda_expert"].notna().any():
                 self._plot_series(ax, x, df["dynamic_k_lambda_expert"], "Lambda Expert", C["lambda_e"])
                 plotted += 1
+            if "tax_loss" in df.columns and df["tax_loss"].notna().any():
+                self._plot_series(ax, x, df["tax_loss"], "Tax Loss", C["tax"])
+                plotted += 1
             if "slot_dataset_loss" in df.columns and df["slot_dataset_loss"].notna().any():
                 self._plot_series(ax, x, df["slot_dataset_loss"], "Slot-Group Loss", C["slot_dataset"])
                 plotted += 1
-            ax.set_title("Regularization")
+            ax.set_title("Auxiliary / Regularization")
             ax.set_xlabel("Global Step")
             ax.set_ylabel("Value")
             ax.grid(alpha=0.25, linestyle="--")
@@ -255,6 +257,9 @@ class StageMetricLogger:
                 plotted += 1
             if "tax_weight" in df.columns and df["tax_weight"].notna().any():
                 self._plot_series(ax, x, df["tax_weight"], "Tax Weight", C["tax"])
+                plotted += 1
+            if "selector_explore" in df.columns and df["selector_explore"].notna().any():
+                self._plot_series(ax, x, df["selector_explore"], "Explore Scale", C["temp"])
                 plotted += 1
             if "learning_rate" in df.columns and df["learning_rate"].notna().any():
                 self._plot_series(ax, x, df["learning_rate"], "Learning Rate", C["lr"])
@@ -331,16 +336,18 @@ class TrainerMetricsCallback(TrainerCallback):
         # K 统计
         has_k = (
             ("k_selected_mean" in row) or
-            ("k_budget_mean" in row) or
+            ("span_gates_mean" in row) or
             ("k_general_mean" in row) or
             ("k_expert_mean" in row)
         )
         if has_k:
-            print(f"[K Statistics]")
+            print(f"[Span Selector Statistics]")
             if "k_selected_mean" in row:
                 print(f"  ├─ Selected Mean K:       {_fmt(row.get('k_selected_mean'), nd=3):>10}")
-            if "k_budget_mean" in row:
-                print(f"  ├─ Budget Mean K:         {_fmt(row.get('k_budget_mean'), nd=3):>10}")
+            if "span_gates_mean" in row:
+                print(f"  ├─ Spans Selected (avg):  {_fmt(row.get('span_gates_mean'), nd=3):>10}")
+            if "span_budget_loss" in row:
+                print(f"  ├─ Span Budget Loss:      {_fmt(row.get('span_budget_loss'), nd=4):>10}")
             if "k_general_mean" in row:
                 print(f"  ├─ General Mean K:        {_fmt(row.get('k_general_mean'), nd=3):>10}")
             if "k_expert_mean" in row:
@@ -385,6 +392,8 @@ class TrainerMetricsCallback(TrainerCallback):
         print(f"[Schedule]")
         if "temperature" in row:
             print(f"  ├─ Temperature:           {_fmt(row.get('temperature'), nd=4):>10}")
+        if "selector_explore" in row:
+            print(f"  ├─ Explore Scale:         {_fmt(row.get('selector_explore'), nd=4):>10}")
         if "budget_weight" in row:
             print(f"  ├─ Budget Weight:         {_fmt(row.get('budget_weight'), nd=4):>10}")
         if "tax_weight" in row:
@@ -392,11 +401,6 @@ class TrainerMetricsCallback(TrainerCallback):
         if "learning_rate" in row:
             print(f"  └─ Learning Rate:         {_fmt(row.get('learning_rate'), nd=8):>10}")
         print("=" * 72 + "\n")
-
-        if "k_dataset_loss" in row:
-            print(f"  ├─ K Loss (Dataset):      {_fmt(row.get('k_dataset_loss')):>10}")
-        if "slot_collapse_loss" in row:
-            print(f"  ├─ Slot Collapse Loss:    {_fmt(row.get('slot_collapse_loss')):>10}")
 
     def on_step_end(self, args, state, control, **kwargs):
         step = int(state.global_step)

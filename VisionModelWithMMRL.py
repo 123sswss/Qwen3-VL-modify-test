@@ -138,6 +138,7 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
         self.G_list = []
         self.k_results = None
         self.text_selector_outputs = None
+        self.text_window_size = int(getattr(self.cfg, "TEXT_PLACEHOLDER_TOKENS", 20))
 
         self.null_image_token = nn.Parameter(torch.zeros(1, self.cfg.vision_token_dim))
         nn.init.normal_(self.null_image_token, std=0.02)
@@ -367,8 +368,10 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
         hidden_states = self.merger(hidden_states)
         ########### text gating ###########
         if v_r_token_list is None:
-             k_results = {"k_selected": torch.zeros(batch_size, device=hidden_states.device, dtype=hidden_states.dtype),
-                          "selected_mask": torch.zeros(batch_size, self.cfg.RP_SPACE_LENGTH * 8, device=hidden_states.device, dtype=hidden_states.dtype),
+             total_text_rep_tokens = int(getattr(self.cfg, "TOTAL_TEXT_REP_TOKENS", self.cfg.RP_SPACE_LENGTH * 8))
+             k_results = {"k_selected": torch.full((batch_size,), float(self.text_window_size), device=hidden_states.device, dtype=hidden_states.dtype),
+                          "selected_mask": torch.zeros(batch_size, total_text_rep_tokens, device=hidden_states.device, dtype=hidden_states.dtype),
+                          "position_weights": torch.zeros(batch_size, self.text_window_size, total_text_rep_tokens, device=hidden_states.device, dtype=hidden_states.dtype),
                           "tax_loss": torch.tensor(0.0, device=hidden_states.device, dtype=hidden_states.dtype)}
              self.k_results = k_results
              self.text_selector_outputs = k_results
@@ -402,38 +405,10 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
             has_image=has_image,
             temperature_override=gating_temperature_override
         )
-        if self.training:
-            hard_k_logits, tax_loss = out  # hard_k_logits: [Batch, TOTAL_REP_TOKENS]
-            k_sums = hard_k_logits.sum(dim=-1)
-            k_results = (k_sums, tax_loss)
-        else:
-            # 修复：按阈值计数，避免 sum().round() 的碎片误激活
-            k_hard = (out > 0.5).to(out.dtype)
-            k_sums = k_hard.sum(dim=-1)
-            k_results = k_sums
-            ############ debug ############
-            # debug_info = self.text_gating.debug_context            
-            # alpha_val = debug_info.get("alpha_val", torch.tensor(0.0))
-            # k_val = debug_info.get("gate_sum_raw", torch.tensor(0.0))
-
-            # if alpha_val.ndim == 0: alpha_val = alpha_val.unsqueeze(0)
-            # if k_val.ndim == 0: k_val = k_val.unsqueeze(0)
-
-            # for i in range(len(alpha_val)):
-            #     print(f"\n[MMRL DEBUG WARNING] Anomaly Detected in Sample {i}:")
-            #     print(f"  Alpha (Professionalism): {alpha_val[i]:.4f} (Should be low)")
-            #     print(f"  Text Relevance:          {debug_info['text_rel']:.4f}")
-            #     print(f"  Raw Intensity Sum:       {debug_info['intensity_sum']:.4f} (Is bias too high?)")
-            #     print(f"  Modulated Intensity:     {debug_info['modulated_intensity']:.4f}")
-            #     print(f"  Calculated K (Gates):    {k_val[i]:.2f}")
-            #     print("-" * 30)
-            ############ debug ############
-
-
-
-        self.k_results = k_results
+        self.k_results = out
+        self.text_selector_outputs = out
         # alpha_loss = torch.mean(torch.sigmoid(self.alpha_list)) * 0.1
-        return hidden_states, deepstack_feature_lists, k_results
+        return hidden_states, deepstack_feature_lists, out
 
     def compute_text_only_gating(self, embedding, text_pooling_mask=None, gating_temperature_override=None):
         batch_size = embedding.shape[0]

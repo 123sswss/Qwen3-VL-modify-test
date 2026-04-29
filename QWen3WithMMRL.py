@@ -23,6 +23,7 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
         text_dim = getattr(config.text_config, "hidden_size")
         # if not hasattr(config, "mmrl_config"):
         total_rep_tokens = int(getattr(cfg, "TOTAL_TEXT_REP_TOKENS", cfg.RP_SPACE_LENGTH * len(cfg.INSERT_LAYER)))
+        total_placeholder_tokens = int(getattr(cfg, "TEXT_PLACEHOLDER_TOKENS", 20))
         config.mmrl_config = {
             "USE_MMRL": cfg.USE_MMRL,
             "INSERT_LAYER": list(cfg.INSERT_LAYER),
@@ -31,7 +32,10 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
             "RP_SPACE_DIM": cfg.RP_SPACE_DIM,
             "TOTAL_REP_TOKENS": int(getattr(cfg, "TOTAL_REP_TOKENS", cfg.RP_SPACE_LENGTH * len(cfg.INSERT_LAYER))),
             "TOTAL_TEXT_REP_TOKENS": total_rep_tokens,
-            "TEXT_REP_EXPAND_FACTOR": int(getattr(cfg, "TEXT_REP_EXPAND_FACTOR", 1)),
+            "TEXT_PLACEHOLDER_TOKENS": total_placeholder_tokens,
+            "MULTI_SPAN_NUM_SELECT": int(getattr(cfg, "MULTI_SPAN_NUM_SELECT", 4)),
+            "START_EXPLORATION_SCALE": float(getattr(cfg, "START_EXPLORATION_SCALE", 0.0)),
+            "TEXT_REP_EXPAND_FACTOR": 1,
             "INSERT_METHOD": cfg.INSERT_METHOD,
             "GATING_MID_DIM": cfg.GATING_MID_DIM,
             "stretching_length": cfg.stretching_length,
@@ -49,7 +53,8 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
                 if getattr(tokenizer, "vision_end_token_id", None)
                 else tokenizer.convert_tokens_to_ids("<|vision_end|>")
             )
-            self.total_rep_tokens = int(config.mmrl_config["TOTAL_TEXT_REP_TOKENS"])
+            self.total_candidate_rep_tokens = int(config.mmrl_config["TOTAL_TEXT_REP_TOKENS"])
+            self.total_rep_tokens = int(config.mmrl_config["TEXT_PLACEHOLDER_TOKENS"])
             self.rep_placeholder_ids = [
                 tokenizer.convert_tokens_to_ids(f"<|REP_placeholder{i}|>") for i in range(self.total_rep_tokens)
             ]
@@ -183,10 +188,10 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
         if self.use_mmrl:
             v_r_token_list, t_r_token_list = self.MMRL()
             t_r_tokens = torch.cat(t_r_token_list, dim=0)
-            if t_r_tokens.shape[0] != self.total_rep_tokens:
+            if t_r_tokens.shape[0] != self.total_candidate_rep_tokens:
                 raise RuntimeError(
                     f"Mismatch between generated text rep tokens ({t_r_tokens.shape[0]}) "
-                    f"and configured placeholder count ({self.total_rep_tokens})."
+                    f"and configured candidate text rep count ({self.total_candidate_rep_tokens})."
                 )
         visual_pos_masks = None
         deepstack_visual_embeds = None
@@ -237,8 +242,8 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
             )
         ######## text gating ########
         if self.use_mmrl and k_results is not None:
-            # 4/23修改，修改原因：占位符注入从“按前缀开前 K 个”改为“依据 selector 输出的 token-wise mask 精确选择 slot”。
             selected_mask = k_results["selected_mask"].to(inputs_embeds.dtype)
+            position_weights = k_results["position_weights"].to(inputs_embeds.dtype)
             k_sums = k_results["k_selected"]
             self.tax_loss = k_results.get("tax_loss", None)
             if self.tax_loss is None:
@@ -247,19 +252,15 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
             self.text_selected_mask = selected_mask
             placeholder_cumsum = is_placeholder.cumsum(dim=-1)
             placeholder_idx = (placeholder_cumsum - 1).clamp(min=0)
-            valid_placeholder = is_placeholder & (placeholder_idx < selected_mask.size(-1))
+            valid_placeholder = is_placeholder & (placeholder_idx < self.total_rep_tokens)
 
-            target_embeds = t_r_tokens[placeholder_idx]
-            gathered_slot_mask = torch.gather(
-                selected_mask,
-                dim=1,
-                index=placeholder_idx.clamp(max=selected_mask.size(-1) - 1)
-            )
-            gate_soft_mask = (gathered_slot_mask * valid_placeholder.to(inputs_embeds.dtype)).unsqueeze(-1)
-            inputs_embeds = torch.where(valid_placeholder.unsqueeze(-1), target_embeds * gate_soft_mask, inputs_embeds)
-            dynamic_gate_mask = valid_placeholder & (gate_soft_mask.squeeze(-1) > 0.5)
+            batch_target_embeds = torch.einsum("bpc,cd->bpd", position_weights, t_r_tokens)
+            safe_placeholder_idx = placeholder_idx.clamp(max=self.total_rep_tokens - 1)
+            expanded_idx = safe_placeholder_idx.unsqueeze(-1).expand(-1, -1, batch_target_embeds.size(-1))
+            target_embeds = torch.gather(batch_target_embeds, dim=1, index=expanded_idx)
+            inputs_embeds = torch.where(valid_placeholder.unsqueeze(-1), target_embeds, inputs_embeds)
+            dynamic_gate_mask = valid_placeholder
 
-            # 4/23修改，修改原因：无论训练/推理，未选中的 placeholder 都不能继续参与注意力，否则会退化回无选择的前缀放行。
             if isinstance(attention_mask, dict):
                 updated_attention_mask = {}
                 for k, v in attention_mask.items():
@@ -270,12 +271,6 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
                 attention_mask = updated_attention_mask
             elif torch.is_tensor(attention_mask):
                 attention_mask = attention_mask & ((~is_placeholder) | dynamic_gate_mask)
-
-            hard_gate = dynamic_gate_mask
-            embed_mask = torch.ones_like(is_placeholder, dtype=inputs_embeds.dtype)
-            tokens_to_zero = is_placeholder & (~hard_gate)
-            embed_mask = embed_mask.masked_fill(tokens_to_zero, 0.0)
-            inputs_embeds = inputs_embeds * embed_mask.unsqueeze(-1)
         ######## text gating ########
         
         if position_ids is None:

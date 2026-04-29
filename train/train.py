@@ -48,15 +48,23 @@ CFG = {
         "seed": 42,
         "per_device_train_batch_size": 2,
         "gradient_accumulation_steps": 16,
-        # Stage4 的预算正则请显式配置，不再依赖 tax_loss_weight 回退。
-        # 之前 stage4 只有 1 个 epoch，同时 warmup=1，导致整个 stage4 的 budget_weight 始终为 0。
-        "budget_loss_weight": 3.0,
+        # 当前 selector 前向是 hard top-k：固定选 4 个 span => 20 个 placeholder。
+        # 因此 budget loss 不再决定“选多少”，更多只是校准 soft gate 的总量；默认先关闭。
+        "budget_loss_weight": 0.0,
         "budget_warmup_epochs": 0,
-        "tax_loss_weight": 4.0,
+        # text_gating 目前也没有实际 tax 项输出，默认关闭，避免误导 total loss 设计。
+        "tax_loss_weight": 0.0,
 
         # 让 selector 更早进入相对离散的决策区，避免长期高温下“全开更安全”的解。
         "initial_temp": 0.7,
         "final_temp": 0.2,
+
+        # multi-span selector 探索噪声：先随机探索，再退火收敛。
+        "selector_explore_init_s3": float(os.getenv("MMRL_SELECTOR_EXPLORE_INIT_S3", "1.0")),
+        "selector_explore_final_s3": float(os.getenv("MMRL_SELECTOR_EXPLORE_FINAL_S3", "1.0")),
+        "selector_explore_init_s4": float(os.getenv("MMRL_SELECTOR_EXPLORE_INIT_S4", "1.0")),
+        "selector_explore_final_s4": float(os.getenv("MMRL_SELECTOR_EXPLORE_FINAL_S4", "0.0")),
+        "selector_two_phase_split_s4": float(os.getenv("MMRL_SELECTOR_TWO_PHASE_SPLIT_S4", "0.35")),
 
         # 加强 stage4 中 alpha 监督，避免预算头和 alpha 脱钩。
         "alpha_loss_weight_s3": 0.5,
@@ -80,9 +88,11 @@ CFG = {
             3: 1,
             4: 2,
         },
-        "enable_k_loss_s4": True,
+        # 现在 k_selected 恒等于窗口长度 20，K loss 会把模型推向一个“不可能完成的目标”。
+        # 对固定窗口实验默认关闭；若将来改回可变K selector，再按需开启。
+        "enable_k_loss_s4": False,
         "k_general_target_s4": 0.0,
-        "k_expert_target_s4": float(os.getenv("MMRL_K_EXPERT_TARGET_S4", "30.0")),
+        "k_expert_target_s4": float(os.getenv("MMRL_K_EXPERT_TARGET_S4", "20.0")),
         "k_general_lambda_init_s4": 0.0,
         "k_expert_lambda_init_s4": 0.0,
         "k_lambda_lr_general_s4": 0.02,
@@ -108,7 +118,9 @@ CFG = {
         "collapse_reg_start_scale_s4": 0.1,
         "collapse_reg_target_scale_s4": 1.0,
 
-        "enable_dataset_slot_loss_s4": True,
+        # 注意：当前实现里的 dataset slot loss 主要基于 hard selected_mask 的熵约束，
+        # 对 hard top-k selector 容易退化成近似常数项/弱梯度；默认关闭，待按 span-level 重新设计后再开。
+        "enable_dataset_slot_loss_s4": False,
         "slot_group_constraints_s4": {
             "report": {"entropy_min": 2.20, "entropy_max": 3.60, "weight": 0.020},
             "vqa":    {"entropy_min": 0.80, "entropy_max": 2.00, "weight": 0.015},

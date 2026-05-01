@@ -1,4 +1,5 @@
 # train_stages.py
+import os
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
@@ -143,6 +144,8 @@ class Qwen3VLMMRLForStages(Qwen3VLForConditionalGeneration):
         self.ce_loss_weight = 1.0
         self.alpha_loss_weight = 0.5   # Stage3建议0.3~1.0，Stage4可0.5
         self.tax_loss_weight = 0.0     # Stage3=0, Stage4由调度升到目标
+        self.enable_alpha_guide_loss = True
+        self.enable_gate_loss_stage2 = True
         
         self.k_general_weight = 0.0
         self.k_expert_weight = 0.0
@@ -163,6 +166,35 @@ class Qwen3VLMMRLForStages(Qwen3VLForConditionalGeneration):
 
         self.debug_mode = True
         self.debug_loss_threshold = 20.0
+
+    def _get_text_gating_module(self):
+        visual = getattr(self.model, "visual", None)
+        return getattr(visual, "text_gating", None)
+
+    def _get_k_norm(self):
+        text_gating = self._get_text_gating_module()
+        return float(getattr(text_gating, "total_rep_num", 40.0))
+
+    def _supports_text_gating_losses(self):
+        text_gating = self._get_text_gating_module()
+        if text_gating is None:
+            return False
+        return bool(getattr(text_gating, "enable_text_gating", True))
+
+    def _expand_alpha_labels(self, alpha_labels, images_per_sample):
+        if alpha_labels is None:
+            return None
+        if images_per_sample is None:
+            return alpha_labels.view(-1, 1)
+
+        tmp = []
+        for i, c in enumerate(images_per_sample):
+            c = int(c)
+            if c > 0:
+                tmp.append(alpha_labels[i].repeat(c))
+        if len(tmp) == 0:
+            return None
+        return torch.cat(tmp).view(-1, 1)
 
     def forward(self, input_ids=None, alpha_labels=None, images_per_sample=None, **kwargs):
         if hasattr(self, "temperature_override") and self.temperature_override is not None:
@@ -194,20 +226,9 @@ class Qwen3VLMMRLForStages(Qwen3VLForConditionalGeneration):
             else:
                 alpha_logits = None
 
-        if alpha_logits is not None and alpha_labels is not None:
-            if images_per_sample is None:
-                expanded_labels = alpha_labels.view(-1, 1)
-            else:
-                tmp = []
-                for i, c in enumerate(images_per_sample):
-                    c = int(c)
-                    if c > 0:
-                        tmp.append(alpha_labels[i].repeat(c))
-                if len(tmp) > 0:
-                    expanded_labels = torch.cat(tmp).view(-1, 1)
-                else:
-                    expanded_labels = None
+        expanded_labels = self._expand_alpha_labels(alpha_labels, images_per_sample)
 
+        if self.enable_alpha_guide_loss and alpha_logits is not None and alpha_labels is not None:
             if expanded_labels is not None and expanded_labels.numel() > 0:
                 if alpha_logits.dim() == 1:
                     alpha_logits = alpha_logits.unsqueeze(-1)
@@ -232,7 +253,7 @@ class Qwen3VLMMRLForStages(Qwen3VLForConditionalGeneration):
                 lbl = expanded_labels.squeeze(-1)
                 is_general = (lbl < 0.1)
                 is_expert = (lbl > 0.9)
-                k_norm = float(getattr(self.model.visual.text_gating, "total_rep_num", 40.0))
+                k_norm = self._get_k_norm()
 
                 # ===== general =====
                 if is_general.any():
@@ -263,6 +284,8 @@ class Qwen3VLMMRLForStages(Qwen3VLForConditionalGeneration):
                     k_expert_loss = current_lambda_e * ((ke - self.k_expert_target) / k_norm).pow(2).mean()
         # 3) tax (optional, stage4再开)
         tax_raw = getattr(self.model, "tax_loss", torch.tensor(0.0, device=input_ids.device))
+        if not torch.is_tensor(tax_raw):
+            tax_raw = torch.tensor(float(tax_raw), device=input_ids.device, dtype=ce_loss.dtype)
         tax_loss = tax_raw * self.tax_loss_weight if self.use_tax else torch.tensor(0.0, device=input_ids.device)
         outputs.loss = self.ce_loss_weight * ce_loss + alpha_guide_loss + k_general_loss + k_expert_loss + tax_loss
 
@@ -299,8 +322,8 @@ class Qwen3VLMMRLForStages(Qwen3VLForConditionalGeneration):
                 "total_loss": outputs.loss.detach(),
                 "ce_loss": ce_loss.detach(),
                 "alpha_guide_loss": alpha_guide_loss.detach(),
-                "cache_k_general_loss": k_general_loss.detach(),
-                "cache_k_expert_loss": k_expert_loss.detach(),
+                "k_general_loss": k_general_loss.detach(),
+                "k_expert_loss": k_expert_loss.detach(),
                 "tax_loss": tax_loss.detach(),
                 "alpha_std": alpha_std.detach(),
                 "label_alpha_std": label_alpha_std.detach(),
@@ -349,6 +372,10 @@ class Qwen3VLMMRLForStages(Qwen3VLForConditionalGeneration):
 
 def build_model_and_processor(model_path):
     config = AutoConfig.from_pretrained(model_path, trust_remote_code=True)
+    config.ENABLE_TEXT_GATING = os.getenv("MMRL_ENABLE_TEXT_GATING", "1") == "1"
+    config.FIXED_K_WHEN_TEXT_GATING_DISABLED = float(os.getenv("MMRL_FIXED_K_WHEN_TEXT_GATING_DISABLED", "40"))
+    config.ENABLE_TEXT_GATE_TAX_LOSS = os.getenv("MMRL_ENABLE_TEXT_GATE_TAX_LOSS", "1") == "1"
+    config.ENABLE_TEXT_GATE_COLLAPSE_LOSS = os.getenv("MMRL_ENABLE_TEXT_GATE_COLLAPSE_LOSS", "1") == "1"
     tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
     image_processor = AutoImageProcessor.from_pretrained(model_path, trust_remote_code=True)
     tokenizer.add_special_tokens(cfg.SPECIAL_TOKENS)
@@ -524,7 +551,7 @@ def run_stage12_light(stage_id, model, processor, data_cfg, train_cfg, output_di
 
             # stage2：把分类结果传递给gate（轻量约束）
             gate_loss = torch.tensor(0.0, device=cls_loss.device)
-            if stage_id == 2:
+            if stage_id == 2 and getattr(model, "enable_gate_loss_stage2", True):
                 g = v.visionGating(alpha_logits, getattr(model, "temperature_override", None))
                 target = alpha_labels
                 gate_loss = torch.nn.functional.mse_loss(g, target)
@@ -580,6 +607,7 @@ def run_stage34_full(stage_id, model, processor, data_cfg, train_cfg, output_dir
     if stage_id == 3:
         model.ce_loss_weight = 1.0
         model.alpha_loss_weight = train_cfg.get("alpha_loss_weight_s3", 0.5)
+        model.enable_alpha_guide_loss = train_cfg.get("enable_alpha_guide_loss_s3", True)
         model.use_tax = False
         model.tax_loss_weight = 0.0
         model.use_k_loss = False
@@ -588,7 +616,8 @@ def run_stage34_full(stage_id, model, processor, data_cfg, train_cfg, output_dir
     else:  # stage4
         model.ce_loss_weight = 1.0
         model.alpha_loss_weight = train_cfg.get("alpha_loss_weight_s4", 0.5)
-        model.use_tax = True
+        model.enable_alpha_guide_loss = train_cfg.get("enable_alpha_guide_loss_s4", True)
+        model.use_tax = train_cfg.get("enable_tax_loss_s4", True)
         model.tax_loss_weight = 0.0
         model.use_k_loss = train_cfg.get("enable_k_loss_s4", True)
         model.use_dynamic_k_lambda = True
@@ -600,6 +629,8 @@ def run_stage34_full(stage_id, model, processor, data_cfg, train_cfg, output_dir
         model.k_lambda_lr_expert = train_cfg.get("k_lambda_lr_expert_s4", 0.01)
         model.k_lambda_max_general = train_cfg.get("k_lambda_max_general_s4", 5.0)
         model.k_lambda_max_expert = train_cfg.get("k_lambda_max_expert_s4", 5.0)
+
+    model.enable_gate_loss_stage2 = train_cfg.get("enable_gate_loss_stage2", True)
 
     ds = FourViewMMRLDataset(
         processor=processor,

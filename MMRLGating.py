@@ -5,6 +5,14 @@ from torch import nn
 from utils import attention_pooling
 import random
 
+
+def _cfg_get(config, key, default):
+    if hasattr(config, key):
+        return getattr(config, key)
+    if isinstance(config, dict):
+        return config.get(key, default)
+    return default
+
 class Task_classifier(nn.Module):
     def __init__(self,config):
         super().__init__()
@@ -72,29 +80,54 @@ class textGating(nn.Module):
         self.total_rep_num = config.RP_SPACE_LENGTH * 8
         self.attention_pooling = attention_pooling(config.vision_token_dim, config.GATING_MID_DIM)
 
-        self.text_relevance_head = nn.Sequential(
-            nn.Linear(config.text_token_dim, config.GATING_MID_DIM),
-            nn.ReLU(),
-            nn.Linear(config.GATING_MID_DIM, 1)
+        # 兼容两种版本：
+        # 1) 当前版本：text gating 存在，K 由 vision/text/alpha/has_image 动态决定
+        # 2) 消融版本：物理上不构建 text gating 分支，直接使用固定最大 K（默认 40）
+        self.enable_text_gating = bool(_cfg_get(config, "ENABLE_TEXT_GATING", True))
+        self.fixed_k_when_text_gating_disabled = float(
+            _cfg_get(config, "FIXED_K_WHEN_TEXT_GATING_DISABLED", self.total_rep_num)
         )
-        nn.init.constant_(self.text_relevance_head[-1].bias, 0.0)
+        self.enable_tax_loss = bool(_cfg_get(config, "ENABLE_TEXT_GATE_TAX_LOSS", True))
+        self.enable_collapse_loss = bool(_cfg_get(config, "ENABLE_TEXT_GATE_COLLAPSE_LOSS", True))
 
-        self.k_budget_head = nn.Sequential(
-            nn.Linear(config.vision_token_dim + config.text_token_dim + 2, config.GATING_MID_DIM),
-            nn.ReLU(),
-            nn.Linear(config.GATING_MID_DIM, 1)
-        )
+        if self.enable_text_gating:
+            self.text_relevance_head = nn.Sequential(
+                nn.Linear(config.text_token_dim, config.GATING_MID_DIM),
+                nn.ReLU(),
+                nn.Linear(config.GATING_MID_DIM, 1)
+            )
+            nn.init.constant_(self.text_relevance_head[-1].bias, 0.0)
+
+            self.k_budget_head = nn.Sequential(
+                nn.Linear(config.vision_token_dim + config.text_token_dim + 2, config.GATING_MID_DIM),
+                nn.ReLU(),
+                nn.Linear(config.GATING_MID_DIM, 1)
+            )
+            nn.init.constant_(self.k_budget_head[-1].bias, -1.5)  # 原来 -0.5 太激进
+        else:
+            self.text_relevance_head = None
+            self.k_budget_head = None
 
         self.hard_concrete = HardConcreteGate(temperature)
         self.lambda_ = lambda_
         self.epsilon = epsilon
         self.debug_context = {}
 
-        nn.init.constant_(self.k_budget_head[-1].bias, -1.5)  # 原来 -0.5 太激进
         self.lambda_general = 1.0
         self.lambda_expert = 0.25
         self.k_cap_expert = 14.0
         self.k_min_expert = 2.0
+
+    def _build_fixed_k_gate(self,
+                            batch_size: int,
+                            device: torch.device,
+                            dtype: torch.dtype,
+                            temperature_override: Optional[float] = None) -> torch.Tensor:
+        fixed_k = max(0.0, min(float(self.fixed_k_when_text_gating_disabled), float(self.total_rep_num)))
+        slot_idx = torch.arange(self.total_rep_num, device=device, dtype=dtype).view(1, -1)
+        fixed_budget = torch.full((batch_size, 1), fixed_k, device=device, dtype=dtype)
+        logits = fixed_budget - slot_idx
+        return self.hard_concrete(logits, temperature_override)
 
     def forward(self,
                 delta_vision_token: torch.Tensor,
@@ -116,23 +149,39 @@ class textGating(nn.Module):
         if has_image is None:
             has_image = torch.ones(batch_size, 1, device=text_embedding.device, dtype=text_embedding.dtype)
 
-        text_relevance_prob = torch.sigmoid(self.text_relevance_head(text_embedding))  # [B, 1]
+        if self.enable_text_gating:
+            text_relevance_prob = torch.sigmoid(self.text_relevance_head(text_embedding))  # [B, 1]
 
-        # K 预算主体：由 vision/text/alpha/has_image 联合决定
-        feat = torch.cat([pooled_vision, text_embedding, batch_alpha, has_image], dim=-1)
-        raw_budget = self.total_rep_num * torch.sigmoid(self.k_budget_head(feat))     # [B, 1]
+            # K 预算主体：由 vision/text/alpha/has_image 联合决定
+            feat = torch.cat([pooled_vision, text_embedding, batch_alpha, has_image], dim=-1)
+            raw_budget = self.total_rep_num * torch.sigmoid(self.k_budget_head(feat))     # [B, 1]
 
-        # text-only 显式抑制；但不归零，保留 text-only expert 能力
-        image_scale = 0.5 + 0.5 * has_image                                            # 无图=0.5，有图=1.0
-        k_budget = raw_budget * image_scale * (0.25 + 0.75 * text_relevance_prob)      # [B, 1]
+            # text-only 显式抑制；但不归零，保留 text-only expert 能力
+            image_scale = 0.5 + 0.5 * has_image                                            # 无图=0.5，有图=1.0
+            k_budget = raw_budget * image_scale * (0.25 + 0.75 * text_relevance_prob)      # [B, 1]
 
-        # 由连续 budget 构造 slot gate
-        slot_idx = torch.arange(
-            self.total_rep_num, device=k_budget.device, dtype=k_budget.dtype
-        ).view(1, -1)  # [1, K]
+            # 由连续 budget 构造 slot gate
+            slot_idx = torch.arange(
+                self.total_rep_num, device=k_budget.device, dtype=k_budget.dtype
+            ).view(1, -1)  # [1, K]
 
-        K_logits = k_budget - slot_idx                                                  # [B, K]
-        hard_k_logits = self.hard_concrete(K_logits, temperature_override)
+            K_logits = k_budget - slot_idx                                                  # [B, K]
+            hard_k_logits = self.hard_concrete(K_logits, temperature_override)
+        else:
+            text_relevance_prob = torch.ones(batch_size, 1, device=text_embedding.device, dtype=text_embedding.dtype)
+            raw_budget = torch.full(
+                (batch_size, 1),
+                min(float(self.fixed_k_when_text_gating_disabled), float(self.total_rep_num)),
+                device=text_embedding.device,
+                dtype=text_embedding.dtype,
+            )
+            k_budget = raw_budget
+            hard_k_logits = self._build_fixed_k_gate(
+                batch_size=batch_size,
+                device=text_embedding.device,
+                dtype=text_embedding.dtype,
+                temperature_override=temperature_override,
+            )
 
         # alpha 只负责放行/抑制
         if self.training:
@@ -141,22 +190,35 @@ class textGating(nn.Module):
             alpha_hard_mask = (batch_alpha > 0.5).to(dtype=hard_k_logits.dtype)
             hard_k_logits = hard_k_logits * alpha_hard_mask
 
+        self.debug_context = {
+            "enable_text_gating": self.enable_text_gating,
+            "text_rel_mean": text_relevance_prob.detach().float().mean(),
+            "raw_budget_mean": raw_budget.detach().float().mean(),
+            "k_budget_mean": k_budget.detach().float().mean(),
+            "batch_alpha_mean": batch_alpha.detach().float().mean(),
+        }
+
         if self.training:
-            batch_alpha_prob = batch_alpha.detach()
-            penalty_mask = torch.where(
-                batch_alpha_prob > 0.5,
-                torch.zeros_like(batch_alpha_prob),
-                1.0 - batch_alpha_prob
-            )
-            dynamic_lambda = self.lambda_ * penalty_mask
-
             k_soft = hard_k_logits.sum(dim=-1)  # [B]
-            target_var = hard_k_logits.new_tensor(4.0)
-            k_var = k_soft.var(unbiased=False)
-            collapse_loss = 0.05 * torch.relu(target_var - k_var)
+            if self.enable_tax_loss:
+                batch_alpha_prob = batch_alpha.detach()
+                penalty_mask = torch.where(
+                    batch_alpha_prob > 0.5,
+                    torch.zeros_like(batch_alpha_prob),
+                    1.0 - batch_alpha_prob
+                )
+                dynamic_lambda = self.lambda_ * penalty_mask
+                raw_loss = dynamic_lambda.squeeze(-1) * (k_soft / self.total_rep_num)
+                tax_loss = raw_loss.mean()
+            else:
+                tax_loss = hard_k_logits.new_tensor(0.0)
 
-            raw_loss = dynamic_lambda.squeeze(-1) * (k_soft / self.total_rep_num)
-            tax_loss = raw_loss.mean() + collapse_loss
+            if self.enable_collapse_loss:
+                target_var = hard_k_logits.new_tensor(4.0)
+                k_var = k_soft.var(unbiased=False)
+                collapse_loss = 0.05 * torch.relu(target_var - k_var)
+                tax_loss = tax_loss + collapse_loss
+
             return hard_k_logits, tax_loss
 
         return hard_k_logits

@@ -17,8 +17,65 @@ from data_pipeline import FourViewMMRLDataset, MMRLDataCollator
 from train_utils import focal_bce_with_logits
 import QWen3WithMMRL
 from transformers import TrainerCallback
+import json
 
 from logger import StageMetricLogger, TrainerMetricsCallback
+
+
+def _build_experiment_context(train_cfg, output_dir, stage_id):
+    experiment_name = train_cfg.get("experiment_name", "experiment")
+    experiment_cfg = dict(train_cfg.get("experiment_cfg", {}))
+    return {
+        "experiment_name": experiment_name,
+        "stage_name": f"stage{stage_id}",
+        "stage_id": stage_id,
+        "output_dir": output_dir,
+        "stage_output_dir": f"{output_dir}/stage{stage_id}",
+        "metrics_dir": f"{output_dir}/stage{stage_id}/metrics",
+        "train_cfg": {
+            "seed": train_cfg.get("seed"),
+            "deterministic_sampling": train_cfg.get("deterministic_sampling", False),
+            "per_device_train_batch_size": train_cfg.get("per_device_train_batch_size"),
+            "gradient_accumulation_steps": train_cfg.get("gradient_accumulation_steps"),
+            "learning_rate": train_cfg.get("learning_rate", {}).get(stage_id),
+            "epochs": train_cfg.get("epochs", {}).get(stage_id),
+            "console_log_every": train_cfg.get("console_log_every"),
+            "metric_smooth_window": train_cfg.get("metric_smooth_window"),
+            "metric_ema_alpha": train_cfg.get("metric_ema_alpha"),
+            "metric_scatter_stride": train_cfg.get("metric_scatter_stride"),
+            "enable_gate_loss_stage2": train_cfg.get("enable_gate_loss_stage2"),
+            "enable_alpha_guide_loss_s3": train_cfg.get("enable_alpha_guide_loss_s3"),
+            "enable_alpha_guide_loss_s4": train_cfg.get("enable_alpha_guide_loss_s4"),
+            "enable_tax_loss_s4": train_cfg.get("enable_tax_loss_s4"),
+            "enable_k_loss_s4": train_cfg.get("enable_k_loss_s4"),
+            "enable_group_anti_collapse_s4": train_cfg.get("enable_group_anti_collapse_s4"),
+            "group_anti_collapse_weight_s4": train_cfg.get("group_anti_collapse_weight_s4"),
+            "group_anti_collapse_warmup_epochs_s4": train_cfg.get("group_anti_collapse_warmup_epochs_s4"),
+            "group_usage_ema_momentum": train_cfg.get("group_usage_ema_momentum"),
+            "tax_loss_weight": train_cfg.get("tax_loss_weight"),
+            "k_general_target_s4": train_cfg.get("k_general_target_s4"),
+            "k_expert_target_s4": train_cfg.get("k_expert_target_s4"),
+        },
+        "experiment_cfg": experiment_cfg,
+    }
+
+
+def _write_experiment_manifest(output_dir, train_cfg):
+    experiment_name = train_cfg.get("experiment_name", "experiment")
+    manifest = {
+        "experiment_name": experiment_name,
+        "output_dir": output_dir,
+        "experiment_cfg": dict(train_cfg.get("experiment_cfg", {})),
+        "train_cfg": {
+            k: v for k, v in train_cfg.items()
+            if k not in {"experiment_cfg"}
+        },
+    }
+    os.makedirs(output_dir, exist_ok=True)
+    manifest_path = os.path.join(output_dir, f"{experiment_name}_manifest.json")
+    with open(manifest_path, "w", encoding="utf-8") as f:
+        json.dump(manifest, f, ensure_ascii=False, indent=2)
+    print(f"[Experiment] manifest saved to {manifest_path}")
 
 def print_stage_step_summary(stage_name, step, row):
     def _fmt(x, nd=4):
@@ -54,12 +111,9 @@ def print_stage_step_summary(stage_name, step, row):
     if "tax_loss" in row:
         print(f"  ├─ Tax Loss:              {_fmt(row.get('tax_loss')):>10}")
 
-    if "alpha_std" in row or "label_alpha_std" in row:
+    if "alpha_mae" in row:
         print(f"[Alpha Statistics]")
-        if "alpha_std" in row:
-            print(f"  ├─ Alpha Std:             {_fmt(row.get('alpha_std')):>10}")
-        if "label_alpha_std" in row:
-            print(f"  └─ Label Alpha Std:       {_fmt(row.get('label_alpha_std')):>10}")
+        print(f"  └─ Alpha MAE:             {_fmt(row.get('alpha_mae')):>10}")
 
     if "k_general_mean" in row or "k_expert_mean" in row:
         print(f"[K Statistics]")
@@ -99,13 +153,25 @@ def _dbg_tensor_stats(name, x):
         )
 
 class StageScheduleCallback(TrainerCallback):
-    def __init__(self, dataset, total_epochs, init_temp=1.0, final_temp=0.1, target_tax=4.0, tax_warmup_epochs=1):
+    def __init__(
+        self,
+        dataset,
+        total_epochs,
+        init_temp=1.0,
+        final_temp=0.1,
+        target_tax=4.0,
+        tax_warmup_epochs=1,
+        target_group_anti_collapse_weight=0.0,
+        group_anti_collapse_warmup_epochs=0,
+    ):
         self.dataset = dataset
         self.total_epochs = total_epochs
         self.init_temp = init_temp
         self.final_temp = final_temp
         self.target_tax = target_tax
         self.tax_warmup_epochs = tax_warmup_epochs
+        self.target_group_anti_collapse_weight = float(target_group_anti_collapse_weight)
+        self.group_anti_collapse_warmup_epochs = float(group_anti_collapse_warmup_epochs)
 
     def on_epoch_begin(self, args, state, control, **kwargs):
         self.dataset.resample_general_data()
@@ -124,6 +190,18 @@ class StageScheduleCallback(TrainerCallback):
         else:
             p = min((ep - self.tax_warmup_epochs) / max(self.total_epochs - self.tax_warmup_epochs, 1e-6), 1.0)
             model.tax_loss_weight = self.target_tax * p
+
+        text_gating = model._get_text_gating_module() if hasattr(model, "_get_text_gating_module") else None
+        if text_gating is not None:
+            if ep < self.group_anti_collapse_warmup_epochs:
+                anti_collapse_p = 0.0
+            else:
+                anti_collapse_p = min(
+                    (ep - self.group_anti_collapse_warmup_epochs) /
+                    max(self.total_epochs - self.group_anti_collapse_warmup_epochs, 1e-6),
+                    1.0,
+                )
+            text_gating.group_anti_collapse_weight = self.target_group_anti_collapse_weight * anti_collapse_p
 
 # =========================
 #  Full model (Stage3/4用)
@@ -167,6 +245,17 @@ class Qwen3VLMMRLForStages(Qwen3VLForConditionalGeneration):
         self.debug_mode = True
         self.debug_loss_threshold = 20.0
 
+    def _compute_group_anti_collapse_loss(self):
+        text_gating = self._get_text_gating_module()
+        zero = torch.tensor(0.0, device=self.lm_head.weight.device)
+        if text_gating is None:
+            return zero, {}
+        if getattr(text_gating, "selection_mode", None) != "group_top4":
+            return zero, {}
+        if hasattr(text_gating, "compute_group_anti_collapse_loss"):
+            return text_gating.compute_group_anti_collapse_loss()
+        return zero, {}
+
     def _get_text_gating_module(self):
         visual = getattr(self.model, "visual", None)
         return getattr(visual, "text_gating", None)
@@ -196,7 +285,7 @@ class Qwen3VLMMRLForStages(Qwen3VLForConditionalGeneration):
             return None
         return torch.cat(tmp).view(-1, 1)
 
-    def forward(self, input_ids=None, alpha_labels=None, images_per_sample=None, **kwargs):
+    def forward(self, input_ids=None, alpha_labels=None, images_per_sample=None, task_type_ids=None, **kwargs):
         if hasattr(self, "temperature_override") and self.temperature_override is not None:
             self.model.temperature_override = self.temperature_override
             kwargs["gating_temperature_override"] = self.temperature_override
@@ -287,24 +376,20 @@ class Qwen3VLMMRLForStages(Qwen3VLForConditionalGeneration):
         if not torch.is_tensor(tax_raw):
             tax_raw = torch.tensor(float(tax_raw), device=input_ids.device, dtype=ce_loss.dtype)
         tax_loss = tax_raw * self.tax_loss_weight if self.use_tax else torch.tensor(0.0, device=input_ids.device)
-        outputs.loss = self.ce_loss_weight * ce_loss + alpha_guide_loss + k_general_loss + k_expert_loss + tax_loss
+        anti_collapse_loss, anti_collapse_debug = self._compute_group_anti_collapse_loss()
+        outputs.loss = self.ce_loss_weight * ce_loss + alpha_guide_loss + k_general_loss + k_expert_loss + tax_loss + anti_collapse_loss
 
         # ---- cache metrics for external logger ----
         with torch.no_grad():
-            alpha_std = torch.tensor(float("nan"), device=input_ids.device)
-            label_alpha_std = torch.tensor(float("nan"), device=input_ids.device)
-            cache_k_general_mean = torch.tensor(float("nan"), device=input_ids.device)
-            cache_k_expert_mean = torch.tensor(float("nan"), device=input_ids.device)
+            alpha_mae = torch.tensor(float("nan"), device=input_ids.device)
 
             if alpha_logits is not None and torch.is_tensor(alpha_logits) and alpha_logits.numel() > 0:
                 a = torch.sigmoid(alpha_logits.detach().float().view(-1))
-                if a.numel() > 1:
-                    alpha_std = a.std(unbiased=False)
-
-            if expanded_labels is not None and torch.is_tensor(expanded_labels) and expanded_labels.numel() > 0:
-                l = expanded_labels.detach().float().view(-1)
-                if l.numel() > 1:
-                    label_alpha_std = l.std(unbiased=False)
+                if expanded_labels is not None and torch.is_tensor(expanded_labels) and expanded_labels.numel() > 0:
+                    l = expanded_labels.detach().float().view(-1)[:a.numel()].to(a.device)
+                    n = min(a.numel(), l.numel())
+                    if n > 0:
+                        alpha_mae = (a[:n] - l[:n]).abs().mean()
 
             if expanded_labels is not None and self.use_k_loss:
                 k_results = self.model.visual.k_results
@@ -325,8 +410,8 @@ class Qwen3VLMMRLForStages(Qwen3VLForConditionalGeneration):
                 "k_general_loss": k_general_loss.detach(),
                 "k_expert_loss": k_expert_loss.detach(),
                 "tax_loss": tax_loss.detach(),
-                "alpha_std": alpha_std.detach(),
-                "label_alpha_std": label_alpha_std.detach(),
+                "anti_collapse_loss": anti_collapse_loss.detach(),
+                "alpha_mae": alpha_mae.detach(),
                 "k_general_mean": k_general_mean.detach(),
                 "k_expert_mean": k_expert_mean.detach(),
                 "temperature": torch.tensor(float(self.temperature_override) if self.temperature_override is not None else float("nan"), device=input_ids.device),
@@ -334,6 +419,47 @@ class Qwen3VLMMRLForStages(Qwen3VLForConditionalGeneration):
                 "dynamic_k_lambda_general": torch.tensor(float(self.k_general_lambda), device=input_ids.device),
                 "dynamic_k_lambda_expert": torch.tensor(float(self.k_expert_lambda), device=input_ids.device),
             }
+            text_gating = self._get_text_gating_module()
+            if text_gating is not None:
+                self._last_metrics["anti_collapse_weight"] = torch.tensor(
+                    float(getattr(text_gating, "group_anti_collapse_weight", 0.0)),
+                    device=input_ids.device,
+                )
+                dbg = getattr(text_gating, "debug_context", {}) or {}
+                selection_mode = getattr(text_gating, "selection_mode", None)
+                if selection_mode is not None:
+                    selection_mode_map = {
+                        "dynamic_prefix": 0.0,
+                        "fixed_prefix": 1.0,
+                        "fixed_group20": 2.0,
+                        "group_top4": 3.0,
+                        "token_top20": 4.0,
+                    }
+                    self._last_metrics["selection_mode_id"] = torch.tensor(
+                        float(selection_mode_map.get(str(selection_mode), -1.0)),
+                        device=input_ids.device,
+                    )
+
+                for key in (
+                    "group_count_loss",
+                    "token_count_loss",
+                    "token_balance_loss",
+                    "raw_budget_mean",
+                    "k_budget_mean",
+                    "active_token_count_mean",
+                    "batch_alpha_mean",
+                    "text_rel_mean",
+                ):
+                    if key in dbg:
+                        self._last_metrics[key] = dbg[key]
+
+                hard_group_mask = getattr(text_gating, "last_hard_group_mask", None)
+                if torch.is_tensor(hard_group_mask) and hard_group_mask.numel() > 0:
+                    usage = hard_group_mask.detach().float().mean(dim=0)
+                    usage = usage / usage.sum().clamp_min(1e-8)
+                    for gi in range(int(usage.shape[0])):
+                        self._last_metrics[f"group_usage_{gi}"] = usage[gi]
+            self._last_metrics.update(anti_collapse_debug)
 
         if self.debug_mode and torch.is_tensor(outputs.loss):
             loss_val = outputs.loss.detach().float().item()
@@ -370,12 +496,67 @@ class Qwen3VLMMRLForStages(Qwen3VLForConditionalGeneration):
         return outputs
 
 
-def build_model_and_processor(model_path):
+def build_model_and_processor(model_path, experiment_cfg=None):
+    experiment_cfg = experiment_cfg or {}
     config = AutoConfig.from_pretrained(model_path, trust_remote_code=True)
-    config.ENABLE_TEXT_GATING = os.getenv("MMRL_ENABLE_TEXT_GATING", "1") == "1"
-    config.FIXED_K_WHEN_TEXT_GATING_DISABLED = float(os.getenv("MMRL_FIXED_K_WHEN_TEXT_GATING_DISABLED", "40"))
-    config.ENABLE_TEXT_GATE_TAX_LOSS = os.getenv("MMRL_ENABLE_TEXT_GATE_TAX_LOSS", "1") == "1"
-    config.ENABLE_TEXT_GATE_COLLAPSE_LOSS = os.getenv("MMRL_ENABLE_TEXT_GATE_COLLAPSE_LOSS", "1") == "1"
+    active_rep_token_count = int(experiment_cfg.get("active_rep_token_count", getattr(cfg, "ACTIVE_REP_TOKEN_COUNT", 40)))
+    cfg.ACTIVE_REP_TOKEN_COUNT = active_rep_token_count
+    cfg.SPECIAL_TOKENS = cfg.build_special_tokens(active_rep_token_count)
+
+    config.ACTIVE_REP_TOKEN_COUNT = active_rep_token_count
+    config.ENABLE_TEXT_GATING = bool(experiment_cfg.get("enable_text_gating", os.getenv("MMRL_ENABLE_TEXT_GATING", "1") == "1"))
+    config.FIXED_K_WHEN_TEXT_GATING_DISABLED = float(experiment_cfg.get(
+        "fixed_k_when_text_gating_disabled",
+        os.getenv("MMRL_FIXED_K_WHEN_TEXT_GATING_DISABLED", "40")
+    ))
+    config.ENABLE_TEXT_GATE_TAX_LOSS = bool(experiment_cfg.get(
+        "enable_text_gate_tax_loss",
+        os.getenv("MMRL_ENABLE_TEXT_GATE_TAX_LOSS", "1") == "1"
+    ))
+    config.ENABLE_TEXT_GATE_COLLAPSE_LOSS = bool(experiment_cfg.get(
+        "enable_text_gate_collapse_loss",
+        os.getenv("MMRL_ENABLE_TEXT_GATE_COLLAPSE_LOSS", "1") == "1"
+    ))
+    config.TEXT_GATE_SELECTION_MODE = str(experiment_cfg.get(
+        "text_gate_selection_mode",
+        os.getenv("MMRL_TEXT_GATE_SELECTION_MODE", "dynamic_prefix")
+    ))
+    config.TEXT_GATE_GROUP_SIZE = int(experiment_cfg.get(
+        "text_gate_group_size",
+        os.getenv("MMRL_TEXT_GATE_GROUP_SIZE", str(cfg.RP_SPACE_LENGTH))
+    ))
+    config.TEXT_GATE_NUM_GROUPS = int(experiment_cfg.get(
+        "text_gate_num_groups",
+        os.getenv("MMRL_TEXT_GATE_NUM_GROUPS", "8")
+    ))
+    config.TEXT_GATE_SELECTED_GROUP_COUNT = int(experiment_cfg.get(
+        "text_gate_selected_group_count",
+        os.getenv("MMRL_TEXT_GATE_SELECTED_GROUP_COUNT", "4")
+    ))
+    config.TEXT_GATE_SELECTED_GROUPS = experiment_cfg.get(
+        "text_gate_selected_groups",
+        os.getenv("MMRL_TEXT_GATE_SELECTED_GROUPS", "0,1,2,3")
+    )
+    config.TEXT_GATE_SHARED_GROUPS = experiment_cfg.get(
+        "text_gate_shared_groups",
+        [0, 1]
+    )
+    config.ENABLE_TEXT_GATE_GROUP_ANTI_COLLAPSE = bool(experiment_cfg.get(
+        "enable_text_gate_group_anti_collapse",
+        False
+    ))
+    config.TEXT_GATE_GROUP_ANTI_COLLAPSE_WEIGHT = float(experiment_cfg.get(
+        "text_gate_group_anti_collapse_weight",
+        0.0
+    ))
+    config.TEXT_GATE_GROUP_USAGE_EMA_MOMENTUM = float(experiment_cfg.get(
+        "text_gate_group_usage_ema_momentum",
+        0.98
+    ))
+    config.TEXT_GATE_GROUP_USAGE_EMA_EPS = float(experiment_cfg.get(
+        "text_gate_group_usage_ema_eps",
+        1e-6
+    ))
     tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
     image_processor = AutoImageProcessor.from_pretrained(model_path, trust_remote_code=True)
     tokenizer.add_special_tokens(cfg.SPECIAL_TOKENS)
@@ -406,6 +587,11 @@ def build_model_and_processor(model_path):
             )
     processor = processingWithMMRL.Qwen3ProcessorWithMMRL(
         image_processor=image_processor, tokenizer=tokenizer, cfg=cfg
+    )
+    print(
+        f"[Experiment] mode={config.TEXT_GATE_SELECTION_MODE} active_rep_token_count={config.ACTIVE_REP_TOKEN_COUNT} "
+        f"group_size={config.TEXT_GATE_GROUP_SIZE} num_groups={config.TEXT_GATE_NUM_GROUPS} "
+        f"selected_group_count={config.TEXT_GATE_SELECTED_GROUP_COUNT} selected_groups={config.TEXT_GATE_SELECTED_GROUPS}"
     )
     print("Processor built.")
     return model, processor
@@ -468,9 +654,12 @@ def run_stage12_light(stage_id, model, processor, data_cfg, train_cfg, output_di
     set_trainable_stage(model, stage_id)
     model.train()
 
+    experiment_context = _build_experiment_context(train_cfg, output_dir, stage_id)
     metric_logger = StageMetricLogger(
         save_dir=f"{output_dir}/stage{stage_id}/metrics",
         stage_name=f"stage{stage_id}",
+        experiment_name=experiment_context["experiment_name"],
+        experiment_config=experiment_context,
         smooth_window=train_cfg.get("metric_smooth_window", 30),
         ema_alpha=train_cfg.get("metric_ema_alpha", 0.15),
         scatter_stride=train_cfg.get("metric_scatter_stride", 3),
@@ -489,6 +678,7 @@ def run_stage12_light(stage_id, model, processor, data_cfg, train_cfg, output_di
         mode=f"stage{stage_id}",
         ce_enabled=False,
         seed=train_cfg["seed"],
+        deterministic_sampling=train_cfg.get("deterministic_sampling", False),
     )
     collator = MMRLDataCollator(processor)
 
@@ -520,6 +710,7 @@ def run_stage12_light(stage_id, model, processor, data_cfg, train_cfg, output_di
             input_ids = batch["input_ids"].cuda(non_blocking=True)
             attention_mask = batch["attention_mask"].cuda(non_blocking=True)
             alpha_labels = batch["alpha_labels"].cuda(non_blocking=True).view(-1, 1).to(dtype=v.dtype)
+            task_type_ids = batch["task_type_ids"].cuda(non_blocking=True)
             is_mm = batch["is_mm"].cuda(non_blocking=True)
             pixel_values = batch["pixel_values"]
             image_grid_thw = batch["image_grid_thw"]
@@ -565,16 +756,14 @@ def run_stage12_light(stage_id, model, processor, data_cfg, train_cfg, output_di
                 global_step += 1
                 with torch.no_grad():
                     alpha_prob = torch.sigmoid(alpha_logits.detach().float().view(-1))
-                    alpha_std = alpha_prob.std(unbiased=False) if alpha_prob.numel() > 1 else torch.tensor(float("nan"), device=alpha_prob.device)
-                    label_std = alpha_labels.detach().float().view(-1).std(unbiased=False) if alpha_labels.numel() > 1 else torch.tensor(float("nan"), device=alpha_labels.device)
+                    alpha_mae = (alpha_prob - alpha_labels.detach().float().view(-1)).abs().mean() if alpha_prob.numel() > 0 else torch.tensor(float("nan"), device=alpha_prob.device)
 
                     metric_logger.log(
                         step=global_step,
                         total_loss=(cls_loss.detach() + gate_loss.detach()),
                         cls_loss=cls_loss.detach(),
                         gate_loss=gate_loss.detach(),
-                        alpha_std=alpha_std,
-                        label_alpha_std=label_std,
+                        alpha_mae=alpha_mae,
                         temperature=getattr(model, "temperature_override", float("nan")),
                         learning_rate=opt.param_groups[0]["lr"],
                     )
@@ -584,8 +773,7 @@ def run_stage12_light(stage_id, model, processor, data_cfg, train_cfg, output_di
                         "total_loss": (cls_loss.detach() + gate_loss.detach()),
                         "cls_loss": cls_loss.detach(),
                         "gate_loss": gate_loss.detach(),
-                        "alpha_std": alpha_std,
-                        "label_alpha_std": label_std,
+                        "alpha_mae": alpha_mae,
                         "temperature": getattr(model, "temperature_override", float("nan")),
                         "learning_rate": opt.param_groups[0]["lr"],
                     }
@@ -643,6 +831,7 @@ def run_stage34_full(stage_id, model, processor, data_cfg, train_cfg, output_dir
         mode=f"stage{stage_id}",
         ce_enabled=True,
         seed=train_cfg["seed"],
+        deterministic_sampling=train_cfg.get("deterministic_sampling", False),
     )
     collator = MMRLDataCollator(processor)
     cb = StageScheduleCallback(
@@ -652,6 +841,11 @@ def run_stage34_full(stage_id, model, processor, data_cfg, train_cfg, output_dir
         final_temp=train_cfg.get("final_temp", 0.1),
         target_tax=(0.0 if stage_id == 3 else train_cfg["tax_loss_weight"]),
         tax_warmup_epochs=train_cfg.get("tax_warmup_epochs", 1),
+        target_group_anti_collapse_weight=(
+            0.0 if stage_id == 3 or not train_cfg.get("enable_group_anti_collapse_s4", True)
+            else train_cfg.get("group_anti_collapse_weight_s4", 0.0)
+        ),
+        group_anti_collapse_warmup_epochs=train_cfg.get("group_anti_collapse_warmup_epochs_s4", 0),
     )
     args = TrainingArguments(
         output_dir=f"{output_dir}/stage{stage_id}",
@@ -668,9 +862,12 @@ def run_stage34_full(stage_id, model, processor, data_cfg, train_cfg, output_dir
         dataloader_pin_memory=False,
         dataloader_num_workers=train_cfg.get("dataloader_num_workers", 4),
     )
+    experiment_context = _build_experiment_context(train_cfg, output_dir, stage_id)
     metric_logger = StageMetricLogger(
         save_dir=f"{output_dir}/stage{stage_id}/metrics",
         stage_name=f"stage{stage_id}",
+        experiment_name=experiment_context["experiment_name"],
+        experiment_config=experiment_context,
         smooth_window=train_cfg.get("metric_smooth_window", 30),
         ema_alpha=train_cfg.get("metric_ema_alpha", 0.15),
         scatter_stride=train_cfg.get("metric_scatter_stride", 3),
@@ -694,6 +891,8 @@ def run_stage34_full(stage_id, model, processor, data_cfg, train_cfg, output_dir
 
 
 def run_stage(stage_id, model, processor, data_cfg, train_cfg, output_dir):
+    if stage_id == 1:
+        _write_experiment_manifest(output_dir, train_cfg)
     if stage_id in [1, 2]:
         run_stage12_light(stage_id, model, processor, data_cfg, train_cfg, output_dir)
     elif stage_id in [3, 4]:

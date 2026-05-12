@@ -81,7 +81,7 @@ class ModelInterface:
         )
         print("[3/3] 模型就绪。")
 
-    def infer(self, image: Image.Image, prompt_text: str, max_new_tokens=256, temperature=0.2, do_sample=True) -> str:
+    def infer(self, image: Image.Image, prompt_text: str, max_new_tokens=256, temperature=0.0, do_sample=False) -> str:
         """单次推理，返回生成文本"""
         messages = [
             {

@@ -136,6 +136,7 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
         self.alpha_list = []
         self.G_list = []
         self.k_results = None
+        self.k_mask_results = None
 
         self.null_image_token = nn.Parameter(torch.zeros(1, self.cfg.vision_token_dim))
         nn.init.normal_(self.null_image_token, std=0.02)
@@ -314,6 +315,7 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
         if v_r_token_list is None:
              k_results = torch.tensor(0.0, device=hidden_states.device)
              self.k_results = k_results
+             self.k_mask_results = None
             #  alpha_loss = torch.tensor(0.0, device=hidden_states.device)
              return hidden_states, deepstack_feature_lists, k_results
         img_seqlens = cu_seqlens[1:] - cu_seqlens[:-1]
@@ -345,11 +347,13 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
             hard_k_logits, tax_loss = out  # hard_k_logits: [Batch, 40]
             k_sums = hard_k_logits.sum(dim=-1)
             k_results = (k_sums, tax_loss)
+            self.k_mask_results = hard_k_logits
         else:
             # 修复：按阈值计数，避免 sum().round() 的碎片误激活
             k_hard = (out > 0.5).to(out.dtype)
             k_sums = k_hard.sum(dim=-1)
             k_results = k_sums
+            self.k_mask_results = k_hard
             ############ debug ############
             # debug_info = self.text_gating.debug_context            
             # alpha_val = debug_info.get("alpha_val", torch.tensor(0.0))
@@ -408,8 +412,10 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
             hard_k_logits, tax_loss = out
             k_sums = hard_k_logits.sum(dim=-1)
             k_results = (k_sums, tax_loss)
+            self.k_mask_results = hard_k_logits
         else:
             k_hard = (out > 0.5).to(out.dtype)
             k_results = k_hard.sum(dim=-1)
+            self.k_mask_results = k_hard
 
         return k_results

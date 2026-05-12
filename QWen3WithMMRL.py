@@ -12,6 +12,12 @@ import config as cfg
 from transformers.models.qwen3_vl import modeling_qwen3_vl as qwen3_vl
 import VisionModelWithMMRL as vmmrl
 
+
+def _cfg_attr(config, key, default):
+    if hasattr(config, key):
+        return getattr(config, key)
+    return default
+
 class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
     def __init__(self,
                  config,
@@ -22,30 +28,46 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
         text_dim = getattr(config.text_config, "hidden_size")
         # if not hasattr(config, "mmrl_config"):
         config.mmrl_config = {
-            "USE_MMRL": cfg.USE_MMRL,
-            "INSERT_LAYER": list(cfg.INSERT_LAYER),
-            "POOLING_DIM": cfg.POOLING_DIM,
-            "RP_SPACE_LENGTH": cfg.RP_SPACE_LENGTH,
-            "RP_SPACE_DIM": cfg.RP_SPACE_DIM,
-            "INSERT_METHOD": cfg.INSERT_METHOD,
-            "GATING_MID_DIM": cfg.GATING_MID_DIM,
-            "stretching_length": cfg.stretching_length,
-            "gating_temperature": cfg.gating_temperature,
-            "text_gating_epsilon": cfg.text_gating_epsilon,
-            "insert_method": cfg.INSERT_METHOD,
+            "USE_MMRL": _cfg_attr(config, "USE_MMRL", cfg.USE_MMRL),
+            "INSERT_LAYER": list(_cfg_attr(config, "INSERT_LAYER", cfg.INSERT_LAYER)),
+            "POOLING_DIM": _cfg_attr(config, "POOLING_DIM", cfg.POOLING_DIM),
+            "RP_SPACE_LENGTH": _cfg_attr(config, "RP_SPACE_LENGTH", cfg.RP_SPACE_LENGTH),
+            "RP_SPACE_DIM": _cfg_attr(config, "RP_SPACE_DIM", cfg.RP_SPACE_DIM),
+            "INSERT_METHOD": _cfg_attr(config, "INSERT_METHOD", cfg.INSERT_METHOD),
+            "GATING_MID_DIM": _cfg_attr(config, "GATING_MID_DIM", cfg.GATING_MID_DIM),
+            "stretching_length": _cfg_attr(config, "stretching_length", cfg.stretching_length),
+            "gating_temperature": _cfg_attr(config, "gating_temperature", cfg.gating_temperature),
+            "text_gating_epsilon": _cfg_attr(config, "text_gating_epsilon", cfg.text_gating_epsilon),
+            "insert_method": _cfg_attr(config, "INSERT_METHOD", cfg.INSERT_METHOD),
+            "ENABLE_TEXT_GATING": _cfg_attr(config, "ENABLE_TEXT_GATING", True),
+            "FIXED_K_WHEN_TEXT_GATING_DISABLED": _cfg_attr(config, "FIXED_K_WHEN_TEXT_GATING_DISABLED", 40.0),
+            "ENABLE_TEXT_GATE_TAX_LOSS": _cfg_attr(config, "ENABLE_TEXT_GATE_TAX_LOSS", True),
+            "ENABLE_TEXT_GATE_COLLAPSE_LOSS": _cfg_attr(config, "ENABLE_TEXT_GATE_COLLAPSE_LOSS", True),
+            "TEXT_GATE_SELECTION_MODE": _cfg_attr(config, "TEXT_GATE_SELECTION_MODE", "dynamic_prefix"),
+            "TEXT_GATE_GROUP_SIZE": _cfg_attr(config, "TEXT_GATE_GROUP_SIZE", cfg.RP_SPACE_LENGTH),
+            "TEXT_GATE_NUM_GROUPS": _cfg_attr(config, "TEXT_GATE_NUM_GROUPS", 8),
+            "TEXT_GATE_SELECTED_GROUP_COUNT": _cfg_attr(config, "TEXT_GATE_SELECTED_GROUP_COUNT", 4),
+            "TEXT_GATE_SELECTED_GROUPS": _cfg_attr(config, "TEXT_GATE_SELECTED_GROUPS", [0, 1, 2, 3]),
+            "TEXT_GATE_SHARED_GROUPS": _cfg_attr(config, "TEXT_GATE_SHARED_GROUPS", [0, 1]),
+            "ENABLE_TEXT_GATE_GROUP_ANTI_COLLAPSE": _cfg_attr(config, "ENABLE_TEXT_GATE_GROUP_ANTI_COLLAPSE", False),
+            "TEXT_GATE_GROUP_ANTI_COLLAPSE_WEIGHT": _cfg_attr(config, "TEXT_GATE_GROUP_ANTI_COLLAPSE_WEIGHT", 0.0),
+            "TEXT_GATE_GROUP_USAGE_EMA_MOMENTUM": _cfg_attr(config, "TEXT_GATE_GROUP_USAGE_EMA_MOMENTUM", 0.98),
+            "TEXT_GATE_GROUP_USAGE_EMA_EPS": _cfg_attr(config, "TEXT_GATE_GROUP_USAGE_EMA_EPS", 1e-6),
+            "ACTIVE_REP_TOKEN_COUNT": _cfg_attr(config, "ACTIVE_REP_TOKEN_COUNT", cfg.ACTIVE_REP_TOKEN_COUNT),
             "vision_token_dim": vision_dim,
             "text_token_dim": text_dim
         }
 
         super().__init__(config)
         if tokenizer is not None:
+            rep_token_count = int(config.mmrl_config.get("ACTIVE_REP_TOKEN_COUNT", cfg.ACTIVE_REP_TOKEN_COUNT))
             self.vision_end_token_id = (
                 tokenizer.vision_end_token_id
                 if getattr(tokenizer, "vision_end_token_id", None)
                 else tokenizer.convert_tokens_to_ids("<|vision_end|>")
             )
             self.rep_placeholder_ids = [
-                tokenizer.convert_tokens_to_ids(f"<|REP_placeholder{i}|>") for i in range(40)
+                tokenizer.convert_tokens_to_ids(f"<|REP_placeholder{i}|>") for i in range(rep_token_count)
             ]
         else:
             raise ValueError("tokenizer must be specified")
@@ -89,7 +111,7 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
                 embedding=embedding,
                 text_pooling_mask=text_pooling_mask,
                 gating_temperature_override=self.temperature_override,
-                images_per_sample=images_per_sample
+                images_per_sample=images_per_sample,
             )
             split_sizes = (image_grid_thw.prod(-1) // self.visual.spatial_merge_size ** 2).tolist()
             image_embeds = torch.split(image_embeds, split_sizes)
@@ -193,7 +215,7 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
                     v_r_token_list=v_r_token_list,
                     embedding=embedding_for_gating,
                     images_per_sample=images_per_sample,
-                    text_pooling_mask=text_pooling_mask
+                    text_pooling_mask=text_pooling_mask,
                 )
             else:
                 image_embeds_raw, deepstack_image_embeds = self.get_image_features(
@@ -216,7 +238,7 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
             k_results = self.visual.compute_text_only_gating(
                 embedding=embedding_for_gating,
                 text_pooling_mask=text_pooling_mask,
-                gating_temperature_override=self.temperature_override
+                gating_temperature_override=self.temperature_override,
             )
         ######## text gating ########
         if self.use_mmrl and k_results is not None:
@@ -228,9 +250,18 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
             self.k_results = k_sums
             placeholder_cumsum = is_placeholder.cumsum(dim=-1)
             placeholder_idx = (placeholder_cumsum - 1).clamp(min=0)
-            
+
             target_embeds = t_r_tokens[placeholder_idx]
-            gate_soft_mask = torch.clamp(k_sums.unsqueeze(-1) - placeholder_idx.to(inputs_embeds.dtype), min=0, max=1).unsqueeze(-1)
+            k_mask = getattr(self.visual, "k_mask_results", None)
+            if k_mask is None:
+                gate_soft_mask = torch.clamp(
+                    k_sums.unsqueeze(-1) - placeholder_idx.to(inputs_embeds.dtype),
+                    min=0,
+                    max=1,
+                ).unsqueeze(-1)
+            else:
+                gather_idx = placeholder_idx.clamp(max=k_mask.shape[-1] - 1)
+                gate_soft_mask = k_mask.gather(dim=1, index=gather_idx).unsqueeze(-1)
             gate_soft_mask = gate_soft_mask.to(inputs_embeds.dtype)
             inputs_embeds = torch.where(is_placeholder.unsqueeze(-1), target_embeds * gate_soft_mask, inputs_embeds)
             dynamic_gate_mask = (gate_soft_mask.squeeze(-1) > 0.5)

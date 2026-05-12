@@ -1,11 +1,92 @@
 # new_train.py
 import os
+
 from train_stages import build_model_and_processor, run_stage
+
+
+EXPERIMENTS = {
+    "dynamic_prefix": {
+        "active_rep_token_count": 40,
+        "text_gate_selection_mode": "dynamic_prefix",
+        "text_gate_group_size": 5,
+        "text_gate_num_groups": 8,
+        "text_gate_selected_group_count": 4,
+        "text_gate_selected_groups": "0,1,2,3",
+        "enable_text_gating": True,
+        "enable_text_gate_tax_loss": True,
+        "enable_text_gate_collapse_loss": False,
+        "enable_k_loss_s4": False,
+        "enable_tax_loss_s4": True,
+        "tax_loss_weight": 0.8,
+        "k_general_target_s4": 0.0,
+        "k_expert_target_s4": 20.0,
+    },
+    "fixed_group20": {
+        "active_rep_token_count": 20,
+        "text_gate_selection_mode": "fixed_group20",
+        "text_gate_group_size": 5,
+        "text_gate_num_groups": 8,
+        "text_gate_selected_group_count": 4,
+        "text_gate_selected_groups": "0,1,2,3",
+        "enable_text_gating": True,
+        "enable_text_gate_tax_loss": False,
+        "enable_text_gate_collapse_loss": False,
+        "enable_k_loss_s4": False,
+        "enable_tax_loss_s4": False,
+        "tax_loss_weight": 0.0,
+        "k_general_target_s4": 0.0,
+        "k_expert_target_s4": 20.0,
+    },
+    "group_top4": {
+        "active_rep_token_count": 20,
+        "text_gate_selection_mode": "group_top4",
+        "text_gate_group_size": 5,
+        "text_gate_num_groups": 8,
+        "text_gate_selected_group_count": 4,
+        "text_gate_selected_groups": "0,1,2,3",
+        "enable_text_gating": True,
+        "enable_text_gate_tax_loss": True,
+        "enable_text_gate_collapse_loss": False,
+        "enable_k_loss_s4": False,
+        "enable_tax_loss_s4": True,
+        "tax_loss_weight": 0.6,
+        "enable_text_gate_group_anti_collapse": True,
+        "text_gate_group_anti_collapse_weight": 0.02,
+        "group_anti_collapse_weight_s4": 0.02,
+        "group_anti_collapse_warmup_epochs_s4": 0.0,
+        "text_gate_group_usage_ema_momentum": 0.98,
+        "k_general_target_s4": 0.0,
+        "k_expert_target_s4": 20.0,
+    },
+    "token_top20": {
+        "active_rep_token_count": 20,
+        "text_gate_selection_mode": "token_top20",
+        "text_gate_group_size": 5,
+        "text_gate_num_groups": 8,
+        "text_gate_selected_group_count": 4,
+        "text_gate_selected_groups": "0,1,2,3",
+        "enable_text_gating": True,
+        "enable_text_gate_tax_loss": True,
+        "enable_text_gate_collapse_loss": False,
+        "enable_k_loss_s4": False,
+        "enable_tax_loss_s4": True,
+        "tax_loss_weight": 1.0,
+        "k_general_target_s4": 0.0,
+        "k_expert_target_s4": 20.0,
+    },
+}
+
+SELECTED_EXPERIMENT = os.getenv("MMRL_EXPERIMENT", "dynamic_prefix")
+if SELECTED_EXPERIMENT not in EXPERIMENTS:
+    raise ValueError(f"Unknown MMRL_EXPERIMENT={SELECTED_EXPERIMENT!r}, choices={sorted(EXPERIMENTS)}")
+EXP_CFG = EXPERIMENTS[SELECTED_EXPERIMENT]
 
 # ===== 可调参数统一字典（不使用 argparse）=====
 CFG = {
-    "model_path": "/root/autodl-tmp/model",
-    "output_dir": os.getenv("MMRL_OUTPUT_DIR", "./output"),
+    "model_path": os.getenv("MMRL_MODEL_PATH", "/root/autodl-tmp/model"),
+    "output_dir": os.getenv("MMRL_OUTPUT_DIR", f"./output/{SELECTED_EXPERIMENT}"),
+    "experiment_name": SELECTED_EXPERIMENT,
+    "experiment": EXP_CFG,
     "data": {
         "expert_json": [
             "/root/autodl-tmp/dataset/1json.json",
@@ -17,14 +98,14 @@ CFG = {
             "/root/autodl-tmp/dataset/test2_train.json",
             "/root/autodl-tmp/dataset/test7_train.json",
 
-            "/root/autodl-tmp/dataset/1json.translated.json",
-            "/root/autodl-tmp/dataset/2conv_c.translated.json",
-            "/root/autodl-tmp/dataset/1conv_c.translated.json",
-            "/root/autodl-tmp/dataset/4conv_c.translated.json",
-            "/root/autodl-tmp/dataset/14json.translated.json",
-            "/root/autodl-tmp/dataset/prof_test.translated.json",
-            "/root/autodl-tmp/dataset/test2_train.translated.json",
-            "/root/autodl-tmp/dataset/test7_train.translated.json",
+            # "/root/autodl-tmp/dataset/1json.translated.json",
+            # "/root/autodl-tmp/dataset/2conv_c.translated.json",
+            # "/root/autodl-tmp/dataset/1conv_c.translated.json",
+            # "/root/autodl-tmp/dataset/4conv_c.translated.json",
+            # "/root/autodl-tmp/dataset/14json.translated.json",
+            # "/root/autodl-tmp/dataset/prof_test.translated.json",
+            # "/root/autodl-tmp/dataset/test2_train.translated.json",
+            # "/root/autodl-tmp/dataset/test7_train.translated.json",
         ],
         "expert_img_dir": [
             "/root/autodl-tmp/dataset/1/train",
@@ -35,7 +116,7 @@ CFG = {
         "general_json": [
             "/root/autodl-tmp/dataset/llava_instruct_150k.json",
             "/root/autodl-tmp/dataset/gen_test.json",
-            "/root/autodl-tmp/dataset/gen_test.translated.json",
+            # "/root/autodl-tmp/dataset/gen_test.translated.json",
             "/root/autodl-tmp/dataset/conversation_58k.json",
         ],
         "general_img_dir": [
@@ -45,30 +126,18 @@ CFG = {
         "total_limit": 20000,
     },
     "train": {
+        "experiment_name": SELECTED_EXPERIMENT,
+        "experiment_cfg": EXP_CFG,
         "seed": 42,
+        "deterministic_sampling": os.getenv("MMRL_DETERMINISTIC_SAMPLING", "0") == "1",
         "per_device_train_batch_size": 2,
         "gradient_accumulation_steps": 16,
-        # 当前 selector 前向是 hard top-k：固定选 4 个 span => 20 个 placeholder。
-        # 因此 budget loss 不再决定“选多少”，更多只是校准 soft gate 的总量；默认先关闭。
-        "budget_loss_weight": 0.0,
-        "budget_warmup_epochs": 0,
-        # text_gating 目前也没有实际 tax 项输出，默认关闭，避免误导 total loss 设计。
-        "tax_loss_weight": 0.0,
-
-        # 让 selector 更早进入相对离散的决策区，避免长期高温下“全开更安全”的解。
-        "initial_temp": 0.7,
-        "final_temp": 0.2,
-
-        # multi-span selector 探索噪声：先随机探索，再退火收敛。
-        "selector_explore_init_s3": float(os.getenv("MMRL_SELECTOR_EXPLORE_INIT_S3", "1.0")),
-        "selector_explore_final_s3": float(os.getenv("MMRL_SELECTOR_EXPLORE_FINAL_S3", "1.0")),
-        "selector_explore_init_s4": float(os.getenv("MMRL_SELECTOR_EXPLORE_INIT_S4", "1.0")),
-        "selector_explore_final_s4": float(os.getenv("MMRL_SELECTOR_EXPLORE_FINAL_S4", "0.0")),
-        "selector_two_phase_split_s4": float(os.getenv("MMRL_SELECTOR_TWO_PHASE_SPLIT_S4", "0.35")),
-
-        # 加强 stage4 中 alpha 监督，避免预算头和 alpha 脱钩。
-        "alpha_loss_weight_s3": 0.5,
-        "alpha_loss_weight_s4": 1.5,
+        "tax_loss_weight": EXP_CFG["tax_loss_weight"],
+        "enable_gate_loss_stage2": os.getenv("MMRL_ENABLE_GATE_LOSS_STAGE2", "1") == "1",
+        "enable_alpha_guide_loss_s3": os.getenv("MMRL_ENABLE_ALPHA_GUIDE_LOSS_S3", "1") == "1",
+        "enable_alpha_guide_loss_s4": os.getenv("MMRL_ENABLE_ALPHA_GUIDE_LOSS_S4", "1") == "1",
+        "enable_tax_loss_s4": EXP_CFG["enable_tax_loss_s4"],
+        "enable_group_anti_collapse_s4": EXP_CFG.get("enable_text_gate_group_anti_collapse", False),
 
         "console_log_every": 50,
         "metric_smooth_window": 30,
@@ -79,20 +148,21 @@ CFG = {
         "learning_rate": {
             1: 1e-4,  # 仅分类器
             2: 1e-4,  # 分类器+门控预热
-            3: 1e-4,  # 联合训练无budget，主要做对齐与过渡
-            4: 6e-5,  # 联合训练+budget，略微回升 LR，让主知识学习更多落在 stage4
+            3: 8e-5,  # 联合训练无tax
+            4: 6e-5,  # 联合训练+tax/K
         },
         "epochs": {
             1: 1,
             2: 1,
-            3: 1,
+            3: 2,
             4: 2,
         },
-        # 现在 k_selected 恒等于窗口长度 20，K loss 会把模型推向一个“不可能完成的目标”。
-        # 对固定窗口实验默认关闭；若将来改回可变K selector，再按需开启。
-        "enable_k_loss_s4": False,
-        "k_general_target_s4": 0.0,
-        "k_expert_target_s4": float(os.getenv("MMRL_K_EXPERT_TARGET_S4", "20.0")),
+        "enable_k_loss_s4": EXP_CFG["enable_k_loss_s4"],
+        "group_anti_collapse_weight_s4": EXP_CFG.get("group_anti_collapse_weight_s4", EXP_CFG.get("text_gate_group_anti_collapse_weight", 0.0)),
+        "group_anti_collapse_warmup_epochs_s4": EXP_CFG.get("group_anti_collapse_warmup_epochs_s4", 0.0),
+        "group_usage_ema_momentum": EXP_CFG.get("text_gate_group_usage_ema_momentum", 0.98),
+        "k_general_target_s4": EXP_CFG["k_general_target_s4"],
+        "k_expert_target_s4": EXP_CFG["k_expert_target_s4"],
         "k_general_lambda_init_s4": 0.0,
         "k_expert_lambda_init_s4": 0.0,
         "k_lambda_lr_general_s4": 0.02,
@@ -132,7 +202,7 @@ CFG = {
 
 
 def main():
-    model, processor = build_model_and_processor(CFG["model_path"])
+    model, processor = build_model_and_processor(CFG["model_path"], experiment_cfg=CFG["experiment"])
 
     for sid in CFG["ablation_order"]:
         print(f"\n========== Running Stage {sid} ==========")

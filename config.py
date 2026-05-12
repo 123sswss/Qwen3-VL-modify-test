@@ -2,6 +2,16 @@ import os
 
 ##################################### init #####################################
 USE_MMRL = True
+ACTIVE_REP_TOKEN_COUNT = 40
+
+def build_special_tokens(active_rep_token_count=None):
+    token_count = ACTIVE_REP_TOKEN_COUNT if active_rep_token_count is None else int(active_rep_token_count)
+    return {
+        "additional_special_tokens": [f"<|REP_placeholder{i}|>" for i in range(token_count)]
+    }
+
+
+SPECIAL_TOKENS = build_special_tokens()
 POOLING_DIM = 128
 
 ##################################### MMRL #####################################

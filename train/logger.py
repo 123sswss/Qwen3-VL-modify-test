@@ -1,6 +1,8 @@
 # logger.py
 import os
 import math
+import json
+from datetime import datetime
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -39,6 +41,8 @@ class StageMetricLogger:
         self,
         save_dir,
         stage_name,
+        experiment_name=None,
+        experiment_config=None,
         smooth_window=30,
         ema_alpha=0.15,
         scatter_stride=3,
@@ -46,12 +50,33 @@ class StageMetricLogger:
     ):
         self.save_dir = save_dir
         self.stage_name = stage_name
+        self.experiment_name = experiment_name
+        self.experiment_config = experiment_config or {}
         self.smooth_window = int(max(3, smooth_window))
         self.ema_alpha = float(ema_alpha)
         self.scatter_stride = int(max(1, scatter_stride))
         self.save_debug_figure = bool(save_debug_figure)
         self.records = []
         os.makedirs(self.save_dir, exist_ok=True)
+
+    def _file_prefix(self):
+        if self.experiment_name:
+            return f"{self.experiment_name}_{self.stage_name}"
+        return self.stage_name
+
+    def _metadata(self):
+        return {
+            "experiment_name": self.experiment_name,
+            "stage_name": self.stage_name,
+            "save_dir": self.save_dir,
+            "smooth_window": self.smooth_window,
+            "ema_alpha": self.ema_alpha,
+            "scatter_stride": self.scatter_stride,
+            "save_debug_figure": self.save_debug_figure,
+            "record_count": len(self.records),
+            "generated_at": datetime.now().isoformat(),
+            "experiment_config": self.experiment_config,
+        }
 
     def log(self, step, **metrics):
         row = {"step": int(step)}
@@ -94,9 +119,68 @@ class StageMetricLogger:
             ax.plot(x, y, color=color, alpha=raw_alpha, linewidth=1.0)
         ax.plot(x, ys, color=color, linewidth=lw, label=label)
 
+    def _has_valid_data(self, df, column):
+        return column in df.columns and pd.to_numeric(df[column], errors="coerce").notna().any()
+
+    def _resolve_text_gate_mode(self, df=None):
+        experiment_cfg = self.experiment_config.get("experiment_cfg", {}) or {}
+        mode = experiment_cfg.get("text_gate_selection_mode", None)
+        if isinstance(mode, str) and mode.strip():
+            return mode.strip().lower()
+
+        if df is not None and self._has_valid_data(df, "selection_mode_id"):
+            val = pd.to_numeric(df["selection_mode_id"], errors="coerce").dropna()
+            if len(val) > 0:
+                mapping = {
+                    0: "dynamic_prefix",
+                    1: "fixed_prefix",
+                    2: "fixed_group20",
+                    3: "group_top4",
+                    4: "token_top20",
+                }
+                return mapping.get(int(round(float(val.iloc[-1]))), None)
+        return None
+
+    def _group_usage_columns(self, df):
+        cols = []
+        for c in df.columns:
+            if c.startswith("group_usage_"):
+                suffix = c[len("group_usage_"):]
+                if suffix.isdigit():
+                    cols.append(c)
+        cols.sort(key=lambda c: int(c.split("_")[-1]))
+        return cols
+
+    def _plot_group_usage_bar(self, ax, df):
+        usage_cols = self._group_usage_columns(df)
+        if not usage_cols:
+            ax.set_visible(False)
+            return
+
+        usage = df[usage_cols].apply(pd.to_numeric, errors="coerce").mean(axis=0)
+        usage = usage.fillna(0.0)
+        total = float(usage.sum())
+        if total > 0:
+            usage = usage / total
+
+        group_ids = [int(c.split("_")[-1]) for c in usage_cols]
+        values = usage.values.astype(float)
+        bars = ax.bar(group_ids, values, color="#4c78a8", alpha=0.9)
+        ax.set_title("Global Group Usage")
+        ax.set_xlabel("Group ID")
+        ax.set_ylabel("Normalized Usage")
+        ax.set_xticks(group_ids)
+        ax.set_ylim(0.0, max(0.2, float(values.max()) * 1.15 if len(values) > 0 else 0.2))
+        ax.grid(axis="y", alpha=0.25, linestyle="--")
+        for bar, v in zip(bars, values):
+            ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.005, f"{v:.2f}",
+                    ha="center", va="bottom", fontsize=8)
+
     def _plot_paper_figure(self, df):
         self._setup_style()
         x = df["step"].values
+        stage_id = self.experiment_config.get("stage_id")
+        gate_mode = self._resolve_text_gate_mode(df)
 
         # 配色统一
         C = {
@@ -118,17 +202,23 @@ class StageMetricLogger:
             "gate": "#d62728",
         }
 
-        is_stage4 = (
-            self.stage_name.lower().endswith("stage4") or
-            ("k_general_mean" in df.columns and df["k_general_mean"].notna().any()) or
-            ("k_expert_mean" in df.columns and df["k_expert_mean"].notna().any()) or
-            ("k_selected_mean" in df.columns and df["k_selected_mean"].notna().any()) or
-            ("dynamic_k_lambda_general" in df.columns and df["dynamic_k_lambda_general"].notna().any()) or
-            ("dynamic_k_lambda_expert" in df.columns and df["dynamic_k_lambda_expert"].notna().any())
-        )
+        if stage_id is not None:
+            is_stage4 = int(stage_id) == 4
+        else:
+            is_stage4 = (
+                ("k_general_mean" in df.columns and df["k_general_mean"].notna().any()) or
+                ("k_expert_mean" in df.columns and df["k_expert_mean"].notna().any()) or
+                ("k_general_loss" in df.columns and df["k_general_loss"].notna().any()) or
+                ("k_expert_loss" in df.columns and df["k_expert_loss"].notna().any()) or
+                ("tax_loss" in df.columns and df["tax_loss"].notna().any())
+            )
+        has_group_usage = len(self._group_usage_columns(df)) > 0
 
-        # Stage1/2/3: 1x3；Stage4: 2x2
-        if is_stage4:
+        # dynamic_prefix 等旧逻辑保持不变；仅对 group_top4 增量扩展一个 group usage 面板
+        if is_stage4 and has_group_usage:
+            fig, axes = plt.subplots(2, 3, figsize=(18, 9))
+            axes = axes.flatten()
+        elif is_stage4:
             fig, axes = plt.subplots(2, 2, figsize=(14, 9))
             axes = axes.flatten()
         else:
@@ -141,7 +231,7 @@ class StageMetricLogger:
             ("total_loss", "Total", C["total"]),
             ("ce_loss", "CE", C["ce"]),
             ("alpha_guide_loss", "Alpha", C["alpha"]),
-            ("budget_loss", "Budget", C["budget"]),
+            ("anti_collapse_loss", "Anti-Collapse", "#bc5090"),
             ("cls_loss", "Cls", C["cls"]),
             ("gate_loss", "Gate", C["gate"]),
             ("tax_loss", "Tax", C["tax"]),
@@ -165,42 +255,77 @@ class StageMetricLogger:
         ax = axes[1]
         if is_stage4:
             plotted = 0
-            if "k_selected_mean" in df.columns and df["k_selected_mean"].notna().any():
-                self._plot_series(ax, x, df["k_selected_mean"], "Selected K (tokens)", C["kg"])
-                plotted += 1
-            if "span_gates_mean" in df.columns and df["span_gates_mean"].notna().any():
-                self._plot_series(ax, x, df["span_gates_mean"], "Spans Selected", C["ke"])
-                plotted += 1
-            if "k_general_mean" in df.columns and df["k_general_mean"].notna().any():
-                self._plot_series(ax, x, df["k_general_mean"], "General K", C["kg"])
-                plotted += 1
-            if "k_expert_mean" in df.columns and df["k_expert_mean"].notna().any():
-                self._plot_series(ax, x, df["k_expert_mean"], "Expert K", C["ke"])
-                plotted += 1
-            if "alpha_open_rate" in df.columns and df["alpha_open_rate"].notna().any():
-                self._plot_series(ax, x, df["alpha_open_rate"], "Alpha Open Rate", C["alpha"])
-                plotted += 1
-            if "selector_explore" in df.columns and df["selector_explore"].notna().any():
-                self._plot_series(ax, x, df["selector_explore"], "Explore Scale", C["temp"])
-                plotted += 1
-            ax.set_title("Multi-Span Selector Behavior")
+            if gate_mode == "dynamic_prefix":
+                if self._has_valid_data(df, "active_token_count_mean"):
+                    self._plot_series(ax, x, df["active_token_count_mean"], "Active Tokens", C["kg"])
+                    plotted += 1
+                if self._has_valid_data(df, "k_budget_mean"):
+                    self._plot_series(ax, x, df["k_budget_mean"], "K Budget", C["ke"])
+                    plotted += 1
+                if self._has_valid_data(df, "raw_budget_mean"):
+                    self._plot_series(ax, x, df["raw_budget_mean"], "Raw Budget", C["tax"])
+                    plotted += 1
+                if plotted == 0:
+                    if self._has_valid_data(df, "k_general_mean"):
+                        self._plot_series(ax, x, df["k_general_mean"], "General K", C["kg"])
+                        plotted += 1
+                    if self._has_valid_data(df, "k_expert_mean"):
+                        self._plot_series(ax, x, df["k_expert_mean"], "Expert K", C["ke"])
+                        plotted += 1
+                ax.set_title("K Statistics")
+                ax.set_ylabel("K / Budget")
+            elif gate_mode == "group_top4":
+                if self._has_valid_data(df, "group_count_loss"):
+                    self._plot_series(ax, x, df["group_count_loss"], "Group Count Loss", C["tax"])
+                    plotted += 1
+                if self._has_valid_data(df, "group_usage_ema_entropy"):
+                    self._plot_series(ax, x, df["group_usage_ema_entropy"], "Usage Entropy", C["kg"])
+                    plotted += 1
+                if self._has_valid_data(df, "group_usage_dead_ratio"):
+                    self._plot_series(ax, x, df["group_usage_dead_ratio"], "Dead Group Ratio", C["ke"])
+                    plotted += 1
+                ax.set_title("Group Statistics")
+                ax.set_ylabel("Value")
+            elif gate_mode == "token_top20":
+                if self._has_valid_data(df, "active_token_count_mean"):
+                    self._plot_series(ax, x, df["active_token_count_mean"], "Active Tokens", C["kg"])
+                    plotted += 1
+                if self._has_valid_data(df, "token_count_loss"):
+                    self._plot_series(ax, x, df["token_count_loss"], "Token Count Loss", C["ke"])
+                    plotted += 1
+                if self._has_valid_data(df, "token_balance_loss"):
+                    self._plot_series(ax, x, df["token_balance_loss"], "Token Balance Loss", C["tax"])
+                    plotted += 1
+                ax.set_title("Token Statistics")
+                ax.set_ylabel("Value")
+            else:
+                if self._has_valid_data(df, "k_general_mean"):
+                    self._plot_series(ax, x, df["k_general_mean"], "General K", C["kg"])
+                    plotted += 1
+                if self._has_valid_data(df, "k_expert_mean"):
+                    self._plot_series(ax, x, df["k_expert_mean"], "Expert K", C["ke"])
+                    plotted += 1
+                ax.set_title("K Statistics")
+                ax.set_ylabel("K")
             ax.set_xlabel("Global Step")
-            ax.set_ylabel("Value")
             ax.grid(alpha=0.25, linestyle="--")
             if plotted > 0:
                 ax.legend(frameon=False)
         else:
             # alpha std
             plotted = 0
-            if "alpha_std" in df.columns and df["alpha_std"].notna().any():
+            if "alpha_mae" in df.columns and df["alpha_mae"].notna().any():
+                self._plot_series(ax, x, df["alpha_mae"], "Alpha MAE", C["std_alpha"])
+                plotted += 1
+            elif "alpha_std" in df.columns and df["alpha_std"].notna().any():
                 self._plot_series(ax, x, df["alpha_std"], "Alpha Std", C["std_alpha"])
                 plotted += 1
             if "label_alpha_std" in df.columns and df["label_alpha_std"].notna().any():
                 self._plot_series(ax, x, df["label_alpha_std"], "Label Std", C["std_label"])
                 plotted += 1
-            ax.set_title("Alpha Dispersion")
+            ax.set_title("Alpha Error")
             ax.set_xlabel("Global Step")
-            ax.set_ylabel("Std")
+            ax.set_ylabel("Value")
             ax.grid(alpha=0.25, linestyle="--")
             if plotted > 0:
                 ax.legend(frameon=False)
@@ -209,24 +334,40 @@ class StageMetricLogger:
         ax = axes[2]
         if is_stage4:
             plotted = 0
-            if "budget_loss" in df.columns and df["budget_loss"].notna().any():
-                self._plot_series(ax, x, df["budget_loss"], "Budget Loss", C["budget"])
-                plotted += 1
-            if "dynamic_k_lambda_general" in df.columns and df["dynamic_k_lambda_general"].notna().any():
-                self._plot_series(ax, x, df["dynamic_k_lambda_general"], "Lambda General", C["lambda_g"])
-                plotted += 1
-            if "dynamic_k_lambda_expert" in df.columns and df["dynamic_k_lambda_expert"].notna().any():
-                self._plot_series(ax, x, df["dynamic_k_lambda_expert"], "Lambda Expert", C["lambda_e"])
-                plotted += 1
-            if "tax_loss" in df.columns and df["tax_loss"].notna().any():
-                self._plot_series(ax, x, df["tax_loss"], "Tax Loss", C["tax"])
-                plotted += 1
-            if "slot_dataset_loss" in df.columns and df["slot_dataset_loss"].notna().any():
-                self._plot_series(ax, x, df["slot_dataset_loss"], "Slot-Group Loss", C["slot_dataset"])
-                plotted += 1
-            ax.set_title("Auxiliary / Regularization")
+            if gate_mode == "group_top4":
+                if self._has_valid_data(df, "anti_collapse_weight"):
+                    self._plot_series(ax, x, df["anti_collapse_weight"], "Anti-Collapse Weight", "#bc5090")
+                    plotted += 1
+                if self._has_valid_data(df, "group_usage_ema_max"):
+                    self._plot_series(ax, x, df["group_usage_ema_max"], "EMA Usage Max", C["kg"])
+                    plotted += 1
+                if self._has_valid_data(df, "group_usage_ema_min"):
+                    self._plot_series(ax, x, df["group_usage_ema_min"], "EMA Usage Min", C["ke"])
+                    plotted += 1
+                ax.set_title("Anti-Collapse")
+                ax.set_ylabel("Value")
+            elif gate_mode == "token_top20":
+                if self._has_valid_data(df, "k_budget_mean"):
+                    self._plot_series(ax, x, df["k_budget_mean"], "K Budget", C["kg"])
+                    plotted += 1
+                if self._has_valid_data(df, "batch_alpha_mean"):
+                    self._plot_series(ax, x, df["batch_alpha_mean"], "Batch Alpha", C["alpha"])
+                    plotted += 1
+                if self._has_valid_data(df, "text_rel_mean"):
+                    self._plot_series(ax, x, df["text_rel_mean"], "Text Relevance", C["temp"])
+                    plotted += 1
+                ax.set_title("Token Routing")
+                ax.set_ylabel("Value")
+            else:
+                if self._has_valid_data(df, "dynamic_k_lambda_general"):
+                    self._plot_series(ax, x, df["dynamic_k_lambda_general"], "Lambda General", C["lambda_g"])
+                    plotted += 1
+                if self._has_valid_data(df, "dynamic_k_lambda_expert"):
+                    self._plot_series(ax, x, df["dynamic_k_lambda_expert"], "Lambda Expert", C["lambda_e"])
+                    plotted += 1
+                ax.set_title("Dynamic K Lambda")
+                ax.set_ylabel("Lambda")
             ax.set_xlabel("Global Step")
-            ax.set_ylabel("Value")
             ax.grid(alpha=0.25, linestyle="--")
             if plotted > 0:
                 ax.legend(frameon=False)
@@ -271,11 +412,18 @@ class StageMetricLogger:
             if plotted > 0:
                 ax.legend(frameon=False)
 
-        fig.suptitle(f"Training Metrics - {self.stage_name}", fontsize=15, y=0.98)
+        if is_stage4 and has_group_usage:
+            self._plot_group_usage_bar(axes[4], df)
+            if len(axes) > 5:
+                axes[5].axis("off")
+
+        fig_title = self.stage_name if not self.experiment_name else f"{self.experiment_name} / {self.stage_name}"
+        fig.suptitle(f"Training Metrics - {fig_title}", fontsize=15, y=0.98)
         fig.tight_layout(rect=[0, 0.02, 1, 0.96])
 
-        png_path = os.path.join(self.save_dir, f"{self.stage_name}_paper.png")
-        pdf_path = os.path.join(self.save_dir, f"{self.stage_name}_paper.pdf")
+        prefix = self._file_prefix()
+        png_path = os.path.join(self.save_dir, f"{prefix}_paper.png")
+        pdf_path = os.path.join(self.save_dir, f"{prefix}_paper.pdf")
         fig.savefig(png_path, bbox_inches="tight")
         fig.savefig(pdf_path, bbox_inches="tight")
         plt.close(fig)
@@ -289,9 +437,15 @@ class StageMetricLogger:
             print(f"[MetricLogger] No records for {self.stage_name}, skip.")
             return
 
-        csv_path = os.path.join(self.save_dir, f"{self.stage_name}_metrics.csv")
+        prefix = self._file_prefix()
+        csv_path = os.path.join(self.save_dir, f"{prefix}_metrics.csv")
         df.to_csv(csv_path, index=False)
         print(f"[MetricLogger] Saved CSV: {csv_path}")
+
+        metadata_path = os.path.join(self.save_dir, f"{prefix}_meta.json")
+        with open(metadata_path, "w", encoding="utf-8") as f:
+            json.dump(self._metadata(), f, ensure_ascii=False, indent=2)
+        print(f"[MetricLogger] Saved META: {metadata_path}")
 
         self._plot_paper_figure(df)
 
@@ -318,8 +472,8 @@ class TrainerMetricsCallback(TrainerCallback):
             print(f"  ├─ CE Loss:               {_fmt(row.get('ce_loss')):>10}")
         if "alpha_guide_loss" in row:
             print(f"  ├─ Alpha Guide Loss:      {_fmt(row.get('alpha_guide_loss')):>10}")
-        if "budget_loss" in row:
-            print(f"  ├─ Budget Loss:           {_fmt(row.get('budget_loss')):>10}")
+        if "anti_collapse_loss" in row:
+            print(f"  ├─ Anti-Collapse Loss:    {_fmt(row.get('anti_collapse_loss')):>10}")
         if "cls_loss" in row:
             print(f"  ├─ Cls Loss:              {_fmt(row.get('cls_loss')):>10}")
         if "gate_loss" in row:
@@ -332,6 +486,16 @@ class TrainerMetricsCallback(TrainerCallback):
             print(f"  ├─ Slot-Group Loss:       {_fmt(row.get('slot_dataset_loss')):>10}")
         if "tax_loss" in row:
             print(f"  ├─ Tax Loss:              {_fmt(row.get('tax_loss')):>10}")
+        if "group_usage_ema_max" in row or "group_usage_ema_min" in row or "group_usage_ema_entropy" in row:
+            print(f"[Anti-Collapse]")
+            if "group_usage_ema_max" in row:
+                print(f"  ├─ EMA Usage Max:         {_fmt(row.get('group_usage_ema_max')):>10}")
+            if "group_usage_ema_min" in row:
+                print(f"  ├─ EMA Usage Min:         {_fmt(row.get('group_usage_ema_min')):>10}")
+            if "group_usage_dead_ratio" in row:
+                print(f"  ├─ Dead Group Ratio:      {_fmt(row.get('group_usage_dead_ratio')):>10}")
+            if "group_usage_ema_entropy" in row:
+                print(f"  └─ EMA Usage Entropy:     {_fmt(row.get('group_usage_ema_entropy')):>10}")
 
         # K 统计
         has_k = (
@@ -380,9 +544,11 @@ class TrainerMetricsCallback(TrainerCallback):
                 print(f"  └─ Test Entropy:          {_fmt(row.get('slot_entropy_test'), nd=3):>10}")
 
         # Alpha 统计
-        has_alpha = ("alpha_std" in row) or ("label_alpha_std" in row)
+        has_alpha = ("alpha_mae" in row) or ("alpha_std" in row) or ("label_alpha_std" in row)
         if has_alpha:
             print(f"[Alpha Statistics]")
+            if "alpha_mae" in row:
+                print(f"  ├─ Alpha MAE:             {_fmt(row.get('alpha_mae'), nd=4):>10}")
             if "alpha_std" in row:
                 print(f"  ├─ Alpha Std:             {_fmt(row.get('alpha_std'), nd=4):>10}")
             if "label_alpha_std" in row:

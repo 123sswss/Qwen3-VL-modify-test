@@ -9,6 +9,8 @@ from transformers import (
     GenerationConfig
 )
 from safetensors.torch import load_file
+import sys
+sys.path.append("..")
 import config as cfg
 import QWen3WithMMRL
 import processingWithMMRL
@@ -49,7 +51,7 @@ def inference():
     # --------------------------------------------------------------------------
     # 配置路径
     # --------------------------------------------------------------------------
-    TRAINED_MODEL_PATH = "/root/autodl-tmp/Qwen3-VL-modify-test/mmrl_output"  
+    TRAINED_MODEL_PATH = "/root/autodl-tmp/Qwen3-VL-modify-test/experiment_outputs/output/textgate_dynamic_prefixv6/final"  
     BASE_MODEL_PATH = "/root/autodl-tmp/model" 
     
     # --------------------------------------------------------------------------

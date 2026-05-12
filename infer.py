@@ -79,35 +79,46 @@ def inference():
     # 配置路径 (请确保这些路径真实存在)
     # --------------------------------------------------------------------------
     # 1. 训练好的模型权重目录
-    TRAINED_MODEL_PATH = "/root/autodl-tmp/Qwen3-VL-modify-test/train/output/final"  
+    TRAINED_MODEL_PATH = "/root/autodl-tmp/Qwen3-VL-modify-test/experiment_outputs/output/textgate_dynamic_prefix_v7_gpu0/final"  
     
     # 2. 原始基座模型路径 (用于读取 Config 和 Processor，防止训练后 Config 缺失)
     BASE_MODEL_PATH = "/root/autodl-tmp/model" 
     
     # 3. 输入图片和文本
-    IMAGE_PATH = "/root/autodl-tmp/dataset/14/DJI_20231023073909_0114_V_JPG.rf.16c125c28c5e6deaf7e9b1525ee0188c.jpg"
-    PROMPT_TEXT = "\n分析设备状态并输出JSON。"
-
-    # IMAGE_PATH = "/root/autodl-tmp/dataset/14/DJI_20231023073909_0114_V_JPG.rf.16c125c28c5e6deaf7e9b1525ee0188c.jpg"
-    # PROMPT_TEXT = "上海有哪些鸟的鸟巢比较常见？"
-
-    IMAGE_PATH = "/root/autodl-tmp/dataset/14/DJI_20231023073909_0114_V_JPG.rf.16c125c28c5e6deaf7e9b1525ee0188c.jpg"
-    PROMPT_TEXT = "详细描述一下这张图片中的设备状态。"
-
-    # IMAGE_PATH = "/root/autodl-tmp/dataset/14/DJI_20231023073909_0114_V_JPG.rf.16c125c28c5e6deaf7e9b1525ee0188c.jpg"
-    # PROMPT_TEXT = "Analyze device status and output JSON. "
-
-    # IMAGE_PATH = "/root/autodl-tmp/Qwen3-VL-modify-test/testimg/test.png"
-    # PROMPT_TEXT = "描述一下图片中的这三个人"
-
-    # IMAGE_PATH = "/root/autodl-tmp/Qwen3-VL-modify-test/testimg/test2.png"
-    # PROMPT_TEXT = "描述一下这张图片。"
-
-    # IMAGE_PATH = "/root/autodl-tmp/Qwen3-VL-modify-test/testimg/test2.png"
-    # PROMPT_TEXT = "**题目**：图中的这是什么动物？ **选项**： A. 猫 B. 猪 C. 松鼠 D. 钝角 请结合图像内容，展示完整的思考和分析过程。 "
-
-    # IMAGE_PATH = "/root/autodl-tmp/dataset/2/train/202107131415546185208_jpg.rf.3e0e829ff15ad8a3925667dfdedd9e62.jpg"
-    # PROMPT_TEXT = "请根据图像内容回答下面的单项选择题，并结合可见特征做简要判断。 **题目**：根据图像内容，画面的顶部右侧位置对应的电力设备是什么？ **选项**： A. 三极隔离开关 B. 断路器 C. 断开状态双连隔离开关 D. 闭合状态双连隔离开关 请严格按以下格式作答： **最终答案**：[[选项字母]] **简要依据**：用1到2句话说明图中关键视觉特征，并简要说明为什么正确选项成立、其他选项不符。"
+    INFERENCE_CASES = [
+        {
+            "image_path": "/root/autodl-tmp/dataset/14/DJI_20231023073909_0114_V_JPG.rf.16c125c28c5e6deaf7e9b1525ee0188c.jpg",
+            "prompt_text": "\n分析设备状态并输出JSON。",
+        },
+        {
+            "image_path": "/root/autodl-tmp/dataset/14/DJI_20231023073909_0114_V_JPG.rf.16c125c28c5e6deaf7e9b1525ee0188c.jpg",
+            "prompt_text": "上海有哪些鸟的鸟巢比较常见？",
+        },
+        {
+            "image_path": "/root/autodl-tmp/dataset/14/DJI_20231023073909_0114_V_JPG.rf.16c125c28c5e6deaf7e9b1525ee0188c.jpg",
+            "prompt_text": "详细描述一下这张图片中的设备状态。",
+        },
+        {
+            "image_path": "/root/autodl-tmp/dataset/14/DJI_20231023073909_0114_V_JPG.rf.16c125c28c5e6deaf7e9b1525ee0188c.jpg",
+            "prompt_text": "Analyze device status and output JSON. ",
+        },
+        {
+            "image_path": "/root/autodl-tmp/Qwen3-VL-modify-test/testimg/test.png",
+            "prompt_text": "描述一下图片中的这三个人",
+        },
+        {
+            "image_path": "/root/autodl-tmp/Qwen3-VL-modify-test/testimg/test2.png",
+            "prompt_text": "描述一下这张图片。",
+        },
+        {
+            "image_path": "/root/autodl-tmp/Qwen3-VL-modify-test/testimg/test2.png",
+            "prompt_text": "**题目**：图中的这是什么动物？ **选项**： A. 猫 B. 猪 C. 松鼠 D. 钝角 请结合图像内容，展示完整的思考和分析过程。 ",
+        },
+        {
+            "image_path": "/root/autodl-tmp/dataset/2/train/202107131415546185208_jpg.rf.3e0e829ff15ad8a3925667dfdedd9e62.jpg",
+            "prompt_text": "请根据图像内容回答下面的单项选择题，并结合可见特征做简要判断。 **题目**：根据图像内容，画面的顶部右侧位置对应的电力设备是什么？ **选项**： A. 三极隔离开关 B. 断路器 C. 断开状态双连隔离开关 D. 闭合状态双连隔离开关 请严格按以下格式作答： **最终答案**：[[选项字母]] **简要依据**：用1到2句话说明图中关键视觉特征，并简要说明为什么正确选项成立、其他选项不符。",
+        },
+    ]
     
     # --------------------------------------------------------------------------
     # 加载模型
@@ -172,89 +183,100 @@ def inference():
         image_processor=image_processor, tokenizer=tokenizer, cfg=cfg
     )
     
-    image = Image.open(IMAGE_PATH).convert("RGB")
-    # image = None
+    for idx, case in enumerate(INFERENCE_CASES, start=1):
+        image_path = case["image_path"]
+        prompt_text = case["prompt_text"]
 
-    messages = [
-        {
-            "role": "user", 
-            "content": [
-                {"type": "image", "image": image},
-                {"type": "text", "text": PROMPT_TEXT}
-            ]
-        }
-    ]
-    
-    text_prompt = processor.apply_chat_template(
-        messages, 
-        tokenize=False, 
-        add_generation_prompt=True
-    )
-    
-    if hasattr(model.model, "rope_deltas"):
-        model.model.rope_deltas = None
+        print(f"\n[{idx}/{len(INFERENCE_CASES)}] 推理样例")
+        print(f"    -> IMAGE_PATH: {image_path}")
 
-    # 2. 处理输入时加入 Padding，规避 Mask 长度不匹配的 Bug
-    # QWen3WithMMRL 的 forward 逻辑在处理变长 mask 时可能有缺陷
-    # 模仿 overfit.py，给定一个足够长的 max_length (比如 2048 或 4096)
-    inputs = processor(
-        text=[text_prompt], 
-        images=image,
-        padding=False,
-        max_length=False,
-        truncation=False,
-        return_tensors="pt"
-    ).to(model.device)
+        image = Image.open(image_path).convert("RGB")
+        # image = None
 
-    # 3. 生成
-    print(f"    -> 开始生成 (Input shape: {inputs.input_ids.shape})...")
-    with torch.no_grad():
-        generated_ids = model.generate(
-            **inputs, 
-            max_new_tokens=256,
-            do_sample=True,
-            temperature=0.2,
-            # Qwen-VL 处理 pad token 的习惯
-            pad_token_id=tokenizer.pad_token_id,
-            eos_token_id=tokenizer.eos_token_id,
-            use_cache=False 
+        messages = [
+            {
+                "role": "user", 
+                "content": [
+                    {"type": "image", "image": image},
+                    {"type": "text", "text": prompt_text}
+                ]
+            }
+        ]
+        
+        text_prompt = processor.apply_chat_template(
+            messages, 
+            tokenize=False, 
+            add_generation_prompt=True
         )
         
-        # 解码时要注意去除 padding 和 input 部分
-        # generated_ids 的长度可能等于 max_length + new_tokens，或者提前停止
-        
-        # 获取实际生成的 token (去掉 input 部分)
-        # 注意：由于使用了 padding，generated_ids 前面部分包含了大量的 pad token 或者 input
-        # 标准做法是截断 input_ids 的长度
-        input_len = inputs.input_ids.shape[1]
-        output_ids = generated_ids[:, input_len:]
-        
-        output_text = tokenizer.decode(output_ids[0], skip_special_tokens=True)
-        
-        print("\n" + "="*40)
-        print(f"Prompt: {PROMPT_TEXT}")
-        print("-" * 40)
-        print(f"Output: {output_text}")
-        print("="*40)
+        if hasattr(model.model, "rope_deltas"):
+            model.model.rope_deltas = None
 
-        if hasattr(model.model.visual, "alpha_list") and model.model.visual.alpha_list is not None:
-            alpha_logits = model.model.visual.alpha_list  # [Total_Images, 1]
-            alpha_probs = torch.sigmoid(alpha_logits)
-            k = model.model.k_results  # [Batch, Total_Experts]
-            G = model.model.visual.G_list  # [Total_Images, 1]
-            selector_debug = getattr(model.model.visual.text_gating, "debug_context", {}) or {}
-            raw_budget = selector_debug.get("raw_budget")
-            alpha_scale = selector_debug.get("alpha_scale")
-            selected_mask = selector_debug.get("selected_mask", getattr(model.model, "text_selected_mask", None))
-            selected_slots = _extract_selected_slots(selected_mask)
+        if hasattr(model.model.visual, "alpha_list"):
+            model.model.visual.alpha_list = None
 
-            print(f"[Debug] 门控状态:")
-            print(f"  ├─ Alpha Logits (原始): {alpha_logits.squeeze().detach().cpu().tolist()}")
-            print(f"  ├─ Alpha Probs (sigmoid): {alpha_probs.squeeze().detach().cpu().tolist()}")
-            print(f"  ├─ G 值: {G.squeeze().detach().cpu().tolist()}")
-            print(f"  ├─ K 值: {k.squeeze().detach().cpu().tolist()}")
-            print(f"  └─ 平均激活值: {alpha_probs.mean().item():.4f}")
-            print(f"     (>0.5=专家模式, <0.5=通用模式)")
+        if hasattr(model.model.visual, "G_list"):
+            model.model.visual.G_list = None
+
+        if hasattr(model.model, "k_results"):
+            model.model.k_results = None
+
+        # 2. 处理输入时加入 Padding，规避 Mask 长度不匹配的 Bug
+        # QWen3WithMMRL 的 forward 逻辑在处理变长 mask 时可能有缺陷
+        # 模仿 overfit.py，给定一个足够长的 max_length (比如 2048 或 4096)
+        inputs = processor(
+            text=[text_prompt], 
+            images=image,
+            padding=False,
+            max_length=False,
+            truncation=False,
+            return_tensors="pt"
+        ).to(model.device)
+
+        # 3. 生成
+        print(f"    -> 开始生成 (Input shape: {inputs.input_ids.shape})...")
+        with torch.no_grad():
+            generated_ids = model.generate(
+                **inputs, 
+                max_new_tokens=256,
+                do_sample=True,
+                temperature=0.2,
+                # Qwen-VL 处理 pad token 的习惯
+                pad_token_id=tokenizer.pad_token_id,
+                eos_token_id=tokenizer.eos_token_id,
+                use_cache=False 
+            )
+            
+            # 解码时要注意去除 padding 和 input 部分
+            # generated_ids 的长度可能等于 max_length + new_tokens，或者提前停止
+            
+            # 获取实际生成的 token (去掉 input 部分)
+            # 注意：由于使用了 padding，generated_ids 前面部分包含了大量的 pad token 或者 input
+            # 标准做法是截断 input_ids 的长度
+            input_len = inputs.input_ids.shape[1]
+            output_ids = generated_ids[:, input_len:]
+            
+            output_text = tokenizer.decode(output_ids[0], skip_special_tokens=True)
+            
+            print("\n" + "="*40)
+            print(f"Prompt: {prompt_text}")
+            print("-" * 40)
+            print(f"Output: {output_text}")
+            print("="*40)
+
+            if hasattr(model.model.visual, "alpha_list") and model.model.visual.alpha_list is not None:
+                alpha_logits = model.model.visual.alpha_list  # [Total_Images, 1]
+                alpha_probs = torch.sigmoid(alpha_logits)
+                k = model.model.k_results  # [Batch, Total_Experts]
+                G = model.model.visual.G_list  # [Total_Images, 1]
+
+                print(f"[Debug] 门控状态:")
+                print(f"  ├─ Alpha Logits (原始): {alpha_logits.squeeze().detach().cpu().tolist()}")
+                print(f"  ├─ Alpha Probs (sigmoid): {alpha_probs.squeeze().detach().cpu().tolist()}")
+                print(f"  ├─ G 值: {G.squeeze().detach().cpu().tolist()}")
+                print(f"  ├─ K 值: {k.squeeze().detach().cpu().tolist()}")
+                print(f"  └─ 平均激活值: {alpha_probs.mean().item():.4f}")
+                print(f"     (>0.5=专家模式, <0.5=通用模式)")
 
             print(f"[Debug] Text Gating 细节:")
             print(f"  ├─ Raw Budget: {_to_debug_list(raw_budget)}")

@@ -86,14 +86,46 @@ def load_jsons(json_input, attach_source=False):
     if isinstance(json_input, list):
         for path in json_input:
             with open(path, "r", encoding="utf-8") as f:
-                arr = json.load(f)
-            _append_records(arr, path)
+                items = json.load(f)
+                for item in items:
+                    if isinstance(item, dict):
+                        item = dict(item)
+                        item["__source_json_path"] = path
+                    data.append(item)
     else:
         with open(json_input, "r", encoding="utf-8") as f:
-            arr = json.load(f)
-        _append_records(arr, json_input)
-
+            items = json.load(f)
+            for item in items:
+                if isinstance(item, dict):
+                    item = dict(item)
+                    item["__source_json_path"] = json_input
+                data.append(item)
     return data
+
+
+TASK_TYPE_TO_ID = {
+    "report": 0,
+    "vqa": 1,
+    "test": 2,
+    "unknown": 3,
+}
+
+
+def infer_task_type_from_source(source_json_path: Optional[str]) -> str:
+    if not source_json_path:
+        return "unknown"
+    base = os.path.basename(source_json_path).lower()
+    stem = os.path.splitext(base)[0]
+
+    if "conversation" in stem or "llava" in stem:
+        return "vqa"
+    if "conv_c" in stem:
+        return "vqa"
+    if "test" in stem:
+        return "test"
+    if stem.endswith("json") or re.search(r"\d+json($|[._-])", stem):
+        return "report"
+    return "unknown"
 
 
 def build_image_mapping(img_input):
@@ -129,12 +161,15 @@ class FourViewMMRLDataset(Dataset):
         mode="stage1_cls",  # stage1_cls / stage2_gate / stage3_joint / stage4_sparse
         ce_enabled=False,
         seed=42,
+        deterministic_sampling=False,
     ):
         self.processor = processor
         self.total_limit = total_limit
         self.enable_views = set(enable_views)
         self.mode = mode
-        random.seed(seed)
+        self.seed = seed
+        self.deterministic_sampling = deterministic_sampling
+        self.resample_round = 0
 
         self.expert_raw = load_jsons(expert_json, attach_source=True) if expert_json else []
         self.general_raw = load_jsons(general_json, attach_source=True) if general_json else []
@@ -168,6 +203,10 @@ class FourViewMMRLDataset(Dataset):
         dataset_group = infer_dataset_group(item.get("_source_json", ""), is_expert=is_expert)
         dataset_group_id = DATASET_GROUP_TO_ID.get(dataset_group, 0 if not is_expert else 1)
         conv = item.get("conversations", [])
+        source_json_path = item.get("__source_json_path")
+        source_name = os.path.basename(source_json_path) if source_json_path else "unknown"
+        dataset_task_type = infer_task_type_from_source(source_json_path)
+        dataset_task_id = TASK_TYPE_TO_ID.get(dataset_task_type, TASK_TYPE_TO_ID["unknown"])
 
         mm_key = f"{task_type}-mm"
         text_key = f"{task_type}-text"
@@ -176,6 +215,9 @@ class FourViewMMRLDataset(Dataset):
         if mm_key in self.enable_views:
             out.append({
                 "task_type": task_type,
+                "dataset_task_type": dataset_task_type,
+                "dataset_task_id": dataset_task_id,
+                "source_name": source_name,
                 "view_type": "mm",
                 "image_path": img_path,
                 "conversations": conv,
@@ -197,6 +239,9 @@ class FourViewMMRLDataset(Dataset):
             if not is_semantic_collapsed(merged_text):
                 out.append({
                     "task_type": task_type,
+                    "dataset_task_type": dataset_task_type,
+                    "dataset_task_id": dataset_task_id,
+                    "source_name": source_name,
                     "view_type": "text",
                     "image_path": None,  # text-only
                     "conversations": cleaned_conv,
@@ -207,25 +252,30 @@ class FourViewMMRLDataset(Dataset):
         return out
 
     def _build(self):
+        if self.deterministic_sampling:
+            rng = random.Random(self.seed + self.resample_round)
+        else:
+            rng = random
         expert_pool = [x for x in self.expert_raw if self._valid_item(x, True)]
         general_pool = [x for x in self.general_raw if self._valid_item(x, False)]
 
         half = self.total_limit // 2
-        e_samples = random.sample(expert_pool, min(half, len(expert_pool)))
-        g_samples = random.sample(general_pool, min(self.total_limit - len(e_samples), len(general_pool)))
+        e_samples = rng.sample(expert_pool, min(half, len(expert_pool)))
+        g_samples = rng.sample(general_pool, min(self.total_limit - len(e_samples), len(general_pool)))
 
         for item in e_samples:
             self.data.extend(self._build_views_from_item(item, "expert"))
         for item in g_samples:
             self.data.extend(self._build_views_from_item(item, "general"))
 
-        random.shuffle(self.data)
+        rng.shuffle(self.data)
         print(f"[FourViewMMRLDataset] total view samples: {len(self.data)}")
 
     def __len__(self):
         return len(self.data)
     
     def resample_general_data(self):
+        self.resample_round += 1
         self.data = []
         self._build()
 
@@ -316,6 +366,9 @@ class FourViewMMRLDataset(Dataset):
             "image_grid_thw": image_grid_thw,
             "labels": labels,
             "alpha_labels": float(alpha_label),
+            "task_type_id": int(s.get("dataset_task_id", TASK_TYPE_TO_ID["unknown"])),
+            "task_type_name": s.get("dataset_task_type", "unknown"),
+            "source_name": s.get("source_name", "unknown"),
             "images_per_sample": images_per_sample,
             "is_mm": is_mm,
             "dataset_group_id": s.get("dataset_group_id", 0),
@@ -327,6 +380,9 @@ class MMRLDataCollator:
         self.processor = processor
     def __call__(self, features: List[Dict[str, Any]]) -> Dict[str, Any]:
         alpha_labels = [f.pop("alpha_labels") for f in features]
+        task_type_ids = [f.pop("task_type_id") for f in features]
+        task_type_names = [f.pop("task_type_name") for f in features]
+        source_names = [f.pop("source_name") for f in features]
         images_per_sample = [f.pop("images_per_sample") for f in features]
         is_mm = [f.pop("is_mm") for f in features]
 
@@ -355,6 +411,9 @@ class MMRLDataCollator:
             batch["image_grid_thw"] = None
 
         batch["alpha_labels"] = torch.tensor(alpha_labels, dtype=torch.float32)
+        batch["task_type_ids"] = torch.tensor(task_type_ids, dtype=torch.long)
+        batch["task_type_names"] = task_type_names
+        batch["source_names"] = source_names
         batch["images_per_sample"] = images_per_sample
         batch["is_mm"] = torch.tensor(is_mm, dtype=torch.long)
         batch["dataset_group_ids"] = torch.tensor(dataset_group_ids, dtype=torch.long)

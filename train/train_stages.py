@@ -1,7 +1,5 @@
 # train_stages.py
-import sys
-
-import numpy as np
+import os
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
@@ -19,10 +17,68 @@ sys.path.append("..")
 import config as cfg
 import processingWithMMRL
 import QWen3WithMMRL
-from data_pipeline import FourViewMMRLDataset, MMRLDataCollator, ID_TO_DATASET_GROUP
+from transformers import TrainerCallback
+import json
+
 from logger import StageMetricLogger, TrainerMetricsCallback
 from train_utils import focal_bce_with_logits
 
+
+
+def _build_experiment_context(train_cfg, output_dir, stage_id):
+    experiment_name = train_cfg.get("experiment_name", "experiment")
+    experiment_cfg = dict(train_cfg.get("experiment_cfg", {}))
+    return {
+        "experiment_name": experiment_name,
+        "stage_name": f"stage{stage_id}",
+        "stage_id": stage_id,
+        "output_dir": output_dir,
+        "stage_output_dir": f"{output_dir}/stage{stage_id}",
+        "metrics_dir": f"{output_dir}/stage{stage_id}/metrics",
+        "train_cfg": {
+            "seed": train_cfg.get("seed"),
+            "deterministic_sampling": train_cfg.get("deterministic_sampling", False),
+            "per_device_train_batch_size": train_cfg.get("per_device_train_batch_size"),
+            "gradient_accumulation_steps": train_cfg.get("gradient_accumulation_steps"),
+            "learning_rate": train_cfg.get("learning_rate", {}).get(stage_id),
+            "epochs": train_cfg.get("epochs", {}).get(stage_id),
+            "console_log_every": train_cfg.get("console_log_every"),
+            "metric_smooth_window": train_cfg.get("metric_smooth_window"),
+            "metric_ema_alpha": train_cfg.get("metric_ema_alpha"),
+            "metric_scatter_stride": train_cfg.get("metric_scatter_stride"),
+            "enable_gate_loss_stage2": train_cfg.get("enable_gate_loss_stage2"),
+            "enable_alpha_guide_loss_s3": train_cfg.get("enable_alpha_guide_loss_s3"),
+            "enable_alpha_guide_loss_s4": train_cfg.get("enable_alpha_guide_loss_s4"),
+            "enable_tax_loss_s4": train_cfg.get("enable_tax_loss_s4"),
+            "enable_k_loss_s4": train_cfg.get("enable_k_loss_s4"),
+            "enable_group_anti_collapse_s4": train_cfg.get("enable_group_anti_collapse_s4"),
+            "group_anti_collapse_weight_s4": train_cfg.get("group_anti_collapse_weight_s4"),
+            "group_anti_collapse_warmup_epochs_s4": train_cfg.get("group_anti_collapse_warmup_epochs_s4"),
+            "group_usage_ema_momentum": train_cfg.get("group_usage_ema_momentum"),
+            "tax_loss_weight": train_cfg.get("tax_loss_weight"),
+            "k_general_target_s4": train_cfg.get("k_general_target_s4"),
+            "k_expert_target_s4": train_cfg.get("k_expert_target_s4"),
+        },
+        "experiment_cfg": experiment_cfg,
+    }
+
+
+def _write_experiment_manifest(output_dir, train_cfg):
+    experiment_name = train_cfg.get("experiment_name", "experiment")
+    manifest = {
+        "experiment_name": experiment_name,
+        "output_dir": output_dir,
+        "experiment_cfg": dict(train_cfg.get("experiment_cfg", {})),
+        "train_cfg": {
+            k: v for k, v in train_cfg.items()
+            if k not in {"experiment_cfg"}
+        },
+    }
+    os.makedirs(output_dir, exist_ok=True)
+    manifest_path = os.path.join(output_dir, f"{experiment_name}_manifest.json")
+    with open(manifest_path, "w", encoding="utf-8") as f:
+        json.dump(manifest, f, ensure_ascii=False, indent=2)
+    print(f"[Experiment] manifest saved to {manifest_path}")
 
 def print_stage_step_summary(stage_name, step, row):
     def _fmt(x, nd=4):
@@ -56,12 +112,9 @@ def print_stage_step_summary(stage_name, step, row):
     if "tax_loss" in row:
         print(f"  ├─ Tax Loss:              {_fmt(row.get('tax_loss')):>10}")
 
-    if "alpha_std" in row or "label_alpha_std" in row:
-        print("[Alpha Statistics]")
-        if "alpha_std" in row:
-            print(f"  ├─ Alpha Std:             {_fmt(row.get('alpha_std')):>10}")
-        if "label_alpha_std" in row:
-            print(f"  └─ Label Alpha Std:       {_fmt(row.get('label_alpha_std')):>10}")
+    if "alpha_mae" in row:
+        print(f"[Alpha Statistics]")
+        print(f"  └─ Alpha MAE:             {_fmt(row.get('alpha_mae')):>10}")
 
     if "k_selected_mean" in row:
         print("[Selector Statistics]")
@@ -110,21 +163,19 @@ class StageScheduleCallback(TrainerCallback):
         total_epochs,
         init_temp=1.0,
         final_temp=0.1,
-        target_budget=0.05,
-        budget_warmup_epochs=1,
-        selector_explore_init=0.0,
-        selector_explore_final=0.0,
-        selector_two_phase_split=0.0,
+        target_tax=4.0,
+        tax_warmup_epochs=1,
+        target_group_anti_collapse_weight=0.0,
+        group_anti_collapse_warmup_epochs=0,
     ):
         self.dataset = dataset
         self.total_epochs = total_epochs
         self.init_temp = init_temp
         self.final_temp = final_temp
-        self.target_budget = target_budget
-        self.budget_warmup_epochs = budget_warmup_epochs
-        self.selector_explore_init = float(selector_explore_init)
-        self.selector_explore_final = float(selector_explore_final)
-        self.selector_two_phase_split = float(selector_two_phase_split)
+        self.target_tax = target_tax
+        self.tax_warmup_epochs = tax_warmup_epochs
+        self.target_group_anti_collapse_weight = float(target_group_anti_collapse_weight)
+        self.group_anti_collapse_warmup_epochs = float(group_anti_collapse_warmup_epochs)
 
     def on_epoch_begin(self, args, state, control, **kwargs):
         self.dataset.resample_general_data()
@@ -157,6 +208,21 @@ class StageScheduleCallback(TrainerCallback):
             model.budget_loss_weight = self.target_budget * budget_progress
 
 
+        text_gating = model._get_text_gating_module() if hasattr(model, "_get_text_gating_module") else None
+        if text_gating is not None:
+            if ep < self.group_anti_collapse_warmup_epochs:
+                anti_collapse_p = 0.0
+            else:
+                anti_collapse_p = min(
+                    (ep - self.group_anti_collapse_warmup_epochs) /
+                    max(self.total_epochs - self.group_anti_collapse_warmup_epochs, 1e-6),
+                    1.0,
+                )
+            text_gating.group_anti_collapse_weight = self.target_group_anti_collapse_weight * anti_collapse_p
+
+# =========================
+#  Full model (Stage3/4用)
+# =========================
 class Qwen3VLMMRLForStages(Qwen3VLForConditionalGeneration):
     def __init__(self, config, tokenizer):
         nn.Module.__init__(self)
@@ -171,13 +237,14 @@ class Qwen3VLMMRLForStages(Qwen3VLForConditionalGeneration):
         self.generation_config = GenerationConfig.from_model_config(config)
 
         self.ce_loss_weight = 1.0
-        self.alpha_loss_weight = 0.5
-        self.budget_loss_weight = 0.0
-        self.temperature_override = None
-        self.selector_exploration_scale = 0.0
-        self.use_k_loss = False
-        self.use_tax = False
-        self.tax_loss_weight = 0.0
+        self.alpha_loss_weight = 0.5   # Stage3建议0.3~1.0，Stage4可0.5
+        self.tax_loss_weight = 0.0     # Stage3=0, Stage4由调度升到目标
+        self.enable_alpha_guide_loss = True
+        self.enable_gate_loss_stage2 = True
+        
+        self.k_general_weight = 0.0
+        self.k_expert_weight = 0.0
+        # ===== dynamic lambda for K control =====
         self.use_dynamic_k_lambda = False
         self.k_general_target = 0.0
         self.k_expert_target = 0.0
@@ -195,138 +262,48 @@ class Qwen3VLMMRLForStages(Qwen3VLForConditionalGeneration):
         self.debug_mode = True
         self.debug_loss_threshold = 20.0
 
+    def _compute_group_anti_collapse_loss(self):
+        text_gating = self._get_text_gating_module()
+        zero = torch.tensor(0.0, device=self.lm_head.weight.device)
+        if text_gating is None:
+            return zero, {}
+        if getattr(text_gating, "selection_mode", None) != "group_top4":
+            return zero, {}
+        if hasattr(text_gating, "compute_group_anti_collapse_loss"):
+            return text_gating.compute_group_anti_collapse_loss()
+        return zero, {}
+
+    def _get_text_gating_module(self):
+        visual = getattr(self.model, "visual", None)
+        return getattr(visual, "text_gating", None)
+
+    def _get_k_norm(self):
+        text_gating = self._get_text_gating_module()
+        return float(getattr(text_gating, "total_rep_num", 40.0))
+
+    def _supports_text_gating_losses(self):
+        text_gating = self._get_text_gating_module()
+        if text_gating is None:
+            return False
+        return bool(getattr(text_gating, "enable_text_gating", True))
+
     def _expand_alpha_labels(self, alpha_labels, images_per_sample):
         if alpha_labels is None:
             return None
         if images_per_sample is None:
             return alpha_labels.view(-1, 1)
 
-        chunks = []
+        tmp = []
         for i, c in enumerate(images_per_sample):
             c = int(c)
             if c > 0:
-                chunks.append(alpha_labels[i].repeat(c))
-        if len(chunks) == 0:
+                tmp.append(alpha_labels[i].repeat(c))
+        if len(tmp) == 0:
             return None
-        return torch.cat(chunks).view(-1, 1)
+        return torch.cat(tmp).view(-1, 1)
 
-    def _compute_alpha_guide_loss(self, alpha_logits, expanded_labels, device):
-        if alpha_logits is None or expanded_labels is None or expanded_labels.numel() == 0:
-            return alpha_logits, torch.tensor(0.0, device=device)
-
-        if isinstance(alpha_logits, list):
-            alpha_logits = torch.stack(alpha_logits) if len(alpha_logits) > 0 else None
-        if alpha_logits is None:
-            return alpha_logits, torch.tensor(0.0, device=device)
-        if alpha_logits.dim() == 1:
-            alpha_logits = alpha_logits.unsqueeze(-1)
-
-        n = min(alpha_logits.shape[0], expanded_labels.shape[0])
-        if n <= 0:
-            return alpha_logits, torch.tensor(0.0, device=device)
-
-        loss = torch.nn.functional.binary_cross_entropy_with_logits(
-            alpha_logits[:n], expanded_labels[:n].to(alpha_logits.dtype)
-        ) * self.alpha_loss_weight
-        return alpha_logits, loss
-
-    def _collect_selector_metrics(self, device):
-        k_selected_mean = torch.tensor(float("nan"), device=device)
-        span_gates_mean = torch.tensor(float("nan"), device=device)
-        span_budget_loss_val = torch.tensor(float("nan"), device=device)
-        alpha_open_rate = torch.tensor(float("nan"), device=device)
-
-        selector = getattr(self.model.visual, "text_selector_outputs", None)
-        if isinstance(selector, dict):
-            k_selected = selector.get("k_selected")
-            if torch.is_tensor(k_selected) and k_selected.numel() > 0:
-                k_selected_mean = k_selected.detach().float().mean()
-            span_gates = selector.get("span_gates")
-            if torch.is_tensor(span_gates) and span_gates.numel() > 0:
-                span_gates_mean = span_gates.detach().float().sum(dim=-1).mean()  # 平均选了多少个 span
-            sbl = selector.get("span_budget_loss")
-            if torch.is_tensor(sbl):
-                span_budget_loss_val = sbl.detach().float()
-
-        alpha_logits = self.model.visual.alpha_list
-        if isinstance(alpha_logits, list):
-            alpha_logits = torch.stack(alpha_logits) if len(alpha_logits) > 0 else None
-        if torch.is_tensor(alpha_logits) and alpha_logits.numel() > 0:
-            alpha_open_rate = (torch.sigmoid(alpha_logits.detach().float()) > 0.5).float().mean()
-
-        return k_selected_mean, span_gates_mean, span_budget_loss_val, alpha_open_rate
-
-    def _compute_budget_loss(self, device):
-        """使用 multi-span selector 的 span_budget_loss（鼓励恰好选4个span）"""
-        selector = getattr(self.model.visual, "text_selector_outputs", None)
-        if not isinstance(selector, dict):
-            return torch.tensor(0.0, device=device)
-
-        span_budget_loss = selector.get("span_budget_loss")
-        if not torch.is_tensor(span_budget_loss):
-            return torch.tensor(0.0, device=device)
-
-        return span_budget_loss * self.budget_loss_weight
-
-    def _compute_dataset_slot_loss(self, dataset_group_ids, device):
-        zero = torch.tensor(0.0, device=device)
-        metrics = {}
-        if not self.enable_dataset_slot_loss_s4:
-            return zero, metrics
-        if dataset_group_ids is None or not torch.is_tensor(dataset_group_ids):
-            return zero, metrics
-
-        selector = getattr(self.model.visual, "text_selector_outputs", None)
-        if not isinstance(selector, dict):
-            return zero, metrics
-
-        selected_mask = selector.get("selected_mask")
-        k_selected = selector.get("k_selected")
-        if not torch.is_tensor(selected_mask) or selected_mask.numel() == 0:
-            return zero, metrics
-
-        dataset_group_ids = dataset_group_ids.to(device=device).view(-1)
-        n = min(selected_mask.shape[0], dataset_group_ids.shape[0])
-        if n <= 0:
-            return zero, metrics
-
-        selected_mask = selected_mask[:n].float()
-        dataset_group_ids = dataset_group_ids[:n]
-        if not torch.is_tensor(k_selected) or k_selected.numel() == 0:
-            k_selected = selected_mask.sum(dim=-1)
-        else:
-            k_selected = k_selected[:n].float()
-
-        slot_probs = selected_mask / selected_mask.sum(dim=-1, keepdim=True).clamp_min(1e-6)
-        slot_entropy = -(slot_probs * slot_probs.clamp_min(1e-6).log()).sum(dim=-1)
-
-        loss_terms = []
-        for gid, group_name in ID_TO_DATASET_GROUP.items():
-            group_cfg = self.slot_group_constraints_s4.get(group_name)
-            if not group_cfg:
-                continue
-            mask = dataset_group_ids == int(gid)
-            if mask.sum().item() <= 0:
-                continue
-
-            ent = slot_entropy[mask]
-            k_grp = k_selected[mask]
-            ent_min = float(group_cfg.get("entropy_min", 0.0))
-            ent_max = float(group_cfg.get("entropy_max", 1e9))
-            weight = float(group_cfg.get("weight", 0.0))
-
-            ent_range_loss = (torch.relu(ent_min - ent) + torch.relu(ent - ent_max)).mean()
-            loss_terms.append(weight * ent_range_loss)
-
-            metrics[f"slot_entropy_{group_name}"] = ent.mean().detach()
-            metrics[f"k_mean_{group_name}"] = k_grp.mean().detach()
-
-        if len(loss_terms) == 0:
-            return zero, metrics
-        return torch.stack(loss_terms).sum(), metrics
-
-    def forward(self, input_ids=None, alpha_labels=None, images_per_sample=None, **kwargs):
-        if self.temperature_override is not None:
+    def forward(self, input_ids=None, alpha_labels=None, images_per_sample=None, task_type_ids=None, **kwargs):
+        if hasattr(self, "temperature_override") and self.temperature_override is not None:
             self.model.temperature_override = self.temperature_override
             kwargs["gating_temperature_override"] = self.temperature_override
         self.model.visual.text_gating.start_exploration_scale = float(getattr(self, "selector_exploration_scale", 0.0))
@@ -362,7 +339,9 @@ class Qwen3VLMMRLForStages(Qwen3VLForConditionalGeneration):
             else:
                 alpha_logits = None
 
-        if alpha_logits is not None and alpha_labels is not None:
+        expanded_labels = self._expand_alpha_labels(alpha_labels, images_per_sample)
+
+        if self.enable_alpha_guide_loss and alpha_logits is not None and alpha_labels is not None:
             if expanded_labels is not None and expanded_labels.numel() > 0:
                 if alpha_logits.dim() == 1:
                     alpha_logits = alpha_logits.unsqueeze(-1)
@@ -392,13 +371,7 @@ class Qwen3VLMMRLForStages(Qwen3VLForConditionalGeneration):
                 lbl = expanded_labels.squeeze(-1)
                 is_general = (lbl < 0.1)
                 is_expert = (lbl > 0.9)
-                k_norm = float(
-                    getattr(
-                        self.model.visual.text_gating,
-                        "total_rep_num",
-                        getattr(cfg, "TOTAL_TEXT_REP_TOKENS", 40.0)
-                    )
-                )
+                k_norm = self._get_k_norm()
 
                 # ===== general =====
                 if is_general.any():
@@ -429,29 +402,23 @@ class Qwen3VLMMRLForStages(Qwen3VLForConditionalGeneration):
                     k_expert_loss = current_lambda_e * ((ke - self.k_expert_target) / k_norm).pow(2).mean()
         # 3) tax (optional, stage4再开)
         tax_raw = getattr(self.model, "tax_loss", torch.tensor(0.0, device=input_ids.device))
+        if not torch.is_tensor(tax_raw):
+            tax_raw = torch.tensor(float(tax_raw), device=input_ids.device, dtype=ce_loss.dtype)
         tax_loss = tax_raw * self.tax_loss_weight if self.use_tax else torch.tensor(0.0, device=input_ids.device)
-        outputs.loss = (
-            self.ce_loss_weight * ce_loss
-            + alpha_guide_loss
-            + k_general_loss
-            + k_expert_loss
-            + tax_loss
-            + budget_loss
-            + slot_dataset_loss
-        )
+        anti_collapse_loss, anti_collapse_debug = self._compute_group_anti_collapse_loss()
+        outputs.loss = self.ce_loss_weight * ce_loss + alpha_guide_loss + k_general_loss + k_expert_loss + tax_loss + anti_collapse_loss
 
         # ---- cache metrics for external logger ----
         with torch.no_grad():
-            alpha_std = torch.tensor(float("nan"), device=device)
-            label_alpha_std = torch.tensor(float("nan"), device=device)
-            if torch.is_tensor(alpha_logits) and alpha_logits.numel() > 0:
+            alpha_mae = torch.tensor(float("nan"), device=input_ids.device)
+
+            if alpha_logits is not None and torch.is_tensor(alpha_logits) and alpha_logits.numel() > 0:
                 a = torch.sigmoid(alpha_logits.detach().float().view(-1))
-                if a.numel() > 1:
-                    alpha_std = a.std(unbiased=False)
-            if torch.is_tensor(expanded_labels) and expanded_labels.numel() > 0:
-                l = expanded_labels.detach().float().view(-1)
-                if l.numel() > 1:
-                    label_alpha_std = l.std(unbiased=False)
+                if expanded_labels is not None and torch.is_tensor(expanded_labels) and expanded_labels.numel() > 0:
+                    l = expanded_labels.detach().float().view(-1)[:a.numel()].to(a.device)
+                    n = min(a.numel(), l.numel())
+                    if n > 0:
+                        alpha_mae = (a[:n] - l[:n]).abs().mean()
 
             k_selected_mean, span_gates_mean, span_budget_loss_val, alpha_open_rate = self._collect_selector_metrics(device)
 
@@ -462,13 +429,8 @@ class Qwen3VLMMRLForStages(Qwen3VLForConditionalGeneration):
                 "k_general_loss": k_general_loss.detach(),
                 "k_expert_loss": k_expert_loss.detach(),
                 "tax_loss": tax_loss.detach(),
-                "budget_loss": budget_loss.detach(),
-                "slot_dataset_loss": slot_dataset_loss.detach(),
-                "alpha_std": alpha_std.detach(),
-                "label_alpha_std": label_alpha_std.detach(),
-                "k_selected_mean": k_selected_mean.detach(),
-                "span_gates_mean": span_gates_mean.detach(),
-                "span_budget_loss": span_budget_loss_val.detach(),
+                "anti_collapse_loss": anti_collapse_loss.detach(),
+                "alpha_mae": alpha_mae.detach(),
                 "k_general_mean": k_general_mean.detach(),
                 "k_expert_mean": k_expert_mean.detach(),
                 "alpha_open_rate": alpha_open_rate.detach(),
@@ -482,7 +444,47 @@ class Qwen3VLMMRLForStages(Qwen3VLForConditionalGeneration):
                 "tax_weight": torch.tensor(float(self.tax_loss_weight), device=device),
                 "selector_explore": torch.tensor(float(self.selector_exploration_scale), device=device),
             }
-            self._last_metrics.update(slot_dataset_metrics)
+            text_gating = self._get_text_gating_module()
+            if text_gating is not None:
+                self._last_metrics["anti_collapse_weight"] = torch.tensor(
+                    float(getattr(text_gating, "group_anti_collapse_weight", 0.0)),
+                    device=input_ids.device,
+                )
+                dbg = getattr(text_gating, "debug_context", {}) or {}
+                selection_mode = getattr(text_gating, "selection_mode", None)
+                if selection_mode is not None:
+                    selection_mode_map = {
+                        "dynamic_prefix": 0.0,
+                        "fixed_prefix": 1.0,
+                        "fixed_group20": 2.0,
+                        "group_top4": 3.0,
+                        "token_top20": 4.0,
+                    }
+                    self._last_metrics["selection_mode_id"] = torch.tensor(
+                        float(selection_mode_map.get(str(selection_mode), -1.0)),
+                        device=input_ids.device,
+                    )
+
+                for key in (
+                    "group_count_loss",
+                    "token_count_loss",
+                    "token_balance_loss",
+                    "raw_budget_mean",
+                    "k_budget_mean",
+                    "active_token_count_mean",
+                    "batch_alpha_mean",
+                    "text_rel_mean",
+                ):
+                    if key in dbg:
+                        self._last_metrics[key] = dbg[key]
+
+                hard_group_mask = getattr(text_gating, "last_hard_group_mask", None)
+                if torch.is_tensor(hard_group_mask) and hard_group_mask.numel() > 0:
+                    usage = hard_group_mask.detach().float().mean(dim=0)
+                    usage = usage / usage.sum().clamp_min(1e-8)
+                    for gi in range(int(usage.shape[0])):
+                        self._last_metrics[f"group_usage_{gi}"] = usage[gi]
+            self._last_metrics.update(anti_collapse_debug)
 
         if self.debug_mode and torch.is_tensor(outputs.loss):
             loss_val = outputs.loss.detach().float().item()
@@ -508,8 +510,67 @@ class Qwen3VLMMRLForStages(Qwen3VLForConditionalGeneration):
         return outputs
 
 
-def build_model_and_processor(model_path):
+def build_model_and_processor(model_path, experiment_cfg=None):
+    experiment_cfg = experiment_cfg or {}
     config = AutoConfig.from_pretrained(model_path, trust_remote_code=True)
+    active_rep_token_count = int(experiment_cfg.get("active_rep_token_count", getattr(cfg, "ACTIVE_REP_TOKEN_COUNT", 40)))
+    cfg.ACTIVE_REP_TOKEN_COUNT = active_rep_token_count
+    cfg.SPECIAL_TOKENS = cfg.build_special_tokens(active_rep_token_count)
+
+    config.ACTIVE_REP_TOKEN_COUNT = active_rep_token_count
+    config.ENABLE_TEXT_GATING = bool(experiment_cfg.get("enable_text_gating", os.getenv("MMRL_ENABLE_TEXT_GATING", "1") == "1"))
+    config.FIXED_K_WHEN_TEXT_GATING_DISABLED = float(experiment_cfg.get(
+        "fixed_k_when_text_gating_disabled",
+        os.getenv("MMRL_FIXED_K_WHEN_TEXT_GATING_DISABLED", "40")
+    ))
+    config.ENABLE_TEXT_GATE_TAX_LOSS = bool(experiment_cfg.get(
+        "enable_text_gate_tax_loss",
+        os.getenv("MMRL_ENABLE_TEXT_GATE_TAX_LOSS", "1") == "1"
+    ))
+    config.ENABLE_TEXT_GATE_COLLAPSE_LOSS = bool(experiment_cfg.get(
+        "enable_text_gate_collapse_loss",
+        os.getenv("MMRL_ENABLE_TEXT_GATE_COLLAPSE_LOSS", "1") == "1"
+    ))
+    config.TEXT_GATE_SELECTION_MODE = str(experiment_cfg.get(
+        "text_gate_selection_mode",
+        os.getenv("MMRL_TEXT_GATE_SELECTION_MODE", "dynamic_prefix")
+    ))
+    config.TEXT_GATE_GROUP_SIZE = int(experiment_cfg.get(
+        "text_gate_group_size",
+        os.getenv("MMRL_TEXT_GATE_GROUP_SIZE", str(cfg.RP_SPACE_LENGTH))
+    ))
+    config.TEXT_GATE_NUM_GROUPS = int(experiment_cfg.get(
+        "text_gate_num_groups",
+        os.getenv("MMRL_TEXT_GATE_NUM_GROUPS", "8")
+    ))
+    config.TEXT_GATE_SELECTED_GROUP_COUNT = int(experiment_cfg.get(
+        "text_gate_selected_group_count",
+        os.getenv("MMRL_TEXT_GATE_SELECTED_GROUP_COUNT", "4")
+    ))
+    config.TEXT_GATE_SELECTED_GROUPS = experiment_cfg.get(
+        "text_gate_selected_groups",
+        os.getenv("MMRL_TEXT_GATE_SELECTED_GROUPS", "0,1,2,3")
+    )
+    config.TEXT_GATE_SHARED_GROUPS = experiment_cfg.get(
+        "text_gate_shared_groups",
+        [0, 1]
+    )
+    config.ENABLE_TEXT_GATE_GROUP_ANTI_COLLAPSE = bool(experiment_cfg.get(
+        "enable_text_gate_group_anti_collapse",
+        False
+    ))
+    config.TEXT_GATE_GROUP_ANTI_COLLAPSE_WEIGHT = float(experiment_cfg.get(
+        "text_gate_group_anti_collapse_weight",
+        0.0
+    ))
+    config.TEXT_GATE_GROUP_USAGE_EMA_MOMENTUM = float(experiment_cfg.get(
+        "text_gate_group_usage_ema_momentum",
+        0.98
+    ))
+    config.TEXT_GATE_GROUP_USAGE_EMA_EPS = float(experiment_cfg.get(
+        "text_gate_group_usage_ema_eps",
+        1e-6
+    ))
     tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
     image_processor = AutoImageProcessor.from_pretrained(model_path, trust_remote_code=True)
     tokenizer.add_special_tokens(cfg.SPECIAL_TOKENS)
@@ -544,6 +605,11 @@ def build_model_and_processor(model_path):
             )
     processor = processingWithMMRL.Qwen3ProcessorWithMMRL(
         image_processor=image_processor, tokenizer=tokenizer, cfg=cfg
+    )
+    print(
+        f"[Experiment] mode={config.TEXT_GATE_SELECTION_MODE} active_rep_token_count={config.ACTIVE_REP_TOKEN_COUNT} "
+        f"group_size={config.TEXT_GATE_GROUP_SIZE} num_groups={config.TEXT_GATE_NUM_GROUPS} "
+        f"selected_group_count={config.TEXT_GATE_SELECTED_GROUP_COUNT} selected_groups={config.TEXT_GATE_SELECTED_GROUPS}"
     )
     print("Processor built.")
     return model, processor
@@ -601,9 +667,12 @@ def run_stage12_light(stage_id, model, processor, data_cfg, train_cfg, output_di
     set_trainable_stage(model, stage_id)
     model.train()
 
+    experiment_context = _build_experiment_context(train_cfg, output_dir, stage_id)
     metric_logger = StageMetricLogger(
         save_dir=f"{output_dir}/stage{stage_id}/metrics",
         stage_name=f"stage{stage_id}",
+        experiment_name=experiment_context["experiment_name"],
+        experiment_config=experiment_context,
         smooth_window=train_cfg.get("metric_smooth_window", 30),
         ema_alpha=train_cfg.get("metric_ema_alpha", 0.15),
         scatter_stride=train_cfg.get("metric_scatter_stride", 3),
@@ -621,6 +690,7 @@ def run_stage12_light(stage_id, model, processor, data_cfg, train_cfg, output_di
         mode=f"stage{stage_id}",
         ce_enabled=False,
         seed=train_cfg["seed"],
+        deterministic_sampling=train_cfg.get("deterministic_sampling", False),
     )
     collator = MMRLDataCollator(processor)
 
@@ -651,6 +721,7 @@ def run_stage12_light(stage_id, model, processor, data_cfg, train_cfg, output_di
             input_ids = batch["input_ids"].cuda(non_blocking=True)
             attention_mask = batch["attention_mask"].cuda(non_blocking=True)
             alpha_labels = batch["alpha_labels"].cuda(non_blocking=True).view(-1, 1).to(dtype=v.dtype)
+            task_type_ids = batch["task_type_ids"].cuda(non_blocking=True)
             is_mm = batch["is_mm"].cuda(non_blocking=True)
             pixel_values = batch["pixel_values"]
             image_grid_thw = batch["image_grid_thw"]
@@ -678,9 +749,10 @@ def run_stage12_light(stage_id, model, processor, data_cfg, train_cfg, output_di
             )
 
             gate_loss = torch.tensor(0.0, device=cls_loss.device)
-            if stage_id == 2:
-                gate_output = v.visionGating(alpha_logits, getattr(model, "temperature_override", None))
-                gate_loss = torch.nn.functional.mse_loss(gate_output, alpha_labels)
+            if stage_id == 2 and getattr(model, "enable_gate_loss_stage2", True):
+                g = v.visionGating(alpha_logits, getattr(model, "temperature_override", None))
+                target = alpha_labels
+                gate_loss = torch.nn.functional.mse_loss(g, target)
 
             ((cls_loss + gate_loss) / steps_per_update).backward()
 
@@ -691,35 +763,28 @@ def run_stage12_light(stage_id, model, processor, data_cfg, train_cfg, output_di
 
                 with torch.no_grad():
                     alpha_prob = torch.sigmoid(alpha_logits.detach().float().view(-1))
-                    alpha_std = alpha_prob.std(unbiased=False) if alpha_prob.numel() > 1 else torch.tensor(float("nan"), device=alpha_prob.device)
-                    label_std = alpha_labels.detach().float().view(-1).std(unbiased=False) if alpha_labels.numel() > 1 else torch.tensor(float("nan"), device=alpha_labels.device)
+                    alpha_mae = (alpha_prob - alpha_labels.detach().float().view(-1)).abs().mean() if alpha_prob.numel() > 0 else torch.tensor(float("nan"), device=alpha_prob.device)
 
                     metric_logger.log(
                         step=global_step,
                         total_loss=(cls_loss.detach() + gate_loss.detach()),
                         cls_loss=cls_loss.detach(),
                         gate_loss=gate_loss.detach(),
-                        alpha_std=alpha_std,
-                        label_alpha_std=label_std,
+                        alpha_mae=alpha_mae,
                         temperature=getattr(model, "temperature_override", float("nan")),
                         learning_rate=opt.param_groups[0]["lr"],
                     )
-
-                if global_step % train_cfg.get("console_log_every", 50) == 0:
-                    print_stage_step_summary(
-                        f"stage{stage_id}",
-                        global_step,
-                        {
-                            "total_loss": (cls_loss.detach() + gate_loss.detach()),
-                            "cls_loss": cls_loss.detach(),
-                            "gate_loss": gate_loss.detach(),
-                            "alpha_std": alpha_std,
-                            "label_alpha_std": label_std,
-                            "temperature": getattr(model, "temperature_override", float("nan")),
-                            "learning_rate": opt.param_groups[0]["lr"],
-                        },
-                    )
-
+                print_every = train_cfg.get("console_log_every", 50)
+                if global_step % print_every == 0:
+                    row = {
+                        "total_loss": (cls_loss.detach() + gate_loss.detach()),
+                        "cls_loss": cls_loss.detach(),
+                        "gate_loss": gate_loss.detach(),
+                        "alpha_mae": alpha_mae,
+                        "temperature": getattr(model, "temperature_override", float("nan")),
+                        "learning_rate": opt.param_groups[0]["lr"],
+                    }
+                    print_stage_step_summary(f"stage{stage_id}", global_step, row)
     metric_logger.finalize()
 
 
@@ -727,26 +792,33 @@ def run_stage34_full(stage_id, model, processor, data_cfg, train_cfg, output_dir
     assert stage_id in [3, 4]
     set_trainable_stage(model, stage_id)
 
-    model.ce_loss_weight = 1.0
-    model.alpha_loss_weight = train_cfg.get(f"alpha_loss_weight_s{stage_id}", 0.5)
-    model.budget_loss_weight = 0.0
-    model.selector_exploration_scale = float(train_cfg.get(f"selector_explore_init_s{stage_id}", 0.0))
-    model.use_tax = bool(stage_id == 4)
-    model.tax_loss_weight = float(train_cfg.get("tax_loss_weight", 0.0))
-    model.use_k_loss = bool(stage_id == 4 and train_cfg.get("enable_k_loss_s4", False))
-    model.use_dynamic_k_lambda = bool(model.use_k_loss)
-    model.k_general_target = float(train_cfg.get("k_general_target_s4", 0.0))
-    model.k_expert_target = float(train_cfg.get("k_expert_target_s4", 0.0))
-    model.k_general_weight = float(train_cfg.get("k_general_lambda_init_s4", 0.0))
-    model.k_expert_weight = float(train_cfg.get("k_expert_lambda_init_s4", 0.0))
-    model.k_general_lambda = float(train_cfg.get("k_general_lambda_init_s4", 0.0))
-    model.k_expert_lambda = float(train_cfg.get("k_expert_lambda_init_s4", 0.0))
-    model.k_lambda_lr_general = float(train_cfg.get("k_lambda_lr_general_s4", 0.0))
-    model.k_lambda_lr_expert = float(train_cfg.get("k_lambda_lr_expert_s4", 0.0))
-    model.k_lambda_max_general = float(train_cfg.get("k_lambda_max_general_s4", 0.0))
-    model.k_lambda_max_expert = float(train_cfg.get("k_lambda_max_expert_s4", 0.0))
-    model.enable_dataset_slot_loss_s4 = bool(stage_id == 4 and train_cfg.get("enable_dataset_slot_loss_s4", False))
-    model.slot_group_constraints_s4 = train_cfg.get("slot_group_constraints_s4", {}) if stage_id == 4 else {}
+    if stage_id == 3:
+        model.ce_loss_weight = 1.0
+        model.alpha_loss_weight = train_cfg.get("alpha_loss_weight_s3", 0.5)
+        model.enable_alpha_guide_loss = train_cfg.get("enable_alpha_guide_loss_s3", True)
+        model.use_tax = False
+        model.tax_loss_weight = 0.0
+        model.use_k_loss = False
+        model.k_general_weight = 0.0
+        model.k_expert_weight = 0.0
+    else:  # stage4
+        model.ce_loss_weight = 1.0
+        model.alpha_loss_weight = train_cfg.get("alpha_loss_weight_s4", 0.5)
+        model.enable_alpha_guide_loss = train_cfg.get("enable_alpha_guide_loss_s4", True)
+        model.use_tax = train_cfg.get("enable_tax_loss_s4", True)
+        model.tax_loss_weight = 0.0
+        model.use_k_loss = train_cfg.get("enable_k_loss_s4", True)
+        model.use_dynamic_k_lambda = True
+        model.k_general_target = train_cfg.get("k_general_target_s4", 0.0)
+        model.k_expert_target = train_cfg.get("k_expert_target_s4", 8.0)
+        model.k_general_lambda = train_cfg.get("k_general_lambda_init_s4", 0.0)
+        model.k_expert_lambda = train_cfg.get("k_expert_lambda_init_s4", 0.0)
+        model.k_lambda_lr_general = train_cfg.get("k_lambda_lr_general_s4", 0.02)
+        model.k_lambda_lr_expert = train_cfg.get("k_lambda_lr_expert_s4", 0.01)
+        model.k_lambda_max_general = train_cfg.get("k_lambda_max_general_s4", 5.0)
+        model.k_lambda_max_expert = train_cfg.get("k_lambda_max_expert_s4", 5.0)
+
+    model.enable_gate_loss_stage2 = train_cfg.get("enable_gate_loss_stage2", True)
 
     ds = FourViewMMRLDataset(
         processor=processor,
@@ -759,6 +831,7 @@ def run_stage34_full(stage_id, model, processor, data_cfg, train_cfg, output_dir
         mode=f"stage{stage_id}",
         ce_enabled=True,
         seed=train_cfg["seed"],
+        deterministic_sampling=train_cfg.get("deterministic_sampling", False),
     )
     collator = MMRLDataCollator(processor)
     schedule_cb = StageScheduleCallback(
@@ -766,17 +839,13 @@ def run_stage34_full(stage_id, model, processor, data_cfg, train_cfg, output_dir
         total_epochs=train_cfg["epochs"][stage_id],
         init_temp=train_cfg.get("initial_temp", 1.0),
         final_temp=train_cfg.get("final_temp", 0.1),
-        target_budget=(
-            0.0
-            if stage_id == 3
-            else train_cfg.get("budget_loss_weight", train_cfg.get("tax_loss_weight", 0.05))
+        target_tax=(0.0 if stage_id == 3 else train_cfg["tax_loss_weight"]),
+        tax_warmup_epochs=train_cfg.get("tax_warmup_epochs", 1),
+        target_group_anti_collapse_weight=(
+            0.0 if stage_id == 3 or not train_cfg.get("enable_group_anti_collapse_s4", True)
+            else train_cfg.get("group_anti_collapse_weight_s4", 0.0)
         ),
-        budget_warmup_epochs=train_cfg.get("budget_warmup_epochs", train_cfg.get("tax_warmup_epochs", 1)),
-        selector_explore_init=train_cfg.get(f"selector_explore_init_s{stage_id}", 0.0),
-        selector_explore_final=train_cfg.get(f"selector_explore_final_s{stage_id}", 0.0),
-        selector_two_phase_split=(
-            train_cfg.get("selector_two_phase_split_s4", 0.0) if stage_id == 4 else 0.0
-        ),
+        group_anti_collapse_warmup_epochs=train_cfg.get("group_anti_collapse_warmup_epochs_s4", 0),
     )
     args = TrainingArguments(
         output_dir=f"{output_dir}/stage{stage_id}",
@@ -793,9 +862,12 @@ def run_stage34_full(stage_id, model, processor, data_cfg, train_cfg, output_dir
         dataloader_pin_memory=False,
         dataloader_num_workers=train_cfg.get("dataloader_num_workers", 4),
     )
+    experiment_context = _build_experiment_context(train_cfg, output_dir, stage_id)
     metric_logger = StageMetricLogger(
         save_dir=f"{output_dir}/stage{stage_id}/metrics",
         stage_name=f"stage{stage_id}",
+        experiment_name=experiment_context["experiment_name"],
+        experiment_config=experiment_context,
         smooth_window=train_cfg.get("metric_smooth_window", 30),
         ema_alpha=train_cfg.get("metric_ema_alpha", 0.15),
         scatter_stride=train_cfg.get("metric_scatter_stride", 3),
@@ -818,6 +890,8 @@ def run_stage34_full(stage_id, model, processor, data_cfg, train_cfg, output_dir
 
 
 def run_stage(stage_id, model, processor, data_cfg, train_cfg, output_dir):
+    if stage_id == 1:
+        _write_experiment_manifest(output_dir, train_cfg)
     if stage_id in [1, 2]:
         run_stage12_light(stage_id, model, processor, data_cfg, train_cfg, output_dir)
     elif stage_id in [3, 4]:

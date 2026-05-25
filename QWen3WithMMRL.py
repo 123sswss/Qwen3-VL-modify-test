@@ -1,6 +1,7 @@
 from typing import Optional, Union
 
 import torch
+import torch.nn as nn
 from transformers import Cache, AutoTokenizer
 from transformers.models.qwen3_vl.modeling_qwen3_vl import Qwen3VLModelOutputWithPast
 from transformers.processing_utils import Unpack
@@ -39,21 +40,28 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
             "gating_temperature": _cfg_attr(config, "gating_temperature", cfg.gating_temperature),
             "text_gating_epsilon": _cfg_attr(config, "text_gating_epsilon", cfg.text_gating_epsilon),
             "insert_method": _cfg_attr(config, "INSERT_METHOD", cfg.INSERT_METHOD),
-            "ENABLE_TEXT_GATING": _cfg_attr(config, "ENABLE_TEXT_GATING", True),
-            "FIXED_K_WHEN_TEXT_GATING_DISABLED": _cfg_attr(config, "FIXED_K_WHEN_TEXT_GATING_DISABLED", 40.0),
-            "ENABLE_TEXT_GATE_TAX_LOSS": _cfg_attr(config, "ENABLE_TEXT_GATE_TAX_LOSS", True),
-            "ENABLE_TEXT_GATE_COLLAPSE_LOSS": _cfg_attr(config, "ENABLE_TEXT_GATE_COLLAPSE_LOSS", True),
-            "TEXT_GATE_SELECTION_MODE": _cfg_attr(config, "TEXT_GATE_SELECTION_MODE", "dynamic_prefix"),
-            "TEXT_GATE_GROUP_SIZE": _cfg_attr(config, "TEXT_GATE_GROUP_SIZE", cfg.RP_SPACE_LENGTH),
-            "TEXT_GATE_NUM_GROUPS": _cfg_attr(config, "TEXT_GATE_NUM_GROUPS", 8),
-            "TEXT_GATE_SELECTED_GROUP_COUNT": _cfg_attr(config, "TEXT_GATE_SELECTED_GROUP_COUNT", 4),
-            "TEXT_GATE_SELECTED_GROUPS": _cfg_attr(config, "TEXT_GATE_SELECTED_GROUPS", [0, 1, 2, 3]),
-            "TEXT_GATE_SHARED_GROUPS": _cfg_attr(config, "TEXT_GATE_SHARED_GROUPS", [0, 1]),
-            "ENABLE_TEXT_GATE_GROUP_ANTI_COLLAPSE": _cfg_attr(config, "ENABLE_TEXT_GATE_GROUP_ANTI_COLLAPSE", False),
-            "TEXT_GATE_GROUP_ANTI_COLLAPSE_WEIGHT": _cfg_attr(config, "TEXT_GATE_GROUP_ANTI_COLLAPSE_WEIGHT", 0.0),
-            "TEXT_GATE_GROUP_USAGE_EMA_MOMENTUM": _cfg_attr(config, "TEXT_GATE_GROUP_USAGE_EMA_MOMENTUM", 0.98),
-            "TEXT_GATE_GROUP_USAGE_EMA_EPS": _cfg_attr(config, "TEXT_GATE_GROUP_USAGE_EMA_EPS", 1e-6),
+            "TEXT_GATE_SELECTION_MODE": _cfg_attr(config, "TEXT_GATE_SELECTION_MODE", "group_threshold_prior"),
+            "TEXT_GATE_GROUP_COUNT": _cfg_attr(config, "TEXT_GATE_GROUP_COUNT", 8),
+            "TEXT_GATE_CAPACITY_PRIOR_ENERGY": _cfg_attr(
+                config,
+                "TEXT_GATE_CAPACITY_PRIOR_ENERGY",
+                [1.0, 0.25, 0.0, 0.0, 0.0, 0.0, 0.0, 0.25, 1.0],
+            ),
+            "TEXT_GATE_CAPACITY_PRIOR_SIGMA": _cfg_attr(config, "TEXT_GATE_CAPACITY_PRIOR_SIGMA", 0.40),
             "ACTIVE_REP_TOKEN_COUNT": _cfg_attr(config, "ACTIVE_REP_TOKEN_COUNT", cfg.ACTIVE_REP_TOKEN_COUNT),
+            "ABLATE_VISUAL_GATE": _cfg_attr(config, "ABLATE_VISUAL_GATE", False),
+            "ABLATE_DIRECT_LEARNABLE_REP": _cfg_attr(config, "ABLATE_DIRECT_LEARNABLE_REP", False),
+            "DISABLE_TEXT_GATE": _cfg_attr(config, "DISABLE_TEXT_GATE", False),
+            "DISABLE_TEXT_PROMPT_INSERT": _cfg_attr(config, "DISABLE_TEXT_PROMPT_INSERT", False),
+            "MASK_REP_PLACEHOLDERS_WHEN_TEXT_DISABLED": _cfg_attr(config, "MASK_REP_PLACEHOLDERS_WHEN_TEXT_DISABLED", True),
+            "VISUAL_RESIDUAL_ADAPTER_COUNT": _cfg_attr(config, "VISUAL_RESIDUAL_ADAPTER_COUNT", 4),
+            "ADAPTER_USAGE_BALANCE_LOSS_WEIGHT": _cfg_attr(config, "ADAPTER_USAGE_BALANCE_LOSS_WEIGHT", 0.0),
+            "ADAPTER_SAMPLE_ENTROPY_LOSS_WEIGHT": _cfg_attr(config, "ADAPTER_SAMPLE_ENTROPY_LOSS_WEIGHT", 0.0),
+            "ADAPTER_COMMON_MODE_LOSS_WEIGHT": _cfg_attr(config, "ADAPTER_COMMON_MODE_LOSS_WEIGHT", 0.0),
+            "ADAPTER_SAMPLE_ENTROPY_TARGET": _cfg_attr(config, "ADAPTER_SAMPLE_ENTROPY_TARGET", 0.40),
+            "ADAPTER_COMMON_MODE_TARGET": _cfg_attr(config, "ADAPTER_COMMON_MODE_TARGET", 0.85),
+            "VISUAL_RESIDUAL_BUDGET_LOSS_WEIGHT": _cfg_attr(config, "VISUAL_RESIDUAL_BUDGET_LOSS_WEIGHT", 0.0),
+            "VISUAL_RESIDUAL_BUDGET_TARGET": _cfg_attr(config, "VISUAL_RESIDUAL_BUDGET_TARGET", 0.65),
             "vision_token_dim": vision_dim,
             "text_token_dim": text_dim
         }
@@ -89,8 +97,13 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
         self.tokenizer = tokenizer
         self.use_mmrl = config.mmrl_config["USE_MMRL"]
         self.tax_loss = None
+        self.capacity_prior_loss = None
         self.temperature_override = None
         self.k_results = None
+        self.disable_text_prompt_insert = bool(config.mmrl_config.get("DISABLE_TEXT_PROMPT_INSERT", False))
+        self.mask_rep_placeholders_when_text_disabled = bool(config.mmrl_config.get("MASK_REP_PLACEHOLDERS_WHEN_TEXT_DISABLED", True))
+        self.debug_context = {}
+        self.text_rep_scale = nn.Parameter(torch.tensor(float(_cfg_attr(config, "TEXT_REP_INIT_SCALE", 1e-3))))
         ###################
 
     def get_image_features(self,
@@ -158,6 +171,8 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
         
         mmrl_gating_mask = kwargs.pop("mmrl_gating_mask", None)
         self.tax_loss = torch.tensor(0.0, device=inputs_embeds.device)
+        self.capacity_prior_loss = torch.tensor(0.0, device=inputs_embeds.device)
+        self.debug_context = {}
         if self.use_mmrl and input_ids is None:
             raise ValueError("MMRL path currently requires input_ids for placeholder detection.")
         placeholder_ids_tensor = torch.tensor(self.rep_placeholder_ids, device=inputs_embeds.device)
@@ -240,39 +255,64 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
                 text_pooling_mask=text_pooling_mask,
                 gating_temperature_override=self.temperature_override,
             )
+        if self.use_mmrl:
+            visual_capacity_prior_loss = getattr(self.visual, "capacity_prior_loss", None)
+            if visual_capacity_prior_loss is None:
+                visual_capacity_prior_loss = getattr(self.visual, "tax_loss", None)
+            if visual_capacity_prior_loss is None:
+                visual_capacity_prior_loss = torch.tensor(0.0, device=inputs_embeds.device, dtype=inputs_embeds.dtype)
+            elif not torch.is_tensor(visual_capacity_prior_loss):
+                visual_capacity_prior_loss = torch.tensor(visual_capacity_prior_loss, device=inputs_embeds.device, dtype=inputs_embeds.dtype)
+            else:
+                visual_capacity_prior_loss = visual_capacity_prior_loss.to(device=inputs_embeds.device, dtype=inputs_embeds.dtype)
+            self.capacity_prior_loss = visual_capacity_prior_loss
+            self.tax_loss = visual_capacity_prior_loss  # compatibility alias during migration
         ######## text gating ########
         if self.use_mmrl and k_results is not None:
-            if self.training:
-                k_sums, tax_loss = k_results
-                self.tax_loss = tax_loss
-            else:
-                k_sums = k_results
+            k_sums = k_results
             self.k_results = k_sums
             placeholder_cumsum = is_placeholder.cumsum(dim=-1)
             placeholder_idx = (placeholder_cumsum - 1).clamp(min=0)
 
-            target_embeds = t_r_tokens[placeholder_idx]
-            k_mask = getattr(self.visual, "k_mask_results", None)
-            if k_mask is None:
-                gate_soft_mask = torch.clamp(
-                    k_sums.unsqueeze(-1) - placeholder_idx.to(inputs_embeds.dtype),
-                    min=0,
-                    max=1,
-                ).unsqueeze(-1)
+            if self.disable_text_prompt_insert:
+                if self.mask_rep_placeholders_when_text_disabled:
+                    attention_mask = attention_mask & (~is_placeholder)
+                    inputs_embeds = inputs_embeds.masked_fill(is_placeholder.unsqueeze(-1), 0.0)
+                rep_attn = attention_mask[is_placeholder].detach().float().mean() if is_placeholder.any() else inputs_embeds.new_tensor(0.0)
+                self.debug_context.update({
+                    "text_prompt_insert_disabled_flag": inputs_embeds.new_tensor(1.0),
+                    "mask_rep_placeholders_when_text_disabled_flag": inputs_embeds.new_tensor(1.0 if self.mask_rep_placeholders_when_text_disabled else 0.0),
+                    "rep_placeholder_attention_ratio": rep_attn.to(device=inputs_embeds.device, dtype=inputs_embeds.dtype),
+                })
             else:
-                gather_idx = placeholder_idx.clamp(max=k_mask.shape[-1] - 1)
-                gate_soft_mask = k_mask.gather(dim=1, index=gather_idx).unsqueeze(-1)
-            gate_soft_mask = gate_soft_mask.to(inputs_embeds.dtype)
-            inputs_embeds = torch.where(is_placeholder.unsqueeze(-1), target_embeds * gate_soft_mask, inputs_embeds)
-            dynamic_gate_mask = (gate_soft_mask.squeeze(-1) > 0.5)
-            attention_mask = attention_mask & ((~is_placeholder) | dynamic_gate_mask)
-            if not self.training:
-                hard_gate = (gate_soft_mask.squeeze(-1) > 0.5)
-                attention_mask = attention_mask & ((~is_placeholder) | hard_gate)
-                embed_mask = torch.ones_like(attention_mask, dtype=inputs_embeds.dtype)
-                tokens_to_zero = is_placeholder & (~hard_gate)
-                embed_mask = embed_mask.masked_fill(tokens_to_zero, 0.0)
-                inputs_embeds = inputs_embeds * embed_mask.unsqueeze(-1)
+                target_embeds = self.text_rep_scale.to(device=inputs_embeds.device, dtype=inputs_embeds.dtype) * t_r_tokens[placeholder_idx]
+                k_mask = getattr(self.visual, "k_mask_results", None)
+                if k_mask is None:
+                    gate_soft_mask = torch.clamp(
+                        k_sums.unsqueeze(-1) - placeholder_idx.to(inputs_embeds.dtype),
+                        min=0,
+                        max=1,
+                    ).unsqueeze(-1)
+                else:
+                    gather_idx = placeholder_idx.clamp(max=k_mask.shape[-1] - 1)
+                    gate_soft_mask = k_mask.gather(dim=1, index=gather_idx).unsqueeze(-1)
+                gate_soft_mask = gate_soft_mask.to(inputs_embeds.dtype)
+                inputs_embeds = torch.where(is_placeholder.unsqueeze(-1), target_embeds * gate_soft_mask, inputs_embeds)
+                dynamic_gate_mask = (gate_soft_mask.squeeze(-1) > 0.5)
+                attention_mask = attention_mask & ((~is_placeholder) | dynamic_gate_mask)
+                if not self.training:
+                    hard_gate = (gate_soft_mask.squeeze(-1) > 0.5)
+                    attention_mask = attention_mask & ((~is_placeholder) | hard_gate)
+                    embed_mask = torch.ones_like(attention_mask, dtype=inputs_embeds.dtype)
+                    tokens_to_zero = is_placeholder & (~hard_gate)
+                    embed_mask = embed_mask.masked_fill(tokens_to_zero, 0.0)
+                    inputs_embeds = inputs_embeds * embed_mask.unsqueeze(-1)
+                rep_attn = attention_mask[is_placeholder].detach().float().mean() if is_placeholder.any() else inputs_embeds.new_tensor(0.0)
+                self.debug_context.update({
+                    "text_prompt_insert_disabled_flag": inputs_embeds.new_tensor(0.0),
+                    "mask_rep_placeholders_when_text_disabled_flag": inputs_embeds.new_tensor(0.0),
+                    "rep_placeholder_attention_ratio": rep_attn.to(device=inputs_embeds.device, dtype=inputs_embeds.dtype),
+                })
         ######## text gating ########
         
         if position_ids is None:

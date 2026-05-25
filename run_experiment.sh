@@ -6,8 +6,6 @@ TRAIN_DIR="$ROOT_DIR/train"
 TEST_DIR="$ROOT_DIR/test"
 OUTPUT_ROOT="$ROOT_DIR/experiment_outputs"
 CHECKPOINT_ROOT="$OUTPUT_ROOT/output"
-DATA_JSON="${1:-/root/autodl-tmp/dataset/test2_val.json}"
-DATA_IMG_DIR="${2:-/root/autodl-tmp/dataset/2/train}"
 
 mkdir -p "$OUTPUT_ROOT" "$CHECKPOINT_ROOT"
 
@@ -29,7 +27,7 @@ run_one() {
   tag="$(with_run_suffix "$raw_tag")"
   local output_dir="$CHECKPOINT_ROOT/$tag"
   local final_dir="$output_dir/final"
-  local eval_dir="$OUTPUT_ROOT/eval_$tag"
+  local eval_dir="$output_dir/eval"
 
   echo "============================================================"
   echo "[EXP] 开始实验: $tag"
@@ -56,7 +54,7 @@ run_one() {
   (
     cd "$TEST_DIR"
     MMRL_TRAINED_MODEL_PATH="$final_dir" \
-    python test.py "$DATA_JSON" "$DATA_IMG_DIR" 2>&1 | tee "$eval_dir/test.log"
+    python test.py 2>&1 | tee "$eval_dir/test.log"
   )
 
   # 测试完成后删除最终模型，保留 stage1~stage4 的日志与图表
@@ -68,29 +66,34 @@ run_one() {
 }
 
 # 可选实验列表（保留注释，便于后续继续切换/复用）：
-# 1) dynamic_prefix：原始连续前缀法
-# run_one "dynamic_prefix" "textgate_dynamic_prefixv4"
+# 1) group_threshold_prior：8组门控 + capacity prior，主实验
+# run_one "group_threshold_prior" "group_threshold_prior"
 #
-# 2) fixed_group20：固定四组、20个placeholder
-# run_one "fixed_group20" "textgate_fixed_group20"
+# 2) ablation_full_model：同主实验，用于显式消融命名
+# run_one "ablation_full_model" "ablation_full_model"
 #
-# 3) group_top4：8选4、可学习分组
-# run_one "group_top4" "textgate_group_top4v4"
+# 3) ablation_wo_visual_gate：视觉门控消融
+# run_one "ablation_wo_visual_gate" "ablation_wo_visual_gate"
 #
-# 4) token_top20：40个rep token直接打分并固定选top20
-# run_one "token_top20" "textgate_token_top20v1"
+# 4) ablation_replace_mmrl_with_40_learnable_tokens：直接可学习文本rep消融
+# run_one "ablation_replace_mmrl_with_40_learnable_tokens" "ablation_replace_mmrl_with_40_learnable_tokens"
 
-# 当前启用的实验：
-# 1) 任务感知轻引导 group_top4（当前主实验）
-run_one "group_top4" "textgate_group_top4_L2_v2"
-# 2) dynamic_prefix 作为对照基线
-# run_one "dynamic_prefix" "textgate_dynamic_prefix_v7"
+# 当前启用的文本门控实验：
+# 当前代码中真实可用的实验名见 train/train.py: EXPERIMENTS
+run_one "visual_router_v3_text_off_budget" "visual_router_v3_text_off_run1"
+run_one "visual_router_v3_text_off_budget" "visual_router_v3_text_off_run2"
+run_one "visual_router_v3_text_off_budget" "visual_router_v3_text_off_run3"
+
+# run_one "visual_causality_text_off_g1" "visual_causality_text_off_g1_run1"
+# run_one "visual_causality_text_off_g1" "visual_causality_text_off_g1_run2"
+# run_one "visual_causality_text_off_g1" "visual_causality_text_off_g1_run3"
+
+
+# run_one "ablation_full_model" "ablation_full_model"
+# run_one "ablation_wo_visual_gate" "ablation_wo_visual_gate"
+# run_one "ablation_replace_mmrl_with_40_learnable_tokens" "ablation_replace_mmrl_with_40_learnable_tokens"
 
 echo "[DONE] 所有实验均已串行完成。"
-if [ "${MMRL_DISABLE_AUTO_SHUTDOWN:-0}" = "1" ]; then
-  echo "[DONE] 检测到 MMRL_DISABLE_AUTO_SHUTDOWN=1，跳过自动关机。"
-else
-  echo "[DONE] 60 秒后自动关机。"
-  sleep 60
-  /usr/bin/shutdown
-fi
+echo "[DONE] 60 秒后自动关机。"
+sleep 60
+/usr/bin/shutdown

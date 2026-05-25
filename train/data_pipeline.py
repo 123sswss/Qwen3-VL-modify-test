@@ -106,6 +106,11 @@ class FourViewMMRLDataset(Dataset):
     """
     每条样本可构造四视图：
     expert-mm / expert-text / general-mm / general-text
+
+    total_limit 语义：
+    - 当同时启用 expert/general 视图时，total_limit 表示“每一侧”的 raw sample 配额；
+      例如 total_limit=20000，会采 20000 expert + 20000 general。
+    - 当只启用 expert 或只启用 general 时，total_limit 表示该单侧的 raw sample 配额。
     """
 
     def __init__(
@@ -212,9 +217,17 @@ class FourViewMMRLDataset(Dataset):
         expert_pool = [x for x in self.expert_raw if self._valid_item(x, True)]
         general_pool = [x for x in self.general_raw if self._valid_item(x, False)]
 
-        half = self.total_limit // 2
-        e_samples = rng.sample(expert_pool, min(half, len(expert_pool)))
-        g_samples = rng.sample(general_pool, min(self.total_limit - len(e_samples), len(general_pool)))
+        use_expert = any(v.startswith("expert-") for v in self.enable_views)
+        use_general = any(v.startswith("general-") for v in self.enable_views)
+
+        if not use_expert and not use_general:
+            raise ValueError("enable_views must contain at least one expert-* or general-* view")
+
+        expert_quota = self.total_limit if use_expert else 0
+        general_quota = self.total_limit if use_general else 0
+
+        e_samples = rng.sample(expert_pool, min(expert_quota, len(expert_pool))) if expert_quota > 0 else []
+        g_samples = rng.sample(general_pool, min(general_quota, len(general_pool))) if general_quota > 0 else []
 
         for item in e_samples:
             self.data.extend(self._build_views_from_item(item, "expert"))
@@ -222,12 +235,16 @@ class FourViewMMRLDataset(Dataset):
             self.data.extend(self._build_views_from_item(item, "general"))
 
         rng.shuffle(self.data)
-        print(f"[FourViewMMRLDataset] total view samples: {len(self.data)}")
+        print(
+            "[FourViewMMRLDataset] "
+            f"mode={self.mode} expert_selected={len(e_samples)} general_selected={len(g_samples)} "
+            f"total view samples={len(self.data)}"
+        )
 
     def __len__(self):
         return len(self.data)
     
-    def resample_general_data(self):
+    def resample_data(self):
         self.resample_round += 1
         self.data = []
         self._build()

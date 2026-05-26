@@ -1,10 +1,8 @@
-5/25：基于 `visual_router_v2_text_off_run1/run2` 的 stage3 diagnostics 复盘，先不继续盲目加 router 正则，而是补了一个 **soft visual residual budget** 小改动，目标是把 run2 那种“视觉分支更克制时反而分数更高”的现象显式化。实现上不直接硬裁剪 `final_delta`，而是在 `VisionModelWithMMRL.py` 里新增 `visual_residual_budget_loss`：按当前 batch 的 `final_delta_norm_mean / org_hidden_norm_mean` 计算 `delta_to_org_ratio`，仅当其超过 `visual_residual_budget_target`（默认 0.65）时，使用 `relu(ratio-target)^2` 产生惩罚。这样能优先压住 run1 那种 residual 幅度接近甚至超过主干 hidden 的情况，同时保留 router / adapter 自己决定方向与细节的自由度。
-同次改动把该 budget loss 接进了现有 Stage3/4 训练与 diagnostics 链路：`QWen3WithMMRL.py` / `train/train_stages.py` 新增 `VISUAL_RESIDUAL_BUDGET_LOSS_WEIGHT` 与 `VISUAL_RESIDUAL_BUDGET_TARGET` 配置透传；`Qwen3VLMMRLForStages.forward` 将其像其它 router aux loss 一样缩放后并入 `outputs.loss`，并把 `visual_residual_budget_loss / scaled / weight / target` 写进 `_last_metrics` 与 `visual.debug_context`，这样 csv/jsonl/paper 图无需重做链路就能直接看 stage3 里 residual 幅度是否被压回预算区间。`train/train.py` 同步新增 `visual_router_v3_text_off_budget` 预设，默认在 `visual_router_v2_text_off` 基础上开启 `visual_residual_budget_loss_weight=0.05`、`visual_residual_budget_target=0.65`，用于验证“更好的分数主要来自更温和的视觉 residual”这个假设。
+5/25：撤回当天尝试加入的 **soft visual residual budget** 分支，不再沿 `visual_residual_budget_loss / target` 这条线继续迭代。对应地，`VisionModelWithMMRL.py`、`QWen3WithMMRL.py`、`train/train_stages.py`、`train/train.py` 中与 budget 相关的 loss、config 透传、metrics 记录和 `visual_router_v3_text_off_budget` 预设已一并清理，避免后续实验入口和诊断面板继续混入这条已放弃分支。
+同次顺手补了一个显式实验入口 `visual_router_v2_text_on`，语义上等价于当前默认的 text-gate 开启版 `visual_router_v2`。这样后续和 `visual_router_v2_text_off` 并排做实验时，命名会更对称，复盘时也更不容易把“默认版其实是 text-on”这件事记混。
 
 5/24：确认 5/23 的 `visual_branch_dropout_probe` 无效，彻底废弃。视觉主线正式改为：**保留图像级开关 `G`，在视觉 residual branch 内部引入 `ResidualRouter + residual adapters`**，用图文联合条件决定每张图走哪条小残差路径，而不是继续让单条宽 residual 支路自由吸收所有视觉增量。
-
 同日复盘 `visual_router_v1_run1` 的 stage3 diagnostics 后，进一步确认当前问题不是“有没有 router”，而是 **router 过早塌缩成单 adapter，`G` 又几乎恒开，导致 residual 仍然呈现强 common-mode**。因此当天顺手把主线推进到 `visual_router_v2`：在保留现有 `G + router + multi-adapter` 框架的前提下，新增三项温和约束——`adapter_usage_balance_loss`、`adapter_sample_entropy_loss`、`adapter_common_mode_loss`——专门抑制“路由全挤到一条”和“视觉残差再次退化成公共方向”这两个失败模式。
-
 一句话记录 5/24 的决策：**dropout 护栏结束；视觉支路后续只围绕 router 是否真分化、common-mode 是否被压住来迭代。** 当前默认实验入口已从 `visual_router_v1` 扩展到 `visual_router_v2 / visual_router_v2_text_off`，后续重点继续看 `adapter_route_entropy_norm`、`adapter_usage_max/min`、`delta_pool_common_mode_ratio`、`delta_pool_specificity_ratio`。
 
 
@@ -12,8 +10,5 @@
 这次 probe 同步补了针对“common-mode shortcut”假说的监控链。`VisionModelWithMMRL.py` 的 residual diagnostics 新增：`delta_pool_common_mode_ratio`（batch 内 pooled delta 均值向量范数 / 平均样本范数，用来测公共偏置占比）、`delta_pool_specificity_ratio`（去均值后残差范数 / 平均样本范数，用来测样本特异性）、以及 `visual_branch_dropout_prob / keep_ratio / drop_ratio / scale / enabled_flag`。这些指标不另开旁路，还是统一塞进 `visual.debug_context`，沿用现有 `_last_metrics -> TrainerMetricsCallback -> StageMetricLogger/MMRLDiagnosticsCallback` 链路输出到 csv/jsonl/paper 图。这样下次回看时，只要看 stage3 的 metrics 和 diagnostics 就能知道：branch dropout 到底是在改变视觉分支的表达几何，还是仅仅把分支打弱了。
 `train/logger.py` 也做了对应增强，避免新指标虽然被记录但图上看不到：当实验配置或运行时指标显示 `disable_text_gate=True` 时，logger 不再强行按 text-gate 的 group/token 面板解释 Stage3/4，而是切换为更适合这次 probe 的视图。Panel 2 会画 `Branch Drop Ratio / Common-Mode / Specificity`，Panel 3 会专门展示视觉 residual 诊断（如 `Final Δ Norm / Δ pairwise cos / Δ-Org cos / Top10 mass` 等）；终端 compact summary 也新增 `[Vision Branch Probe]` 小节。`train/train.py` 增加了 `visual_branch_dropout_probe` 实验 preset，并把 `visual_branch_dropout_prob`、实验级 `diag_every_steps` 纳入统一配置；`train/train_stages.py` 则负责把该参数透传进 `config.mmrl_config`，并写入 experiment context / manifest，避免后面复盘时只看到结果看不到当时到底开了什么开关。
 一句话总结这次 5/23 的改动意图：**不是正式重构架构，而是先做一个最小但因果指向很强的视觉支路 probe。** 如果 stage3 前中期出现 `common_mode_ratio` 明显下降、`specificity_ratio` 上升、`pairwise_cos_mean` 下降且 CE 没炸，就说明原来的视觉支路确实在吃 shortcut；后续可以继续做更结构化的视觉分支重构。反过来，如果只有 `final_delta_norm` 变小而 common-mode 几乎不动，那就说明 branch dropout 只是无效削弱，下一步应果断放弃这个护栏思路，直接转向更结构化的新视觉架构，而不是继续在现有 dynamic prefix / 残差注入周围修修补补。
-
-
-5/20：本次将 Stage4 恢复为复现版（参考:loss.txt）：默认开启 tax(0.8) 与 alpha guide(0.5)，关闭 expert floor 与 anti-collapse；训练视图恢复为 expert-mm+general-mm。补通 text/visual gate 的 raw tax 上传链，Stage4 loss 改为 CE+alpha_guide+scaled raw tax，保留 residual diagnostics。已执行 py_compile 静态检查通过。
 
 5/19：做了些基线测试，lora方法rank8/16/32时分数：60/65/65，而未训练基线模型为53分。

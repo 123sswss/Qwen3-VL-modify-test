@@ -192,9 +192,7 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
         ])
         self.adapter_usage_balance_loss = torch.tensor(0.0)
         self.adapter_sample_entropy_loss = torch.tensor(0.0)
-        self.visual_residual_budget_loss = torch.tensor(0.0)
         self.adapter_common_mode_loss = torch.tensor(0.0)
-        self.visual_residual_budget_target = float(getattr(self.cfg, "VISUAL_RESIDUAL_BUDGET_TARGET", 0.65))
         self.adapter_sample_entropy_target = float(getattr(self.cfg, "ADAPTER_SAMPLE_ENTROPY_TARGET", 0.40))
         self.adapter_common_mode_target = float(getattr(self.cfg, "ADAPTER_COMMON_MODE_TARGET", 0.85))
         self.alpha_list = []
@@ -365,7 +363,7 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
         zero = final_delta.new_tensor(0.0)
         route_probs = self.route_probs
         if not torch.is_tensor(route_probs) or route_probs.numel() == 0:
-            return zero, zero, zero, zero
+            return zero, zero, zero
 
         route_probs = route_probs.float()
         adapter_count = route_probs.shape[-1]
@@ -392,22 +390,13 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
             pooled_delta_mean_norm = pooled_delta_norm.mean().clamp_min(1e-8)
             common_ratio = pooled_delta.mean(dim=0).norm() / pooled_delta_mean_norm
             common_mode_loss = torch.relu(
-                common_ratio - pooled_delta.new_tensor(float(self.adapter_common_mode_target))
+                common_ratio - float(self.adapter_common_mode_target)
             ).pow(2)
-
-        budget_loss = zero
-        if org_hidden_states is not None:
-            final_norm = final_delta.float().norm(dim=-1).mean()
-            org_norm = org_hidden_states.detach().float().norm(dim=-1).mean().clamp_min(1e-8)
-            ratio = final_norm / org_norm
-            budget_gap = torch.relu(ratio - float(self.visual_residual_budget_target))
-            budget_loss = budget_gap.pow(2)
 
         return (
             usage_balance_loss.to(device=device, dtype=final_delta.dtype),
             sample_entropy_loss.to(device=device, dtype=final_delta.dtype),
             common_mode_loss.to(device=device, dtype=final_delta.dtype),
-            budget_loss.to(device=device, dtype=final_delta.dtype),
         )
 
     def _return_text_gate_disabled(self, hidden_states, deepstack_feature_lists, batch_size):
@@ -622,7 +611,6 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
             self.adapter_usage_balance_loss,
             self.adapter_sample_entropy_loss,
             self.adapter_common_mode_loss,
-            self.visual_residual_budget_loss,
         ) = self._compute_router_aux_losses(final_delta, cu_seqlens, org_hidden_states=org_hidden_states)
 
         org_hidden_norm = org_hidden_states.detach().float().norm(dim=-1).mean()
@@ -652,8 +640,6 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
             "adapter_usage_balance_loss": self.adapter_usage_balance_loss.detach(),
             "adapter_sample_entropy_loss": self.adapter_sample_entropy_loss.detach(),
             "adapter_common_mode_loss": self.adapter_common_mode_loss.detach(),
-            "visual_residual_budget_loss": self.visual_residual_budget_loss.detach(),
-            "visual_residual_budget_target": hidden_states.new_tensor(float(self.visual_residual_budget_target)),
             "text_gate_disabled_flag": hidden_states.new_tensor(1.0 if self.disable_text_gate else 0.0),
             "k_mask_is_none_flag": hidden_states.new_tensor(1.0),
             **residual_debug,

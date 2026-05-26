@@ -52,8 +52,6 @@ def _build_experiment_context(train_cfg, output_dir, stage_id):
             "visual_residual_adapter_count": train_cfg.get("visual_residual_adapter_count"),
             "adapter_usage_balance_loss_weight": train_cfg.get("adapter_usage_balance_loss_weight"),
             "adapter_sample_entropy_loss_weight": train_cfg.get("adapter_sample_entropy_loss_weight"),
-            "visual_residual_budget_loss_weight": train_cfg.get("visual_residual_budget_loss_weight"),
-            "visual_residual_budget_target": train_cfg.get("visual_residual_budget_target"),
             "adapter_common_mode_loss_weight": train_cfg.get("adapter_common_mode_loss_weight"),
             "adapter_sample_entropy_target": train_cfg.get("adapter_sample_entropy_target"),
             "adapter_common_mode_target": train_cfg.get("adapter_common_mode_target"),
@@ -475,7 +473,6 @@ class Qwen3VLMMRLForStages(Qwen3VLForConditionalGeneration):
         self.adapter_usage_balance_loss_weight = 0.0
         self.adapter_sample_entropy_loss_weight = 0.0
         self.adapter_common_mode_loss_weight = 0.0
-        self.visual_residual_budget_loss_weight = 0.0
         self.enable_expert_floor_loss = False
         self.expert_floor_loss_weight = 0.0
         self.expert_min_active_tokens = 4.0
@@ -748,7 +745,6 @@ class Qwen3VLMMRLForStages(Qwen3VLForConditionalGeneration):
         adapter_usage_balance_loss = getattr(self.model.visual, "adapter_usage_balance_loss", torch.tensor(0.0, device=input_ids.device))
         adapter_sample_entropy_loss = getattr(self.model.visual, "adapter_sample_entropy_loss", torch.tensor(0.0, device=input_ids.device))
         adapter_common_mode_loss = getattr(self.model.visual, "adapter_common_mode_loss", torch.tensor(0.0, device=input_ids.device))
-        visual_residual_budget_loss = getattr(self.model.visual, "visual_residual_budget_loss", torch.tensor(0.0, device=input_ids.device))
         if not torch.is_tensor(adapter_usage_balance_loss):
             adapter_usage_balance_loss = torch.tensor(adapter_usage_balance_loss, device=input_ids.device, dtype=ce_loss.dtype)
         else:
@@ -761,14 +757,9 @@ class Qwen3VLMMRLForStages(Qwen3VLForConditionalGeneration):
             adapter_common_mode_loss = torch.tensor(adapter_common_mode_loss, device=input_ids.device, dtype=ce_loss.dtype)
         else:
             adapter_common_mode_loss = adapter_common_mode_loss.to(device=input_ids.device, dtype=ce_loss.dtype)
-        if not torch.is_tensor(visual_residual_budget_loss):
-            visual_residual_budget_loss = torch.tensor(visual_residual_budget_loss, device=input_ids.device, dtype=ce_loss.dtype)
-        else:
-            visual_residual_budget_loss = visual_residual_budget_loss.to(device=input_ids.device, dtype=ce_loss.dtype)
         scaled_adapter_usage_balance_loss = adapter_usage_balance_loss * float(self.adapter_usage_balance_loss_weight)
         scaled_adapter_sample_entropy_loss = adapter_sample_entropy_loss * float(self.adapter_sample_entropy_loss_weight)
         scaled_adapter_common_mode_loss = adapter_common_mode_loss * float(self.adapter_common_mode_loss_weight)
-        scaled_visual_residual_budget_loss = visual_residual_budget_loss * float(self.visual_residual_budget_loss_weight)
 
         expert_mask = None
         if expanded_labels is not None and k_sums is not None and k_sums.shape[0] == expanded_labels.shape[0]:
@@ -830,7 +821,6 @@ class Qwen3VLMMRLForStages(Qwen3VLForConditionalGeneration):
             + scaled_adapter_usage_balance_loss
             + scaled_adapter_sample_entropy_loss
             + scaled_adapter_common_mode_loss
-            + scaled_visual_residual_budget_loss
         )
 
         # ---- cache metrics for external logger ----
@@ -858,11 +848,9 @@ class Qwen3VLMMRLForStages(Qwen3VLForConditionalGeneration):
                 "adapter_usage_balance_loss": adapter_usage_balance_loss.detach(),
                 "adapter_sample_entropy_loss": adapter_sample_entropy_loss.detach(),
                 "adapter_common_mode_loss": adapter_common_mode_loss.detach(),
-                "visual_residual_budget_loss": visual_residual_budget_loss.detach(),
                 "adapter_usage_balance_loss_scaled": scaled_adapter_usage_balance_loss.detach(),
                 "adapter_sample_entropy_loss_scaled": scaled_adapter_sample_entropy_loss.detach(),
                 "adapter_common_mode_loss_scaled": scaled_adapter_common_mode_loss.detach(),
-                "visual_residual_budget_loss_scaled": scaled_visual_residual_budget_loss.detach(),
                 "alpha_mae": alpha_mae.detach(),
                 "k_general_mean": k_general_mean.detach(),
                 "k_expert_mean": k_expert_mean.detach(),
@@ -879,7 +867,6 @@ class Qwen3VLMMRLForStages(Qwen3VLForConditionalGeneration):
                 "adapter_usage_balance_weight": torch.tensor(float(self.adapter_usage_balance_loss_weight), device=input_ids.device),
                 "adapter_sample_entropy_weight": torch.tensor(float(self.adapter_sample_entropy_loss_weight), device=input_ids.device),
                 "adapter_common_mode_weight": torch.tensor(float(self.adapter_common_mode_loss_weight), device=input_ids.device),
-                "visual_residual_budget_weight": torch.tensor(float(self.visual_residual_budget_loss_weight), device=input_ids.device),
             }
             if text_gating is not None:
                 dbg = getattr(text_gating, "debug_context", {}) or {}
@@ -986,14 +973,6 @@ def build_model_and_processor(model_path, experiment_cfg=None):
     config.ADAPTER_COMMON_MODE_TARGET = float(experiment_cfg.get(
         "adapter_common_mode_target",
         os.getenv("MMRL_ADAPTER_COMMON_MODE_TARGET", "0.85"),
-    ))
-    config.VISUAL_RESIDUAL_BUDGET_LOSS_WEIGHT = float(experiment_cfg.get(
-        "visual_residual_budget_loss_weight",
-        os.getenv("MMRL_VISUAL_RESIDUAL_BUDGET_LOSS_WEIGHT", "0.0"),
-    ))
-    config.VISUAL_RESIDUAL_BUDGET_TARGET = float(experiment_cfg.get(
-        "visual_residual_budget_target",
-        os.getenv("MMRL_VISUAL_RESIDUAL_BUDGET_TARGET", "0.65"),
     ))
     tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
     image_processor = AutoImageProcessor.from_pretrained(model_path, trust_remote_code=True)
@@ -1311,8 +1290,6 @@ def run_stage34_full(stage_id, model, processor, data_cfg, train_cfg, output_dir
     model.adapter_usage_balance_loss_weight = float(train_cfg.get("adapter_usage_balance_loss_weight", 0.0))
     model.adapter_sample_entropy_loss_weight = float(train_cfg.get("adapter_sample_entropy_loss_weight", 0.0))
     model.adapter_common_mode_loss_weight = float(train_cfg.get("adapter_common_mode_loss_weight", 0.0))
-    model.visual_residual_budget_loss_weight = float(train_cfg.get("visual_residual_budget_loss_weight", 0.0))
-
     model.enable_gate_loss_stage2 = train_cfg.get("enable_gate_loss_stage2", True)
 
     stage34_views = ("expert-mm",)

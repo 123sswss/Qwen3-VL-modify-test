@@ -3,3 +3,17 @@
 __pycache__/
 eval/
 mmrl_output/
+.ipynb_checkpoints/processingWithMMRL-checkpoint.py
+.ipynb_checkpoints/QWen3WithMMRL-checkpoint.py
+.ipynb_checkpoints/test-checkpoint.py
+.ipynb_checkpoints/VisionModelWithMMRL-checkpoint.py
+.vscode/settings.json
+__pycache__/config.cpython-312.pyc
+__pycache__/MMRL.cpython-312.pyc
+__pycache__/MMRLGating.cpython-312.pyc
+__pycache__/processingWithMMRL.cpython-312.pyc
+__pycache__/QWen3WithMMRL.cpython-312.pyc
+__pycache__/utils.cpython-312.pyc
+__pycache__/VisionModelWithMMRL.cpython-312.pyc
+experiment_outputs/
+test/

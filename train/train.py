@@ -19,8 +19,6 @@ BASE_VISUAL_ROUTER_MODEL = {
     "adapter_common_mode_loss_weight": 0.02,
     "adapter_sample_entropy_target": 0.55,
     "adapter_common_mode_target": 0.85,
-    "visual_residual_budget_loss_weight": 0.0,
-    "visual_residual_budget_target": 0.65,
     "ablate_visual_gate": False,
     "ablate_direct_learnable_rep": False,
     "disable_text_gate": False,
@@ -64,6 +62,10 @@ EXPERIMENTS = {
         **BASE_VISUAL_ROUTER_MODEL,
         "diag_every_steps": 500,
     },
+    "visual_router_v2_text_on": {
+        **BASE_VISUAL_ROUTER_MODEL,
+        "diag_every_steps": 500,
+    },
     "visual_router_v2_text_off": {
         **BASE_VISUAL_ROUTER_MODEL,
         "disable_text_gate": True,
@@ -72,18 +74,6 @@ EXPERIMENTS = {
         "disable_general_mm_stage34": True,
         "enable_capacity_prior_loss_s4": False,
         "capacity_prior_loss_weight": 0.0,
-        "diag_every_steps": 500,
-    },
-    "visual_router_v3_text_off_budget": {
-        **BASE_VISUAL_ROUTER_MODEL,
-        "disable_text_gate": True,
-        "disable_text_prompt_insert": True,
-        "mask_rep_placeholders_when_text_disabled": True,
-        "disable_general_mm_stage34": True,
-        "enable_capacity_prior_loss_s4": False,
-        "capacity_prior_loss_weight": 0.0,
-        "visual_residual_budget_loss_weight": 0.05,
-        "visual_residual_budget_target": 0.65,
         "diag_every_steps": 500,
     },
 }
@@ -159,14 +149,6 @@ CFG = {
         "adapter_common_mode_target": float(os.getenv(
             "MMRL_ADAPTER_COMMON_MODE_TARGET",
             str(EXP_CFG.get("adapter_common_mode_target", 0.85)),
-        )),
-        "visual_residual_budget_loss_weight": float(os.getenv(
-            "MMRL_VISUAL_RESIDUAL_BUDGET_LOSS_WEIGHT",
-            str(EXP_CFG.get("visual_residual_budget_loss_weight", 0.0)),
-        )),
-        "visual_residual_budget_target": float(os.getenv(
-            "MMRL_VISUAL_RESIDUAL_BUDGET_TARGET",
-            str(EXP_CFG.get("visual_residual_budget_target", 0.65)),
         )),
         "per_device_train_batch_size": 2,
         "gradient_accumulation_steps": 16,

@@ -1,0 +1,234 @@
+以下内容只讨论 `dynamic_prefix` 方案。
+
+在这个项目中，第四阶段（Stage 4）的总损失定义在 `train/train_stages.py` 的 `Qwen3VLMMRLForStages.forward()` 里，原始总式为：
+
+```python
+outputs.loss = self.ce_loss_weight * ce_loss + alpha_guide_loss + k_general_loss + k_expert_loss + tax_loss + anti_collapse_loss
+```
+
+但如果实验配置采用 `train/train.py` 中的 `EXPERIMENTS["dynamic_prefix"]`，那么真正生效的 Stage 4 损失可以还原成：
+
+```python
+total_loss = 1.0 * ce_loss + alpha_guide_loss + tax_loss
+```
+
+原因如下。第一，`run_stage34_full(stage_id=4, ...)` 在进入第四阶段时会设置 `model.ce_loss_weight = 1.0`，因此 CE loss 始终参与总损失，权重固定为 1。这里的 `ce_loss` 来自 `super().forward(...)` 返回的语言建模损失，也就是 `Qwen3VLForConditionalGeneration` 的原始 `outputs.loss`，只要 batch 中提供了 `labels` 就会参与计算。第四阶段对应的数据集在 `run_stage34_full()` 中通过 `FourViewMMRLDataset(..., enable_views=("expert-mm", "general-mm"), ce_enabled=True, ...)` 构造，因此这是一个带监督标签的多模态生成训练阶段，CE loss 是主干项。
+
+第二，Stage 4 默认还会开启 `alpha guide loss`。在 `run_stage34_full(stage_id=4, ...)` 中，模型被设置为：
+
+```python
+model.alpha_loss_weight = train_cfg.get("alpha_loss_weight_s4", 0.5)
+model.enable_alpha_guide_loss = train_cfg.get("enable_alpha_guide_loss_s4", True)
+```
+
+再看 `train/train.py` 的 `CFG["train"]`，其中定义了：
+
+```python
+"enable_alpha_guide_loss_s4": os.getenv("MMRL_ENABLE_ALPHA_GUIDE_LOSS_S4", "1") == "1"
+```
+
+默认值为 `True`。而 `alpha_loss_weight_s4` 在 `CFG["train"]` 中没有被显式写出，所以这里使用代码默认值 `0.5`。这一项在 `Qwen3VLMMRLForStages.forward()` 里按如下方式计算：先取出 `self.model.visual.alpha_list` 作为 `alpha_logits`，再把 `alpha_labels` 按 `images_per_sample` 展开为 `expanded_labels`，随后计算
+
+```python
+torch.nn.functional.binary_cross_entropy_with_logits(alpha_logits[:n], expanded_labels[:n].to(alpha_logits.dtype)) * self.alpha_loss_weight
+```
+
+因此可以准确复现为：Stage 4 的 alpha guide loss 采用 `BCEWithLogits`，标签是按图像数展开后的 `expanded_labels`，最后再乘以权重 `0.5`。
+
+第三，虽然 Stage 4 的总式里保留了 `k_general_loss` 和 `k_expert_loss`，但对当前 `dynamic_prefix` 实验而言这两项实际上不生效。因为 `run_stage34_full(stage_id=4, ...)` 中会设置：
+
+```python
+model.use_k_loss = train_cfg.get("enable_k_loss_s4", True)
+```
+
+而 `train/train.py` 里的 `EXPERIMENTS["dynamic_prefix"]` 明确给出：
+
+```python
+"enable_k_loss_s4": False
+```
+
+所以第四阶段训练时 `use_k_loss=False`，`k_general_loss` 与 `k_expert_loss` 都保持为零，不参与最终损失。虽然 `train/train.py` 里仍然定义了 `k_general_target_s4=0.0`、`k_expert_target_s4=20.0`、`k_general_lambda_init_s4=0.0`、`k_expert_lambda_init_s4=0.0`、`k_lambda_lr_general_s4=0.02`、`k_lambda_lr_expert_s4=0.01`、`k_lambda_max_general_s4=5.0`、`k_lambda_max_expert_s4=5.0` 这些参数，但在当前实验里它们只是预留配置，并不会实际进入 loss 计算。
+
+第四，`anti_collapse_loss` 在当前讨论范围内同样不生效。虽然 `Qwen3VLMMRLForStages.forward()` 的总式中包含 `anti_collapse_loss`，但这项损失来自 `_compute_group_anti_collapse_loss()`，而该函数内部明确要求 `text_gating.selection_mode == "group_top4"` 才会进一步调用 `compute_group_anti_collapse_loss()`；否则直接返回零。当前实验选择的是 `dynamic_prefix`，因此这部分恒为 0，可以从 Stage 4 的有效损失中忽略。
+
+因此，在只考虑 `dynamic_prefix` 的前提下，真正需要重点追溯的是 `tax_loss`。
+
+Stage 4 中的 `tax_loss` 不是直接在 `train/train_stages.py` 里从头定义的，而是先从底层模型对象上取出一个原始值：
+
+```python
+tax_raw = getattr(self.model, "tax_loss", torch.tensor(0.0, device=input_ids.device))
+tax_loss = tax_raw * self.tax_loss_weight if self.use_tax else torch.tensor(0.0, device=input_ids.device)
+```
+
+这说明 Stage 4 最终加到总损失里的其实是“外层缩放后的 tax loss”，即：
+
+```python
+scaled_tax_loss = tax_raw * 当前时刻的 tax_loss_weight
+```
+
+其中 `tax_raw` 需要继续向下追溯到 `MMRLGating.py`。在 `textGating.forward()` 中，训练态会返回：
+
+```python
+return hard_k_logits, tax_loss
+```
+
+这里第二个返回值就是原始 tax loss，也就是之后会被上层接到 `self.model.tax_loss` 中的那个量。由于当前模式是 `dynamic_prefix`，`textGating.forward()` 会走入：
+
+```python
+elif self.selection_mode == "dynamic_prefix":
+    hard_k_logits, text_relevance_prob, raw_budget, k_budget = self._build_dynamic_prefix_gate(...)
+```
+
+所以必须先看 `_build_dynamic_prefix_gate()` 如何定义 token 预算。这个函数中最关键的代码是：
+
+```python
+text_relevance_prob = torch.sigmoid(self.text_relevance_head(text_embedding))
+feat = torch.cat([pooled_vision, text_embedding, batch_alpha, has_image], dim=-1)
+raw_budget = self.total_rep_num * torch.sigmoid(self.k_budget_head(feat))
+image_scale = 0.5 + 0.5 * has_image
+k_budget = raw_budget * image_scale * (0.25 + 0.75 * text_relevance_prob)
+slot_idx = torch.arange(self.total_rep_num, device=k_budget.device, dtype=k_budget.dtype).view(1, -1)
+k_logits = k_budget - slot_idx
+hard_k_logits = self.hard_concrete(k_logits, temperature_override)
+```
+
+这段逻辑的含义可以逐项固定下来。`text_relevance_head` 根据文本特征产生一个 `[0, 1]` 区间内的 `text_relevance_prob`，表示文本相关性强弱；`k_budget_head` 根据视觉池化特征、文本特征、`batch_alpha` 和 `has_image` 拼接后的向量预测一个原始预算，再经 sigmoid 后映射到 `[0, total_rep_num]` 范围内，得到 `raw_budget`；`image_scale = 0.5 + 0.5 * has_image` 表示如果没有图像就把预算缩到 0.5 倍，有图像则保持 1 倍；然后再乘上 `(0.25 + 0.75 * text_relevance_prob)`，也就是文本相关性越高，保留的 token 预算越大。于是 dynamic prefix 的核心预算公式可以完整写成：
+
+```python
+k_budget = raw_budget * image_scale * (0.25 + 0.75 * text_relevance_prob)
+```
+
+随后用 `k_budget - slot_idx` 构造前缀式的 gating logits，再送入 `HardConcreteGate` 生成 `hard_k_logits`。这表示 dynamic prefix 并不是任意挑选离散 token，而是更偏向“保留前 k 个 rep token”，只是这个 `k` 是由网络动态预测出来的软预算。
+
+在当前 Stage 4 中，数据集配置是：
+
+```python
+enable_views=("expert-mm", "general-mm")
+```
+
+因此训练样本只包含多模态 expert 和多模态 general，两类样本都带图像，所以 `has_image` 在绝大多数训练情形下可以视为 1。也就是说对当前实验而言，`image_scale` 实际上通常等于 1，此时预算大小主要由 `raw_budget` 和 `text_relevance_prob` 决定。
+
+接下来是最关键的 tax loss 原始定义。在 `textGating.forward()` 的训练分支中，先有：
+
+```python
+k_soft = hard_k_logits.sum(dim=-1)
+```
+
+它表示每个样本当前激活的 rep token 数量的软和。然后，对 `dynamic_prefix` 且 `enable_tax_loss=True` 的场景，代码进入的是：
+
+```python
+batch_alpha_prob = batch_alpha.detach()
+penalty_mask = torch.where(
+    batch_alpha_prob > 0.5,
+    torch.zeros_like(batch_alpha_prob),
+    1.0 - batch_alpha_prob
+)
+dynamic_lambda = self.lambda_ * penalty_mask
+raw_loss = dynamic_lambda.squeeze(-1) * (k_soft / self.total_rep_num)
+tax_loss = raw_loss.mean()
+```
+
+因此如果完全照代码复现，dynamic prefix 下的原始 tax 项应理解为：先根据 `batch_alpha` 判断该样本是否更偏 expert。若 `alpha > 0.5`，则 `penalty_mask=0`，该样本不会受到 tax 惩罚；若 `alpha <= 0.5`，则 `penalty_mask = 1 - alpha`，alpha 越小，惩罚越强。然后再用 `self.lambda_` 与 `penalty_mask` 相乘得到每个样本自己的 `dynamic_lambda`，并乘以该样本当前激活 token 比例 `k_soft / total_rep_num`，最终对 batch 求平均。把它用文字公式写清楚就是：
+
+对样本 `i`，若 `alpha_i > 0.5`，则 `penalty_i = 0`；若 `alpha_i <= 0.5`，则 `penalty_i = 1 - alpha_i`。再令 `dynamic_lambda_i = lambda_ * penalty_i`，其中 `lambda_` 是 `textGating.__init__()` 中的默认常数 `0.2`。于是该样本的税项为：
+
+```python
+sample_tax_i = dynamic_lambda_i * (k_soft_i / total_rep_num)
+```
+
+整个 batch 的原始 tax loss 为：
+
+```python
+tax_raw = mean(sample_tax_i)
+```
+
+这意味着 dynamic prefix 的 tax loss 本质上是在惩罚“偏 general 的样本仍然使用过多 text rep token”的行为，而对于偏 expert 的样本，tax 项直接关闭，不施加稀疏预算惩罚。这里 `lambda_` 并没有在 `train/train.py` 中单独暴露成可调参数，而是在 `MMRLGating.py` 的 `textGating.__init__(..., lambda_=0.2)` 中写死为默认值 `0.2`，所以如果以后想要完全复现实验，必须记住 dynamic prefix 的内层 tax 系数默认就是 0.2。
+
+还需要继续确认 tax loss 内部是否叠加 collapse loss。`MMRLGating.py` 里在 dynamic_prefix 的训练态还有一段：
+
+```python
+if self.enable_collapse_loss and self.selection_mode == "dynamic_prefix":
+    target_var = hard_k_logits.new_tensor(4.0)
+    k_var = k_soft.var(unbiased=False)
+    collapse_loss = 0.05 * torch.relu(target_var - k_var)
+    tax_loss = tax_loss + collapse_loss
+```
+
+这意味着从代码机制上说，dynamic prefix 的 `tax_raw` 理论上可能等于“前面的稀疏税项 + collapse_loss”。但当前实验的 `train/train.py` 在 `EXPERIMENTS["dynamic_prefix"]` 中明确设置了：
+
+```python
+"enable_text_gate_collapse_loss": False
+```
+
+这个值会在 `build_model_and_processor()` 中被写入：
+
+```python
+config.ENABLE_TEXT_GATE_COLLAPSE_LOSS = bool(experiment_cfg.get("enable_text_gate_collapse_loss", ...))
+```
+
+随后又在 `textGating.__init__()` 中变成：
+
+```python
+self.enable_collapse_loss = bool(_cfg_get(config, "ENABLE_TEXT_GATE_COLLAPSE_LOSS", True))
+```
+
+所以当前 dynamic prefix 实验里 `enable_collapse_loss=False`，这部分额外的方差约束不会生效。因此本实验条件下的 `tax_raw` 就只有上面那项按 `dynamic_lambda * (k_soft / total_rep_num)` 计算出的 batch 平均税项。
+
+再往上回到 `train/train_stages.py`，Stage 4 并不是把 `tax_raw` 原封不动直接加进总损失，而是还要乘上一个阶段级的权重 `self.tax_loss_weight`。这一权重在 Stage 4 初始化时先被强制设为 0：
+
+```python
+model.tax_loss_weight = 0.0
+```
+
+真正的值由 `StageScheduleCallback.on_step_begin()` 在训练过程中动态调度：
+
+```python
+if ep < self.tax_warmup_epochs:
+    model.tax_loss_weight = 0.0
+else:
+    p = min((ep - self.tax_warmup_epochs) / max(self.total_epochs - self.tax_warmup_epochs, 1e-6), 1.0)
+    model.tax_loss_weight = self.target_tax * p
+```
+
+而这个 callback 在 `run_stage34_full(stage_id=4, ...)` 中是这样构造的：
+
+```python
+cb = StageScheduleCallback(
+    dataset=ds,
+    total_epochs=train_cfg["epochs"][stage_id],
+    init_temp=train_cfg.get("initial_temp", 1.0),
+    final_temp=train_cfg.get("final_temp", 0.1),
+    target_tax=(0.0 if stage_id == 3 else train_cfg["tax_loss_weight"]),
+    tax_warmup_epochs=train_cfg.get("tax_warmup_epochs", 1),
+    ...
+)
+```
+
+于是只要再看 `train/train.py` 的 `CFG["train"]` 即可确定具体数值。当前 `dynamic_prefix` 的实验配置给出：
+
+```python
+"tax_loss_weight": 0.8,
+"enable_tax_loss_s4": True,
+"enable_k_loss_s4": False,
+```
+
+并且训练配置里还有：
+
+```python
+"learning_rate": {4: 6e-5},
+"epochs": {4: 2},
+"per_device_train_batch_size": 2,
+"gradient_accumulation_steps": 16,
+```
+
+但 `tax_warmup_epochs` 并没有在 `CFG["train"]` 中显式给出，所以这里采用默认值 `1`。Stage 4 总 epoch 数则是 `2`。这就可以把外层 tax 权重调度准确复原为：第 1 个 epoch 内，`tax_loss_weight = 0.0`；从第 2 个 epoch 开始，按照代码中的线性公式从 0 朝目标值 `0.8` 提升。在这个仅训练 2 个 epoch 的设定下，可以理解为 Stage 4 前半段基本不施加 tax 约束，后半段逐步把 tax loss 拉起来，使其接近目标强度 0.8。最终真正进入总损失的 tax 项是：
+
+```python
+tax_loss = tax_raw * tax_loss_weight
+```
+
+而 `tax_raw` 就是前文从 `MMRLGating.py` 中追溯出的、基于 `alpha` 和激活 token 数比例的 batch 平均稀疏税项。
+
+如果把所有与 Stage 4 loss 直接相关的 dynamic_prefix 参数收拢起来，那么在 `train/train.py` 中必须记住以下配置：`text_gate_selection_mode="dynamic_prefix"`，`active_rep_token_count=40`，`text_gate_group_size=5`，`text_gate_num_groups=8`，`enable_text_gating=True`，`enable_text_gate_tax_loss=True`，`enable_text_gate_collapse_loss=False`，`enable_tax_loss_s4=True`，`enable_k_loss_s4=False`，`tax_loss_weight=0.8`，`k_general_target_s4=0.0`，`k_expert_target_s4=20.0`。其中 `group_size * num_groups = 5 * 8 = 40`，和当前 token 空间总数一致；`enable_k_loss_s4=False` 决定了 K loss 不参与；`enable_text_gate_collapse_loss=False` 决定了 tax raw 中不叠加 collapse loss；`tax_loss_weight=0.8` 决定了 Stage 4 外层 tax 的最终目标强度。再结合训练配置 `learning_rate[4]=6e-5`、`epochs[4]=2`、`per_device_train_batch_size=2`、`gradient_accumulation_steps=16`，以及默认 `tax_warmup_epochs=1`，就可以完整复现实验中的第四阶段损失机制。
+
+因此，如果以后只看一段话就要复现当前项目在 `dynamic_prefix` 下的 Stage 4 loss，可以直接按下面这段理解：Stage 4 的总损失虽然代码上写成 `ce_loss + alpha_guide_loss + k_general_loss + k_expert_loss + tax_loss + anti_collapse_loss`，但由于当前实验配置中 `enable_k_loss_s4=False`、且 `anti_collapse_loss` 只对 `group_top4` 生效，所以实际有效形式就是 `total_loss = ce_loss + alpha_guide_loss + tax_loss`。其中 `ce_loss` 权重恒为 1.0；`alpha_guide_loss` 默认启用，计算方式是 `BCEWithLogits(alpha_logits, expanded_labels) * 0.5`；`tax_loss` 的原始值 `tax_raw` 来自 `MMRLGating.py` 的 `textGating.forward()`：dynamic prefix 会先预测 `text_relevance_prob` 和 `raw_budget`，再按 `k_budget = raw_budget * image_scale * (0.25 + 0.75 * text_relevance_prob)` 得到前缀预算，并通过 `HardConcreteGate` 生成激活 token，记其软计数为 `k_soft`。对每个样本，若 `alpha > 0.5` 则不施加 tax 惩罚；若 `alpha <= 0.5`，则惩罚系数为 `0.2 * (1 - alpha)`，单样本税项等于 `0.2 * (1 - alpha) * (k_soft / 40)`，再对 batch 取平均得到 `tax_raw`。由于 `enable_text_gate_collapse_loss=False`，当前实验没有额外 collapse loss。最后 Stage 4 再对 `tax_raw` 乘一个外层调度权重 `tax_loss_weight`，其目标值在 `train/train.py` 中设为 `0.8`，并通过 `StageScheduleCallback` 在默认 `tax_warmup_epochs=1` 的条件下于第 1 个 epoch 保持 0、后续再线性升高。因此，只要保持 `dynamic_prefix`、40 个 rep token 空间、tax 目标权重 0.8、alpha guide 开启、K loss 关闭、collapse loss 关闭、Stage 4 学习率 6e-5、训练 2 个 epoch、batch size 2、gradient accumulation 16 这些条件不变，就能复现出与当前代码一致的第四阶段损失机制。

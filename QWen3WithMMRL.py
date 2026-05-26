@@ -60,8 +60,6 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
             "ADAPTER_COMMON_MODE_LOSS_WEIGHT": _cfg_attr(config, "ADAPTER_COMMON_MODE_LOSS_WEIGHT", 0.0),
             "ADAPTER_SAMPLE_ENTROPY_TARGET": _cfg_attr(config, "ADAPTER_SAMPLE_ENTROPY_TARGET", 0.40),
             "ADAPTER_COMMON_MODE_TARGET": _cfg_attr(config, "ADAPTER_COMMON_MODE_TARGET", 0.85),
-            "VISUAL_RESIDUAL_BUDGET_LOSS_WEIGHT": _cfg_attr(config, "VISUAL_RESIDUAL_BUDGET_LOSS_WEIGHT", 0.0),
-            "VISUAL_RESIDUAL_BUDGET_TARGET": _cfg_attr(config, "VISUAL_RESIDUAL_BUDGET_TARGET", 0.65),
             "vision_token_dim": vision_dim,
             "text_token_dim": text_dim
         }

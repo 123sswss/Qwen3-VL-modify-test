@@ -80,9 +80,9 @@ run_one() {
 
 # 当前启用的文本门控实验：
 # 当前代码中真实可用的实验名见 train/train.py: EXPERIMENTS
-run_one "visual_router_v3_text_off_budget" "visual_router_v3_text_off_run1"
-run_one "visual_router_v3_text_off_budget" "visual_router_v3_text_off_run2"
-run_one "visual_router_v3_text_off_budget" "visual_router_v3_text_off_run3"
+run_one "visual_router_v2_text_on" "visual_router_v2_text_on_run1"
+run_one "visual_router_v2_text_on" "visual_router_v2_text_on_run2"
+run_one "visual_router_v2_text_on" "visual_router_v2_text_on_run3"
 
 # run_one "visual_causality_text_off_g1" "visual_causality_text_off_g1_run1"
 # run_one "visual_causality_text_off_g1" "visual_causality_text_off_g1_run2"

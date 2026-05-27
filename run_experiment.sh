@@ -20,11 +20,25 @@ with_run_suffix() {
   fi
 }
 
+# 若目录已存在，自动追加 _1, _2, ... 直到找到可用名称
+find_available_tag() {
+  local base_tag="$1"
+  local candidate="$base_tag"
+  local i=1
+  while [ -d "$CHECKPOINT_ROOT/$candidate" ]; do
+    candidate="${base_tag}_${i}"
+    ((i++))
+  done
+  echo "$candidate"
+}
+
 run_one() {
   local experiment_name="$1"
   local raw_tag="$2"
+  local base_tag
+  base_tag="$(with_run_suffix "$raw_tag")"
   local tag
-  tag="$(with_run_suffix "$raw_tag")"
+  tag="$(find_available_tag "$base_tag")"
   local output_dir="$CHECKPOINT_ROOT/$tag"
   local final_dir="$output_dir/final"
   local eval_dir="$output_dir/eval"
@@ -35,7 +49,6 @@ run_one() {
   echo "[EXP] checkpoint目录: $output_dir"
   echo "============================================================"
 
-  rm -rf "$output_dir" "$eval_dir"
   mkdir -p "$output_dir" "$eval_dir"
 
   (
@@ -65,6 +78,18 @@ run_one() {
   fi
 }
 
+# 重复跑 N 次同一实验；目录命名由 find_available_tag 自动处理，不会覆写
+# 用法: run_N <experiment_name> <raw_tag> <N>
+run_N() {
+  local experiment_name="$1"
+  local raw_tag="$2"
+  local n="$3"
+  local i
+  for ((i = 1; i <= n; i++)); do
+    run_one "$experiment_name" "$raw_tag"
+  done
+}
+
 # 可选实验列表（保留注释，便于后续继续切换/复用）：
 # 1) group_threshold_prior：8组门控 + capacity prior，主实验
 # run_one "group_threshold_prior" "group_threshold_prior"
@@ -80,14 +105,10 @@ run_one() {
 
 # 当前启用的文本门控实验：
 # 当前代码中真实可用的实验名见 train/train.py: EXPERIMENTS
-run_one "visual_router_v2_text_on" "visual_router_v2_text_on_run1"
-run_one "visual_router_v2_text_on" "visual_router_v2_text_on_run2"
-run_one "visual_router_v2_text_on" "visual_router_v2_text_on_run3"
+run_one "visual_router_v2_text_off" "visual_router_v2_text_off_test1"
+# run_one "visual_router_v2_text_off" "visual_router_v2_text_off_test2"
 
-# run_one "visual_causality_text_off_g1" "visual_causality_text_off_g1_run1"
-# run_one "visual_causality_text_off_g1" "visual_causality_text_off_g1_run2"
-# run_one "visual_causality_text_off_g1" "visual_causality_text_off_g1_run3"
-
+run_N "visual_router_v2_text_off" "visual_router_v2_text_off" 3
 
 # run_one "ablation_full_model" "ablation_full_model"
 # run_one "ablation_wo_visual_gate" "ablation_wo_visual_gate"

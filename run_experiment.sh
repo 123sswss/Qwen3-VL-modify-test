@@ -105,10 +105,10 @@ run_N() {
 
 # 当前启用的文本门控实验：
 # 当前代码中真实可用的实验名见 train/train.py: EXPERIMENTS
-run_one "visual_router_v2_text_off" "visual_router_v2_text_off_test1"
+run_one "visual_router_v2_1_text_off" "visual_router_v2_1_text_off_safe"
 # run_one "visual_router_v2_text_off" "visual_router_v2_text_off_test2"
 
-run_N "visual_router_v2_text_off" "visual_router_v2_text_off" 3
+run_N "visual_router_v2_1_text_off" "visual_router_v2_1_text_off" 3
 
 # run_one "ablation_full_model" "ablation_full_model"
 # run_one "ablation_wo_visual_gate" "ablation_wo_visual_gate"

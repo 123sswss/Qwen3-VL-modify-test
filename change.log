@@ -1,3 +1,6 @@
+5/27：基于 `visual_router_v2_text_off` 三次 stage3 diagnostics 与实际分数（61 / 55 / 52）的对比，先不开新结构分支，也不恢复任何 budget / residual target 类 loss，先补一个**纯参数实验入口** `visual_router_v2_1_text_off` 做低风险验证。这个 v2.1 明确保留现有 `G + residual router + 4 adapters` 架构与训练流程不动，只对 v2 text-off 的三项 adapter 正则权重做小步调整：`adapter_usage_balance_loss_weight: 0.01 -> 0.005`、`adapter_common_mode_loss_weight: 0.02 -> 0.03`、`adapter_sample_entropy_loss_weight: 0.02` 保持不变。
+这次调参的判断依据是：最低分 52 的 run 并不是 router collapse，反而是 **route entropy 更高、usage 更均匀**，但视觉 residual 更强、common-mode 更重，已经掉到未训练基线 53 以下；最高分 61 的 run 则表现为 **适度专门化 + 略低 common-mode + 更克制的 residual 幅度**。因此 v2.1 的目标不是继续把 router 往“更均匀”方向推，而是先放松 balance 约束，允许 adapter 形成更接近 61 分 run 的分化，同时小幅加强 common-mode 抑制，看看能否在不改结构的前提下把 stage3 后半段的 `adapter_route_entropy_norm / adapter_usage_max-min / delta_pool_common_mode_ratio / delta_pool_specificity_ratio` 推回更健康区间。
+
 5/25：撤回当天尝试加入的 **soft visual residual budget** 分支，不再沿 `visual_residual_budget_loss / target` 这条线继续迭代。对应地，`VisionModelWithMMRL.py`、`QWen3WithMMRL.py`、`train/train_stages.py`、`train/train.py` 中与 budget 相关的 loss、config 透传、metrics 记录和 `visual_router_v3_text_off_budget` 预设已一并清理，避免后续实验入口和诊断面板继续混入这条已放弃分支。
 同次顺手补了一个显式实验入口 `visual_router_v2_text_on`，语义上等价于当前默认的 text-gate 开启版 `visual_router_v2`。这样后续和 `visual_router_v2_text_off` 并排做实验时，命名会更对称，复盘时也更不容易把“默认版其实是 text-on”这件事记混。
 

@@ -96,12 +96,14 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
         self.use_mmrl = config.mmrl_config["USE_MMRL"]
         self.tax_loss = None
         self.capacity_prior_loss = None
+        self.text_common_mode_loss = None
         self.temperature_override = None
         self.k_results = None
         self.disable_text_prompt_insert = bool(config.mmrl_config.get("DISABLE_TEXT_PROMPT_INSERT", False))
         self.mask_rep_placeholders_when_text_disabled = bool(config.mmrl_config.get("MASK_REP_PLACEHOLDERS_WHEN_TEXT_DISABLED", True))
         self.debug_context = {}
         self.text_rep_scale = nn.Parameter(torch.tensor(float(_cfg_attr(config, "TEXT_REP_INIT_SCALE", 1e-3))))
+        self.text_common_mode_target = 0.85
         ###################
 
     def _text_insert_debug_defaults(self, device, dtype):
@@ -113,8 +115,57 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
             "text_insert_pool_common_mode_ratio": nan,
             "text_insert_pool_specificity_ratio": nan,
             "text_insert_pool_pairwise_cos_mean": nan,
+            "text_common_mode_ratio_live": nan,
+            "text_common_mode_common_norm": nan,
+            "text_common_mode_mean_norm": nan,
+            "text_common_mode_valid_sample_count": torch.tensor(0.0, device=device, dtype=dtype),
+            "text_common_mode_valid_sample_ratio": torch.tensor(0.0, device=device, dtype=dtype),
+            "raw_text_common_mode_loss_live": torch.tensor(0.0, device=device, dtype=dtype),
             "text_rep_scale_abs": self.text_rep_scale.detach().abs().to(device=device, dtype=dtype),
         }
+
+    def _compute_text_common_mode_loss(
+        self,
+        text_insert_delta: torch.Tensor,
+        is_placeholder: torch.Tensor,
+        gate_soft_mask: torch.Tensor,
+        target: float,
+        eps: float = 1e-8,
+    ):
+        metrics = self._text_insert_debug_defaults(text_insert_delta.device, text_insert_delta.dtype)
+        zero = text_insert_delta.new_tensor(0.0)
+
+        sample_mask = is_placeholder.float() * gate_soft_mask.squeeze(-1).float()
+        sample_count = sample_mask.sum(dim=1, keepdim=True)
+        valid_samples = sample_count.squeeze(-1) > eps
+        metrics["text_common_mode_valid_sample_count"] = valid_samples.float().sum().to(dtype=text_insert_delta.dtype)
+        metrics["text_common_mode_valid_sample_ratio"] = valid_samples.float().mean().to(dtype=text_insert_delta.dtype)
+        if not valid_samples.any():
+            return zero, metrics
+
+        pooled_delta = (text_insert_delta.float() * sample_mask.unsqueeze(-1)).sum(dim=1)
+        pooled_delta = pooled_delta / sample_count.clamp_min(1.0)
+        pooled_delta = pooled_delta[valid_samples]
+        pooled_norm = pooled_delta.norm(dim=-1)
+        valid_pool = pooled_norm > eps
+        if not valid_pool.any():
+            return zero, metrics
+
+        pooled_delta = pooled_delta[valid_pool]
+        pooled_norm = pooled_norm[valid_pool]
+        mean_norm = pooled_norm.mean().clamp_min(eps)
+        common_norm = pooled_delta.mean(dim=0).norm()
+        common_ratio_debug = (common_norm.detach() / mean_norm.detach()).to(device=text_insert_delta.device, dtype=text_insert_delta.dtype)
+        common_ratio_loss = common_norm / mean_norm.detach().clamp_min(eps)
+        loss = torch.relu(common_ratio_loss - float(target)).pow(2).to(device=text_insert_delta.device, dtype=text_insert_delta.dtype)
+
+        metrics.update({
+            "text_common_mode_ratio_live": common_ratio_debug,
+            "text_common_mode_common_norm": common_norm.detach().to(device=text_insert_delta.device, dtype=text_insert_delta.dtype),
+            "text_common_mode_mean_norm": mean_norm.detach().to(device=text_insert_delta.device, dtype=text_insert_delta.dtype),
+            "raw_text_common_mode_loss_live": loss.detach(),
+        })
+        return loss, metrics
 
     def _compute_text_insert_debug_metrics(
         self,
@@ -244,6 +295,7 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
         mmrl_gating_mask = kwargs.pop("mmrl_gating_mask", None)
         self.tax_loss = torch.tensor(0.0, device=inputs_embeds.device)
         self.capacity_prior_loss = torch.tensor(0.0, device=inputs_embeds.device)
+        self.text_common_mode_loss = torch.tensor(0.0, device=inputs_embeds.device, dtype=inputs_embeds.dtype)
         self.debug_context = {}
         if self.use_mmrl and input_ids is None:
             raise ValueError("MMRL path currently requires input_ids for placeholder detection.")
@@ -371,13 +423,23 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
                     gather_idx = placeholder_idx.clamp(max=k_mask.shape[-1] - 1)
                     gate_soft_mask = k_mask.gather(dim=1, index=gather_idx).unsqueeze(-1)
                 gate_soft_mask = gate_soft_mask.to(inputs_embeds.dtype)
-                self.debug_context.update(self._compute_text_insert_debug_metrics(
+                text_insert_delta = target_embeds * gate_soft_mask
+                raw_text_common_mode_loss, text_common_mode_debug = self._compute_text_common_mode_loss(
+                    text_insert_delta=text_insert_delta,
+                    is_placeholder=is_placeholder,
+                    gate_soft_mask=gate_soft_mask,
+                    target=float(self.text_common_mode_target),
+                )
+                self.text_common_mode_loss = raw_text_common_mode_loss if self.training else inputs_embeds.new_tensor(0.0)
+                text_insert_debug = self._compute_text_insert_debug_metrics(
                     base_embeds=placeholder_base_embeds,
                     target_embeds=target_embeds,
                     gate_soft_mask=gate_soft_mask,
                     is_placeholder=is_placeholder,
-                ))
-                inputs_embeds = torch.where(is_placeholder.unsqueeze(-1), target_embeds * gate_soft_mask, inputs_embeds)
+                )
+                self.debug_context.update(text_insert_debug)
+                self.debug_context.update(text_common_mode_debug)
+                inputs_embeds = torch.where(is_placeholder.unsqueeze(-1), text_insert_delta, inputs_embeds)
                 dynamic_gate_mask = (gate_soft_mask.squeeze(-1) > 0.5)
                 attention_mask = attention_mask & ((~is_placeholder) | dynamic_gate_mask)
                 if not self.training:

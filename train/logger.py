@@ -255,6 +255,7 @@ class StageMetricLogger:
             ("adapter_usage_balance_loss_scaled", "Route-Balance", "#72b7b2"),
             ("adapter_sample_entropy_loss_scaled", "Route-Entropy", "#eeca3b"),
             ("adapter_common_mode_loss_scaled", "Common-Mode Penalty", "#b279a2"),
+            ("text_common_mode_loss", "Text Common", "#ff9da6"),
             ("expert_floor_loss", "Expert-Floor", C["ke"]),
             ("anti_collapse_loss", "Anti-Collapse", "#bc5090"),
             ("cls_loss", "Cls", C["cls"]),
@@ -282,20 +283,29 @@ class StageMetricLogger:
         ax = axes[1]
         if is_stage34:
             plotted = 0
-            if has_adapter_usage:
-                if self._has_valid_data(df, "adapter_route_entropy_norm"):
-                    self._plot_series(ax, x, df["adapter_route_entropy_norm"], "Route Entropy", C["alpha"])
+            if gate_mode in ("group_threshold_prior", "group_top4") or not text_gate_disabled:
+                if self._has_valid_data(df, "active_token_count_mean"):
+                    self._plot_series(ax, x, df["active_token_count_mean"], "Active Tokens", C["kg"])
                     plotted += 1
-                if self._has_valid_data(df, "adapter_route_confidence"):
-                    self._plot_series(ax, x, df["adapter_route_confidence"], "Route Confidence", C["kg"])
+                if self._has_valid_data(df, "hard_group_count_post_G_mean"):
+                    self._plot_series(ax, x, df["hard_group_count_post_G_mean"], "Hard Groups Post-G", C["tax"])
                     plotted += 1
-                if self._has_valid_data(df, "adapter_usage_max"):
-                    self._plot_series(ax, x, df["adapter_usage_max"], "Usage Max", C["ke"])
+                if self._has_valid_data(df, "group_entropy_norm"):
+                    self._plot_series(ax, x, df["group_entropy_norm"], "Group Entropy", C["alpha"])
                     plotted += 1
-                if self._has_valid_data(df, "adapter_usage_min"):
-                    self._plot_series(ax, x, df["adapter_usage_min"], "Usage Min", C["tax"])
+                if self._has_valid_data(df, "group_usage_max"):
+                    self._plot_series(ax, x, df["group_usage_max"], "Usage Max", C["ke"])
                     plotted += 1
-                ax.set_title("Visual Adapter Routing")
+                if self._has_valid_data(df, "group_usage_min"):
+                    self._plot_series(ax, x, df["group_usage_min"], "Usage Min", C["tax"])
+                    plotted += 1
+                if self._has_valid_data(df, "rep_placeholder_attention_ratio"):
+                    self._plot_series(ax, x, df["rep_placeholder_attention_ratio"], "Rep Attention Ratio", "#72b7b2")
+                    plotted += 1
+                if self._has_valid_data(df, "batch_G_on_ratio"):
+                    self._plot_series(ax, x, df["batch_G_on_ratio"], "Batch G On", "#b279a2")
+                    plotted += 1
+                ax.set_title("Text Gate Usage")
                 ax.set_ylabel("Value")
             elif gate_mode in ("group_threshold_prior", "group_top4"):
                 if self._has_valid_data(df, "group_count_loss"):
@@ -367,26 +377,23 @@ class StageMetricLogger:
         ax = axes[2]
         if is_stage34:
             plotted = 0
-            if text_gate_disabled or has_adapter_usage:
-                if self._has_valid_data(df, "gated_delta_norm_mean"):
-                    self._plot_series(ax, x, df["gated_delta_norm_mean"], "Gated Δ Norm", "#4c78a8")
+            if self._has_valid_data(df, "text_insert_to_base_embed_ratio") or self._has_valid_data(df, "text_insert_pool_common_mode_ratio"):
+                if self._has_valid_data(df, "text_insert_delta_norm_mean"):
+                    self._plot_series(ax, x, df["text_insert_delta_norm_mean"], "Text Δ Norm", "#4c78a8")
                     plotted += 1
-                if self._has_valid_data(df, "final_delta_norm_mean"):
-                    self._plot_series(ax, x, df["final_delta_norm_mean"], "Final Δ Norm", "#f58518")
+                if self._has_valid_data(df, "text_insert_to_base_embed_ratio"):
+                    self._plot_series(ax, x, df["text_insert_to_base_embed_ratio"], "Text Δ / Base", "#f58518")
                     plotted += 1
-                if self._has_valid_data(df, "delta_to_org_ratio"):
-                    self._plot_series(ax, x, df["delta_to_org_ratio"], "Δ / Org", "#54a24b")
+                if self._has_valid_data(df, "text_insert_pool_common_mode_ratio"):
+                    self._plot_series(ax, x, df["text_insert_pool_common_mode_ratio"], "Text Common-Mode", "#72b7b2")
                     plotted += 1
-                if self._has_valid_data(df, "delta_pool_common_mode_ratio"):
-                    self._plot_series(ax, x, df["delta_pool_common_mode_ratio"], "Common-Mode", "#72b7b2")
+                if self._has_valid_data(df, "text_insert_pool_specificity_ratio"):
+                    self._plot_series(ax, x, df["text_insert_pool_specificity_ratio"], "Text Specificity", "#eeca3b")
                     plotted += 1
-                if self._has_valid_data(df, "delta_pool_specificity_ratio"):
-                    self._plot_series(ax, x, df["delta_pool_specificity_ratio"], "Specificity", "#eeca3b")
+                if self._has_valid_data(df, "text_insert_pool_pairwise_cos_mean"):
+                    self._plot_series(ax, x, df["text_insert_pool_pairwise_cos_mean"], "Text Pairwise Cos", "#b279a2")
                     plotted += 1
-                if self._has_valid_data(df, "delta_pool_pairwise_cos_mean"):
-                    self._plot_series(ax, x, df["delta_pool_pairwise_cos_mean"], "Δ Pairwise Cos", "#b279a2")
-                    plotted += 1
-                ax.set_title("Vision Residual Diagnostics")
+                ax.set_title("Text Insert Geometry")
                 ax.set_ylabel("Value")
             elif gate_mode in ("group_threshold_prior", "group_top4"):
                 if self._has_valid_data(df, "batch_alpha_mean"):
@@ -489,6 +496,37 @@ class StageMetricLogger:
         if is_stage4:
             ax = axes[3]
             plotted = 0
+            if self._has_valid_data(df, "adapter_route_entropy_norm"):
+                self._plot_series(ax, x, df["adapter_route_entropy_norm"], "Route Entropy", C["alpha"])
+                plotted += 1
+            if self._has_valid_data(df, "adapter_usage_max"):
+                self._plot_series(ax, x, df["adapter_usage_max"], "Usage Max", C["ke"])
+                plotted += 1
+            if self._has_valid_data(df, "adapter_usage_min"):
+                self._plot_series(ax, x, df["adapter_usage_min"], "Usage Min", C["tax"])
+                plotted += 1
+            if self._has_valid_data(df, "final_delta_norm_mean"):
+                self._plot_series(ax, x, df["final_delta_norm_mean"], "Final Δ Norm", "#4c78a8")
+                plotted += 1
+            if self._has_valid_data(df, "delta_to_org_ratio"):
+                self._plot_series(ax, x, df["delta_to_org_ratio"], "Δ / Org", "#f58518")
+                plotted += 1
+            if self._has_valid_data(df, "delta_pool_common_mode_ratio"):
+                self._plot_series(ax, x, df["delta_pool_common_mode_ratio"], "Common-Mode", "#72b7b2")
+                plotted += 1
+            if self._has_valid_data(df, "delta_pool_specificity_ratio"):
+                self._plot_series(ax, x, df["delta_pool_specificity_ratio"], "Specificity", "#eeca3b")
+                plotted += 1
+            ax.set_title("Minimal Visual Health")
+            ax.set_xlabel("Global Step")
+            ax.set_ylabel("Value")
+            ax.grid(alpha=0.25, linestyle="--")
+            if plotted > 0:
+                ax.legend(frameon=False)
+
+        if is_stage4 and has_group_usage:
+            ax = axes[4]
+            plotted = 0
             if "temperature" in df.columns and df["temperature"].notna().any():
                 self._plot_series(ax, x, df["temperature"], "Temperature", C["temp"])
                 plotted += 1
@@ -498,11 +536,11 @@ class StageMetricLogger:
             if "capacity_prior_loss" in df.columns and df["capacity_prior_loss"].notna().any():
                 self._plot_series(ax, x, df["capacity_prior_loss"], "Capacity Prior", "#7a5195")
                 plotted += 1
-            if "shared_rep_grad_spike_flag" in df.columns and df["shared_rep_grad_spike_flag"].notna().any():
-                self._plot_series(ax, x, df["shared_rep_grad_spike_flag"], "Grad Spike Flag", "#ef5675", draw_raw=False)
+            if "text_common_mode_weight" in df.columns and df["text_common_mode_weight"].notna().any():
+                self._plot_series(ax, x, df["text_common_mode_weight"], "Text Common W", "#ff9da6")
                 plotted += 1
-            if "shared_rep_grad_spike_count" in df.columns and df["shared_rep_grad_spike_count"].notna().any():
-                self._plot_series(ax, x, df["shared_rep_grad_spike_count"], "Grad Spike Count", "#ffa600", draw_raw=False)
+            if "text_common_mode_loss" in df.columns and df["text_common_mode_loss"].notna().any():
+                self._plot_series(ax, x, df["text_common_mode_loss"], "Text Common", "#d37295")
                 plotted += 1
             if "learning_rate" in df.columns and df["learning_rate"].notna().any():
                 self._plot_series(ax, x, df["learning_rate"], "Learning Rate", C["lr"])
@@ -513,11 +551,8 @@ class StageMetricLogger:
             ax.grid(alpha=0.25, linestyle="--")
             if plotted > 0:
                 ax.legend(frameon=False)
-
-        if is_stage4 and has_group_usage:
-            self._plot_group_usage_bar(axes[4], df)
             if len(axes) > 5:
-                axes[5].axis("off")
+                self._plot_group_usage_bar(axes[5], df)
 
         fig_title = self.stage_name if not self.experiment_name else f"{self.experiment_name} / {self.stage_name}"
         fig.suptitle(f"Training Metrics - {fig_title}", fontsize=15, y=0.98)
@@ -588,6 +623,8 @@ class TrainerMetricsCallback(TrainerCallback):
             print(f"  ├─ Expert K Proxy Loss:   {_fmt(row.get('k_expert_loss')):>10}")
         if "capacity_prior_loss" in row:
             print(f"  ├─ Capacity Prior Loss:   {_fmt(row.get('capacity_prior_loss')):>10}")
+        if "text_common_mode_loss" in row:
+            print(f"  ├─ Text Common Loss:      {_fmt(row.get('text_common_mode_loss')):>10}")
         if "adapter_usage_balance_loss_scaled" in row:
             print(f"  ├─ Route Balance Loss:    {_fmt(row.get('adapter_usage_balance_loss_scaled')):>10}")
         if "adapter_sample_entropy_loss_scaled" in row:
@@ -596,6 +633,8 @@ class TrainerMetricsCallback(TrainerCallback):
             print(f"  ├─ Common-Mode Penalty:   {_fmt(row.get('adapter_common_mode_loss_scaled')):>10}")
         if "raw_capacity_prior_loss" in row:
             print(f"  ├─ Raw Capacity Prior:    {_fmt(row.get('raw_capacity_prior_loss')):>10}")
+        if "raw_text_common_mode_loss" in row:
+            print(f"  ├─ Raw Text Common:       {_fmt(row.get('raw_text_common_mode_loss')):>10}")
         if "group_usage_max" in row or "group_usage_min" in row or "group_usage_entropy" in row:
             print(f"[Group Usage]")
             if "group_usage_max" in row:
@@ -663,28 +702,49 @@ class TrainerMetricsCallback(TrainerCallback):
                 print(f"  └─ Spike Count:          {_fmt(row.get('shared_rep_grad_spike_count'), nd=0):>10}")
 
         has_visual_residual = (
-            ("gated_delta_norm_mean" in row) or
             ("final_delta_norm_mean" in row) or
             ("delta_to_org_ratio" in row) or
-            ("final_to_gated_ratio" in row) or
-            ("delta_transform_cos_mean" in row) or
-            ("delta_pool_pairwise_cos_mean" in row) or
-            ("delta_org_pool_cos_mean" in row) or
-            ("delta_token_top10_mass" in row)
+            ("delta_pool_common_mode_ratio" in row) or
+            ("delta_pool_specificity_ratio" in row)
         )
         has_visual_branch_probe = (
             ("adapter_route_entropy_norm" in row) or
-            ("adapter_route_confidence" in row) or
             ("adapter_usage_max" in row) or
             ("delta_pool_common_mode_ratio" in row) or
             ("delta_pool_specificity_ratio" in row)
         )
+        has_text_insert_geometry = (
+            ("text_insert_delta_norm_mean" in row) or
+            ("text_insert_to_base_embed_ratio" in row) or
+            ("text_insert_pool_common_mode_ratio" in row) or
+            ("text_insert_pool_specificity_ratio" in row) or
+            ("text_insert_pool_pairwise_cos_mean" in row)
+        )
+        if has_text_insert_geometry:
+            print(f"[Text Insert Geometry]")
+            if "text_insert_delta_norm_mean" in row:
+                print(f"  ├─ Text Δ Norm:         {_fmt(row.get('text_insert_delta_norm_mean'), nd=4):>10}")
+            if "text_insert_to_base_embed_ratio" in row:
+                print(f"  ├─ Text Δ / Base:       {_fmt(row.get('text_insert_to_base_embed_ratio'), nd=4):>10}")
+            if "text_insert_pool_common_mode_ratio" in row:
+                print(f"  ├─ Text Common-Mode:    {_fmt(row.get('text_insert_pool_common_mode_ratio'), nd=4):>10}")
+            if "text_insert_pool_specificity_ratio" in row:
+                print(f"  ├─ Text Specificity:    {_fmt(row.get('text_insert_pool_specificity_ratio'), nd=4):>10}")
+            if "text_insert_pool_pairwise_cos_mean" in row:
+                print(f"  ├─ Text Pairwise Cos:   {_fmt(row.get('text_insert_pool_pairwise_cos_mean'), nd=4):>10}")
+            if "text_common_mode_mean_norm" in row:
+                print(f"  ├─ CM Mean Norm:        {_fmt(row.get('text_common_mode_mean_norm'), nd=4):>10}")
+            if "text_common_mode_common_norm" in row:
+                print(f"  ├─ CM Common Norm:      {_fmt(row.get('text_common_mode_common_norm'), nd=4):>10}")
+            if "text_common_mode_valid_sample_ratio" in row:
+                print(f"  ├─ CM Valid Ratio:      {_fmt(row.get('text_common_mode_valid_sample_ratio'), nd=4):>10}")
+            if "rep_placeholder_attention_ratio" in row:
+                print(f"  └─ Rep Attention Ratio: {_fmt(row.get('rep_placeholder_attention_ratio'), nd=4):>10}")
+
         if has_visual_branch_probe:
             print(f"[Visual Adapter Routing]")
             if "adapter_route_entropy_norm" in row:
                 print(f"  ├─ Route Entropy:      {_fmt(row.get('adapter_route_entropy_norm'), nd=4):>10}")
-            if "adapter_route_confidence" in row:
-                print(f"  ├─ Route Confidence:   {_fmt(row.get('adapter_route_confidence'), nd=4):>10}")
             if "adapter_usage_max" in row:
                 print(f"  ├─ Adapter Usage Max:  {_fmt(row.get('adapter_usage_max'), nd=4):>10}")
             if "adapter_usage_min" in row:
@@ -696,22 +756,14 @@ class TrainerMetricsCallback(TrainerCallback):
 
         if has_visual_residual:
             print(f"[Vision Residual]")
-            if "gated_delta_norm_mean" in row:
-                print(f"  ├─ Gated Δ Norm:        {_fmt(row.get('gated_delta_norm_mean'), nd=4):>10}")
             if "final_delta_norm_mean" in row:
                 print(f"  ├─ Final Δ Norm:        {_fmt(row.get('final_delta_norm_mean'), nd=4):>10}")
             if "delta_to_org_ratio" in row:
                 print(f"  ├─ Δ / Org Ratio:       {_fmt(row.get('delta_to_org_ratio'), nd=4):>10}")
-            if "final_to_gated_ratio" in row:
-                print(f"  ├─ Final / Gated:       {_fmt(row.get('final_to_gated_ratio'), nd=4):>10}")
-            if "delta_transform_cos_mean" in row:
-                print(f"  ├─ Transform Cos:       {_fmt(row.get('delta_transform_cos_mean'), nd=4):>10}")
-            if "delta_pool_pairwise_cos_mean" in row:
-                print(f"  ├─ Δ Pairwise Cos:      {_fmt(row.get('delta_pool_pairwise_cos_mean'), nd=4):>10}")
-            if "delta_org_pool_cos_mean" in row:
-                print(f"  ├─ Δ-Org Pool Cos:      {_fmt(row.get('delta_org_pool_cos_mean'), nd=4):>10}")
-            if "delta_token_top10_mass" in row:
-                print(f"  └─ Δ Top10 Mass:        {_fmt(row.get('delta_token_top10_mass'), nd=4):>10}")
+            if "delta_pool_common_mode_ratio" in row:
+                print(f"  ├─ Common-Mode Ratio:   {_fmt(row.get('delta_pool_common_mode_ratio'), nd=4):>10}")
+            if "delta_pool_specificity_ratio" in row:
+                print(f"  └─ Specificity Ratio:   {_fmt(row.get('delta_pool_specificity_ratio'), nd=4):>10}")
 
         # 调度
         print(f"[Schedule]")
@@ -719,6 +771,10 @@ class TrainerMetricsCallback(TrainerCallback):
             print(f"  ├─ Temperature:           {_fmt(row.get('temperature'), nd=4):>10}")
         if "capacity_prior_weight" in row:
             print(f"  ├─ Capacity Prior Weight: {_fmt(row.get('capacity_prior_weight'), nd=4):>10}")
+        if "text_common_mode_weight" in row:
+            print(f"  ├─ Text Common W:        {_fmt(row.get('text_common_mode_weight'), nd=4):>10}")
+        if "text_common_mode_target" in row:
+            print(f"  ├─ Text Common Target:   {_fmt(row.get('text_common_mode_target'), nd=4):>10}")
         if "learning_rate" in row:
             print(f"  └─ Learning Rate:         {_fmt(row.get('learning_rate'), nd=8):>10}")
         if "adapter_usage_balance_weight" in row:

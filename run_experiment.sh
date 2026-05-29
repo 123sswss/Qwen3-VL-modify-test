@@ -108,7 +108,7 @@ run_N() {
 # run_one "visual_router_v2_1_text_off" "visual_router_v2_1_text_off_safe"
 # run_one "visual_router_v2_text_off" "visual_router_v2_text_off_test2"
 
-run_N "visual_router_v2_1_text_on_monitor" "visual_router_v2_1_text_on_monitor" 3
+run_N "visual_router_v2_1_text_on_text_cm" "visual_router_v2_1_text_on_text_cm" 3
 
 # run_one "ablation_full_model" "ablation_full_model"
 # run_one "ablation_wo_visual_gate" "ablation_wo_visual_gate"

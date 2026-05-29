@@ -49,6 +49,10 @@ def _build_experiment_context(train_cfg, output_dir, stage_id):
             "alpha_loss_weight_s4": train_cfg.get("alpha_loss_weight_s4"),
             "enable_capacity_prior_loss_s4": train_cfg.get("enable_capacity_prior_loss_s4"),
             "capacity_prior_loss_weight": train_cfg.get("capacity_prior_loss_weight"),
+            "enable_text_common_mode_loss_s4": train_cfg.get("enable_text_common_mode_loss_s4"),
+            "text_common_mode_loss_weight": train_cfg.get("text_common_mode_loss_weight"),
+            "text_common_mode_target": train_cfg.get("text_common_mode_target"),
+            "text_common_mode_warmup_epochs": train_cfg.get("text_common_mode_warmup_epochs"),
             "visual_residual_adapter_count": train_cfg.get("visual_residual_adapter_count"),
             "adapter_usage_balance_loss_weight": train_cfg.get("adapter_usage_balance_loss_weight"),
             "adapter_sample_entropy_loss_weight": train_cfg.get("adapter_sample_entropy_loss_weight"),
@@ -178,6 +182,8 @@ class StageScheduleCallback(TrainerCallback):
         final_temp=0.1,
         target_capacity_prior_weight=0.03,
         capacity_prior_warmup_epochs=1,
+        text_common_mode_target_weight=0.0,
+        text_common_mode_warmup_epochs=1,
     ):
         self.dataset = dataset
         self.total_epochs = total_epochs
@@ -185,6 +191,8 @@ class StageScheduleCallback(TrainerCallback):
         self.final_temp = final_temp
         self.target_capacity_prior_weight = target_capacity_prior_weight
         self.capacity_prior_warmup_epochs = capacity_prior_warmup_epochs
+        self.text_common_mode_target_weight = text_common_mode_target_weight
+        self.text_common_mode_warmup_epochs = text_common_mode_warmup_epochs
 
     def on_epoch_begin(self, args, state, control, **kwargs):
         self.dataset.resample_data()
@@ -207,6 +215,18 @@ class StageScheduleCallback(TrainerCallback):
                 1.0,
             )
             model.capacity_prior_loss_weight = self.target_capacity_prior_weight * p
+
+        if not getattr(model, "use_text_common_mode_loss", False):
+            model.text_common_mode_loss_weight = 0.0
+        elif ep < self.text_common_mode_warmup_epochs:
+            model.text_common_mode_loss_weight = 0.0
+        else:
+            p = min(
+                (ep - self.text_common_mode_warmup_epochs)
+                / max(self.total_epochs - self.text_common_mode_warmup_epochs, 1e-6),
+                1.0,
+            )
+            model.text_common_mode_loss_weight = self.text_common_mode_target_weight * p
 
 
 class MMRLDiagnosticsCallback(TrainerCallback):
@@ -468,6 +488,9 @@ class Qwen3VLMMRLForStages(Qwen3VLForConditionalGeneration):
         self.ce_loss_weight = 1.0
         self.alpha_loss_weight = 0.0
         self.capacity_prior_loss_weight = 0.0     # Stage3=0, Stage4由调度升到目标
+        self.use_text_common_mode_loss = False
+        self.text_common_mode_loss_weight = 0.0
+        self.text_common_mode_target = 0.85
         self.enable_alpha_guide_loss = False
         self.enable_gate_loss_stage2 = True
         self.adapter_usage_balance_loss_weight = 0.0
@@ -668,6 +691,7 @@ class Qwen3VLMMRLForStages(Qwen3VLForConditionalGeneration):
     def forward(self, input_ids=None, alpha_labels=None, images_per_sample=None, task_type_ids=None, **kwargs):
         self._last_shared_rep_grad = {}
         self._ensure_shared_rep_grad_hook()
+        self.model.text_common_mode_target = float(self.text_common_mode_target)
         if hasattr(self, "temperature_override") and self.temperature_override is not None:
             self.model.temperature_override = self.temperature_override
             kwargs["gating_temperature_override"] = self.temperature_override
@@ -740,6 +764,16 @@ class Qwen3VLMMRLForStages(Qwen3VLForConditionalGeneration):
         capacity_prior_loss = (
             raw_capacity_prior_loss * self.capacity_prior_loss_weight
             if self.use_capacity_prior_loss
+            else torch.tensor(0.0, device=input_ids.device, dtype=ce_loss.dtype)
+        )
+        raw_text_common_mode_loss = getattr(self.model, "text_common_mode_loss", torch.tensor(0.0, device=input_ids.device))
+        if not torch.is_tensor(raw_text_common_mode_loss):
+            raw_text_common_mode_loss = torch.tensor(raw_text_common_mode_loss, device=input_ids.device, dtype=ce_loss.dtype)
+        else:
+            raw_text_common_mode_loss = raw_text_common_mode_loss.to(device=input_ids.device, dtype=ce_loss.dtype)
+        scaled_text_common_mode_loss = (
+            raw_text_common_mode_loss * float(self.text_common_mode_loss_weight)
+            if self.use_text_common_mode_loss
             else torch.tensor(0.0, device=input_ids.device, dtype=ce_loss.dtype)
         )
         adapter_usage_balance_loss = getattr(self.model.visual, "adapter_usage_balance_loss", torch.tensor(0.0, device=input_ids.device))
@@ -818,6 +852,7 @@ class Qwen3VLMMRLForStages(Qwen3VLForConditionalGeneration):
             self.ce_loss_weight * ce_loss
             + alpha_guide_loss
             + capacity_prior_loss
+            + scaled_text_common_mode_loss
             + scaled_adapter_usage_balance_loss
             + scaled_adapter_sample_entropy_loss
             + scaled_adapter_common_mode_loss
@@ -845,6 +880,8 @@ class Qwen3VLMMRLForStages(Qwen3VLForConditionalGeneration):
                 "k_expert_loss": expert_floor_loss.detach(),
                 "raw_capacity_prior_loss": raw_capacity_prior_loss.detach(),
                 "capacity_prior_loss": capacity_prior_loss.detach(),
+                "raw_text_common_mode_loss": raw_text_common_mode_loss.detach(),
+                "text_common_mode_loss": scaled_text_common_mode_loss.detach(),
                 "adapter_usage_balance_loss": adapter_usage_balance_loss.detach(),
                 "adapter_sample_entropy_loss": adapter_sample_entropy_loss.detach(),
                 "adapter_common_mode_loss": adapter_common_mode_loss.detach(),
@@ -864,6 +901,8 @@ class Qwen3VLMMRLForStages(Qwen3VLForConditionalGeneration):
                 "group_usage_dead_ratio": group_usage_dead_ratio.detach(),
                 "temperature": torch.tensor(float(self.temperature_override) if self.temperature_override is not None else float("nan"), device=input_ids.device),
                 "capacity_prior_weight": torch.tensor(float(self.capacity_prior_loss_weight), device=input_ids.device),
+                "text_common_mode_weight": torch.tensor(float(self.text_common_mode_loss_weight), device=input_ids.device),
+                "text_common_mode_target": torch.tensor(float(self.text_common_mode_target), device=input_ids.device),
                 "adapter_usage_balance_weight": torch.tensor(float(self.adapter_usage_balance_loss_weight), device=input_ids.device),
                 "adapter_sample_entropy_weight": torch.tensor(float(self.adapter_sample_entropy_loss_weight), device=input_ids.device),
                 "adapter_common_mode_weight": torch.tensor(float(self.adapter_common_mode_loss_weight), device=input_ids.device),
@@ -1269,6 +1308,9 @@ def run_stage34_full(stage_id, model, processor, data_cfg, train_cfg, output_dir
         model.anti_collapse_weight = 0.0
         model.use_capacity_prior_loss = False
         model.capacity_prior_loss_weight = 0.0
+        model.use_text_common_mode_loss = False
+        model.text_common_mode_loss_weight = 0.0
+        model.text_common_mode_target = float(train_cfg.get("text_common_mode_target", 0.85))
     else:  # stage4
         model.ce_loss_weight = 1.0
         model.alpha_loss_weight = 0.0
@@ -1286,6 +1328,9 @@ def run_stage34_full(stage_id, model, processor, data_cfg, train_cfg, output_dir
         model.group_usage_ema = None
         model.use_capacity_prior_loss = train_cfg.get("enable_capacity_prior_loss_s4", True)
         model.capacity_prior_loss_weight = 0.0
+        model.use_text_common_mode_loss = train_cfg.get("enable_text_common_mode_loss_s4", False)
+        model.text_common_mode_loss_weight = 0.0
+        model.text_common_mode_target = float(train_cfg.get("text_common_mode_target", 0.85))
 
     model.adapter_usage_balance_loss_weight = float(train_cfg.get("adapter_usage_balance_loss_weight", 0.0))
     model.adapter_sample_entropy_loss_weight = float(train_cfg.get("adapter_sample_entropy_loss_weight", 0.0))
@@ -1320,6 +1365,12 @@ def run_stage34_full(stage_id, model, processor, data_cfg, train_cfg, output_dir
             else train_cfg["capacity_prior_loss_weight"]
         ),
         capacity_prior_warmup_epochs=train_cfg.get("capacity_prior_warmup_epochs", 1),
+        text_common_mode_target_weight=(
+            0.0
+            if stage_id == 3 or (not train_cfg.get("enable_text_common_mode_loss_s4", False))
+            else train_cfg.get("text_common_mode_loss_weight", 0.0)
+        ),
+        text_common_mode_warmup_epochs=train_cfg.get("text_common_mode_warmup_epochs", 1),
     )
     args = TrainingArguments(
         output_dir=f"{output_dir}/stage{stage_id}",

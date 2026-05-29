@@ -12,6 +12,11 @@ BASE_VISUAL_ROUTER_MODEL = {
     "text_gate_capacity_prior_sigma": 0.40,
     "enable_capacity_prior_loss_s4": True,
     "capacity_prior_loss_weight": 0.03,
+    "capacity_prior_warmup_epochs": 1,
+    "enable_text_common_mode_loss_s4": False,
+    "text_common_mode_loss_weight": 0.0,
+    "text_common_mode_target": 0.85,
+    "text_common_mode_warmup_epochs": 1,
     "text_rep_init_scale": 1e-3,
     "visual_residual_adapter_count": 4,
     "adapter_usage_balance_loss_weight": 0.01,
@@ -89,6 +94,37 @@ EXPERIMENTS = {
         "adapter_sample_entropy_loss_weight": 0.02,
         "diag_every_steps": 500,
     },
+    "visual_router_v2_1_text_on_monitor": {
+        **BASE_VISUAL_ROUTER_MODEL,
+        "disable_text_gate": False,
+        "disable_text_prompt_insert": False,
+        "mask_rep_placeholders_when_text_disabled": True,
+        "disable_general_mm_stage34": False,
+        "enable_capacity_prior_loss_s4": True,
+        "capacity_prior_loss_weight": 0.03,
+        "adapter_usage_balance_loss_weight": 0.005,
+        "adapter_common_mode_loss_weight": 0.03,
+        "adapter_sample_entropy_loss_weight": 0.02,
+        "diag_every_steps": 500,
+    },
+    "visual_router_v2_1_text_on_text_cm": {
+        **BASE_VISUAL_ROUTER_MODEL,
+        "disable_text_gate": False,
+        "disable_text_prompt_insert": False,
+        "mask_rep_placeholders_when_text_disabled": True,
+        "disable_general_mm_stage34": False,
+        "enable_capacity_prior_loss_s4": True,
+        "capacity_prior_loss_weight": 0.01,
+        "capacity_prior_warmup_epochs": 2,
+        "adapter_usage_balance_loss_weight": 0.005,
+        "adapter_common_mode_loss_weight": 0.03,
+        "adapter_sample_entropy_loss_weight": 0.02,
+        "enable_text_common_mode_loss_s4": True,
+        "text_common_mode_loss_weight": 0.005,
+        "text_common_mode_target": 0.85,
+        "text_common_mode_warmup_epochs": 2,
+        "diag_every_steps": 500,
+    },
 }
 
 SELECTED_EXPERIMENT = os.getenv("MMRL_EXPERIMENT", "visual_router_v1")
@@ -139,6 +175,10 @@ CFG = {
             "MMRL_CAPACITY_PRIOR_LOSS_WEIGHT",
             str(EXP_CFG["capacity_prior_loss_weight"]),
         )),
+        "capacity_prior_warmup_epochs": int(os.getenv(
+            "MMRL_CAPACITY_PRIOR_WARMUP_EPOCHS",
+            str(EXP_CFG.get("capacity_prior_warmup_epochs", 1)),
+        )),
         "visual_residual_adapter_count": int(os.getenv(
             "MMRL_VISUAL_RESIDUAL_ADAPTER_COUNT",
             str(EXP_CFG.get("visual_residual_adapter_count", 4)),
@@ -172,6 +212,22 @@ CFG = {
             "MMRL_ENABLE_CAPACITY_PRIOR_LOSS_S4",
             "1" if EXP_CFG["enable_capacity_prior_loss_s4"] else "0",
         ) == "1",
+        "enable_text_common_mode_loss_s4": os.getenv(
+            "MMRL_ENABLE_TEXT_COMMON_MODE_LOSS_S4",
+            "1" if EXP_CFG.get("enable_text_common_mode_loss_s4", False) else "0",
+        ) == "1",
+        "text_common_mode_loss_weight": float(os.getenv(
+            "MMRL_TEXT_COMMON_MODE_LOSS_WEIGHT",
+            str(EXP_CFG.get("text_common_mode_loss_weight", 0.0)),
+        )),
+        "text_common_mode_target": float(os.getenv(
+            "MMRL_TEXT_COMMON_MODE_TARGET",
+            str(EXP_CFG.get("text_common_mode_target", 0.85)),
+        )),
+        "text_common_mode_warmup_epochs": int(os.getenv(
+            "MMRL_TEXT_COMMON_MODE_WARMUP_EPOCHS",
+            str(EXP_CFG.get("text_common_mode_warmup_epochs", 1)),
+        )),
         "disable_general_mm_stage34": os.getenv(
             "MMRL_DISABLE_GENERAL_MM_STAGE34",
             "1" if EXP_CFG.get("disable_general_mm_stage34", False) else "0",

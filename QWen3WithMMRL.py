@@ -19,6 +19,46 @@ def _cfg_attr(config, key, default):
         return getattr(config, key)
     return default
 
+
+class TextResidualAdapter(nn.Module):
+    def __init__(self, dim: int):
+        super().__init__()
+        hidden = 256
+        self.net = nn.Sequential(
+            nn.Linear(dim, hidden),
+            nn.ReLU(),
+            nn.Linear(hidden, dim),
+        )
+        nn.init.zeros_(self.net[-1].weight)
+        nn.init.zeros_(self.net[-1].bias)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.net(x)
+
+
+class TextAdapterRouter(nn.Module):
+    def __init__(self, text_dim: int, hidden_dim: int, adapter_count: int):
+        super().__init__()
+        self.adapter_count = int(max(adapter_count, 1))
+        self.text_proj = nn.Linear(text_dim, hidden_dim)
+        self.state_proj = nn.Linear(2, hidden_dim)
+        self.fusion = nn.Linear(hidden_dim * 2, hidden_dim)
+        self.route_head = nn.Linear(hidden_dim, self.adapter_count)
+        self.gate_head = nn.Linear(hidden_dim, 1)
+        nn.init.zeros_(self.route_head.weight)
+        nn.init.zeros_(self.route_head.bias)
+        nn.init.zeros_(self.gate_head.weight)
+        nn.init.constant_(self.gate_head.bias, -2.0)
+        self.relu = nn.ReLU()
+
+    def forward(self, text_pooled: torch.Tensor, visual_state: torch.Tensor):
+        text_feat = self.relu(self.text_proj(text_pooled))
+        state_feat = self.relu(self.state_proj(visual_state.to(dtype=text_pooled.dtype)))
+        fused = self.relu(self.fusion(torch.cat([text_feat, state_feat], dim=-1)))
+        route_probs = torch.softmax(self.route_head(fused), dim=-1)
+        text_gate = torch.sigmoid(self.gate_head(fused))
+        return route_probs, text_gate
+
 class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
     def __init__(self,
                  config,
@@ -50,6 +90,9 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
             "DISABLE_TEXT_PROMPT_INSERT": _cfg_attr(config, "DISABLE_TEXT_PROMPT_INSERT", False),
             "MASK_REP_PLACEHOLDERS_WHEN_TEXT_DISABLED": _cfg_attr(config, "MASK_REP_PLACEHOLDERS_WHEN_TEXT_DISABLED", True),
             "VISUAL_RESIDUAL_ADAPTER_COUNT": _cfg_attr(config, "VISUAL_RESIDUAL_ADAPTER_COUNT", 4),
+            "TEXT_ADAPTER_TOKEN_COUNT": _cfg_attr(config, "TEXT_ADAPTER_TOKEN_COUNT", 5),
+            "TEXT_RESIDUAL_ADAPTER_COUNT": _cfg_attr(config, "TEXT_RESIDUAL_ADAPTER_COUNT", 4),
+            "TEXT_ADAPTER_GATE_INIT_BIAS": _cfg_attr(config, "TEXT_ADAPTER_GATE_INIT_BIAS", -2.0),
             "ADAPTER_USAGE_BALANCE_LOSS_WEIGHT": _cfg_attr(config, "ADAPTER_USAGE_BALANCE_LOSS_WEIGHT", 0.0),
             "ADAPTER_SAMPLE_ENTROPY_LOSS_WEIGHT": _cfg_attr(config, "ADAPTER_SAMPLE_ENTROPY_LOSS_WEIGHT", 0.0),
             "ADAPTER_COMMON_MODE_LOSS_WEIGHT": _cfg_attr(config, "ADAPTER_COMMON_MODE_LOSS_WEIGHT", 0.0),
@@ -100,6 +143,18 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
         self.mask_rep_placeholders_when_text_disabled = bool(config.mmrl_config.get("MASK_REP_PLACEHOLDERS_WHEN_TEXT_DISABLED", True))
         self.debug_context = {}
         self.text_rep_scale = nn.Parameter(torch.tensor(float(_cfg_attr(config, "TEXT_REP_INIT_SCALE", 1e-3))))
+        self.text_adapter_token_count = int(config.mmrl_config.get("TEXT_ADAPTER_TOKEN_COUNT", 5))
+        self.text_residual_adapter_count = int(max(config.mmrl_config.get("TEXT_RESIDUAL_ADAPTER_COUNT", 4), 1))
+        self.text_adapter_router = TextAdapterRouter(
+            text_dim,
+            int(config.mmrl_config.get("GATING_MID_DIM", cfg.GATING_MID_DIM)),
+            self.text_residual_adapter_count,
+        )
+        self.text_residual_adapters = nn.ModuleList([
+            TextResidualAdapter(text_dim) for _ in range(self.text_residual_adapter_count)
+        ])
+        gate_bias = float(config.mmrl_config.get("TEXT_ADAPTER_GATE_INIT_BIAS", -2.0))
+        nn.init.constant_(self.text_adapter_router.gate_head.bias, gate_bias)
         ###################
 
     def _text_insert_debug_defaults(self, device, dtype):
@@ -209,6 +264,46 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
                             )
 
         return metrics
+
+    def _pool_text_for_adapter(self, embedding: torch.Tensor, mask: Optional[torch.Tensor]):
+        if torch.is_tensor(mask):
+            m = mask.to(device=embedding.device, dtype=embedding.dtype).unsqueeze(-1)
+            denom = m.sum(dim=1).clamp_min(1.0)
+            return (embedding * m).sum(dim=1) / denom
+        return embedding.mean(dim=1)
+
+    def _batch_visual_state(self, batch_size: int, images_per_sample, device, dtype):
+        alpha = torch.zeros(batch_size, 1, device=device, dtype=dtype)
+        gate = torch.zeros(batch_size, 1, device=device, dtype=dtype)
+        alpha_list = getattr(self.visual, "alpha_list", None)
+        gate_list = getattr(self.visual, "G_list", None)
+        if not torch.is_tensor(alpha_list):
+            return torch.cat([alpha, gate], dim=-1)
+        alpha_prob = torch.sigmoid(alpha_list.detach().to(device=device, dtype=dtype)).view(-1, 1)
+        gate_prob = gate_list.detach().to(device=device, dtype=dtype).view(-1, 1) if torch.is_tensor(gate_list) else alpha_prob.new_zeros(alpha_prob.shape)
+        if images_per_sample is None:
+            n = min(batch_size, alpha_prob.shape[0])
+            alpha[:n] = alpha_prob[:n]
+            gate[:n] = gate_prob[:n]
+            return torch.cat([alpha, gate], dim=-1)
+        cursor = 0
+        for sample_idx, count in enumerate(images_per_sample):
+            count = int(count)
+            if count > 0:
+                alpha[sample_idx] = alpha_prob[cursor:cursor + count].mean(dim=0)
+                gate[sample_idx] = gate_prob[cursor:cursor + count].mean(dim=0)
+            cursor += count
+        return torch.cat([alpha, gate], dim=-1)
+
+    def _apply_text_adapter_router(self, text_tokens: torch.Tensor, text_pooled: torch.Tensor, visual_state: torch.Tensor):
+        route_probs, text_gate = self.text_adapter_router(text_pooled, visual_state)
+        adapter_outputs = torch.stack([adapter(text_tokens) for adapter in self.text_residual_adapters], dim=2)
+        mixed_delta = (adapter_outputs * route_probs[:, None, :, None].to(dtype=text_tokens.dtype)).sum(dim=2)
+        adapted_tokens = text_tokens + mixed_delta
+        visual_gate = visual_state[:, 1:2].to(dtype=text_tokens.dtype)
+        inserted_tokens = visual_gate[:, None, :] * text_gate[:, None, :].to(dtype=text_tokens.dtype) * adapted_tokens
+        return inserted_tokens, route_probs, text_gate, mixed_delta
+
 
     def get_image_features(self,
                         pixel_values: torch.FloatTensor,
@@ -385,28 +480,28 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
                 })
             else:
                 placeholder_base_embeds = inputs_embeds.detach().clone()
-                live_context = getattr(getattr(self.visual, "text_gating", None), "live_context", {}) or {}
-                selected_token_indices = live_context.get("top4_selected_token_indices_live", None)
-                if not torch.is_tensor(selected_token_indices):
-                    selected_token_indices = torch.arange(
-                        int(self.config.mmrl_config.get("ACTIVE_REP_TOKEN_COUNT", cfg.ACTIVE_REP_TOKEN_COUNT)),
-                        device=inputs_embeds.device,
-                        dtype=torch.long,
-                    ).view(1, -1).expand(inputs_embeds.shape[0], -1)
-                selected_token_indices = selected_token_indices.to(device=inputs_embeds.device, dtype=torch.long)
-                selected_token_indices = selected_token_indices.clamp(min=0, max=t_r_tokens.shape[0] - 1)
-                selected_t_tokens = t_r_tokens[selected_token_indices]
+                token_count = min(int(self.text_adapter_token_count), int(t_r_tokens.shape[0]))
+                selected_t_tokens = t_r_tokens[:token_count].to(device=inputs_embeds.device, dtype=inputs_embeds.dtype)
+                selected_t_tokens = selected_t_tokens.unsqueeze(0).expand(inputs_embeds.shape[0], -1, -1)
+                text_pooled_for_adapter = self._pool_text_for_adapter(embedding_for_gating, text_pooling_mask)
+                visual_state = self._batch_visual_state(
+                    inputs_embeds.shape[0],
+                    images_per_sample,
+                    inputs_embeds.device,
+                    inputs_embeds.dtype,
+                )
+                selected_t_tokens, text_route_probs, text_gate, text_mixed_delta = self._apply_text_adapter_router(
+                    selected_t_tokens,
+                    text_pooled_for_adapter,
+                    visual_state,
+                )
                 selected_count = selected_t_tokens.shape[1]
                 gather_idx = placeholder_idx.clamp(max=selected_count - 1).unsqueeze(-1).expand(-1, -1, selected_t_tokens.shape[-1])
                 target_embeds = self.text_rep_scale.to(device=inputs_embeds.device, dtype=inputs_embeds.dtype) * selected_t_tokens.gather(1, gather_idx)
                 gate_soft_mask = is_placeholder.unsqueeze(-1).to(inputs_embeds.dtype)
                 text_insert_delta = target_embeds * gate_soft_mask
-                text_common_target = float(getattr(self, "text_common_mode_target", 0.85))
-                self.text_common_mode_loss, self.text_common_mode_ratio_train = self._compute_text_common_mode_loss(
-                    text_insert_delta=text_insert_delta,
-                    is_placeholder=is_placeholder,
-                    target=text_common_target,
-                )
+                self.text_common_mode_loss = inputs_embeds.new_tensor(0.0)
+                self.text_common_mode_ratio_train = inputs_embeds.new_tensor(0.0)
                 text_insert_debug = self._compute_text_insert_debug_metrics(
                     base_embeds=placeholder_base_embeds,
                     target_embeds=target_embeds,
@@ -418,15 +513,29 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
                 attention_mask = attention_mask | is_placeholder.to(dtype=attention_mask.dtype)
                 rep_attn = attention_mask[is_placeholder].detach().float().mean() if is_placeholder.any() else inputs_embeds.new_tensor(0.0)
                 per_sample_insert_count = is_placeholder.detach().float().sum(dim=-1)
+                text_usage = text_route_probs.detach().float().mean(dim=0)
+                text_usage = text_usage / text_usage.sum().clamp_min(1e-8)
+                text_route_entropy = -(text_usage * text_usage.clamp_min(1e-8).log()).sum()
+                if text_usage.numel() > 1:
+                    text_route_entropy_norm = text_route_entropy / torch.log(text_usage.new_tensor(float(text_usage.numel())))
+                else:
+                    text_route_entropy_norm = text_usage.new_tensor(0.0)
                 self.debug_context.update({
                     "text_prompt_insert_disabled_flag": inputs_embeds.new_tensor(0.0),
                     "mask_rep_placeholders_when_text_disabled_flag": inputs_embeds.new_tensor(0.0),
                     "rep_placeholder_attention_ratio": rep_attn.to(device=inputs_embeds.device, dtype=inputs_embeds.dtype),
-                    "top4_insert_token_count_mean": per_sample_insert_count.mean().to(device=inputs_embeds.device, dtype=inputs_embeds.dtype),
-                    "top4_insert_token_count_std": per_sample_insert_count.std(unbiased=False).to(device=inputs_embeds.device, dtype=inputs_embeds.dtype) if per_sample_insert_count.numel() > 1 else inputs_embeds.new_tensor(0.0),
+                    "text_adapter_insert_token_count_mean": per_sample_insert_count.mean().to(device=inputs_embeds.device, dtype=inputs_embeds.dtype),
+                    "text_adapter_token_count": inputs_embeds.new_tensor(float(selected_count)),
+                    "text_adapter_count": inputs_embeds.new_tensor(float(self.text_residual_adapter_count)),
+                    "text_adapter_gate_mean": text_gate.detach().float().mean().to(device=inputs_embeds.device, dtype=inputs_embeds.dtype),
+                    "text_adapter_gate_std": text_gate.detach().float().std(unbiased=False).to(device=inputs_embeds.device, dtype=inputs_embeds.dtype) if text_gate.numel() > 1 else inputs_embeds.new_tensor(0.0),
+                    "text_adapter_route_entropy_norm": text_route_entropy_norm.to(device=inputs_embeds.device, dtype=inputs_embeds.dtype),
+                    "text_adapter_route_confidence": text_route_probs.detach().float().max(dim=-1).values.mean().to(device=inputs_embeds.device, dtype=inputs_embeds.dtype),
+                    "text_adapter_usage_max": text_usage.max().to(device=inputs_embeds.device, dtype=inputs_embeds.dtype),
+                    "text_adapter_usage_min": text_usage.min().to(device=inputs_embeds.device, dtype=inputs_embeds.dtype),
+                    "text_adapter_mixed_delta_norm_mean": text_mixed_delta.detach().float().norm(dim=-1).mean().to(device=inputs_embeds.device, dtype=inputs_embeds.dtype),
                     "text_common_mode_loss_raw": self.text_common_mode_loss.detach().to(device=inputs_embeds.device, dtype=inputs_embeds.dtype),
                     "text_common_mode_ratio_train": self.text_common_mode_ratio_train.detach().to(device=inputs_embeds.device, dtype=inputs_embeds.dtype),
-                    "text_common_mode_target": inputs_embeds.new_tensor(text_common_target),
                 })
         ######## text gating ########
         

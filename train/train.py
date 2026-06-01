@@ -5,26 +5,14 @@ from train_stages import build_model_and_processor, run_stage
 
 
 BASE_VISUAL_ROUTER_MODEL = {
-    "active_rep_token_count": 20,
+    "active_rep_token_count": 5,
     "rp_space_length": 40,
-    "text_gate_selection_mode": "top4_group",
-    "text_gate_group_count": 8,
-    "top4_group_count": 4,
-    "tokens_per_group": 5,
-    "enable_top4_group_dead_ema_loss_s3": False,
-    "enable_top4_group_dead_ema_loss_s4": False,
-    "top4_group_dead_ema_update_rate": 0.01,
-    "top4_group_dead_ema_warmup_steps": 100,
-    "top4_group_dead_floor": 0.05,
-    "top4_group_dead_score_floor": 0.0,
-    "top4_group_dead_loss_weight": 0.0,
-    "enable_text_common_mode_loss_s3": False,
-    "enable_text_common_mode_loss_s4": False,
-    "text_common_mode_loss_weight": 0.0,
-    "text_common_mode_target": 0.85,
-    "text_common_mode_warmup_steps_s3": 300,
+    "text_gate_selection_mode": "text_adapter_router",
     "text_rep_init_scale": 1e-3,
     "visual_residual_adapter_count": 4,
+    "text_adapter_token_count": 5,
+    "text_residual_adapter_count": 4,
+    "text_adapter_gate_init_bias": -2.0,
     # v2.1 visual-safe baseline: loosen usage balance, strengthen common-mode suppression.
     "adapter_usage_balance_loss_weight": 0.005,
     "adapter_sample_entropy_loss_weight": 0.02,
@@ -42,95 +30,21 @@ BASE_VISUAL_ROUTER_MODEL = {
 
 
 EXPERIMENTS = {
-    "top4_group": dict(BASE_VISUAL_ROUTER_MODEL),
-    "top4_group_text_cm": {
-        **BASE_VISUAL_ROUTER_MODEL,
-        "enable_text_common_mode_loss_s3": True,
-        "enable_text_common_mode_loss_s4": True,
-        "text_common_mode_loss_weight": 0.03,
-        "text_common_mode_target": 0.85,
-        "text_common_mode_warmup_steps_s3": 300,
-        "diag_every_steps": 500,
-    },
-    "top4_group_ema_dead_cmstrong": {
-        **BASE_VISUAL_ROUTER_MODEL,
-        "enable_top4_group_dead_ema_loss_s3": True,
-        "enable_top4_group_dead_ema_loss_s4": True,
-        "top4_group_dead_ema_update_rate": 0.01,
-        "top4_group_dead_ema_warmup_steps": 100,
-        "top4_group_dead_floor": 0.05,
-        "top4_group_dead_score_floor": 0.0,
-        "top4_group_dead_loss_weight": 0.05,
-        "enable_text_common_mode_loss_s3": True,
-        "enable_text_common_mode_loss_s4": True,
-        "text_common_mode_loss_weight": 0.5,
-        "text_common_mode_target": 0.85,
-        "text_common_mode_warmup_steps_s3": 100,
-        "diag_every_steps": 500,
-    },
-        "top4_group_ema_cm_v3": {
-        **BASE_VISUAL_ROUTER_MODEL,
-        "enable_top4_group_dead_ema_loss_s3": True,
-        "enable_top4_group_dead_ema_loss_s4": True,
-        "top4_group_dead_ema_update_rate": 0.01,
-        "top4_group_dead_ema_warmup_steps": 100,
-        "top4_group_dead_floor": 0.05,
-        "top4_group_dead_score_floor": 0.1,
-        "top4_group_dead_loss_weight": 0.05,
-        "enable_text_common_mode_loss_s3": True,
-        "enable_text_common_mode_loss_s4": True,
-        "text_common_mode_loss_weight": 0.5,
-        "text_common_mode_target": 0.9,
-        "text_common_mode_warmup_steps_s3": 100,
-        "diag_every_steps": 500,
-        "text_rep_init_scale": 0.003
-    },
-    "visual_router_v2": {
+    "text5_adapter_router_v1": {
         **BASE_VISUAL_ROUTER_MODEL,
         "diag_every_steps": 500,
     },
-    "visual_router_v2_text_on": {
-        **BASE_VISUAL_ROUTER_MODEL,
-        "diag_every_steps": 500,
-    },
-    "visual_router_v2_text_off": {
+    "text5_adapter_router_text_off": {
         **BASE_VISUAL_ROUTER_MODEL,
         "disable_text_gate": True,
         "disable_text_prompt_insert": True,
         "mask_rep_placeholders_when_text_disabled": True,
         "disable_general_mm_stage34": True,
-        "diag_every_steps": 500,
-    },
-    "visual_router_v2_1_text_off": {
-        **BASE_VISUAL_ROUTER_MODEL,
-        "disable_text_gate": True,
-        "disable_text_prompt_insert": True,
-        "mask_rep_placeholders_when_text_disabled": True,
-        "disable_general_mm_stage34": True,
-        "adapter_usage_balance_loss_weight": 0.005,
-        "adapter_common_mode_loss_weight": 0.03,
-        "adapter_sample_entropy_loss_weight": 0.02,
-        "diag_every_steps": 500,
-    },
-    "visual_router_v2_1_text_on_text_cm": {
-        **BASE_VISUAL_ROUTER_MODEL,
-        "disable_text_gate": False,
-        "disable_text_prompt_insert": False,
-        "mask_rep_placeholders_when_text_disabled": True,
-        "disable_general_mm_stage34": False,
-        "adapter_usage_balance_loss_weight": 0.005,
-        "adapter_common_mode_loss_weight": 0.03,
-        "adapter_sample_entropy_loss_weight": 0.02,
-        "enable_text_common_mode_loss_s3": True,
-        "enable_text_common_mode_loss_s4": True,
-        "text_common_mode_loss_weight": 0.03,
-        "text_common_mode_target": 0.85,
-        "text_common_mode_warmup_steps_s3": 300,
         "diag_every_steps": 500,
     },
 }
 
-SELECTED_EXPERIMENT = os.getenv("MMRL_EXPERIMENT", "visual_router_v1")
+SELECTED_EXPERIMENT = os.getenv("MMRL_EXPERIMENT", "text5_adapter_router_v1")
 if SELECTED_EXPERIMENT not in EXPERIMENTS:
     raise ValueError(f"Unknown MMRL_EXPERIMENT={SELECTED_EXPERIMENT!r}, choices={sorted(EXPERIMENTS)}")
 EXP_CFG = EXPERIMENTS[SELECTED_EXPERIMENT]
@@ -174,57 +88,21 @@ CFG = {
         "experiment_cfg": EXP_CFG,
         "seed": 42,
         "deterministic_sampling": os.getenv("MMRL_DETERMINISTIC_SAMPLING", "0") == "1",
-        "enable_top4_group_dead_ema_loss_s3": os.getenv(
-            "MMRL_ENABLE_TOP4_GROUP_DEAD_EMA_LOSS_S3",
-            "1" if EXP_CFG.get("enable_top4_group_dead_ema_loss_s3", False) else "0",
-        ) == "1",
-        "enable_top4_group_dead_ema_loss_s4": os.getenv(
-            "MMRL_ENABLE_TOP4_GROUP_DEAD_EMA_LOSS_S4",
-            "1" if EXP_CFG.get("enable_top4_group_dead_ema_loss_s4", False) else "0",
-        ) == "1",
-        "top4_group_dead_ema_update_rate": float(os.getenv(
-            "MMRL_TOP4_GROUP_DEAD_EMA_UPDATE_RATE",
-            str(EXP_CFG.get("top4_group_dead_ema_update_rate", 0.01)),
-        )),
-        "top4_group_dead_ema_warmup_steps": int(os.getenv(
-            "MMRL_TOP4_GROUP_DEAD_EMA_WARMUP_STEPS",
-            str(EXP_CFG.get("top4_group_dead_ema_warmup_steps", 100)),
-        )),
-        "top4_group_dead_floor": float(os.getenv(
-            "MMRL_TOP4_GROUP_DEAD_FLOOR",
-            str(EXP_CFG.get("top4_group_dead_floor", 0.05)),
-        )),
-        "top4_group_dead_score_floor": float(os.getenv(
-            "MMRL_TOP4_GROUP_DEAD_SCORE_FLOOR",
-            str(EXP_CFG.get("top4_group_dead_score_floor", 0.0)),
-        )),
-        "top4_group_dead_loss_weight": float(os.getenv(
-            "MMRL_TOP4_GROUP_DEAD_LOSS_WEIGHT",
-            str(EXP_CFG.get("top4_group_dead_loss_weight", 0.0)),
-        )),
-        "enable_text_common_mode_loss_s3": os.getenv(
-            "MMRL_ENABLE_TEXT_COMMON_MODE_LOSS_S3",
-            "1" if EXP_CFG.get("enable_text_common_mode_loss_s3", False) else "0",
-        ) == "1",
-        "enable_text_common_mode_loss_s4": os.getenv(
-            "MMRL_ENABLE_TEXT_COMMON_MODE_LOSS_S4",
-            "1" if EXP_CFG.get("enable_text_common_mode_loss_s4", False) else "0",
-        ) == "1",
-        "text_common_mode_loss_weight": float(os.getenv(
-            "MMRL_TEXT_COMMON_MODE_LOSS_WEIGHT",
-            str(EXP_CFG.get("text_common_mode_loss_weight", 0.0)),
-        )),
-        "text_common_mode_target": float(os.getenv(
-            "MMRL_TEXT_COMMON_MODE_TARGET",
-            str(EXP_CFG.get("text_common_mode_target", 0.85)),
-        )),
-        "text_common_mode_warmup_steps_s3": int(os.getenv(
-            "MMRL_TEXT_COMMON_MODE_WARMUP_STEPS_S3",
-            str(EXP_CFG.get("text_common_mode_warmup_steps_s3", 300)),
-        )),
         "visual_residual_adapter_count": int(os.getenv(
             "MMRL_VISUAL_RESIDUAL_ADAPTER_COUNT",
             str(EXP_CFG.get("visual_residual_adapter_count", 4)),
+        )),
+        "text_adapter_token_count": int(os.getenv(
+            "MMRL_TEXT_ADAPTER_TOKEN_COUNT",
+            str(EXP_CFG.get("text_adapter_token_count", 5)),
+        )),
+        "text_residual_adapter_count": int(os.getenv(
+            "MMRL_TEXT_RESIDUAL_ADAPTER_COUNT",
+            str(EXP_CFG.get("text_residual_adapter_count", 4)),
+        )),
+        "text_adapter_gate_init_bias": float(os.getenv(
+            "MMRL_TEXT_ADAPTER_GATE_INIT_BIAS",
+            str(EXP_CFG.get("text_adapter_gate_init_bias", -2.0)),
         )),
         "adapter_usage_balance_loss_weight": float(os.getenv(
             "MMRL_ADAPTER_USAGE_BALANCE_LOSS_WEIGHT",

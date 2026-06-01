@@ -47,19 +47,10 @@ def _build_experiment_context(train_cfg, output_dir, stage_id):
             "enable_gate_loss_stage2": train_cfg.get("enable_gate_loss_stage2"),
             "enable_alpha_guide_loss_s4": train_cfg.get("enable_alpha_guide_loss_s4"),
             "alpha_loss_weight_s4": train_cfg.get("alpha_loss_weight_s4"),
-            "enable_top4_group_dead_ema_loss_s3": train_cfg.get("enable_top4_group_dead_ema_loss_s3"),
-            "enable_top4_group_dead_ema_loss_s4": train_cfg.get("enable_top4_group_dead_ema_loss_s4"),
-            "top4_group_dead_ema_update_rate": train_cfg.get("top4_group_dead_ema_update_rate"),
-            "top4_group_dead_ema_warmup_steps": train_cfg.get("top4_group_dead_ema_warmup_steps"),
-            "top4_group_dead_floor": train_cfg.get("top4_group_dead_floor"),
-            "top4_group_dead_score_floor": train_cfg.get("top4_group_dead_score_floor"),
-            "top4_group_dead_loss_weight": train_cfg.get("top4_group_dead_loss_weight"),
-            "enable_text_common_mode_loss_s3": train_cfg.get("enable_text_common_mode_loss_s3"),
-            "enable_text_common_mode_loss_s4": train_cfg.get("enable_text_common_mode_loss_s4"),
-            "text_common_mode_loss_weight": train_cfg.get("text_common_mode_loss_weight"),
-            "text_common_mode_target": train_cfg.get("text_common_mode_target"),
-            "text_common_mode_warmup_steps_s3": train_cfg.get("text_common_mode_warmup_steps_s3"),
             "visual_residual_adapter_count": train_cfg.get("visual_residual_adapter_count"),
+            "text_adapter_token_count": train_cfg.get("text_adapter_token_count"),
+            "text_residual_adapter_count": train_cfg.get("text_residual_adapter_count"),
+            "text_adapter_gate_init_bias": train_cfg.get("text_adapter_gate_init_bias"),
             "adapter_usage_balance_loss_weight": train_cfg.get("adapter_usage_balance_loss_weight"),
             "adapter_sample_entropy_loss_weight": train_cfg.get("adapter_sample_entropy_loss_weight"),
             "adapter_common_mode_loss_weight": train_cfg.get("adapter_common_mode_loss_weight"),
@@ -130,14 +121,6 @@ def print_stage_step_summary(stage_name, step, row):
         print(f"  ├─ CE Loss:               {_fmt(row.get('ce_loss')):>10}")
     if "alpha_guide_loss" in row:
         print(f"  ├─ Alpha Guide Loss:      {_fmt(row.get('alpha_guide_loss')):>10}")
-    if "top4_group_dead_ema_loss_scaled" in row:
-        print(f"  ├─ Top4 Dead EMA Loss:    {_fmt(row.get('top4_group_dead_ema_loss_scaled')):>10}")
-    if "top4_group_dead_count" in row:
-        print(f"  ├─ Top4 Dead Count:       {_fmt(row.get('top4_group_dead_count'), 1):>10}")
-    if "text_common_mode_loss_scaled" in row:
-        print(f"  ├─ Text Common Loss:      {_fmt(row.get('text_common_mode_loss_scaled')):>10}")
-    if "text_common_mode_loss_raw" in row:
-        print(f"  ├─ Raw Text Common:       {_fmt(row.get('text_common_mode_loss_raw')):>10}")
     if "alpha_mae" in row:
         print(f"[Alpha Statistics]")
         print(f"  └─ Alpha MAE:             {_fmt(row.get('alpha_mae')):>10}")
@@ -160,12 +143,6 @@ def print_stage_step_summary(stage_name, step, row):
     print(f"[Schedule]")
     if "temperature" in row:
         print(f"  ├─ Temperature:           {_fmt(row.get('temperature'), 4):>10}")
-    if "top4_group_dead_ema_warmup_factor" in row:
-        print(f"  ├─ Top4 Dead Warmup:      {_fmt(row.get('top4_group_dead_ema_warmup_factor'), 4):>10}")
-    if "text_common_mode_warmup_factor" in row:
-        print(f"  ├─ Text CM Warmup:        {_fmt(row.get('text_common_mode_warmup_factor'), 4):>10}")
-    if "text_common_mode_loss_effective_weight" in row:
-        print(f"  ├─ Text CM Eff. Weight:   {_fmt(row.get('text_common_mode_loss_effective_weight'), 4):>10}")
     if "learning_rate" in row:
         print(f"  └─ Learning Rate:         {_fmt(row.get('learning_rate'), 8):>10}")
     print("=" * 72 + "\n")
@@ -217,34 +194,17 @@ class MMRLDiagnosticsCallback(TrainerCallback):
     DEFAULT_KEEP_KEYS = {
         "ce_loss",
         "active_token_count_mean",
-        "top4_group_dead_ema_loss_raw",
-        "top4_group_dead_ema_loss_scaled",
-        "top4_group_dead_ema_loss_weight",
-        "top4_group_dead_ema_update_rate",
-        "top4_group_dead_ema_warmup_factor",
-        "top4_group_dead_floor",
-        "top4_group_dead_score_floor",
-        "top4_group_dead_count",
-        "top4_group_dead_ratio",
-        "top4_group_dead_ema_usage_min",
-        "top4_group_dead_ema_usage_max",
-        "top4_group_dead_ema_usage_std",
-        "top4_group_dead_ema_usage_entropy_norm",
-        "text_common_mode_loss_raw",
-        "text_common_mode_loss_scaled",
-        "text_common_mode_loss_weight",
-        "text_common_mode_loss_effective_weight",
-        "text_common_mode_warmup_factor",
-        "text_common_mode_target",
-        "text_common_mode_ratio_train",
-        "top4_group_usage_max",
-        "top4_group_usage_min",
-        "top4_group_usage_std",
-        "top4_group_usage_entropy_norm",
-        "top4_selected_group_count_mean",
-        "top4_insert_token_count_mean",
-        "top4_group_score_margin_mean",
         "rep_placeholder_attention_ratio",
+        "text_adapter_insert_token_count_mean",
+        "text_adapter_token_count",
+        "text_adapter_count",
+        "text_adapter_gate_mean",
+        "text_adapter_gate_std",
+        "text_adapter_route_entropy_norm",
+        "text_adapter_route_confidence",
+        "text_adapter_usage_max",
+        "text_adapter_usage_min",
+        "text_adapter_mixed_delta_norm_mean",
         "text_insert_to_base_embed_ratio",
         "text_insert_pool_common_mode_ratio",
         "text_insert_pool_specificity_ratio",
@@ -492,14 +452,13 @@ class SharedRepGradMonitorCallback(TrainerCallback):
                     "alpha_guide_loss": metrics.get("alpha_guide_loss"),
                     "expert_floor_loss": metrics.get("expert_floor_loss"),
                     "anti_collapse_loss": metrics.get("anti_collapse_loss"),
-                    "top4_group_dead_ema_loss_scaled": metrics.get("top4_group_dead_ema_loss_scaled"),
-                    "top4_group_dead_ema_loss_raw": metrics.get("top4_group_dead_ema_loss_raw"),
                     "k_expert_mean": metrics.get("k_expert_mean"),
                     "k_general_mean": metrics.get("k_general_mean"),
                     "expert_sample_count": metrics.get("expert_sample_count"),
                     "general_sample_count": metrics.get("general_sample_count"),
                     "active_token_count_mean": metrics.get("active_token_count_mean"),
-                    "top4_selected_group_count_mean": metrics.get("top4_selected_group_count_mean"),
+                    "text_adapter_gate_mean": metrics.get("text_adapter_gate_mean"),
+                    "text_adapter_route_entropy_norm": metrics.get("text_adapter_route_entropy_norm"),
                     "group_usage_max": metrics.get("group_usage_max"),
                     "group_usage_min": metrics.get("group_usage_min"),
                     "group_usage_entropy": metrics.get("group_usage_entropy"),
@@ -526,21 +485,8 @@ class Qwen3VLMMRLForStages(Qwen3VLForConditionalGeneration):
 
         self.ce_loss_weight = 1.0
         self.alpha_loss_weight = 0.0
-        self.enable_top4_group_dead_ema_loss_s3 = False
-        self.enable_top4_group_dead_ema_loss_s4 = False
-        self.top4_group_dead_ema_update_rate = 0.01
-        self.top4_group_dead_ema_warmup_steps = 100
-        self.top4_group_dead_floor = 0.05
-        self.top4_group_dead_score_floor = 0.0
-        self.top4_group_dead_loss_weight = 0.0
-        self.top4_group_dead_ema_usage = None
         self.current_stage_id = 0
         self.current_stage_step = 0
-        self.enable_text_common_mode_loss_s3 = False
-        self.enable_text_common_mode_loss_s4 = False
-        self.text_common_mode_loss_weight = 0.0
-        self.text_common_mode_target = 0.85
-        self.text_common_mode_warmup_steps_s3 = 300
         self.enable_alpha_guide_loss = False
         self.enable_gate_loss_stage2 = True
         self.adapter_usage_balance_loss_weight = 0.0
@@ -584,6 +530,11 @@ class Qwen3VLMMRLForStages(Qwen3VLForConditionalGeneration):
                 result["shared_rep_grad_norm"] = shared.grad.detach().float().norm()
 
         def _grad_stats(modules, prefix):
+            if modules is None:
+                modules = []
+            elif isinstance(modules, nn.Module):
+                modules = [modules]
+
             grads = []
             for m in modules:
                 for p in m.parameters():
@@ -593,6 +544,7 @@ class Qwen3VLMMRLForStages(Qwen3VLForConditionalGeneration):
                 stacked = torch.stack(grads)
                 result[f"{prefix}_grad_norm_mean"] = stacked.mean()
                 result[f"{prefix}_grad_norm_max"] = stacked.max()
+
 
         _grad_stats(getattr(mmrl, "t_r_token_projector", []), "t_projector")
         _grad_stats(getattr(mmrl, "v_r_token_projector", []), "v_projector")
@@ -666,8 +618,7 @@ class Qwen3VLMMRLForStages(Qwen3VLForConditionalGeneration):
         return getattr(visual, "text_gating", None)
 
     def _get_k_norm(self):
-        text_gating = self._get_text_gating_module()
-        return float(getattr(text_gating, "total_rep_num", 40.0))
+        return float(getattr(self.model, "text_adapter_token_count", 5))
 
     def _compute_group_usage_stats(self, slot_usage, device):
         if slot_usage is None or slot_usage.numel() == 0:
@@ -709,28 +660,6 @@ class Qwen3VLMMRLForStages(Qwen3VLForConditionalGeneration):
             "group_usage_entropy": entropy,
             "group_usage_entropy_norm": entropy_norm,
             "group_usage_dead_ratio": (group_probs < float(self.group_usage_dead_threshold)).float().mean(),
-        }
-
-    def _compute_top4_usage_stats(self, group_usage, device):
-        if group_usage is None or group_usage.numel() == 0:
-            nan = torch.tensor(float("nan"), device=device)
-            return {
-                "top4_group_usage_max": nan,
-                "top4_group_usage_min": nan,
-                "top4_group_usage_std": nan,
-                "top4_group_usage_entropy": nan,
-                "top4_group_usage_entropy_norm": nan,
-            }
-        usage = group_usage.detach().float().to(device).clamp_min(0.0)
-        probs = usage / usage.sum().clamp_min(1e-8)
-        entropy = -(probs * probs.clamp_min(1e-8).log()).sum()
-        entropy_norm = entropy / torch.log(probs.new_tensor(float(max(probs.numel(), 2))))
-        return {
-            "top4_group_usage_max": usage.max(),
-            "top4_group_usage_min": usage.min(),
-            "top4_group_usage_std": usage.std(unbiased=False) if usage.numel() > 1 else usage.new_tensor(0.0),
-            "top4_group_usage_entropy": entropy,
-            "top4_group_usage_entropy_norm": entropy_norm,
         }
 
     def _update_group_usage_ema(self, group_probs):
@@ -811,15 +740,6 @@ class Qwen3VLMMRLForStages(Qwen3VLForConditionalGeneration):
         total_rep_num = self._get_k_norm()
         expert_floor_loss = torch.tensor(0.0, device=input_ids.device)
         anti_collapse_loss = torch.tensor(0.0, device=input_ids.device)
-        raw_top4_group_dead_ema_loss = torch.tensor(0.0, device=input_ids.device, dtype=ce_loss.dtype)
-        top4_group_dead_ema_loss = torch.tensor(0.0, device=input_ids.device, dtype=ce_loss.dtype)
-        top4_group_dead_ema_warmup_factor = 0.0
-        top4_group_dead_count = torch.tensor(0.0, device=input_ids.device)
-        top4_group_dead_ratio = torch.tensor(0.0, device=input_ids.device)
-        top4_group_dead_ema_usage_min = torch.tensor(float("nan"), device=input_ids.device)
-        top4_group_dead_ema_usage_max = torch.tensor(float("nan"), device=input_ids.device)
-        top4_group_dead_ema_usage_std = torch.tensor(float("nan"), device=input_ids.device)
-        top4_group_dead_ema_usage_entropy_norm = torch.tensor(float("nan"), device=input_ids.device)
         group_usage_max = torch.tensor(0.0, device=input_ids.device)
         group_usage_min = torch.tensor(0.0, device=input_ids.device)
         group_usage_entropy = torch.tensor(0.0, device=input_ids.device)
@@ -832,67 +752,6 @@ class Qwen3VLMMRLForStages(Qwen3VLForConditionalGeneration):
         if text_gating is not None:
             live_context = getattr(text_gating, "live_context", {}) or {}
 
-        top4_group_mask_for_loss = live_context.get("top4_group_mask_live", None)
-        top4_group_scores_for_loss = live_context.get("top4_group_scores_live", live_context.get("group_logits_live", None))
-        if torch.is_tensor(top4_group_mask_for_loss) and top4_group_mask_for_loss.numel() > 0:
-            batch_usage = top4_group_mask_for_loss.detach().float().mean(dim=0).to(input_ids.device)
-            if self.top4_group_dead_ema_usage is None or self.top4_group_dead_ema_usage.shape != batch_usage.shape:
-                self.top4_group_dead_ema_usage = torch.full_like(batch_usage, 0.5)
-            update_rate = float(self.top4_group_dead_ema_update_rate)
-            self.top4_group_dead_ema_usage = (1.0 - update_rate) * self.top4_group_dead_ema_usage + update_rate * batch_usage
-        raw_text_common_mode_loss = getattr(self.model, "text_common_mode_loss", torch.tensor(0.0, device=input_ids.device))
-        text_common_mode_ratio_train = getattr(self.model, "text_common_mode_ratio_train", torch.tensor(0.0, device=input_ids.device))
-        if not torch.is_tensor(raw_text_common_mode_loss):
-            raw_text_common_mode_loss = torch.tensor(raw_text_common_mode_loss, device=input_ids.device, dtype=ce_loss.dtype)
-        else:
-            raw_text_common_mode_loss = raw_text_common_mode_loss.to(device=input_ids.device, dtype=ce_loss.dtype)
-        if not torch.is_tensor(text_common_mode_ratio_train):
-            text_common_mode_ratio_train = torch.tensor(text_common_mode_ratio_train, device=input_ids.device, dtype=ce_loss.dtype)
-        else:
-            text_common_mode_ratio_train = text_common_mode_ratio_train.to(device=input_ids.device, dtype=ce_loss.dtype)
-
-        stage_id = int(getattr(self, "current_stage_id", 0))
-        enable_dead_ema = (
-            (stage_id == 3 and bool(self.enable_top4_group_dead_ema_loss_s3))
-            or (stage_id == 4 and bool(self.enable_top4_group_dead_ema_loss_s4))
-        )
-        dead_warmup_steps = max(int(self.top4_group_dead_ema_warmup_steps), 1)
-        top4_group_dead_ema_warmup_factor = min(
-            1.0,
-            float(max(int(getattr(self, "current_stage_step", 0)), 0)) / float(dead_warmup_steps),
-        )
-        if self.top4_group_dead_ema_usage is not None:
-            ema_usage = self.top4_group_dead_ema_usage.detach().float().to(input_ids.device)
-            dead_mask = ema_usage < float(self.top4_group_dead_floor)
-            top4_group_dead_count = dead_mask.float().sum()
-            top4_group_dead_ratio = dead_mask.float().mean()
-            top4_group_dead_ema_usage_min = ema_usage.min()
-            top4_group_dead_ema_usage_max = ema_usage.max()
-            top4_group_dead_ema_usage_std = ema_usage.std(unbiased=False) if ema_usage.numel() > 1 else ema_usage.new_tensor(0.0)
-            ema_probs = ema_usage.clamp_min(0.0) / ema_usage.clamp_min(0.0).sum().clamp_min(1e-8)
-            ema_entropy = -(ema_probs * ema_probs.clamp_min(1e-8).log()).sum()
-            top4_group_dead_ema_usage_entropy_norm = ema_entropy / torch.log(ema_probs.new_tensor(float(max(ema_probs.numel(), 2))))
-            if (
-                enable_dead_ema
-                and top4_group_dead_ema_warmup_factor >= 1.0
-                and torch.is_tensor(top4_group_scores_for_loss)
-                and top4_group_scores_for_loss.numel() > 0
-                and dead_mask.any()
-            ):
-                dead_scores = top4_group_scores_for_loss.to(device=input_ids.device, dtype=ce_loss.dtype)[:, dead_mask]
-                raw_top4_group_dead_ema_loss = torch.relu(
-                    dead_scores.new_tensor(float(self.top4_group_dead_score_floor)) - dead_scores
-                ).pow(2).mean()
-                top4_group_dead_ema_loss = raw_top4_group_dead_ema_loss * float(self.top4_group_dead_loss_weight)
-        base_text_common_weight = float(self.text_common_mode_loss_weight)
-        warmup_factor = 0.0
-        if stage_id == 3 and bool(self.enable_text_common_mode_loss_s3):
-            warmup_steps = max(int(self.text_common_mode_warmup_steps_s3), 1)
-            warmup_factor = min(1.0, float(max(int(getattr(self, "current_stage_step", 0)), 0)) / float(warmup_steps))
-        elif stage_id == 4 and bool(self.enable_text_common_mode_loss_s4):
-            warmup_factor = 1.0
-        text_common_mode_effective_weight = base_text_common_weight * warmup_factor
-        scaled_text_common_mode_loss = raw_text_common_mode_loss * text_common_mode_effective_weight
         adapter_usage_balance_loss = getattr(self.model.visual, "adapter_usage_balance_loss", torch.tensor(0.0, device=input_ids.device))
         adapter_sample_entropy_loss = getattr(self.model.visual, "adapter_sample_entropy_loss", torch.tensor(0.0, device=input_ids.device))
         adapter_common_mode_loss = getattr(self.model.visual, "adapter_common_mode_loss", torch.tensor(0.0, device=input_ids.device))
@@ -936,9 +795,6 @@ class Qwen3VLMMRLForStages(Qwen3VLForConditionalGeneration):
             group_usage_entropy = group_stats["group_usage_entropy"]
             group_usage_entropy_norm = group_stats["group_usage_entropy_norm"]
             group_usage_dead_ratio = group_stats["group_usage_dead_ratio"]
-            top4_usage_stats = self._compute_top4_usage_stats(group_usage_live, input_ids.device)
-        else:
-            top4_usage_stats = self._compute_top4_usage_stats(None, input_ids.device)
 
         if self.enable_expert_floor_loss and expert_mask is not None and expert_mask.any() and k_sums is not None:
             expert_active = k_sums[expert_mask].float()
@@ -971,11 +827,9 @@ class Qwen3VLMMRLForStages(Qwen3VLForConditionalGeneration):
         outputs.loss = (
             self.ce_loss_weight * ce_loss
             + alpha_guide_loss
-            + top4_group_dead_ema_loss
             + scaled_adapter_usage_balance_loss
             + scaled_adapter_sample_entropy_loss
             + scaled_adapter_common_mode_loss
-            + scaled_text_common_mode_loss
         )
 
         # ---- cache metrics for external logger ----
@@ -998,26 +852,6 @@ class Qwen3VLMMRLForStages(Qwen3VLForConditionalGeneration):
                 "anti_collapse_loss": anti_collapse_loss.detach(),
                 "k_general_loss": torch.tensor(0.0, device=input_ids.device),
                 "k_expert_loss": expert_floor_loss.detach(),
-                "top4_group_dead_ema_loss_raw": raw_top4_group_dead_ema_loss.detach(),
-                "top4_group_dead_ema_loss_scaled": top4_group_dead_ema_loss.detach(),
-                "top4_group_dead_ema_loss_weight": torch.tensor(float(self.top4_group_dead_loss_weight), device=input_ids.device),
-                "top4_group_dead_ema_update_rate": torch.tensor(float(self.top4_group_dead_ema_update_rate), device=input_ids.device),
-                "top4_group_dead_ema_warmup_factor": torch.tensor(top4_group_dead_ema_warmup_factor, device=input_ids.device),
-                "top4_group_dead_floor": torch.tensor(float(self.top4_group_dead_floor), device=input_ids.device),
-                "top4_group_dead_score_floor": torch.tensor(float(self.top4_group_dead_score_floor), device=input_ids.device),
-                "top4_group_dead_count": top4_group_dead_count.detach(),
-                "top4_group_dead_ratio": top4_group_dead_ratio.detach(),
-                "top4_group_dead_ema_usage_min": top4_group_dead_ema_usage_min.detach(),
-                "top4_group_dead_ema_usage_max": top4_group_dead_ema_usage_max.detach(),
-                "top4_group_dead_ema_usage_std": top4_group_dead_ema_usage_std.detach(),
-                "top4_group_dead_ema_usage_entropy_norm": top4_group_dead_ema_usage_entropy_norm.detach(),
-                "text_common_mode_loss_raw": raw_text_common_mode_loss.detach(),
-                "text_common_mode_loss_scaled": scaled_text_common_mode_loss.detach(),
-                "text_common_mode_loss_weight": torch.tensor(base_text_common_weight, device=input_ids.device),
-                "text_common_mode_loss_effective_weight": torch.tensor(text_common_mode_effective_weight, device=input_ids.device),
-                "text_common_mode_warmup_factor": torch.tensor(warmup_factor, device=input_ids.device),
-                "text_common_mode_target": torch.tensor(float(self.text_common_mode_target), device=input_ids.device),
-                "text_common_mode_ratio_train": text_common_mode_ratio_train.detach(),
                 "adapter_usage_balance_loss": adapter_usage_balance_loss.detach(),
                 "adapter_sample_entropy_loss": adapter_sample_entropy_loss.detach(),
                 "adapter_common_mode_loss": adapter_common_mode_loss.detach(),
@@ -1035,7 +869,6 @@ class Qwen3VLMMRLForStages(Qwen3VLForConditionalGeneration):
                 "group_usage_entropy": group_usage_entropy.detach(),
                 "group_usage_entropy_norm": group_usage_entropy_norm.detach(),
                 "group_usage_dead_ratio": group_usage_dead_ratio.detach(),
-                **{k: v.detach() for k, v in top4_usage_stats.items()},
                 "temperature": torch.tensor(float(self.temperature_override) if self.temperature_override is not None else float("nan"), device=input_ids.device),
                 "adapter_usage_balance_weight": torch.tensor(float(self.adapter_usage_balance_loss_weight), device=input_ids.device),
                 "adapter_sample_entropy_weight": torch.tensor(float(self.adapter_sample_entropy_loss_weight), device=input_ids.device),
@@ -1064,8 +897,6 @@ class Qwen3VLMMRLForStages(Qwen3VLForConditionalGeneration):
                 print(f"!!!! [HIGH-LOSS-DBG] final_loss={loss_val:.6f}")
                 print(f"!!!! [HIGH-LOSS-DBG] manual_ce={ce_loss.detach().float().item():.6f}")
                 print(f"!!!! [HIGH-LOSS-DBG] alpha_loss={alpha_guide_loss.detach().float().item():.6f}")
-                print(f"!!!! [HIGH-LOSS-DBG] top4_dead_raw={raw_top4_group_dead_ema_loss.detach().float().item():.6f}")
-                print(f"!!!! [HIGH-LOSS-DBG] top4_dead_scaled={top4_group_dead_ema_loss.detach().float().item():.6f}")
 
                 if labels is not None:
                     valid_per_sample = (labels != -100).sum(dim=1)
@@ -1095,9 +926,9 @@ def build_model_and_processor(model_path, experiment_cfg=None):
 
     config.ACTIVE_REP_TOKEN_COUNT = active_rep_token_count
     config.RP_SPACE_LENGTH = int(experiment_cfg.get("rp_space_length", 40))
-    config.TEXT_GATE_SELECTION_MODE = str(experiment_cfg.get("text_gate_selection_mode", "top4_group"))
-    config.TEXT_GATE_GROUP_COUNT = int(experiment_cfg.get("text_gate_group_count", 8))
-    config.TOP4_GROUP_COUNT = int(experiment_cfg.get("top4_group_count", 4))
+    config.TEXT_GATE_SELECTION_MODE = str(experiment_cfg.get("text_gate_selection_mode", "text_adapter_router"))
+    config.TEXT_GATE_GROUP_COUNT = int(experiment_cfg.get("text_gate_group_count", 1))
+    config.TOP4_GROUP_COUNT = int(experiment_cfg.get("top4_group_count", 1))
     config.ABLATE_VISUAL_GATE = bool(experiment_cfg.get(
         "ablate_visual_gate",
         os.getenv("MMRL_ABLATE_VISUAL_GATE", "0") == "1"
@@ -1122,6 +953,18 @@ def build_model_and_processor(model_path, experiment_cfg=None):
     config.VISUAL_RESIDUAL_ADAPTER_COUNT = int(experiment_cfg.get(
         "visual_residual_adapter_count",
         os.getenv("MMRL_VISUAL_RESIDUAL_ADAPTER_COUNT", "4"),
+    ))
+    config.TEXT_ADAPTER_TOKEN_COUNT = int(experiment_cfg.get(
+        "text_adapter_token_count",
+        os.getenv("MMRL_TEXT_ADAPTER_TOKEN_COUNT", "5"),
+    ))
+    config.TEXT_RESIDUAL_ADAPTER_COUNT = int(experiment_cfg.get(
+        "text_residual_adapter_count",
+        os.getenv("MMRL_TEXT_RESIDUAL_ADAPTER_COUNT", "4"),
+    ))
+    config.TEXT_ADAPTER_GATE_INIT_BIAS = float(experiment_cfg.get(
+        "text_adapter_gate_init_bias",
+        os.getenv("MMRL_TEXT_ADAPTER_GATE_INIT_BIAS", "-2.0"),
     ))
     config.ADAPTER_USAGE_BALANCE_LOSS_WEIGHT = float(experiment_cfg.get(
         "adapter_usage_balance_loss_weight",
@@ -1184,6 +1027,8 @@ def build_model_and_processor(model_path, experiment_cfg=None):
         f"adapter_usage_balance_loss_weight={config.ADAPTER_USAGE_BALANCE_LOSS_WEIGHT} "
         f"adapter_sample_entropy_loss_weight={config.ADAPTER_SAMPLE_ENTROPY_LOSS_WEIGHT} "
         f"adapter_common_mode_loss_weight={config.ADAPTER_COMMON_MODE_LOSS_WEIGHT} "
+        f"text_adapter_token_count={config.TEXT_ADAPTER_TOKEN_COUNT} "
+        f"text_residual_adapter_count={config.TEXT_RESIDUAL_ADAPTER_COUNT} "
         f"disable_text_gate={config.DISABLE_TEXT_GATE} "
         f"disable_text_prompt_insert={config.DISABLE_TEXT_PROMPT_INSERT} "
         f"mask_rep_placeholders_when_text_disabled={config.MASK_REP_PLACEHOLDERS_WHEN_TEXT_DISABLED}"
@@ -1203,7 +1048,7 @@ def set_trainable_stage(model, stage):
     if stage == 1:
         mods = [v.hidden_state_pooling, v.embedding_pooling, v.Task_classifier, v.adapter_router]
     elif stage == 2:
-        mods = [v.hidden_state_pooling, v.embedding_pooling, v.Task_classifier, v.adapter_router, v.visionGating, v.text_gating]
+        mods = [v.hidden_state_pooling, v.embedding_pooling, v.Task_classifier, v.adapter_router, v.visionGating]
     elif stage in [3, 4]:
         mods = [model.model.MMRL,
                 # v.blocks_with_rep, # ablation: keep rep-token branch forward, but freeze branch blocks
@@ -1212,7 +1057,8 @@ def set_trainable_stage(model, stage):
                 v.adapter_router,
                 v.residual_adapters,
                 v.visionGating, 
-                v.text_gating, 
+                model.model.text_adapter_router,
+                model.model.text_residual_adapters,
                 ]
     else:
         raise ValueError("stage must be 1/2/3/4")
@@ -1221,15 +1067,16 @@ def set_trainable_stage(model, stage):
         for p in m.parameters():
             p.requires_grad = True
 
-    if getattr(v, "disable_text_gate", False):
-        for p in v.text_gating.parameters():
-            p.requires_grad = False
     if getattr(model.model, "disable_text_prompt_insert", False):
         for p in model.model.MMRL.t_r_token_projector.parameters():
             p.requires_grad = False
         for p in getattr(model.model.MMRL, "direct_t_tokens", []):
             p.requires_grad = False
         model.model.text_rep_scale.requires_grad = False
+        for p in model.model.text_adapter_router.parameters():
+            p.requires_grad = False
+        for p in model.model.text_residual_adapters.parameters():
+            p.requires_grad = False
 
 
 def print_stage4_trainable_params_before_stage1(model):
@@ -1454,21 +1301,6 @@ def run_stage34_full(stage_id, model, processor, data_cfg, train_cfg, output_dir
 
     model.current_stage_id = int(stage_id)
     model.current_stage_step = 0
-    model.enable_top4_group_dead_ema_loss_s3 = bool(train_cfg.get("enable_top4_group_dead_ema_loss_s3", False))
-    model.enable_top4_group_dead_ema_loss_s4 = bool(train_cfg.get("enable_top4_group_dead_ema_loss_s4", False))
-    model.top4_group_dead_ema_update_rate = float(train_cfg.get("top4_group_dead_ema_update_rate", 0.01))
-    model.top4_group_dead_ema_warmup_steps = int(train_cfg.get("top4_group_dead_ema_warmup_steps", 100))
-    model.top4_group_dead_floor = float(train_cfg.get("top4_group_dead_floor", 0.05))
-    model.top4_group_dead_score_floor = float(train_cfg.get("top4_group_dead_score_floor", 0.0))
-    model.top4_group_dead_loss_weight = float(train_cfg.get("top4_group_dead_loss_weight", 0.0))
-    model.top4_group_dead_ema_usage = None
-    model.enable_text_common_mode_loss_s3 = bool(train_cfg.get("enable_text_common_mode_loss_s3", False))
-    model.enable_text_common_mode_loss_s4 = bool(train_cfg.get("enable_text_common_mode_loss_s4", False))
-    model.text_common_mode_loss_weight = float(train_cfg.get("text_common_mode_loss_weight", 0.0))
-    model.text_common_mode_target = float(train_cfg.get("text_common_mode_target", 0.85))
-    model.text_common_mode_warmup_steps_s3 = int(train_cfg.get("text_common_mode_warmup_steps_s3", 300))
-    if hasattr(model, "model"):
-        model.model.text_common_mode_target = model.text_common_mode_target
     model.adapter_usage_balance_loss_weight = float(train_cfg.get("adapter_usage_balance_loss_weight", 0.0))
     model.adapter_sample_entropy_loss_weight = float(train_cfg.get("adapter_sample_entropy_loss_weight", 0.0))
     model.adapter_common_mode_loss_weight = float(train_cfg.get("adapter_common_mode_loss_weight", 0.0))

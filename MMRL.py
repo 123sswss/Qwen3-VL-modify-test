@@ -14,17 +14,14 @@ class MMRL(nn.Module):
         self.shared_represent_space = nn.Parameter(torch.empty(cfg.RP_SPACE_LENGTH, cfg.RP_SPACE_DIM))
         nn.init.normal_(self.shared_represent_space, std=0.02)
         self.v_r_token_projector = nn.ModuleList([nn.Linear(cfg.RP_SPACE_DIM, cfg.vision_token_dim) for _ in range(len(cfg.INSERT_LAYER))])
-        self.t_r_token_projector = nn.ModuleList([nn.Linear(cfg.RP_SPACE_DIM, cfg.text_token_dim) for _ in range(len(cfg.INSERT_LAYER))])
+        self.t_r_token_projector = nn.Linear(cfg.RP_SPACE_DIM, cfg.text_token_dim)
         self.direct_v_tokens = nn.ParameterList([
             nn.Parameter(torch.empty(cfg.RP_SPACE_LENGTH, cfg.vision_token_dim)) for _ in range(self.insert_layer_count)
         ])
-        self.direct_t_tokens = nn.ParameterList([
-            nn.Parameter(torch.empty(cfg.RP_SPACE_LENGTH, cfg.text_token_dim)) for _ in range(self.insert_layer_count)
-        ])
+        self.direct_t_tokens = nn.Parameter(torch.empty(cfg.RP_SPACE_LENGTH, cfg.text_token_dim))
         for param in self.direct_v_tokens:
             nn.init.normal_(param, std=0.02)
-        for param in self.direct_t_tokens:
-            nn.init.normal_(param, std=0.02)
+        nn.init.normal_(self.direct_t_tokens, std=0.02)
 
         self.cached_v_tokens = None
         self.cached_t_tokens = None
@@ -32,10 +29,10 @@ class MMRL(nn.Module):
     def _compute_tokens(self) -> tuple[list[torch.Tensor], list[torch.Tensor]]:
         if self.use_direct_learnable_rep:
             v_list = [param for param in self.direct_v_tokens]
-            t_list = [param for param in self.direct_t_tokens]
+            t_list = [self.direct_t_tokens]
             return v_list, t_list
         v_list = [vp(self.shared_represent_space) for vp in self.v_r_token_projector]
-        t_list = [tp(self.shared_represent_space) for tp in self.t_r_token_projector]
+        t_list = [self.t_r_token_projector(self.shared_represent_space)]
         return v_list, t_list
 
     def forward(self):

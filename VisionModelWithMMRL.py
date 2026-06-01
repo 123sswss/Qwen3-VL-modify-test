@@ -647,103 +647,20 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
 
         hidden_states = self.merger(hidden_states)
         ########### text gating ###########
-        if self.disable_text_gate:
-            return self._return_text_gate_disabled(hidden_states, deepstack_feature_lists, batch_size)
-
-        if v_r_token_list is None:
-             k_results = torch.zeros(batch_size, device=hidden_states.device, dtype=hidden_states.dtype)
-             self.k_results = k_results
-             self.k_mask_results = None
-             self.tax_loss = torch.tensor(0.0, device=hidden_states.device, dtype=hidden_states.dtype)
-             self.capacity_prior_loss = self.tax_loss
-             self.debug_context.update({
-                 "k_mask_is_none_flag": hidden_states.new_tensor(1.0),
-             })
-            #  alpha_loss = torch.tensor(0.0, device=hidden_states.device)
-             return hidden_states, deepstack_feature_lists, k_results
-        img_seqlens = cu_seqlens[1:] - cu_seqlens[:-1]
-        img_counts = torch.tensor(images_per_sample, device=hidden_states.device)
-        batch_indices_img = torch.repeat_interleave(
-            torch.arange(batch_size, device=hidden_states.device),
-            img_counts
-        )
-        batch_indices_token = torch.repeat_interleave(
-            batch_indices_img,
-            img_seqlens
-        )
-        has_image = torch.ones(
-            batch_size, 1,
-            device=hidden_states.device,
-            dtype=embedding_after_pooling.dtype
-        )
-        out = self.text_gating(
-            final_delta,
-            self.alpha_list,
-            batch_indices_token,
-            batch_indices_img,
-            batch_size,
-            embedding_after_pooling,
-            has_image=has_image,
-            temperature_override=gating_temperature_override
-        )
-        if self.training:
-            if isinstance(out, tuple):
-                hard_k_logits, capacity_prior_loss = out
-            else:
-                hard_k_logits, capacity_prior_loss = out, hidden_states.new_tensor(0.0)
-            k_sums = hard_k_logits.sum(dim=-1)
-            k_results = k_sums
-            self.k_mask_results = hard_k_logits
-            self.capacity_prior_loss = capacity_prior_loss
-            self.tax_loss = capacity_prior_loss  # compatibility alias during migration
-            self.debug_context["k_mask_is_none_flag"] = hidden_states.new_tensor(0.0)
-        else:
-            k_hard = (out > 0.5).to(out.dtype)
-            k_sums = k_hard.sum(dim=-1)
-            k_results = k_sums
-            self.k_mask_results = k_hard
-            self.tax_loss = hidden_states.new_tensor(0.0)
-            self.capacity_prior_loss = self.tax_loss
-            self.debug_context["k_mask_is_none_flag"] = hidden_states.new_tensor(0.0)
-            ############ debug ############
-            # debug_info = self.text_gating.debug_context            
-            # alpha_val = debug_info.get("alpha_val", torch.tensor(0.0))
-            # k_val = debug_info.get("gate_sum_raw", torch.tensor(0.0))
-
-            # if alpha_val.ndim == 0: alpha_val = alpha_val.unsqueeze(0)
-            # if k_val.ndim == 0: k_val = k_val.unsqueeze(0)
-
-            # for i in range(len(alpha_val)):
-            #     print(f"\n[MMRL DEBUG WARNING] Anomaly Detected in Sample {i}:")
-            #     print(f"  Alpha (Professionalism): {alpha_val[i]:.4f} (Should be low)")
-            #     print(f"  Text Relevance:          {debug_info['text_rel']:.4f}")
-            #     print(f"  Raw Intensity Sum:       {debug_info['intensity_sum']:.4f} (Is bias too high?)")
-            #     print(f"  Modulated Intensity:     {debug_info['modulated_intensity']:.4f}")
-            #     print(f"  Calculated K (Gates):    {k_val[i]:.2f}")
-            #     print("-" * 30)
-            ############ debug ############
-
-
-
+        k_results = hidden_states.new_full((batch_size,), float(getattr(self.cfg, "TEXT_ADAPTER_TOKEN_COUNT", 5)))
         self.k_results = k_results
-        # alpha_loss = torch.mean(torch.sigmoid(self.alpha_list)) * 0.1
+        self.k_mask_results = None
+        self.tax_loss = hidden_states.new_tensor(0.0)
+        self.capacity_prior_loss = self.tax_loss
+        self.debug_context.update({
+            "text_gate_disabled_flag": hidden_states.new_tensor(1.0),
+            "k_mask_is_none_flag": hidden_states.new_tensor(1.0),
+        })
         return hidden_states, deepstack_feature_lists, k_results
 
     def compute_text_only_gating(self, embedding, text_pooling_mask=None, gating_temperature_override=None):
         batch_size = embedding.shape[0]
         embedding_after_pooling = self.embedding_pooling(embedding, mask=text_pooling_mask)  # [B, Dt]
-        if self.disable_text_gate:
-            k_results = torch.zeros(batch_size, device=embedding.device, dtype=embedding.dtype)
-            self.alpha_list = None
-            self.k_results = k_results
-            self.k_mask_results = None
-            self.tax_loss = embedding.new_tensor(0.0)
-            self.capacity_prior_loss = self.tax_loss
-            self.debug_context = {
-                "text_gate_disabled_flag": embedding.new_tensor(1.0),
-                "k_mask_is_none_flag": embedding.new_tensor(1.0),
-            }
-            return k_results
         dummy_vision_states = self.null_image_token.expand(batch_size, -1)
         if self.ablate_visual_gate:
             self.alpha_list = torch.ones(
@@ -754,50 +671,13 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
         else:
             self.alpha_list = self.Task_classifier(dummy_vision_states, embedding_after_pooling)
 
-        dummy_delta_batch = torch.zeros(
-            batch_size,
-            self.cfg.vision_token_dim,
-            device=embedding.device,
-            dtype=embedding.dtype
-        )
-        batch_indices = torch.arange(batch_size, device=embedding.device)
-        has_image = torch.zeros(
-            batch_size, 1,
-            device=embedding.device,
-            dtype=embedding_after_pooling.dtype
-        )
-
-        out = self.text_gating(
-            dummy_delta_batch,
-            self.alpha_list,
-            batch_indices,
-            batch_indices,
-            batch_size,
-            embedding_after_pooling,
-            has_image=has_image,
-            temperature_override=gating_temperature_override
-        )
         self.debug_context = {
-            "text_gate_disabled_flag": embedding.new_tensor(0.0),
+            "text_gate_disabled_flag": embedding.new_tensor(1.0),
+            "k_mask_is_none_flag": embedding.new_tensor(1.0),
         }
-
-        if self.training:
-            if isinstance(out, tuple):
-                hard_k_logits, capacity_prior_loss = out
-            else:
-                hard_k_logits, capacity_prior_loss = out, embedding.new_tensor(0.0)
-            k_sums = hard_k_logits.sum(dim=-1)
-            k_results = k_sums
-            self.k_mask_results = hard_k_logits
-            self.capacity_prior_loss = capacity_prior_loss
-            self.tax_loss = capacity_prior_loss  # compatibility alias during migration
-            self.debug_context["k_mask_is_none_flag"] = embedding.new_tensor(0.0)
-        else:
-            k_hard = (out > 0.5).to(out.dtype)
-            k_results = k_hard.sum(dim=-1)
-            self.k_mask_results = k_hard
-            self.tax_loss = embedding.new_tensor(0.0)
-            self.capacity_prior_loss = self.tax_loss
-            self.debug_context["k_mask_is_none_flag"] = embedding.new_tensor(0.0)
-
+        k_results = embedding.new_full((batch_size,), float(getattr(self.cfg, "TEXT_ADAPTER_TOKEN_COUNT", 5)))
+        self.k_results = k_results
+        self.k_mask_results = None
+        self.tax_loss = embedding.new_tensor(0.0)
+        self.capacity_prior_loss = self.tax_loss
         return k_results

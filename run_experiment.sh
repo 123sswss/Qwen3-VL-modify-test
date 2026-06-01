@@ -132,8 +132,8 @@ run_N() {
 # run_one "visual_router_v2_text_off" "visual_router_v2_text_off_test2"
 # run_N "top4_group" "top4_group" 3
 
-# 5/30: 只做 top4 group 防死亡 EMA + 强 text common-mode loss，不再做均匀 balance。
-run_N "top4_group_ema_cm_v3" "top4_group_ema_cm_v3" 2
+# 6/1: 文本侧改为固定 5 token + 残差 adapter/router，不再使用 top4 group/common/dead 旧链路。
+run_N "text5_adapter_router_v1" "text5_adapter_router_v1" 3
 
 # run_one "ablation_full_model" "ablation_full_model"
 # run_one "ablation_wo_visual_gate" "ablation_wo_visual_gate"

@@ -1,6 +1,29 @@
 #!/bin/bash
 set -euo pipefail
 
+SHUTDOWN_ON_EXIT=1
+
+cancel_shutdown_on_interrupt() {
+  SHUTDOWN_ON_EXIT=0
+  trap - EXIT
+  echo "[INT] 检测到 Ctrl+C，已取消自动关机。"
+  exit 130
+}
+
+shutdown_on_exit() {
+  local exit_code=$?
+  if [ "${SHUTDOWN_ON_EXIT:-1}" != "1" ]; then
+    return "$exit_code"
+  fi
+  echo "[EXIT] 脚本退出，exit_code=$exit_code"
+  echo "[EXIT] 60 秒后自动关机。"
+  echo "[EXIT] 如需取消自动关机，请在倒计时内按 Ctrl+C。"
+  sleep 60
+  /usr/bin/shutdown
+}
+trap shutdown_on_exit EXIT
+trap cancel_shutdown_on_interrupt INT
+
 ROOT_DIR="/root/autodl-tmp/Qwen3-VL-modify-test"
 TRAIN_DIR="$ROOT_DIR/train"
 TEST_DIR="$ROOT_DIR/test"
@@ -107,14 +130,13 @@ run_N() {
 # 当前代码中真实可用的实验名见 train/train.py: EXPERIMENTS
 # run_one "visual_router_v2_1_text_off" "visual_router_v2_1_text_off_safe"
 # run_one "visual_router_v2_text_off" "visual_router_v2_text_off_test2"
+# run_N "top4_group" "top4_group" 3
 
-run_N "visual_router_v2_1_text_on_text_cm" "visual_router_v2_1_text_on_text_cm" 3
+# 5/30: 只做 top4 group 防死亡 EMA + 强 text common-mode loss，不再做均匀 balance。
+run_N "top4_group_ema_cm_v3" "top4_group_ema_cm_v3" 2
 
 # run_one "ablation_full_model" "ablation_full_model"
 # run_one "ablation_wo_visual_gate" "ablation_wo_visual_gate"
 # run_one "ablation_replace_mmrl_with_40_learnable_tokens" "ablation_replace_mmrl_with_40_learnable_tokens"
 
 echo "[DONE] 所有实验均已串行完成。"
-echo "[DONE] 60 秒后自动关机。"
-sleep 60
-/usr/bin/shutdown

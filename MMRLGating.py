@@ -65,11 +65,10 @@ class HardConcreteGate(nn.Module):
 
 
 class textGating(nn.Module):
-    """Group-threshold text gate with a minimal capacity prior.
+    """Text-side group router.
 
-    40 个文本 rep-token 固定切成 8 组，每组 5 个。router 根据视觉/文本上下文、
-    专业模式概率 batch_alpha 与 has_image 输出 8 个 group logits。前向用 hard
-    threshold，反向用 sigmoid straight-through；最终再乘专业模式总开关 G。
+    top4_group: 40 个 text rep token 切成 8 组，每组 5 个；router 输出 8 个
+    group score，每个样本固定选择 top-4 组，按组 id 顺序展开为 20 个 token。
     """
 
     def __init__(self,
@@ -78,29 +77,16 @@ class textGating(nn.Module):
                  temperature: float = 1.0,
                  lambda_: float = 0.2):
         super().__init__()
-        self.total_rep_num = config.RP_SPACE_LENGTH * 8
+        self.total_rep_num = int(_cfg_get(config, "RP_SPACE_LENGTH", 40))
         self.group_count = int(_cfg_get(config, "TEXT_GATE_GROUP_COUNT", 8))
         if self.group_count <= 0 or self.total_rep_num % self.group_count != 0:
             raise ValueError(
                 f"TEXT_GATE_GROUP_COUNT={self.group_count} must divide total_rep_num={self.total_rep_num}"
             )
         self.group_size = self.total_rep_num // self.group_count
-        self.selection_mode = str(_cfg_get(config, "TEXT_GATE_SELECTION_MODE", "group_threshold_prior"))
-        self.capacity_prior_sigma = float(_cfg_get(config, "TEXT_GATE_CAPACITY_PRIOR_SIGMA", 0.40))
-        energy = _cfg_get(
-            config,
-            "TEXT_GATE_CAPACITY_PRIOR_ENERGY",
-            [1.0, 0.25, 0.0, 0.0, 0.0, 0.0, 0.0, 0.25, 1.0],
-        )
-        if len(energy) != self.group_count + 1:
-            raise ValueError(
-                f"TEXT_GATE_CAPACITY_PRIOR_ENERGY length must be group_count+1={self.group_count + 1}, got {len(energy)}"
-            )
-        self.register_buffer(
-            "capacity_prior_energy",
-            torch.tensor([float(x) for x in energy], dtype=torch.float32),
-            persistent=False,
-        )
+        self.selection_mode = str(_cfg_get(config, "TEXT_GATE_SELECTION_MODE", "top4_group"))
+        self.top4_group_count = int(_cfg_get(config, "TOP4_GROUP_COUNT", 4))
+        self.top4_group_count = max(1, min(self.top4_group_count, self.group_count))
         self.attention_pooling = attention_pooling(config.vision_token_dim, config.GATING_MID_DIM)
 
         self.group_score_head = nn.Sequential(
@@ -130,45 +116,24 @@ class textGating(nn.Module):
         probs = probs / probs.sum().clamp_min(eps)
         return -(probs * (probs.clamp_min(eps).log())).sum()
 
-    def _build_group_threshold_gate(self,
-                                    pooled_vision: torch.Tensor,
-                                    text_embedding: torch.Tensor,
-                                    batch_alpha: torch.Tensor,
-                                    has_image: torch.Tensor,
-                                    temperature_override: Optional[float] = None):
+    def _build_top4_group_gate(self,
+                               pooled_vision: torch.Tensor,
+                               text_embedding: torch.Tensor,
+                               batch_alpha: torch.Tensor,
+                               has_image: torch.Tensor):
         feat = torch.cat([pooled_vision, text_embedding, batch_alpha, has_image], dim=-1)
         group_logits = self.group_score_head(feat)  # [B, 8]
-        temp = float(temperature_override) if temperature_override is not None else self.temperature
-        temp = max(temp, 1e-4)
-        soft_group_gate = torch.sigmoid(group_logits / temp)
-        hard_group_gate = (group_logits > 0).to(dtype=soft_group_gate.dtype)
-        st_group_gate = hard_group_gate.detach() - soft_group_gate.detach() + soft_group_gate
+        _, selected_group_ids = torch.topk(group_logits, k=self.top4_group_count, dim=-1)
+        selected_group_ids = torch.sort(selected_group_ids, dim=-1).values
+        group_mask = torch.zeros_like(group_logits)
+        group_mask.scatter_(1, selected_group_ids, 1.0)
+        soft_group_mask = torch.softmax(group_logits, dim=-1) * float(self.top4_group_count)
+        st_group_mask = group_mask.detach() - soft_group_mask.detach() + soft_group_mask
 
-        batch_G = (batch_alpha > 0.5).to(dtype=st_group_gate.dtype)
-        gated_group_gate = st_group_gate * batch_G
-        slot_gate = gated_group_gate.repeat_interleave(self.group_size, dim=-1)
-        return slot_gate, group_logits, soft_group_gate, hard_group_gate, gated_group_gate, batch_G
-
-    def _compute_capacity_prior_loss(self,
-                                     soft_group_gate: torch.Tensor,
-                                     batch_G: torch.Tensor):
-        if soft_group_gate.numel() == 0:
-            return soft_group_gate.new_tensor(0.0), soft_group_gate.new_empty(0)
-        soft_count = soft_group_gate.sum(dim=-1)  # [B]
-        ks = torch.arange(
-            self.group_count + 1,
-            device=soft_group_gate.device,
-            dtype=soft_group_gate.dtype,
-        ).view(1, -1)
-        sigma = max(float(self.capacity_prior_sigma), 1e-4)
-        weights = torch.exp(-0.5 * ((soft_count.unsqueeze(-1) - ks) / sigma).pow(2))
-        energy = self.capacity_prior_energy.to(device=soft_group_gate.device, dtype=soft_group_gate.dtype).view(1, -1)
-        per_sample = (weights * energy).sum(dim=-1) / weights.sum(dim=-1).clamp_min(1e-8)
-
-        expert_weight = batch_G.detach().squeeze(-1).to(dtype=per_sample.dtype)
-        denom = expert_weight.sum().clamp_min(1.0)
-        loss = (per_sample * expert_weight).sum() / denom
-        return loss, per_sample
+        token_offsets = torch.arange(self.group_size, device=group_logits.device, dtype=selected_group_ids.dtype).view(1, 1, -1)
+        selected_token_indices = (selected_group_ids.unsqueeze(-1) * self.group_size + token_offsets).reshape(group_logits.shape[0], -1)
+        slot_gate = group_mask.repeat_interleave(self.group_size, dim=-1)
+        return slot_gate, group_logits, group_mask, st_group_mask, selected_group_ids, selected_token_indices
 
     def _count_ratio(self, counts: torch.Tensor, k: int):
         if counts.numel() == 0:
@@ -195,34 +160,36 @@ class textGating(nn.Module):
         if has_image is None:
             has_image = torch.ones(batch_size, 1, device=text_embedding.device, dtype=text_embedding.dtype)
 
-        slot_gate, group_logits, soft_group_gate, hard_group_gate, gated_group_gate, batch_G = self._build_group_threshold_gate(
+        slot_gate, group_logits, group_mask, st_group_mask, selected_group_ids, selected_token_indices = self._build_top4_group_gate(
             pooled_vision=pooled_vision,
             text_embedding=text_embedding,
             batch_alpha=batch_alpha,
             has_image=has_image,
-            temperature_override=temperature_override,
         )
 
         slot_usage_live = slot_gate.mean(dim=0)
-        group_usage_live = gated_group_gate.mean(dim=0)
+        group_usage_live = group_mask.mean(dim=0)
         active_counts_live = slot_gate.sum(dim=-1)
-        soft_group_counts_live = soft_group_gate.sum(dim=-1)
-        hard_group_counts_pre_G_live = hard_group_gate.sum(dim=-1)
-        hard_group_counts_post_G_live = gated_group_gate.detach().sum(dim=-1)
+        selected_group_counts_live = group_mask.sum(dim=-1)
+        top4_values = group_logits.gather(1, selected_group_ids)
+        kth_top4_score = top4_values[:, -1]
+        unselected_scores = group_logits.masked_fill(group_mask.bool(), float("-inf"))
+        best_unselected_score = unselected_scores.max(dim=-1).values
+        group_score_margin = kth_top4_score - best_unselected_score
         self.live_context = {
             "hard_k_logits_live": slot_gate,
             "slot_usage_live": slot_usage_live,
             "group_logits_live": group_logits,
-            "soft_group_gate_live": soft_group_gate,
-            "hard_group_gate_live": hard_group_gate,
-            "gated_group_gate_live": gated_group_gate,
+            "top4_group_scores_live": group_logits,
+            "top4_group_mask_live": group_mask,
+            "top4_group_mask_st_live": st_group_mask,
+            "top4_selected_group_ids_live": selected_group_ids,
+            "top4_selected_token_indices_live": selected_token_indices,
             "group_usage_live": group_usage_live,
             "active_counts_live": active_counts_live,
-            "soft_group_counts_live": soft_group_counts_live,
-            "hard_group_counts_pre_G_live": hard_group_counts_pre_G_live,
-            "hard_group_counts_post_G_live": hard_group_counts_post_G_live,
+            "top4_selected_group_counts_live": selected_group_counts_live,
+            "top4_group_score_margin_live": group_score_margin,
             "batch_alpha_live": batch_alpha,
-            "batch_G_live": batch_G,
         }
 
         slot_usage = slot_usage_live.detach().float()
@@ -232,57 +199,40 @@ class textGating(nn.Module):
         active_stats = self._tensor_stats(active_counts)
         batch_alpha_stats = self._tensor_stats(batch_alpha)
         group_logit_stats = self._tensor_stats(group_logits)
-        group_prob_stats = self._tensor_stats(soft_group_gate)
-        soft_count_stats = self._tensor_stats(soft_group_counts_live)
-        preG_count_stats = self._tensor_stats(hard_group_counts_pre_G_live.detach().float())
-        postG_count_stats = self._tensor_stats(hard_group_counts_post_G_live.detach().float())
+        selected_count_stats = self._tensor_stats(selected_group_counts_live.detach().float())
+        margin_stats = self._tensor_stats(group_score_margin.detach().float())
         group_entropy = self._compute_entropy(group_usage)
         if group_usage.numel() > 1:
             group_entropy_norm = group_entropy / torch.log(group_usage.new_tensor(float(group_usage.numel())))
         else:
             group_entropy_norm = group_usage.new_tensor(0.0)
 
-        capacity_prior_loss = slot_gate.new_tensor(0.0)
-        capacity_prior_energy_live = slot_gate.new_zeros(batch_size)
-        if self.training:
-            capacity_prior_loss, capacity_prior_energy_live = self._compute_capacity_prior_loss(
-                soft_group_gate=soft_group_gate,
-                batch_G=batch_G,
-            )
-
         self.debug_context = {
-            "soft_group_count_mean": soft_count_stats["mean"],
-            "soft_group_count_std": soft_count_stats["std"],
-            "hard_group_count_pre_G_mean": preG_count_stats["mean"],
-            "hard_group_count_pre_G_std": preG_count_stats["std"],
-            "hard_group_count_post_G_mean": postG_count_stats["mean"],
-            "hard_group_count_post_G_std": postG_count_stats["std"],
+            "top4_selected_group_count_mean": selected_count_stats["mean"],
+            "top4_selected_group_count_std": selected_count_stats["std"],
             "active_token_count_mean": active_stats["mean"],
             "active_token_count_std": active_stats["std"],
             "batch_alpha_mean": batch_alpha_stats["mean"],
             "batch_alpha_std": batch_alpha_stats["std"],
-            "batch_G_on_ratio": batch_G.detach().float().mean(),
             "batch_alpha_boundary_ratio": ((batch_alpha.detach().float() > 0.45) & (batch_alpha.detach().float() < 0.55)).float().mean(),
-            "group_logit_mean": group_logit_stats["mean"],
-            "group_logit_std": group_logit_stats["std"],
-            "group_logit_abs_mean": group_logits.detach().float().abs().mean(),
-            "group_prob_mean": group_prob_stats["mean"],
-            "group_prob_std": group_prob_stats["std"],
-            "group_boundary_ratio": (group_logits.detach().float().abs() < 0.2).float().mean(),
+            "top4_group_score_mean": group_logit_stats["mean"],
+            "top4_group_score_std": group_logit_stats["std"],
+            "top4_group_score_margin_mean": margin_stats["mean"],
             "dead_slot_ratio": dead_slot_ratio,
-            "group_entropy": group_entropy,
-            "group_entropy_norm": group_entropy_norm,
-            "raw_capacity_prior_loss": capacity_prior_loss.detach().float(),
-            "capacity_prior_energy_mean": capacity_prior_energy_live.detach().float().mean() if capacity_prior_energy_live.numel() > 0 else slot_gate.new_tensor(0.0),
+            "top4_group_usage_max": group_usage.max(),
+            "top4_group_usage_min": group_usage.min(),
+            "top4_group_usage_std": group_usage.std(unbiased=False) if group_usage.numel() > 1 else group_usage.new_tensor(0.0),
+            "top4_group_usage_entropy": group_entropy,
+            "top4_group_usage_entropy_norm": group_entropy_norm,
+            "group_usage_max": group_usage.max(),
+            "group_usage_min": group_usage.min(),
+            "group_usage_entropy": group_entropy,
+            "group_usage_entropy_norm": group_entropy_norm,
         }
         for idx, value in enumerate(group_usage.tolist()):
+            self.debug_context[f"top4_group_usage_{idx}"] = float(value)
             self.debug_context[f"group_usage_{idx}"] = float(value)
-        pre_counts = hard_group_counts_pre_G_live.detach().float().round().to(torch.long)
-        post_counts = hard_group_counts_post_G_live.detach().float().round().to(torch.long)
-        for k in range(self.group_count + 1):
-            self.debug_context[f"preG_group_count_ratio_{k}"] = self._count_ratio(pre_counts, k)
-            self.debug_context[f"postG_group_count_ratio_{k}"] = self._count_ratio(post_counts, k)
 
-        self.capacity_prior_loss = capacity_prior_loss
-        self.tax_loss = capacity_prior_loss  # compatibility alias during migration
-        return (slot_gate, capacity_prior_loss) if self.training else slot_gate
+        self.capacity_prior_loss = slot_gate.new_tensor(0.0)
+        self.tax_loss = self.capacity_prior_loss
+        return slot_gate

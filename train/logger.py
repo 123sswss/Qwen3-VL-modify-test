@@ -255,12 +255,13 @@ class StageMetricLogger:
             ("adapter_usage_balance_loss_scaled", "Route-Balance", "#72b7b2"),
             ("adapter_sample_entropy_loss_scaled", "Route-Entropy", "#eeca3b"),
             ("adapter_common_mode_loss_scaled", "Common-Mode Penalty", "#b279a2"),
-            ("text_common_mode_loss", "Text Common", "#ff9da6"),
+            ("top4_group_balance_loss", "Top4 Balance", "#ff9da6"),
+            ("text_common_mode_loss_scaled", "Text CM Penalty", "#7a5195"),
             ("expert_floor_loss", "Expert-Floor", C["ke"]),
             ("anti_collapse_loss", "Anti-Collapse", "#bc5090"),
             ("cls_loss", "Cls", C["cls"]),
             ("gate_loss", "Gate", C["gate"]),
-            ("capacity_prior_loss", "Capacity Prior", C["tax"]),
+            ("raw_top4_group_balance_loss", "Raw Top4 Balance", C["tax"]),
             ("k_general_loss", "K-General", C["kg"]),
             ("k_expert_loss", "K-Expert", C["ke"]),
         ]
@@ -386,6 +387,9 @@ class StageMetricLogger:
                     plotted += 1
                 if self._has_valid_data(df, "text_insert_pool_common_mode_ratio"):
                     self._plot_series(ax, x, df["text_insert_pool_common_mode_ratio"], "Text Common-Mode", "#72b7b2")
+                    plotted += 1
+                if self._has_valid_data(df, "text_common_mode_ratio_train"):
+                    self._plot_series(ax, x, df["text_common_mode_ratio_train"], "Text CM Train", "#54a24b")
                     plotted += 1
                 if self._has_valid_data(df, "text_insert_pool_specificity_ratio"):
                     self._plot_series(ax, x, df["text_insert_pool_specificity_ratio"], "Text Specificity", "#eeca3b")
@@ -530,17 +534,17 @@ class StageMetricLogger:
             if "temperature" in df.columns and df["temperature"].notna().any():
                 self._plot_series(ax, x, df["temperature"], "Temperature", C["temp"])
                 plotted += 1
-            if "capacity_prior_weight" in df.columns and df["capacity_prior_weight"].notna().any():
-                self._plot_series(ax, x, df["capacity_prior_weight"], "Capacity Prior Weight", C["tax"])
+            if "top4_group_balance_loss_weight" in df.columns and df["top4_group_balance_loss_weight"].notna().any():
+                self._plot_series(ax, x, df["top4_group_balance_loss_weight"], "Top4 Balance Weight", C["tax"])
                 plotted += 1
-            if "capacity_prior_loss" in df.columns and df["capacity_prior_loss"].notna().any():
-                self._plot_series(ax, x, df["capacity_prior_loss"], "Capacity Prior", "#7a5195")
+            if "top4_group_balance_loss" in df.columns and df["top4_group_balance_loss"].notna().any():
+                self._plot_series(ax, x, df["top4_group_balance_loss"], "Top4 Balance", "#7a5195")
                 plotted += 1
-            if "text_common_mode_weight" in df.columns and df["text_common_mode_weight"].notna().any():
-                self._plot_series(ax, x, df["text_common_mode_weight"], "Text Common W", "#ff9da6")
+            if "text_common_mode_loss_effective_weight" in df.columns and df["text_common_mode_loss_effective_weight"].notna().any():
+                self._plot_series(ax, x, df["text_common_mode_loss_effective_weight"], "Text CM Eff.W", "#bc5090")
                 plotted += 1
-            if "text_common_mode_loss" in df.columns and df["text_common_mode_loss"].notna().any():
-                self._plot_series(ax, x, df["text_common_mode_loss"], "Text Common", "#d37295")
+            if "text_common_mode_loss_scaled" in df.columns and df["text_common_mode_loss_scaled"].notna().any():
+                self._plot_series(ax, x, df["text_common_mode_loss_scaled"], "Text CM Loss", "#4c78a8")
                 plotted += 1
             if "learning_rate" in df.columns and df["learning_rate"].notna().any():
                 self._plot_series(ax, x, df["learning_rate"], "Learning Rate", C["lr"])
@@ -623,8 +627,8 @@ class TrainerMetricsCallback(TrainerCallback):
             print(f"  ├─ Expert K Proxy Loss:   {_fmt(row.get('k_expert_loss')):>10}")
         if "capacity_prior_loss" in row:
             print(f"  ├─ Capacity Prior Loss:   {_fmt(row.get('capacity_prior_loss')):>10}")
-        if "text_common_mode_loss" in row:
-            print(f"  ├─ Text Common Loss:      {_fmt(row.get('text_common_mode_loss')):>10}")
+        if "text_common_mode_loss_scaled" in row:
+            print(f"  ├─ Text Common Loss:      {_fmt(row.get('text_common_mode_loss_scaled')):>10}")
         if "adapter_usage_balance_loss_scaled" in row:
             print(f"  ├─ Route Balance Loss:    {_fmt(row.get('adapter_usage_balance_loss_scaled')):>10}")
         if "adapter_sample_entropy_loss_scaled" in row:
@@ -633,8 +637,8 @@ class TrainerMetricsCallback(TrainerCallback):
             print(f"  ├─ Common-Mode Penalty:   {_fmt(row.get('adapter_common_mode_loss_scaled')):>10}")
         if "raw_capacity_prior_loss" in row:
             print(f"  ├─ Raw Capacity Prior:    {_fmt(row.get('raw_capacity_prior_loss')):>10}")
-        if "raw_text_common_mode_loss" in row:
-            print(f"  ├─ Raw Text Common:       {_fmt(row.get('raw_text_common_mode_loss')):>10}")
+        if "text_common_mode_loss_raw" in row:
+            print(f"  ├─ Raw Text Common:       {_fmt(row.get('text_common_mode_loss_raw')):>10}")
         if "group_usage_max" in row or "group_usage_min" in row or "group_usage_entropy" in row:
             print(f"[Group Usage]")
             if "group_usage_max" in row:
@@ -728,6 +732,8 @@ class TrainerMetricsCallback(TrainerCallback):
                 print(f"  ├─ Text Δ / Base:       {_fmt(row.get('text_insert_to_base_embed_ratio'), nd=4):>10}")
             if "text_insert_pool_common_mode_ratio" in row:
                 print(f"  ├─ Text Common-Mode:    {_fmt(row.get('text_insert_pool_common_mode_ratio'), nd=4):>10}")
+            if "text_common_mode_ratio_train" in row:
+                print(f"  ├─ Text CM Train:       {_fmt(row.get('text_common_mode_ratio_train'), nd=4):>10}")
             if "text_insert_pool_specificity_ratio" in row:
                 print(f"  ├─ Text Specificity:    {_fmt(row.get('text_insert_pool_specificity_ratio'), nd=4):>10}")
             if "text_insert_pool_pairwise_cos_mean" in row:
@@ -771,8 +777,12 @@ class TrainerMetricsCallback(TrainerCallback):
             print(f"  ├─ Temperature:           {_fmt(row.get('temperature'), nd=4):>10}")
         if "capacity_prior_weight" in row:
             print(f"  ├─ Capacity Prior Weight: {_fmt(row.get('capacity_prior_weight'), nd=4):>10}")
-        if "text_common_mode_weight" in row:
-            print(f"  ├─ Text Common W:        {_fmt(row.get('text_common_mode_weight'), nd=4):>10}")
+        if "text_common_mode_loss_weight" in row:
+            print(f"  ├─ Text Common W:        {_fmt(row.get('text_common_mode_loss_weight'), nd=4):>10}")
+        if "text_common_mode_loss_effective_weight" in row:
+            print(f"  ├─ Text CM Eff.W:        {_fmt(row.get('text_common_mode_loss_effective_weight'), nd=4):>10}")
+        if "text_common_mode_warmup_factor" in row:
+            print(f"  ├─ Text CM Warmup:       {_fmt(row.get('text_common_mode_warmup_factor'), nd=4):>10}")
         if "text_common_mode_target" in row:
             print(f"  ├─ Text Common Target:   {_fmt(row.get('text_common_mode_target'), nd=4):>10}")
         if "learning_rate" in row:

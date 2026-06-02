@@ -44,11 +44,8 @@ class TextAdapterRouter(nn.Module):
         self.state_proj = nn.Linear(2, hidden_dim)
         self.fusion = nn.Linear(hidden_dim * 2, hidden_dim)
         self.route_head = nn.Linear(hidden_dim, self.adapter_count)
-        self.gate_head = nn.Linear(hidden_dim, 1)
         nn.init.zeros_(self.route_head.weight)
         nn.init.zeros_(self.route_head.bias)
-        nn.init.zeros_(self.gate_head.weight)
-        nn.init.constant_(self.gate_head.bias, -2.0)
         self.relu = nn.ReLU()
 
     def forward(self, text_pooled: torch.Tensor, visual_state: torch.Tensor):
@@ -56,8 +53,7 @@ class TextAdapterRouter(nn.Module):
         state_feat = self.relu(self.state_proj(visual_state.to(dtype=text_pooled.dtype)))
         fused = self.relu(self.fusion(torch.cat([text_feat, state_feat], dim=-1)))
         route_probs = torch.softmax(self.route_head(fused), dim=-1)
-        text_gate = torch.sigmoid(self.gate_head(fused))
-        return route_probs, text_gate
+        return route_probs
 
 class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
     def __init__(self,
@@ -153,8 +149,6 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
         self.text_residual_adapters = nn.ModuleList([
             TextResidualAdapter(text_dim) for _ in range(self.text_residual_adapter_count)
         ])
-        gate_bias = float(config.mmrl_config.get("TEXT_ADAPTER_GATE_INIT_BIAS", -2.0))
-        nn.init.constant_(self.text_adapter_router.gate_head.bias, gate_bias)
         ###################
 
     def _text_insert_debug_defaults(self, device, dtype):
@@ -295,14 +289,30 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
             cursor += count
         return torch.cat([alpha, gate], dim=-1)
 
+    def _batch_visual_gate_soft(self, batch_size: int, images_per_sample, device, dtype):
+        gate = torch.zeros(batch_size, 1, device=device, dtype=dtype)
+        gate_list = getattr(self.visual, "G_list", None)
+        if not torch.is_tensor(gate_list):
+            return gate
+        gate_prob = gate_list.to(device=device, dtype=dtype).view(-1, 1)
+        if images_per_sample is None:
+            n = min(batch_size, gate_prob.shape[0])
+            gate[:n] = gate_prob[:n]
+            return gate
+        cursor = 0
+        for sample_idx, count in enumerate(images_per_sample):
+            count = int(count)
+            if count > 0:
+                gate[sample_idx] = gate_prob[cursor:cursor + count].mean(dim=0)
+            cursor += count
+        return gate
+
     def _apply_text_adapter_router(self, text_tokens: torch.Tensor, text_pooled: torch.Tensor, visual_state: torch.Tensor):
-        route_probs, text_gate = self.text_adapter_router(text_pooled, visual_state)
+        route_probs = self.text_adapter_router(text_pooled, visual_state)
         adapter_outputs = torch.stack([adapter(text_tokens) for adapter in self.text_residual_adapters], dim=2)
         mixed_delta = (adapter_outputs * route_probs[:, None, :, None].to(dtype=text_tokens.dtype)).sum(dim=2)
-        adapted_tokens = text_tokens + mixed_delta
-        visual_gate = visual_state[:, 1:2].to(dtype=text_tokens.dtype)
-        inserted_tokens = visual_gate[:, None, :] * text_gate[:, None, :].to(dtype=text_tokens.dtype) * adapted_tokens
-        return inserted_tokens, route_probs, text_gate, mixed_delta
+        expert_tokens = text_tokens + mixed_delta
+        return expert_tokens, route_probs, mixed_delta
 
 
     def get_image_features(self,
@@ -490,14 +500,23 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
                     inputs_embeds.device,
                     inputs_embeds.dtype,
                 )
-                selected_t_tokens, text_route_probs, text_gate, text_mixed_delta = self._apply_text_adapter_router(
+                selected_t_tokens, text_route_probs, text_mixed_delta = self._apply_text_adapter_router(
                     selected_t_tokens,
                     text_pooled_for_adapter,
                     visual_state,
                 )
+                text_gate_soft = self._batch_visual_gate_soft(
+                    inputs_embeds.shape[0],
+                    images_per_sample,
+                    inputs_embeds.device,
+                    inputs_embeds.dtype,
+                )
+                text_gate_hard = (text_gate_soft > 0.5).to(dtype=inputs_embeds.dtype)
+                text_gate_ste = text_gate_hard - text_gate_soft.detach() + text_gate_soft
+                selected_t_tokens = text_gate_ste[:, None, :] * selected_t_tokens
                 selected_count = selected_t_tokens.shape[1]
                 gather_idx = placeholder_idx.clamp(max=selected_count - 1).unsqueeze(-1).expand(-1, -1, selected_t_tokens.shape[-1])
-                target_embeds = self.text_rep_scale.to(device=inputs_embeds.device, dtype=inputs_embeds.dtype) * selected_t_tokens.gather(1, gather_idx)
+                target_embeds = selected_t_tokens.gather(1, gather_idx)
                 gate_soft_mask = is_placeholder.unsqueeze(-1).to(inputs_embeds.dtype)
                 text_insert_delta = target_embeds * gate_soft_mask
                 self.text_common_mode_loss = inputs_embeds.new_tensor(0.0)
@@ -527,8 +546,6 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
                     "text_adapter_insert_token_count_mean": per_sample_insert_count.mean().to(device=inputs_embeds.device, dtype=inputs_embeds.dtype),
                     "text_adapter_token_count": inputs_embeds.new_tensor(float(selected_count)),
                     "text_adapter_count": inputs_embeds.new_tensor(float(self.text_residual_adapter_count)),
-                    "text_adapter_gate_mean": text_gate.detach().float().mean().to(device=inputs_embeds.device, dtype=inputs_embeds.dtype),
-                    "text_adapter_gate_std": text_gate.detach().float().std(unbiased=False).to(device=inputs_embeds.device, dtype=inputs_embeds.dtype) if text_gate.numel() > 1 else inputs_embeds.new_tensor(0.0),
                     "text_adapter_route_entropy_norm": text_route_entropy_norm.to(device=inputs_embeds.device, dtype=inputs_embeds.dtype),
                     "text_adapter_route_confidence": text_route_probs.detach().float().max(dim=-1).values.mean().to(device=inputs_embeds.device, dtype=inputs_embeds.dtype),
                     "text_adapter_usage_max": text_usage.max().to(device=inputs_embeds.device, dtype=inputs_embeds.dtype),

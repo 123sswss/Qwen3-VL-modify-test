@@ -19,7 +19,7 @@ class Qwen3ProcessorWithMMRL(Qwen3VLProcessor):
                  cfg = None,
                  **kwargs):
         super().__init__(image_processor=image_processor, tokenizer=tokenizer, video_processor=None, **kwargs)
-        active_rep_token_count = getattr(modcfg, "ACTIVE_REP_TOKEN_COUNT", 40)
+        active_rep_token_count = getattr(modcfg, "ACTIVE_REP_TOKEN_COUNT", 5)
         if cfg is not None and hasattr(cfg, "ACTIVE_REP_TOKEN_COUNT"):
             active_rep_token_count = getattr(cfg, "ACTIVE_REP_TOKEN_COUNT")
         self.rep_tokens = [f"<|REP_placeholder{i}|>" for i in range(int(active_rep_token_count))]

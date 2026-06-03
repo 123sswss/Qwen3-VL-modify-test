@@ -12,7 +12,6 @@ BASE_VISUAL_ROUTER_MODEL = {
     "visual_residual_adapter_count": 4,
     "text_adapter_token_count": 5,
     "text_residual_adapter_count": 4,
-    "text_adapter_gate_init_bias": -2.0,
     # v2.1 visual-safe baseline: loosen usage balance, strengthen common-mode suppression.
     "adapter_usage_balance_loss_weight": 0.005,
     "adapter_sample_entropy_loss_weight": 0.02,
@@ -42,6 +41,15 @@ EXPERIMENTS = {
         "disable_general_mm_stage34": True,
         "diag_every_steps": 500,
     },
+    "text5_adapter_router_v2": {
+    "text_rep_init_scale": 2e-3,
+    "text_residual_adapter_count": 2,
+    "adapter_usage_balance_loss_weight": 0.002,
+    "adapter_sample_entropy_loss_weight": 0.05,
+    "adapter_common_mode_loss_weight": 0.05,
+    "adapter_sample_entropy_target": 0.35,
+    "adapter_common_mode_target": 0.75,
+    }
 }
 
 SELECTED_EXPERIMENT = os.getenv("MMRL_EXPERIMENT", "text5_adapter_router_v1")
@@ -99,10 +107,6 @@ CFG = {
         "text_residual_adapter_count": int(os.getenv(
             "MMRL_TEXT_RESIDUAL_ADAPTER_COUNT",
             str(EXP_CFG.get("text_residual_adapter_count", 4)),
-        )),
-        "text_adapter_gate_init_bias": float(os.getenv(
-            "MMRL_TEXT_ADAPTER_GATE_INIT_BIAS",
-            str(EXP_CFG.get("text_adapter_gate_init_bias", -2.0)),
         )),
         "adapter_usage_balance_loss_weight": float(os.getenv(
             "MMRL_ADAPTER_USAGE_BALANCE_LOSS_WEIGHT",

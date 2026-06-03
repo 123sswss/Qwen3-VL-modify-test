@@ -88,7 +88,6 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
             "VISUAL_RESIDUAL_ADAPTER_COUNT": _cfg_attr(config, "VISUAL_RESIDUAL_ADAPTER_COUNT", 4),
             "TEXT_ADAPTER_TOKEN_COUNT": _cfg_attr(config, "TEXT_ADAPTER_TOKEN_COUNT", 5),
             "TEXT_RESIDUAL_ADAPTER_COUNT": _cfg_attr(config, "TEXT_RESIDUAL_ADAPTER_COUNT", 4),
-            "TEXT_ADAPTER_GATE_INIT_BIAS": _cfg_attr(config, "TEXT_ADAPTER_GATE_INIT_BIAS", -2.0),
             "ADAPTER_USAGE_BALANCE_LOSS_WEIGHT": _cfg_attr(config, "ADAPTER_USAGE_BALANCE_LOSS_WEIGHT", 0.0),
             "ADAPTER_SAMPLE_ENTROPY_LOSS_WEIGHT": _cfg_attr(config, "ADAPTER_SAMPLE_ENTROPY_LOSS_WEIGHT", 0.0),
             "ADAPTER_COMMON_MODE_LOSS_WEIGHT": _cfg_attr(config, "ADAPTER_COMMON_MODE_LOSS_WEIGHT", 0.0),
@@ -511,27 +510,28 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
                     inputs_embeds.device,
                     inputs_embeds.dtype,
                 )
-                text_gate_hard = (text_gate_soft > 0.5).to(dtype=inputs_embeds.dtype)
-                text_gate_ste = text_gate_hard - text_gate_soft.detach() + text_gate_soft
-                selected_t_tokens = text_gate_ste[:, None, :] * selected_t_tokens
+                sample_active_mask = (text_gate_soft > 0.5).squeeze(-1)
                 selected_count = selected_t_tokens.shape[1]
                 gather_idx = placeholder_idx.clamp(max=selected_count - 1).unsqueeze(-1).expand(-1, -1, selected_t_tokens.shape[-1])
                 target_embeds = selected_t_tokens.gather(1, gather_idx)
-                gate_soft_mask = is_placeholder.unsqueeze(-1).to(inputs_embeds.dtype)
-                text_insert_delta = target_embeds * gate_soft_mask
+                active_placeholder_mask = is_placeholder & sample_active_mask.unsqueeze(-1)
+                inactive_placeholder_mask = is_placeholder & (~sample_active_mask.unsqueeze(-1))
+                text_insert_mask = active_placeholder_mask.unsqueeze(-1).to(inputs_embeds.dtype)
                 self.text_common_mode_loss = inputs_embeds.new_tensor(0.0)
                 self.text_common_mode_ratio_train = inputs_embeds.new_tensor(0.0)
                 text_insert_debug = self._compute_text_insert_debug_metrics(
                     base_embeds=placeholder_base_embeds,
                     target_embeds=target_embeds,
-                    gate_soft_mask=gate_soft_mask,
+                    gate_soft_mask=text_insert_mask,
                     is_placeholder=is_placeholder,
                 )
                 self.debug_context.update(text_insert_debug)
-                inputs_embeds = torch.where(is_placeholder.unsqueeze(-1), text_insert_delta, inputs_embeds)
-                attention_mask = attention_mask | is_placeholder.to(dtype=attention_mask.dtype)
+                inputs_embeds = torch.where(active_placeholder_mask.unsqueeze(-1), target_embeds, inputs_embeds)
+                inputs_embeds = inputs_embeds.masked_fill(inactive_placeholder_mask.unsqueeze(-1), 0.0)
+                attention_mask = attention_mask & (~inactive_placeholder_mask)
+                attention_mask = attention_mask | active_placeholder_mask.to(dtype=attention_mask.dtype)
                 rep_attn = attention_mask[is_placeholder].detach().float().mean() if is_placeholder.any() else inputs_embeds.new_tensor(0.0)
-                per_sample_insert_count = is_placeholder.detach().float().sum(dim=-1)
+                per_sample_insert_count = active_placeholder_mask.detach().float().sum(dim=-1)
                 text_usage = text_route_probs.detach().float().mean(dim=0)
                 text_usage = text_usage / text_usage.sum().clamp_min(1e-8)
                 text_route_entropy = -(text_usage * text_usage.clamp_min(1e-8).log()).sum()
@@ -544,6 +544,8 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
                     "mask_rep_placeholders_when_text_disabled_flag": inputs_embeds.new_tensor(0.0),
                     "rep_placeholder_attention_ratio": rep_attn.to(device=inputs_embeds.device, dtype=inputs_embeds.dtype),
                     "text_adapter_insert_token_count_mean": per_sample_insert_count.mean().to(device=inputs_embeds.device, dtype=inputs_embeds.dtype),
+                    "text_active_sample_ratio": sample_active_mask.detach().float().mean().to(device=inputs_embeds.device, dtype=inputs_embeds.dtype),
+                    "text_inactive_placeholder_ratio": inactive_placeholder_mask.detach().float().mean().to(device=inputs_embeds.device, dtype=inputs_embeds.dtype),
                     "text_adapter_token_count": inputs_embeds.new_tensor(float(selected_count)),
                     "text_adapter_count": inputs_embeds.new_tensor(float(self.text_residual_adapter_count)),
                     "text_adapter_route_entropy_norm": text_route_entropy_norm.to(device=inputs_embeds.device, dtype=inputs_embeds.dtype),

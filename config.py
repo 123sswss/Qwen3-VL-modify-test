@@ -1,6 +1,6 @@
 ##################################### init #####################################
 USE_MMRL = True
-ACTIVE_REP_TOKEN_COUNT = 40
+ACTIVE_REP_TOKEN_COUNT = 5
 
 def build_special_tokens(active_rep_token_count=None):
     token_count = ACTIVE_REP_TOKEN_COUNT if active_rep_token_count is None else int(active_rep_token_count)

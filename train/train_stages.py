@@ -50,7 +50,6 @@ def _build_experiment_context(train_cfg, output_dir, stage_id):
             "visual_residual_adapter_count": train_cfg.get("visual_residual_adapter_count"),
             "text_adapter_token_count": train_cfg.get("text_adapter_token_count"),
             "text_residual_adapter_count": train_cfg.get("text_residual_adapter_count"),
-            "text_adapter_gate_init_bias": train_cfg.get("text_adapter_gate_init_bias"),
             "adapter_usage_balance_loss_weight": train_cfg.get("adapter_usage_balance_loss_weight"),
             "adapter_sample_entropy_loss_weight": train_cfg.get("adapter_sample_entropy_loss_weight"),
             "adapter_common_mode_loss_weight": train_cfg.get("adapter_common_mode_loss_weight"),
@@ -958,10 +957,6 @@ def build_model_and_processor(model_path, experiment_cfg=None):
     config.TEXT_RESIDUAL_ADAPTER_COUNT = int(experiment_cfg.get(
         "text_residual_adapter_count",
         os.getenv("MMRL_TEXT_RESIDUAL_ADAPTER_COUNT", "4"),
-    ))
-    config.TEXT_ADAPTER_GATE_INIT_BIAS = float(experiment_cfg.get(
-        "text_adapter_gate_init_bias",
-        os.getenv("MMRL_TEXT_ADAPTER_GATE_INIT_BIAS", "-2.0"),
     ))
     config.ADAPTER_USAGE_BALANCE_LOSS_WEIGHT = float(experiment_cfg.get(
         "adapter_usage_balance_loss_weight",

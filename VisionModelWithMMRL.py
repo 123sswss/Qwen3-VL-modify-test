@@ -202,6 +202,8 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
         self.k_mask_results = None
         self.tax_loss = None
         self.capacity_prior_loss = None
+        self.text_router_visual_pooled = None
+
 
         self.null_image_token = nn.Parameter(torch.zeros(1, self.cfg.vision_token_dim))
         nn.init.normal_(self.null_image_token, std=0.02)
@@ -427,6 +429,9 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
         self.alpha_list = None 
         self.G_list = []
         self.route_probs = None
+        self.text_router_visual_pooled = None
+
+
         rotary_pos_emb_with_rep = None
         embedding_after_pooling = self.embedding_pooling(embedding, mask=text_pooling_mask)
         hidden_states = self.patch_embed(hidden_states)
@@ -645,6 +650,35 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
             **residual_debug,
         }
 
+        if cu_seqlens is not None and cu_seqlens.numel() > 1:
+            img_seqlens = cu_seqlens[1:] - cu_seqlens[:-1]
+            img_indices = torch.repeat_interleave(
+                torch.arange(total_pic_num, device=hidden_states.device),
+                img_seqlens,
+            )
+            pooled_visual_per_image = self.hidden_state_pooling.forward_vectorized(
+                hidden_states,
+                img_indices,
+                total_pic_num,
+            )
+
+            pooled_visual_per_sample = torch.zeros(
+                batch_size,
+                pooled_visual_per_image.shape[-1],
+                device=hidden_states.device,
+                dtype=hidden_states.dtype,
+            )
+            cursor = 0
+            for sample_idx, count in enumerate(images_per_sample):
+                count = int(count)
+                if count > 0:
+                    pooled_visual_per_sample[sample_idx] = pooled_visual_per_image[cursor:cursor + count].mean(dim=0)
+                cursor += count
+
+            self.text_router_visual_pooled = pooled_visual_per_sample.detach()
+        else:
+            self.text_router_visual_pooled = None
+
         hidden_states = self.merger(hidden_states)
         ########### text gating ###########
         k_results = hidden_states.new_full((batch_size,), float(getattr(self.cfg, "TEXT_ADAPTER_TOKEN_COUNT", 5)))
@@ -659,6 +693,7 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
         return hidden_states, deepstack_feature_lists, k_results
 
     def compute_text_only_gating(self, embedding, text_pooling_mask=None, gating_temperature_override=None):
+        self.text_router_visual_pooled = None
         batch_size = embedding.shape[0]
         embedding_after_pooling = self.embedding_pooling(embedding, mask=text_pooling_mask)  # [B, Dt]
         dummy_vision_states = self.null_image_token.expand(batch_size, -1)

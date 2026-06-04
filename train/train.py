@@ -12,6 +12,11 @@ BASE_VISUAL_ROUTER_MODEL = {
     "visual_residual_adapter_count": 4,
     "text_adapter_token_count": 5,
     "text_residual_adapter_count": 4,
+    "text_common_mode_loss_weight": 0.05,
+    "text_common_mode_target": 0.75,
+    "text_adapter_balance_loss_weight": 0.01,
+    "text_adapter_sample_entropy_loss_weight": 0.05,
+    "text_adapter_sample_entropy_target": 0.55,
     # v2.1 visual-safe baseline: loosen usage balance, strengthen common-mode suppression.
     "adapter_usage_balance_loss_weight": 0.005,
     "adapter_sample_entropy_loss_weight": 0.02,
@@ -41,15 +46,24 @@ EXPERIMENTS = {
         "disable_general_mm_stage34": True,
         "diag_every_steps": 500,
     },
-    "text5_adapter_router_v2": {
-    "text_rep_init_scale": 2e-3,
-    "text_residual_adapter_count": 2,
-    "adapter_usage_balance_loss_weight": 0.002,
-    "adapter_sample_entropy_loss_weight": 0.05,
-    "adapter_common_mode_loss_weight": 0.05,
-    "adapter_sample_entropy_target": 0.35,
-    "adapter_common_mode_target": 0.75,
-    }
+    "text5_adapter_router_v3": {
+        **BASE_VISUAL_ROUTER_MODEL,
+        "text_rep_init_scale": 1e-3,
+    },
+    "text5_adapter_router_v4": {
+        **BASE_VISUAL_ROUTER_MODEL,
+        "diag_every_steps": 500,
+        "text_rep_init_scale": 5e-4,
+        "text_common_mode_loss_weight": 0.01,
+        "text_common_mode_target": 0.9,
+        "text_adapter_balance_loss_weight": 0.05,
+        "text_adapter_sample_entropy_loss_weight": 0.10,
+        "text_adapter_sample_entropy_target": 0.90,
+    },
+
+
+
+
 }
 
 SELECTED_EXPERIMENT = os.getenv("MMRL_EXPERIMENT", "text5_adapter_router_v1")
@@ -107,6 +121,26 @@ CFG = {
         "text_residual_adapter_count": int(os.getenv(
             "MMRL_TEXT_RESIDUAL_ADAPTER_COUNT",
             str(EXP_CFG.get("text_residual_adapter_count", 4)),
+        )),
+        "text_common_mode_loss_weight": float(os.getenv(
+            "MMRL_TEXT_COMMON_MODE_LOSS_WEIGHT",
+            str(EXP_CFG.get("text_common_mode_loss_weight", 0.0)),
+        )),
+        "text_common_mode_target": float(os.getenv(
+            "MMRL_TEXT_COMMON_MODE_TARGET",
+            str(EXP_CFG.get("text_common_mode_target", 0.85)),
+        )),
+        "text_adapter_balance_loss_weight": float(os.getenv(
+            "MMRL_TEXT_ADAPTER_BALANCE_LOSS_WEIGHT",
+            str(EXP_CFG.get("text_adapter_balance_loss_weight", 0.0)),
+        )),
+        "text_adapter_sample_entropy_loss_weight": float(os.getenv(
+            "MMRL_TEXT_ADAPTER_SAMPLE_ENTROPY_LOSS_WEIGHT",
+            str(EXP_CFG.get("text_adapter_sample_entropy_loss_weight", 0.0)),
+        )),
+        "text_adapter_sample_entropy_target": float(os.getenv(
+            "MMRL_TEXT_ADAPTER_SAMPLE_ENTROPY_TARGET",
+            str(EXP_CFG.get("text_adapter_sample_entropy_target", 1.0)),
         )),
         "adapter_usage_balance_loss_weight": float(os.getenv(
             "MMRL_ADAPTER_USAGE_BALANCE_LOSS_WEIGHT",

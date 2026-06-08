@@ -38,6 +38,31 @@ EXPERIMENTS = {
         **BASE_VISUAL_ROUTER_MODEL,
         "diag_every_steps": 500,
     },
+    "text5_adapter_router_v1_cm_0p07": {
+        **BASE_VISUAL_ROUTER_MODEL,
+        "diag_every_steps": 500,
+        "text_common_mode_loss_weight": 0.07,
+    },
+    "text5_adapter_router_v1_cm_0p075": {
+        **BASE_VISUAL_ROUTER_MODEL,
+        "diag_every_steps": 500,
+        "text_common_mode_loss_weight": 0.075,
+    },
+    "text5_adapter_router_v1_cm_0p08": {
+        **BASE_VISUAL_ROUTER_MODEL,
+        "diag_every_steps": 500,
+        "text_common_mode_loss_weight": 0.08,
+    },
+    "text5_adapter_router_v1_cm_0p06": {
+        **BASE_VISUAL_ROUTER_MODEL,
+        "diag_every_steps": 500,
+        "text_common_mode_loss_weight": 0.06,
+    },
+    "text5_adapter_router_v1_cm_0p09": {
+        **BASE_VISUAL_ROUTER_MODEL,
+        "diag_every_steps": 500,
+        "text_common_mode_loss_weight": 0.09,
+    },
     "text5_adapter_router_text_off": {
         **BASE_VISUAL_ROUTER_MODEL,
         "disable_text_gate": True,

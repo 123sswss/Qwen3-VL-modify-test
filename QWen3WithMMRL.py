@@ -320,29 +320,6 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
             cursor += count
         return alpha
 
-    # def _batch_visual_state(self, batch_size: int, images_per_sample, device, dtype):
-    #     alpha = torch.zeros(batch_size, 1, device=device, dtype=dtype)
-    #     gate = torch.zeros(batch_size, 1, device=device, dtype=dtype)
-    #     alpha_list = getattr(self.visual, "alpha_list", None)
-    #     gate_list = getattr(self.visual, "G_list", None)
-    #     if not torch.is_tensor(alpha_list):
-    #         return torch.cat([alpha, gate], dim=-1)
-    #     alpha_prob = torch.sigmoid(alpha_list.detach().to(device=device, dtype=dtype)).view(-1, 1)
-    #     gate_prob = gate_list.detach().to(device=device, dtype=dtype).view(-1, 1) if torch.is_tensor(gate_list) else alpha_prob.new_zeros(alpha_prob.shape)
-    #     if images_per_sample is None:
-    #         n = min(batch_size, alpha_prob.shape[0])
-    #         alpha[:n] = alpha_prob[:n]
-    #         gate[:n] = gate_prob[:n]
-    #         return torch.cat([alpha, gate], dim=-1)
-    #     cursor = 0
-    #     for sample_idx, count in enumerate(images_per_sample):
-    #         count = int(count)
-    #         if count > 0:
-    #             alpha[sample_idx] = alpha_prob[cursor:cursor + count].mean(dim=0)
-    #             gate[sample_idx] = gate_prob[cursor:cursor + count].mean(dim=0)
-    #         cursor += count
-    #     return torch.cat([alpha, gate], dim=-1)
-
     def _batch_visual_gate_soft(self, batch_size: int, images_per_sample, device, dtype):
         gate = torch.zeros(batch_size, 1, device=device, dtype=dtype)
         gate_list = getattr(self.visual, "G_list", None)

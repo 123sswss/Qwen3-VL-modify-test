@@ -173,9 +173,9 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
                                                          self.cfg.POOLING_DIM)
         self.Task_classifier = MMRLGating.Task_classifier(self.cfg)
         self.visionGating = MMRLGating.HardConcreteGate(self.cfg.gating_temperature)
-        self.text_gating = MMRLGating.textGating(self.cfg,
-                                                 self.cfg.text_gating_epsilon,
-                                                 self.cfg.gating_temperature)
+        # self.text_gating = MMRLGating.textGating(self.cfg,
+        #                                          self.cfg.text_gating_epsilon,
+        #                                          self.cfg.gating_temperature)
         self.visual_residual_adapter_count = int(max(
             getattr(self.cfg, "VISUAL_RESIDUAL_ADAPTER_COUNT", 4),
             1,

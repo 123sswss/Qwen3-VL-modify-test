@@ -132,8 +132,11 @@ run_N() {
 # run_one "visual_router_v2_text_off" "visual_router_v2_text_off_test2"
 # run_N "top4_group" "top4_group" 3
 
-# 6/1: 文本侧改为固定 5 token + 残差 adapter/router，不再使用 top4 group/common/dead 旧链路。
-run_N "text5_adapter_router_v4" "text5_adapter_router_v4" 3
+# 6/6: 复验 0p07 / 0p08，并新增 0p06 与 0p075 以定位 sweet spot 与 cliff。
+run_N   "text5_adapter_router_v1_cm_0p07"  "text5_adapter_router_v1_cm_0p07"  2
+run_one "text5_adapter_router_v1_cm_0p08"  "text5_adapter_router_v1_cm_0p08"
+run_one "text5_adapter_router_v1_cm_0p06"  "text5_adapter_router_v1_cm_0p06"
+run_one "text5_adapter_router_v1_cm_0p075" "text5_adapter_router_v1_cm_0p075"
 
 # run_one "ablation_full_model" "ablation_full_model"
 # run_one "ablation_wo_visual_gate" "ablation_wo_visual_gate"

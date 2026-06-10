@@ -98,6 +98,8 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
             "TEXT_RESIDUAL_ADAPTER_COUNT": _cfg_attr(config, "TEXT_RESIDUAL_ADAPTER_COUNT", 4),
             "TEXT_COMMON_MODE_LOSS_WEIGHT": _cfg_attr(config, "TEXT_COMMON_MODE_LOSS_WEIGHT", 0.0),
             "TEXT_COMMON_MODE_TARGET": _cfg_attr(config, "TEXT_COMMON_MODE_TARGET", 0.85),
+            "TEXT_INTERVENTION_LOSS_WEIGHT": _cfg_attr(config, "TEXT_INTERVENTION_LOSS_WEIGHT", 0.0),
+            "TEXT_INTERVENTION_TARGET": _cfg_attr(config, "TEXT_INTERVENTION_TARGET", 1.45),
             "TEXT_ADAPTER_BALANCE_LOSS_WEIGHT": _cfg_attr(config, "TEXT_ADAPTER_BALANCE_LOSS_WEIGHT", 0.0),
             "TEXT_ADAPTER_SAMPLE_ENTROPY_LOSS_WEIGHT": _cfg_attr(config, "TEXT_ADAPTER_SAMPLE_ENTROPY_LOSS_WEIGHT", 0.0),
             "TEXT_ADAPTER_SAMPLE_ENTROPY_TARGET": _cfg_attr(config, "TEXT_ADAPTER_SAMPLE_ENTROPY_TARGET", 1.0),
@@ -145,6 +147,8 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
         self.top4_group_balance_loss = None
         self.text_common_mode_loss = None
         self.text_common_mode_ratio_train = None
+        self.text_intervention_loss = None
+        self.text_intervention_ratio_train = None
         self.text_adapter_balance_loss = None
         self.text_adapter_sample_entropy_loss = None
         self.temperature_override = None
@@ -212,6 +216,33 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
         common_ratio = pooled_delta.mean(dim=0).norm() / pooled_norm.mean().clamp_min(1e-8)
         loss = torch.relu(common_ratio - float(target)).pow(2)
         return loss.to(dtype=text_insert_delta.dtype), common_ratio.to(dtype=text_insert_delta.dtype)
+
+    def _compute_text_intervention_loss(
+        self,
+        text_insert_delta: torch.Tensor,
+        base_embeds: torch.Tensor,
+        is_placeholder: torch.Tensor,
+        target: float = 1.45,
+    ):
+        zero = text_insert_delta.new_tensor(0.0)
+        if text_insert_delta.numel() == 0 or base_embeds.numel() == 0 or not is_placeholder.any():
+            return zero, zero
+
+        placeholder_mask = is_placeholder.unsqueeze(-1)
+        placeholder_delta = text_insert_delta[placeholder_mask.expand_as(text_insert_delta)].view(-1, text_insert_delta.shape[-1])
+        placeholder_base = base_embeds[placeholder_mask.expand_as(base_embeds)].view(-1, base_embeds.shape[-1])
+        if placeholder_delta.numel() == 0 or placeholder_base.numel() == 0:
+            return zero, zero
+
+        delta_norm = placeholder_delta.float().norm(dim=-1)
+        base_norm = placeholder_base.float().norm(dim=-1)
+        valid = base_norm > 1e-8
+        if not valid.any():
+            return zero, zero
+
+        ratio = delta_norm[valid].mean() / base_norm[valid].mean().clamp_min(1e-8)
+        loss = torch.relu(ratio - float(target)).pow(2)
+        return loss.to(dtype=text_insert_delta.dtype), ratio.to(dtype=text_insert_delta.dtype)
 
     def _compute_text_adapter_aux_losses(
         self,
@@ -422,6 +453,8 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
         self.top4_group_balance_loss = torch.tensor(0.0, device=inputs_embeds.device, dtype=inputs_embeds.dtype)
         self.text_common_mode_loss = torch.tensor(0.0, device=inputs_embeds.device, dtype=inputs_embeds.dtype)
         self.text_common_mode_ratio_train = torch.tensor(0.0, device=inputs_embeds.device, dtype=inputs_embeds.dtype)
+        self.text_intervention_loss = torch.tensor(0.0, device=inputs_embeds.device, dtype=inputs_embeds.dtype)
+        self.text_intervention_ratio_train = torch.tensor(0.0, device=inputs_embeds.device, dtype=inputs_embeds.dtype)
         self.text_adapter_balance_loss = torch.tensor(0.0, device=inputs_embeds.device, dtype=inputs_embeds.dtype)
         self.text_adapter_sample_entropy_loss = torch.tensor(0.0, device=inputs_embeds.device, dtype=inputs_embeds.dtype)
         self.debug_context = {}
@@ -586,6 +619,12 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
                     is_placeholder=active_placeholder_mask,
                     target=float(self.config.mmrl_config.get("TEXT_COMMON_MODE_TARGET", 0.85)),
                 )
+                self.text_intervention_loss, self.text_intervention_ratio_train = self._compute_text_intervention_loss(
+                    text_insert_delta=text_insert_delta,
+                    base_embeds=placeholder_base_embeds,
+                    is_placeholder=active_placeholder_mask,
+                    target=float(self.config.mmrl_config.get("TEXT_INTERVENTION_TARGET", 1.45)),
+                )
                 text_insert_debug = self._compute_text_insert_debug_metrics(
                     base_embeds=placeholder_base_embeds,
                     target_embeds=target_embeds,
@@ -626,6 +665,9 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
                     "text_common_mode_loss_raw": self.text_common_mode_loss.detach().to(device=inputs_embeds.device, dtype=inputs_embeds.dtype),
                     "text_common_mode_ratio_train": self.text_common_mode_ratio_train.detach().to(device=inputs_embeds.device, dtype=inputs_embeds.dtype),
                     "text_common_mode_target": inputs_embeds.new_tensor(float(self.config.mmrl_config.get("TEXT_COMMON_MODE_TARGET", 0.85))),
+                    "text_intervention_loss_raw": self.text_intervention_loss.detach().to(device=inputs_embeds.device, dtype=inputs_embeds.dtype),
+                    "text_intervention_ratio_train": self.text_intervention_ratio_train.detach().to(device=inputs_embeds.device, dtype=inputs_embeds.dtype),
+                    "text_intervention_target": inputs_embeds.new_tensor(float(self.config.mmrl_config.get("TEXT_INTERVENTION_TARGET", 1.45))),
                 })
         ######## text gating ########
         

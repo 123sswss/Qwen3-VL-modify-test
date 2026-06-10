@@ -14,6 +14,8 @@ BASE_VISUAL_ROUTER_MODEL = {
     "text_residual_adapter_count": 4,
     "text_common_mode_loss_weight": 0.05,
     "text_common_mode_target": 0.75,
+    "text_intervention_loss_weight": 0.0,
+    "text_intervention_target": 1.45,
     "text_adapter_balance_loss_weight": 0.01,
     "text_adapter_sample_entropy_loss_weight": 0.05,
     "text_adapter_sample_entropy_target": 0.55,
@@ -36,33 +38,29 @@ BASE_VISUAL_ROUTER_MODEL = {
 EXPERIMENTS = {
     "text5_adapter_router_v1": {
         **BASE_VISUAL_ROUTER_MODEL,
-        "diag_every_steps": 500,
     },
-    "text5_adapter_router_v1_cm_0p07": {
+    "text5_adapter_router_v6_aggr": {
         **BASE_VISUAL_ROUTER_MODEL,
         "diag_every_steps": 500,
+        "text_rep_init_scale": 9e-4,
         "text_common_mode_loss_weight": 0.07,
+        "text_common_mode_target": 0.75,
+        "text_adapter_balance_loss_weight": 0.01,
+        "text_adapter_sample_entropy_loss_weight": 0.05,
+        "text_adapter_sample_entropy_target": 0.55,
     },
-    "text5_adapter_router_v1_cm_0p075": {
+
+    "text5_adapter_router_v6_aggr_1": {
         **BASE_VISUAL_ROUTER_MODEL,
         "diag_every_steps": 500,
-        "text_common_mode_loss_weight": 0.075,
+        "text_rep_init_scale": 9.5e-4,
+        "text_common_mode_loss_weight": 0.07,
+        "text_common_mode_target": 0.75,
+        "text_adapter_balance_loss_weight": 0.01,
+        "text_adapter_sample_entropy_loss_weight": 0.05,
+        "text_adapter_sample_entropy_target": 0.55,
     },
-    "text5_adapter_router_v1_cm_0p08": {
-        **BASE_VISUAL_ROUTER_MODEL,
-        "diag_every_steps": 500,
-        "text_common_mode_loss_weight": 0.08,
-    },
-    "text5_adapter_router_v1_cm_0p06": {
-        **BASE_VISUAL_ROUTER_MODEL,
-        "diag_every_steps": 500,
-        "text_common_mode_loss_weight": 0.06,
-    },
-    "text5_adapter_router_v1_cm_0p09": {
-        **BASE_VISUAL_ROUTER_MODEL,
-        "diag_every_steps": 500,
-        "text_common_mode_loss_weight": 0.09,
-    },
+
     "text5_adapter_router_text_off": {
         **BASE_VISUAL_ROUTER_MODEL,
         "disable_text_gate": True,
@@ -71,20 +69,47 @@ EXPERIMENTS = {
         "disable_general_mm_stage34": True,
         "diag_every_steps": 500,
     },
-    "text5_adapter_router_v3": {
-        **BASE_VISUAL_ROUTER_MODEL,
-        "text_rep_init_scale": 1e-3,
-    },
-    "text5_adapter_router_v4": {
+    "text5_adapter_router_v1_cm_0p07_ti_safe_a": {
         **BASE_VISUAL_ROUTER_MODEL,
         "diag_every_steps": 500,
-        "text_rep_init_scale": 5e-4,
-        "text_common_mode_loss_weight": 0.01,
-        "text_common_mode_target": 0.9,
-        "text_adapter_balance_loss_weight": 0.05,
-        "text_adapter_sample_entropy_loss_weight": 0.10,
-        "text_adapter_sample_entropy_target": 0.90,
+        "text_rep_init_scale": 1e-3,
+        "text_common_mode_loss_weight": 0.07,
+        "text_common_mode_target": 0.75,
+        "text_intervention_loss_weight": 0.25,
+        "text_intervention_target": 1.45,
+        "text_adapter_balance_loss_weight": 0.01,
+        "text_adapter_sample_entropy_loss_weight": 0.05,
+        "text_adapter_sample_entropy_target": 0.55,
     },
+
+    "text5_adapter_router_v1_cm_0p07_ti_safe_b": {
+        **BASE_VISUAL_ROUTER_MODEL,
+        "diag_every_steps": 500,
+        "text_rep_init_scale": 1e-3,
+        "text_common_mode_loss_weight": 0.07,
+        "text_common_mode_target": 0.75,
+        "text_intervention_loss_weight": 0.35,
+        "text_intervention_target": 1.44,
+        "text_adapter_balance_loss_weight": 0.01,
+        "text_adapter_sample_entropy_loss_weight": 0.05,
+        "text_adapter_sample_entropy_target": 0.55,
+    },
+
+    "text5_adapter_router_v1_cm_0p07_ti_safe_c": {
+        **BASE_VISUAL_ROUTER_MODEL,
+        "diag_every_steps": 500,
+        "text_rep_init_scale": 1e-3,
+        "text_common_mode_loss_weight": 0.07,
+        "text_common_mode_target": 0.75,
+        "text_intervention_loss_weight": 0.50,
+        "text_intervention_target": 1.43,
+        "text_adapter_balance_loss_weight": 0.01,
+        "text_adapter_sample_entropy_loss_weight": 0.05,
+        "text_adapter_sample_entropy_target": 0.55,
+    },
+
+
+
 
 
 
@@ -154,6 +179,14 @@ CFG = {
         "text_common_mode_target": float(os.getenv(
             "MMRL_TEXT_COMMON_MODE_TARGET",
             str(EXP_CFG.get("text_common_mode_target", 0.85)),
+        )),
+        "text_intervention_loss_weight": float(os.getenv(
+            "MMRL_TEXT_INTERVENTION_LOSS_WEIGHT",
+            str(EXP_CFG.get("text_intervention_loss_weight", 0.0)),
+        )),
+        "text_intervention_target": float(os.getenv(
+            "MMRL_TEXT_INTERVENTION_TARGET",
+            str(EXP_CFG.get("text_intervention_target", 1.45)),
         )),
         "text_adapter_balance_loss_weight": float(os.getenv(
             "MMRL_TEXT_ADAPTER_BALANCE_LOSS_WEIGHT",

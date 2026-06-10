@@ -52,6 +52,8 @@ def _build_experiment_context(train_cfg, output_dir, stage_id):
             "text_residual_adapter_count": train_cfg.get("text_residual_adapter_count"),
             "text_common_mode_loss_weight": train_cfg.get("text_common_mode_loss_weight"),
             "text_common_mode_target": train_cfg.get("text_common_mode_target"),
+            "text_intervention_loss_weight": train_cfg.get("text_intervention_loss_weight"),
+            "text_intervention_target": train_cfg.get("text_intervention_target"),
             "text_adapter_balance_loss_weight": train_cfg.get("text_adapter_balance_loss_weight"),
             "text_adapter_sample_entropy_loss_weight": train_cfg.get("text_adapter_sample_entropy_loss_weight"),
             "text_adapter_sample_entropy_target": train_cfg.get("text_adapter_sample_entropy_target"),
@@ -494,6 +496,7 @@ class Qwen3VLMMRLForStages(Qwen3VLForConditionalGeneration):
         self.adapter_sample_entropy_loss_weight = 0.0
         self.adapter_common_mode_loss_weight = 0.0
         self.text_common_mode_loss_weight = 0.0
+        self.text_intervention_loss_weight = 0.0
         self.text_adapter_balance_loss_weight = 0.0
         self.text_adapter_sample_entropy_loss_weight = 0.0
         self.enable_expert_floor_loss = False
@@ -760,6 +763,7 @@ class Qwen3VLMMRLForStages(Qwen3VLForConditionalGeneration):
         adapter_sample_entropy_loss = getattr(self.model.visual, "adapter_sample_entropy_loss", torch.tensor(0.0, device=input_ids.device))
         adapter_common_mode_loss = getattr(self.model.visual, "adapter_common_mode_loss", torch.tensor(0.0, device=input_ids.device))
         text_common_mode_loss = getattr(self.model, "text_common_mode_loss", torch.tensor(0.0, device=input_ids.device))
+        text_intervention_loss = getattr(self.model, "text_intervention_loss", torch.tensor(0.0, device=input_ids.device))
         text_adapter_balance_loss = getattr(self.model, "text_adapter_balance_loss", torch.tensor(0.0, device=input_ids.device))
         text_adapter_sample_entropy_loss = getattr(self.model, "text_adapter_sample_entropy_loss", torch.tensor(0.0, device=input_ids.device))
         if not torch.is_tensor(adapter_usage_balance_loss):
@@ -778,6 +782,10 @@ class Qwen3VLMMRLForStages(Qwen3VLForConditionalGeneration):
             text_common_mode_loss = torch.tensor(text_common_mode_loss, device=input_ids.device, dtype=ce_loss.dtype)
         else:
             text_common_mode_loss = text_common_mode_loss.to(device=input_ids.device, dtype=ce_loss.dtype)
+        if not torch.is_tensor(text_intervention_loss):
+            text_intervention_loss = torch.tensor(text_intervention_loss, device=input_ids.device, dtype=ce_loss.dtype)
+        else:
+            text_intervention_loss = text_intervention_loss.to(device=input_ids.device, dtype=ce_loss.dtype)
         if not torch.is_tensor(text_adapter_balance_loss):
             text_adapter_balance_loss = torch.tensor(text_adapter_balance_loss, device=input_ids.device, dtype=ce_loss.dtype)
         else:
@@ -790,6 +798,7 @@ class Qwen3VLMMRLForStages(Qwen3VLForConditionalGeneration):
         scaled_adapter_sample_entropy_loss = adapter_sample_entropy_loss * float(self.adapter_sample_entropy_loss_weight)
         scaled_adapter_common_mode_loss = adapter_common_mode_loss * float(self.adapter_common_mode_loss_weight)
         scaled_text_common_mode_loss = text_common_mode_loss * float(self.text_common_mode_loss_weight)
+        scaled_text_intervention_loss = text_intervention_loss * float(self.text_intervention_loss_weight)
         scaled_text_adapter_balance_loss = text_adapter_balance_loss * float(self.text_adapter_balance_loss_weight)
         scaled_text_adapter_sample_entropy_loss = text_adapter_sample_entropy_loss * float(self.text_adapter_sample_entropy_loss_weight)
 
@@ -853,6 +862,7 @@ class Qwen3VLMMRLForStages(Qwen3VLForConditionalGeneration):
             + scaled_adapter_sample_entropy_loss
             + scaled_adapter_common_mode_loss
             + scaled_text_common_mode_loss
+            + scaled_text_intervention_loss
             + scaled_text_adapter_balance_loss
             + scaled_text_adapter_sample_entropy_loss
         )
@@ -885,6 +895,8 @@ class Qwen3VLMMRLForStages(Qwen3VLForConditionalGeneration):
                 "adapter_common_mode_loss_scaled": scaled_adapter_common_mode_loss.detach(),
                 "text_common_mode_loss_raw": text_common_mode_loss.detach(),
                 "text_common_mode_loss_scaled": scaled_text_common_mode_loss.detach(),
+                "text_intervention_loss_raw": text_intervention_loss.detach(),
+                "text_intervention_loss_scaled": scaled_text_intervention_loss.detach(),
                 "text_adapter_balance_loss": text_adapter_balance_loss.detach(),
                 "text_adapter_balance_loss_scaled": scaled_text_adapter_balance_loss.detach(),
                 "text_adapter_sample_entropy_loss": text_adapter_sample_entropy_loss.detach(),
@@ -905,6 +917,7 @@ class Qwen3VLMMRLForStages(Qwen3VLForConditionalGeneration):
                 "adapter_sample_entropy_weight": torch.tensor(float(self.adapter_sample_entropy_loss_weight), device=input_ids.device),
                 "adapter_common_mode_weight": torch.tensor(float(self.adapter_common_mode_loss_weight), device=input_ids.device),
                 "text_common_mode_loss_weight": torch.tensor(float(self.text_common_mode_loss_weight), device=input_ids.device),
+                "text_intervention_loss_weight": torch.tensor(float(self.text_intervention_loss_weight), device=input_ids.device),
                 "text_adapter_balance_loss_weight": torch.tensor(float(self.text_adapter_balance_loss_weight), device=input_ids.device),
                 "text_adapter_sample_entropy_loss_weight": torch.tensor(float(self.text_adapter_sample_entropy_loss_weight), device=input_ids.device),
             }
@@ -1004,6 +1017,14 @@ def build_model_and_processor(model_path, experiment_cfg=None):
         "text_common_mode_target",
         os.getenv("MMRL_TEXT_COMMON_MODE_TARGET", "0.85"),
     ))
+    config.TEXT_INTERVENTION_LOSS_WEIGHT = float(experiment_cfg.get(
+        "text_intervention_loss_weight",
+        os.getenv("MMRL_TEXT_INTERVENTION_LOSS_WEIGHT", "0.0"),
+    ))
+    config.TEXT_INTERVENTION_TARGET = float(experiment_cfg.get(
+        "text_intervention_target",
+        os.getenv("MMRL_TEXT_INTERVENTION_TARGET", "1.45"),
+    ))
     config.TEXT_ADAPTER_BALANCE_LOSS_WEIGHT = float(experiment_cfg.get(
         "text_adapter_balance_loss_weight",
         os.getenv("MMRL_TEXT_ADAPTER_BALANCE_LOSS_WEIGHT", "0.0"),
@@ -1078,6 +1099,7 @@ def build_model_and_processor(model_path, experiment_cfg=None):
         f"adapter_sample_entropy_loss_weight={config.ADAPTER_SAMPLE_ENTROPY_LOSS_WEIGHT} "
         f"adapter_common_mode_loss_weight={config.ADAPTER_COMMON_MODE_LOSS_WEIGHT} "
         f"text_common_mode_loss_weight={config.TEXT_COMMON_MODE_LOSS_WEIGHT} "
+        f"text_intervention_loss_weight={config.TEXT_INTERVENTION_LOSS_WEIGHT} "
         f"text_adapter_balance_loss_weight={config.TEXT_ADAPTER_BALANCE_LOSS_WEIGHT} "
         f"text_adapter_sample_entropy_loss_weight={config.TEXT_ADAPTER_SAMPLE_ENTROPY_LOSS_WEIGHT} "
         f"text_adapter_token_count={config.TEXT_ADAPTER_TOKEN_COUNT} "
@@ -1358,6 +1380,8 @@ def run_stage34_full(stage_id, model, processor, data_cfg, train_cfg, output_dir
     model.adapter_sample_entropy_loss_weight = float(train_cfg.get("adapter_sample_entropy_loss_weight", 0.0))
     model.adapter_common_mode_loss_weight = float(train_cfg.get("adapter_common_mode_loss_weight", 0.0))
     model.text_common_mode_loss_weight = float(train_cfg.get("text_common_mode_loss_weight", 0.0))
+    model.text_intervention_loss_weight = float(train_cfg.get("text_intervention_loss_weight", 0.0))
+    model.text_intervention_target = float(train_cfg.get("text_intervention_target", 1.45))
     model.text_adapter_balance_loss_weight = float(train_cfg.get("text_adapter_balance_loss_weight", 0.0))
     model.text_adapter_sample_entropy_loss_weight = float(train_cfg.get("text_adapter_sample_entropy_loss_weight", 0.0))
     model.enable_gate_loss_stage2 = train_cfg.get("enable_gate_loss_stage2", True)

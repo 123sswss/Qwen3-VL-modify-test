@@ -133,10 +133,11 @@ run_N() {
 # run_N "top4_group" "top4_group" 3
 
 # 6/6: 复验 0p07 / 0p08，并新增 0p06 与 0p075 以定位 sweet spot 与 cliff。
-run_N   "text5_adapter_router_v1_cm_0p07"  "text5_adapter_router_v1_cm_0p07"  2
-run_one "text5_adapter_router_v1_cm_0p08"  "text5_adapter_router_v1_cm_0p08"
-run_one "text5_adapter_router_v1_cm_0p06"  "text5_adapter_router_v1_cm_0p06"
-run_one "text5_adapter_router_v1_cm_0p075" "text5_adapter_router_v1_cm_0p075"
+# run_N   "text5_adapter_router_v5"  "text5_adapter_router_v5"  2
+run_one "text5_adapter_router_v6_safe"  "text5_adapter_router_v6_safe"
+run_one "text5_adapter_router_v6_safe_1"  "text5_adapter_router_v6_safe_1"
+run_one "text5_adapter_router_v6_aggr"  "text5_adapter_router_v6_aggr"
+run_one "text5_adapter_router_v6_aggr_1"  "text5_adapter_router_v6_aggr_1"
 
 # run_one "ablation_full_model" "ablation_full_model"
 # run_one "ablation_wo_visual_gate" "ablation_wo_visual_gate"

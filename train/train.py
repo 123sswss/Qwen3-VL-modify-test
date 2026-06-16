@@ -5,21 +5,8 @@ from train_stages import build_model_and_processor, run_stage
 
 
 BASE_VISUAL_ROUTER_MODEL = {
-    "active_rep_token_count": 5,
     "rp_space_length": 40,
-    "text_gate_selection_mode": "text_adapter_router",
-    "text_rep_init_scale": 1e-3,
     "visual_residual_adapter_count": 4,
-    "text_adapter_token_count": 5,
-    "text_residual_adapter_count": 4,
-    "text_common_mode_loss_weight": 0.05,
-    "text_common_mode_target": 0.75,
-    "text_intervention_loss_weight": 0.0,
-    "text_intervention_target": 1.45,
-    "text_adapter_balance_loss_weight": 0.01,
-    "text_adapter_sample_entropy_loss_weight": 0.05,
-    "text_adapter_sample_entropy_target": 0.55,
-    # v2.1 visual-safe baseline: loosen usage balance, strengthen common-mode suppression.
     "adapter_usage_balance_loss_weight": 0.005,
     "adapter_sample_entropy_loss_weight": 0.02,
     "adapter_common_mode_loss_weight": 0.03,
@@ -27,96 +14,17 @@ BASE_VISUAL_ROUTER_MODEL = {
     "adapter_common_mode_target": 0.85,
     "ablate_visual_gate": False,
     "ablate_direct_learnable_rep": False,
-    "disable_text_gate": False,
-    "disable_text_prompt_insert": False,
-    "mask_rep_placeholders_when_text_disabled": True,
     "disable_general_mm_stage34": False,
     "diag_every_steps": 1000,
 }
 
 
 EXPERIMENTS = {
-    "text5_adapter_router_v1": {
+    "visual_router_v1": {
         **BASE_VISUAL_ROUTER_MODEL,
     },
-    "text5_adapter_router_v6_aggr": {
-        **BASE_VISUAL_ROUTER_MODEL,
-        "diag_every_steps": 500,
-        "text_rep_init_scale": 9e-4,
-        "text_common_mode_loss_weight": 0.07,
-        "text_common_mode_target": 0.75,
-        "text_adapter_balance_loss_weight": 0.01,
-        "text_adapter_sample_entropy_loss_weight": 0.05,
-        "text_adapter_sample_entropy_target": 0.55,
-    },
-
-    "text5_adapter_router_v6_aggr_1": {
-        **BASE_VISUAL_ROUTER_MODEL,
-        "diag_every_steps": 500,
-        "text_rep_init_scale": 9.5e-4,
-        "text_common_mode_loss_weight": 0.07,
-        "text_common_mode_target": 0.75,
-        "text_adapter_balance_loss_weight": 0.01,
-        "text_adapter_sample_entropy_loss_weight": 0.05,
-        "text_adapter_sample_entropy_target": 0.55,
-    },
-
-    "text5_adapter_router_text_off": {
-        **BASE_VISUAL_ROUTER_MODEL,
-        "disable_text_gate": True,
-        "disable_text_prompt_insert": True,
-        "mask_rep_placeholders_when_text_disabled": True,
-        "disable_general_mm_stage34": True,
-        "diag_every_steps": 500,
-    },
-    "text5_adapter_router_v1_cm_0p07_ti_safe_a": {
-        **BASE_VISUAL_ROUTER_MODEL,
-        "diag_every_steps": 500,
-        "text_rep_init_scale": 1e-3,
-        "text_common_mode_loss_weight": 0.07,
-        "text_common_mode_target": 0.75,
-        "text_intervention_loss_weight": 0.25,
-        "text_intervention_target": 1.45,
-        "text_adapter_balance_loss_weight": 0.01,
-        "text_adapter_sample_entropy_loss_weight": 0.05,
-        "text_adapter_sample_entropy_target": 0.55,
-    },
-
-    "text5_adapter_router_v1_cm_0p07_ti_safe_b": {
-        **BASE_VISUAL_ROUTER_MODEL,
-        "diag_every_steps": 500,
-        "text_rep_init_scale": 1e-3,
-        "text_common_mode_loss_weight": 0.07,
-        "text_common_mode_target": 0.75,
-        "text_intervention_loss_weight": 0.35,
-        "text_intervention_target": 1.44,
-        "text_adapter_balance_loss_weight": 0.01,
-        "text_adapter_sample_entropy_loss_weight": 0.05,
-        "text_adapter_sample_entropy_target": 0.55,
-    },
-
-    "text5_adapter_router_v1_cm_0p07_ti_safe_c": {
-        **BASE_VISUAL_ROUTER_MODEL,
-        "diag_every_steps": 500,
-        "text_rep_init_scale": 1e-3,
-        "text_common_mode_loss_weight": 0.07,
-        "text_common_mode_target": 0.75,
-        "text_intervention_loss_weight": 0.50,
-        "text_intervention_target": 1.43,
-        "text_adapter_balance_loss_weight": 0.01,
-        "text_adapter_sample_entropy_loss_weight": 0.05,
-        "text_adapter_sample_entropy_target": 0.55,
-    },
-
-
-
-
-
-
-
 }
-
-SELECTED_EXPERIMENT = os.getenv("MMRL_EXPERIMENT", "text5_adapter_router_v1")
+SELECTED_EXPERIMENT = os.getenv("MMRL_EXPERIMENT", "visual_router_v1")
 if SELECTED_EXPERIMENT not in EXPERIMENTS:
     raise ValueError(f"Unknown MMRL_EXPERIMENT={SELECTED_EXPERIMENT!r}, choices={sorted(EXPERIMENTS)}")
 EXP_CFG = EXPERIMENTS[SELECTED_EXPERIMENT]
@@ -163,42 +71,6 @@ CFG = {
         "visual_residual_adapter_count": int(os.getenv(
             "MMRL_VISUAL_RESIDUAL_ADAPTER_COUNT",
             str(EXP_CFG.get("visual_residual_adapter_count", 4)),
-        )),
-        "text_adapter_token_count": int(os.getenv(
-            "MMRL_TEXT_ADAPTER_TOKEN_COUNT",
-            str(EXP_CFG.get("text_adapter_token_count", 5)),
-        )),
-        "text_residual_adapter_count": int(os.getenv(
-            "MMRL_TEXT_RESIDUAL_ADAPTER_COUNT",
-            str(EXP_CFG.get("text_residual_adapter_count", 4)),
-        )),
-        "text_common_mode_loss_weight": float(os.getenv(
-            "MMRL_TEXT_COMMON_MODE_LOSS_WEIGHT",
-            str(EXP_CFG.get("text_common_mode_loss_weight", 0.0)),
-        )),
-        "text_common_mode_target": float(os.getenv(
-            "MMRL_TEXT_COMMON_MODE_TARGET",
-            str(EXP_CFG.get("text_common_mode_target", 0.85)),
-        )),
-        "text_intervention_loss_weight": float(os.getenv(
-            "MMRL_TEXT_INTERVENTION_LOSS_WEIGHT",
-            str(EXP_CFG.get("text_intervention_loss_weight", 0.0)),
-        )),
-        "text_intervention_target": float(os.getenv(
-            "MMRL_TEXT_INTERVENTION_TARGET",
-            str(EXP_CFG.get("text_intervention_target", 1.45)),
-        )),
-        "text_adapter_balance_loss_weight": float(os.getenv(
-            "MMRL_TEXT_ADAPTER_BALANCE_LOSS_WEIGHT",
-            str(EXP_CFG.get("text_adapter_balance_loss_weight", 0.0)),
-        )),
-        "text_adapter_sample_entropy_loss_weight": float(os.getenv(
-            "MMRL_TEXT_ADAPTER_SAMPLE_ENTROPY_LOSS_WEIGHT",
-            str(EXP_CFG.get("text_adapter_sample_entropy_loss_weight", 0.0)),
-        )),
-        "text_adapter_sample_entropy_target": float(os.getenv(
-            "MMRL_TEXT_ADAPTER_SAMPLE_ENTROPY_TARGET",
-            str(EXP_CFG.get("text_adapter_sample_entropy_target", 1.0)),
         )),
         "adapter_usage_balance_loss_weight": float(os.getenv(
             "MMRL_ADAPTER_USAGE_BALANCE_LOSS_WEIGHT",

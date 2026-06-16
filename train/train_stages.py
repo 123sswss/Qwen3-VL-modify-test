@@ -48,15 +48,6 @@ def _build_experiment_context(train_cfg, output_dir, stage_id):
             "enable_alpha_guide_loss_s4": train_cfg.get("enable_alpha_guide_loss_s4"),
             "alpha_loss_weight_s4": train_cfg.get("alpha_loss_weight_s4"),
             "visual_residual_adapter_count": train_cfg.get("visual_residual_adapter_count"),
-            "text_adapter_token_count": train_cfg.get("text_adapter_token_count"),
-            "text_residual_adapter_count": train_cfg.get("text_residual_adapter_count"),
-            "text_common_mode_loss_weight": train_cfg.get("text_common_mode_loss_weight"),
-            "text_common_mode_target": train_cfg.get("text_common_mode_target"),
-            "text_intervention_loss_weight": train_cfg.get("text_intervention_loss_weight"),
-            "text_intervention_target": train_cfg.get("text_intervention_target"),
-            "text_adapter_balance_loss_weight": train_cfg.get("text_adapter_balance_loss_weight"),
-            "text_adapter_sample_entropy_loss_weight": train_cfg.get("text_adapter_sample_entropy_loss_weight"),
-            "text_adapter_sample_entropy_target": train_cfg.get("text_adapter_sample_entropy_target"),
             "adapter_usage_balance_loss_weight": train_cfg.get("adapter_usage_balance_loss_weight"),
             "adapter_sample_entropy_loss_weight": train_cfg.get("adapter_sample_entropy_loss_weight"),
             "adapter_common_mode_loss_weight": train_cfg.get("adapter_common_mode_loss_weight"),
@@ -131,18 +122,14 @@ def print_stage_step_summary(stage_name, step, row):
         print(f"[Alpha Statistics]")
         print(f"  └─ Alpha MAE:             {_fmt(row.get('alpha_mae')):>10}")
 
-    if "k_general_mean" in row or "k_expert_mean" in row or "active_token_count_mean" in row:
+    if "active_token_count_mean" in row:
         print(f"[Routing Statistics]")
-        if "k_expert_mean" in row:
-            print(f"  ├─ Expert Mean K:         {_fmt(row.get('k_expert_mean'), 3):>10}")
         if "active_token_count_mean" in row:
             print(f"  ├─ Active Tokens:         {_fmt(row.get('active_token_count_mean'), 3):>10}")
         if "k_budget_mean" in row:
             print(f"  ├─ K Budget:              {_fmt(row.get('k_budget_mean'), 3):>10}")
         if "raw_budget_mean" in row:
             print(f"  ├─ Raw Budget:            {_fmt(row.get('raw_budget_mean'), 3):>10}")
-        if "k_general_mean" in row:
-            print(f"  ├─ General Mean K:        {_fmt(row.get('k_general_mean'), 3):>10}")
         if "batch_alpha_mean" in row:
             print(f"  └─ Batch Alpha:           {_fmt(row.get('batch_alpha_mean'), 4):>10}")
 
@@ -200,19 +187,6 @@ class MMRLDiagnosticsCallback(TrainerCallback):
     DEFAULT_KEEP_KEYS = {
         "ce_loss",
         "active_token_count_mean",
-        "rep_placeholder_attention_ratio",
-        "text_adapter_insert_token_count_mean",
-        "text_adapter_token_count",
-        "text_adapter_count",
-        "text_adapter_route_entropy_norm",
-        "text_adapter_route_confidence",
-        "text_adapter_usage_max",
-        "text_adapter_usage_min",
-        "text_adapter_mixed_delta_norm_mean",
-        "text_insert_to_base_embed_ratio",
-        "text_insert_pool_common_mode_ratio",
-        "text_insert_pool_specificity_ratio",
-        "text_insert_pool_pairwise_cos_mean",
         "delta_pool_common_mode_ratio",
         "delta_pool_specificity_ratio",
         "adapter_route_entropy_norm",
@@ -454,17 +428,7 @@ class SharedRepGradMonitorCallback(TrainerCallback):
                     "total_loss": metrics.get("total_loss"),
                     "ce_loss": metrics.get("ce_loss"),
                     "alpha_guide_loss": metrics.get("alpha_guide_loss"),
-                    "expert_floor_loss": metrics.get("expert_floor_loss"),
-                    "anti_collapse_loss": metrics.get("anti_collapse_loss"),
-                    "k_expert_mean": metrics.get("k_expert_mean"),
-                    "k_general_mean": metrics.get("k_general_mean"),
-                    "expert_sample_count": metrics.get("expert_sample_count"),
-                    "general_sample_count": metrics.get("general_sample_count"),
                     "active_token_count_mean": metrics.get("active_token_count_mean"),
-                    "text_adapter_route_entropy_norm": metrics.get("text_adapter_route_entropy_norm"),
-                    "group_usage_max": metrics.get("group_usage_max"),
-                    "group_usage_min": metrics.get("group_usage_min"),
-                    "group_usage_entropy": metrics.get("group_usage_entropy"),
                     "batch_alpha_mean": metrics.get("batch_alpha_mean"),
                     "delta_to_org_ratio": metrics.get("delta_to_org_ratio"),
                 }
@@ -495,10 +459,6 @@ class Qwen3VLMMRLForStages(Qwen3VLForConditionalGeneration):
         self.adapter_usage_balance_loss_weight = 0.0
         self.adapter_sample_entropy_loss_weight = 0.0
         self.adapter_common_mode_loss_weight = 0.0
-        self.text_common_mode_loss_weight = 0.0
-        self.text_intervention_loss_weight = 0.0
-        self.text_adapter_balance_loss_weight = 0.0
-        self.text_adapter_sample_entropy_loss_weight = 0.0
         self.enable_expert_floor_loss = False
         self.expert_floor_loss_weight = 0.0
         self.expert_min_active_tokens = 4.0
@@ -553,13 +513,7 @@ class Qwen3VLMMRLForStages(Qwen3VLForConditionalGeneration):
                 result[f"{prefix}_grad_norm_max"] = stacked.max()
 
 
-        _grad_stats(getattr(mmrl, "t_r_token_projector", []), "t_projector")
         _grad_stats(getattr(mmrl, "v_r_token_projector", []), "v_projector")
-        result["text_rep_scale"] = self.model.text_rep_scale.detach().float().to(device)
-        if getattr(self.model.text_rep_scale, "grad", None) is not None:
-            result["text_rep_scale_grad_abs"] = self.model.text_rep_scale.grad.detach().float().abs().to(device)
-        else:
-            result["text_rep_scale_grad_abs"] = torch.tensor(0.0, device=device)
 
         visual = getattr(self.model, "visual", None)
         if visual is not None:
@@ -619,66 +573,6 @@ class Qwen3VLMMRLForStages(Qwen3VLForConditionalGeneration):
 
         self._shared_rep_grad_hook_handle = shared.register_hook(self._shared_rep_grad_hook)
         self._shared_rep_grad_hook_param_id = current_param_id
-
-    def _get_text_gating_module(self):
-        visual = getattr(self.model, "visual", None)
-        return getattr(visual, "text_gating", None)
-
-    def _get_k_norm(self):
-        return float(getattr(self.model, "text_adapter_token_count", 5))
-
-    def _compute_group_usage_stats(self, slot_usage, device):
-        if slot_usage is None or slot_usage.numel() == 0:
-            nan = torch.tensor(float("nan"), device=device)
-            return {
-                "group_usage_probs": None,
-                "group_usage_max": nan,
-                "group_usage_min": nan,
-                "group_usage_entropy": nan,
-                "group_usage_entropy_norm": nan,
-                "group_usage_dead_ratio": nan,
-            }
-
-        group_count = 8
-        total_slots = int(slot_usage.numel())
-        if total_slots % group_count == 0:
-            group_usage = slot_usage.view(group_count, total_slots // group_count).mean(dim=-1)
-        else:
-            group_usage = slot_usage
-            group_count = int(group_usage.numel())
-
-        group_usage = group_usage.clamp_min(0.0)
-        usage_sum = group_usage.sum()
-        if usage_sum <= 1e-8:
-            group_probs = torch.full_like(group_usage, 1.0 / max(group_usage.numel(), 1))
-        else:
-            group_probs = group_usage / usage_sum
-
-        entropy = -(group_probs * group_probs.clamp_min(1e-8).log()).sum()
-        if group_probs.numel() > 1:
-            entropy_norm = entropy / torch.log(group_probs.new_tensor(float(group_probs.numel())))
-        else:
-            entropy_norm = group_probs.new_tensor(0.0)
-
-        return {
-            "group_usage_probs": group_probs,
-            "group_usage_max": group_probs.max(),
-            "group_usage_min": group_probs.min(),
-            "group_usage_entropy": entropy,
-            "group_usage_entropy_norm": entropy_norm,
-            "group_usage_dead_ratio": (group_probs < float(self.group_usage_dead_threshold)).float().mean(),
-        }
-
-    def _update_group_usage_ema(self, group_probs):
-        if group_probs is None:
-            return None
-        probs = group_probs.detach().float()
-        if self.group_usage_ema is None or self.group_usage_ema.shape != probs.shape:
-            self.group_usage_ema = probs
-        else:
-            alpha = float(self.group_usage_ema_alpha)
-            self.group_usage_ema = (1.0 - alpha) * self.group_usage_ema + alpha * probs
-        return self.group_usage_ema
 
     def _expand_alpha_labels(self, alpha_labels, images_per_sample):
         if alpha_labels is None:
@@ -740,32 +634,9 @@ class Qwen3VLMMRLForStages(Qwen3VLForConditionalGeneration):
                         alpha_logits[:n], expanded_labels[:n].to(alpha_logits.dtype)
                     ) * self.alpha_loss_weight
 
-        k_general_mean = torch.tensor(float("nan"), device=input_ids.device)
-        k_expert_mean = torch.tensor(float("nan"), device=input_ids.device)
-        k_results = self.model.visual.k_results
-        k_sums = k_results[0] if isinstance(k_results, tuple) else k_results
-        total_rep_num = self._get_k_norm()
-        expert_floor_loss = torch.tensor(0.0, device=input_ids.device)
-        anti_collapse_loss = torch.tensor(0.0, device=input_ids.device)
-        group_usage_max = torch.tensor(0.0, device=input_ids.device)
-        group_usage_min = torch.tensor(0.0, device=input_ids.device)
-        group_usage_entropy = torch.tensor(0.0, device=input_ids.device)
-        group_usage_entropy_norm = torch.tensor(0.0, device=input_ids.device)
-        group_usage_dead_ratio = torch.tensor(0.0, device=input_ids.device)
-        expert_sample_count = torch.tensor(0.0, device=input_ids.device)
-        general_sample_count = torch.tensor(0.0, device=input_ids.device)
-        live_context = {}
-        text_gating = self._get_text_gating_module()
-        if text_gating is not None:
-            live_context = getattr(text_gating, "live_context", {}) or {}
-
         adapter_usage_balance_loss = getattr(self.model.visual, "adapter_usage_balance_loss", torch.tensor(0.0, device=input_ids.device))
         adapter_sample_entropy_loss = getattr(self.model.visual, "adapter_sample_entropy_loss", torch.tensor(0.0, device=input_ids.device))
         adapter_common_mode_loss = getattr(self.model.visual, "adapter_common_mode_loss", torch.tensor(0.0, device=input_ids.device))
-        text_common_mode_loss = getattr(self.model, "text_common_mode_loss", torch.tensor(0.0, device=input_ids.device))
-        text_intervention_loss = getattr(self.model, "text_intervention_loss", torch.tensor(0.0, device=input_ids.device))
-        text_adapter_balance_loss = getattr(self.model, "text_adapter_balance_loss", torch.tensor(0.0, device=input_ids.device))
-        text_adapter_sample_entropy_loss = getattr(self.model, "text_adapter_sample_entropy_loss", torch.tensor(0.0, device=input_ids.device))
         if not torch.is_tensor(adapter_usage_balance_loss):
             adapter_usage_balance_loss = torch.tensor(adapter_usage_balance_loss, device=input_ids.device, dtype=ce_loss.dtype)
         else:
@@ -778,82 +649,9 @@ class Qwen3VLMMRLForStages(Qwen3VLForConditionalGeneration):
             adapter_common_mode_loss = torch.tensor(adapter_common_mode_loss, device=input_ids.device, dtype=ce_loss.dtype)
         else:
             adapter_common_mode_loss = adapter_common_mode_loss.to(device=input_ids.device, dtype=ce_loss.dtype)
-        if not torch.is_tensor(text_common_mode_loss):
-            text_common_mode_loss = torch.tensor(text_common_mode_loss, device=input_ids.device, dtype=ce_loss.dtype)
-        else:
-            text_common_mode_loss = text_common_mode_loss.to(device=input_ids.device, dtype=ce_loss.dtype)
-        if not torch.is_tensor(text_intervention_loss):
-            text_intervention_loss = torch.tensor(text_intervention_loss, device=input_ids.device, dtype=ce_loss.dtype)
-        else:
-            text_intervention_loss = text_intervention_loss.to(device=input_ids.device, dtype=ce_loss.dtype)
-        if not torch.is_tensor(text_adapter_balance_loss):
-            text_adapter_balance_loss = torch.tensor(text_adapter_balance_loss, device=input_ids.device, dtype=ce_loss.dtype)
-        else:
-            text_adapter_balance_loss = text_adapter_balance_loss.to(device=input_ids.device, dtype=ce_loss.dtype)
-        if not torch.is_tensor(text_adapter_sample_entropy_loss):
-            text_adapter_sample_entropy_loss = torch.tensor(text_adapter_sample_entropy_loss, device=input_ids.device, dtype=ce_loss.dtype)
-        else:
-            text_adapter_sample_entropy_loss = text_adapter_sample_entropy_loss.to(device=input_ids.device, dtype=ce_loss.dtype)
         scaled_adapter_usage_balance_loss = adapter_usage_balance_loss * float(self.adapter_usage_balance_loss_weight)
         scaled_adapter_sample_entropy_loss = adapter_sample_entropy_loss * float(self.adapter_sample_entropy_loss_weight)
         scaled_adapter_common_mode_loss = adapter_common_mode_loss * float(self.adapter_common_mode_loss_weight)
-        scaled_text_common_mode_loss = text_common_mode_loss * float(self.text_common_mode_loss_weight)
-        scaled_text_intervention_loss = text_intervention_loss * float(self.text_intervention_loss_weight)
-        scaled_text_adapter_balance_loss = text_adapter_balance_loss * float(self.text_adapter_balance_loss_weight)
-        scaled_text_adapter_sample_entropy_loss = text_adapter_sample_entropy_loss * float(self.text_adapter_sample_entropy_loss_weight)
-
-        expert_mask = None
-        if expanded_labels is not None and k_sums is not None and k_sums.shape[0] == expanded_labels.shape[0]:
-            lbl = expanded_labels.squeeze(-1)
-            is_general = (lbl < 0.1)
-            expert_mask = (lbl > 0.9)
-            general_sample_count = is_general.float().sum()
-            expert_sample_count = expert_mask.float().sum()
-            if is_general.any():
-                k_general_mean = k_sums[is_general].detach().float().mean()
-            else:
-                k_general_mean = torch.tensor(0.0, device=input_ids.device)
-            if expert_mask.any():
-                k_expert_mean = k_sums[expert_mask].detach().float().mean()
-            else:
-                k_expert_mean = torch.tensor(0.0, device=input_ids.device)
-
-        group_usage_live = live_context.get("group_usage_live", None)
-        if torch.is_tensor(group_usage_live) and group_usage_live.numel() > 0:
-            group_stats = self._compute_group_usage_stats(group_usage_live.detach().float(), input_ids.device)
-            group_usage_max = group_stats["group_usage_max"]
-            group_usage_min = group_stats["group_usage_min"]
-            group_usage_entropy = group_stats["group_usage_entropy"]
-            group_usage_entropy_norm = group_stats["group_usage_entropy_norm"]
-            group_usage_dead_ratio = group_stats["group_usage_dead_ratio"]
-
-        if self.enable_expert_floor_loss and expert_mask is not None and expert_mask.any() and k_sums is not None:
-            expert_active = k_sums[expert_mask].float()
-            min_active = min(float(self.expert_min_active_tokens), float(total_rep_num))
-            gap = torch.relu(k_sums.new_tensor(min_active) - expert_active)
-            expert_floor_loss = (gap / max(min_active, 1.0)).pow(2).mean() * float(self.expert_floor_loss_weight)
-
-        if self.enable_collapse_loss and expert_mask is not None and expert_mask.any():
-            hard_k_logits_live = live_context.get("hard_k_logits_live", None)
-            if torch.is_tensor(hard_k_logits_live) and hard_k_logits_live.dim() == 2 and hard_k_logits_live.shape[0] == expert_mask.shape[0]:
-                expert_gate = hard_k_logits_live[expert_mask]
-                if expert_gate.numel() > 0:
-                    slot_usage_live = expert_gate.mean(dim=0)
-                    group_stats = self._compute_group_usage_stats(slot_usage_live, input_ids.device)
-                    group_probs = group_stats["group_usage_probs"]
-                    group_usage_max = group_stats["group_usage_max"]
-                    group_usage_min = group_stats["group_usage_min"]
-                    group_usage_entropy = group_stats["group_usage_entropy"]
-                    group_usage_entropy_norm = group_stats["group_usage_entropy_norm"]
-                    group_usage_dead_ratio = group_stats["group_usage_dead_ratio"]
-
-                    max_penalty = torch.relu(group_usage_max - float(self.collapse_max_ratio)).pow(2)
-                    min_penalty = torch.relu(float(self.collapse_min_ratio) - group_usage_min).pow(2)
-                    entropy_penalty = torch.relu(float(self.collapse_entropy_target) - group_usage_entropy_norm).pow(2)
-                    anti_collapse_loss = (max_penalty + min_penalty + entropy_penalty) * float(self.anti_collapse_weight)
-
-                    ema_probs = self._update_group_usage_ema(group_probs)
-                    _ = self._compute_group_usage_stats(ema_probs, input_ids.device)
 
         outputs.loss = (
             self.ce_loss_weight * ce_loss
@@ -861,10 +659,6 @@ class Qwen3VLMMRLForStages(Qwen3VLForConditionalGeneration):
             + scaled_adapter_usage_balance_loss
             + scaled_adapter_sample_entropy_loss
             + scaled_adapter_common_mode_loss
-            + scaled_text_common_mode_loss
-            + scaled_text_intervention_loss
-            + scaled_text_adapter_balance_loss
-            + scaled_text_adapter_sample_entropy_loss
         )
 
         # ---- cache metrics for external logger ----
@@ -883,51 +677,18 @@ class Qwen3VLMMRLForStages(Qwen3VLForConditionalGeneration):
                 "total_loss": outputs.loss.detach(),
                 "ce_loss": ce_loss.detach(),
                 "alpha_guide_loss": alpha_guide_loss.detach(),
-                "expert_floor_loss": expert_floor_loss.detach(),
-                "anti_collapse_loss": anti_collapse_loss.detach(),
-                "k_general_loss": torch.tensor(0.0, device=input_ids.device),
-                "k_expert_loss": expert_floor_loss.detach(),
                 "adapter_usage_balance_loss": adapter_usage_balance_loss.detach(),
                 "adapter_sample_entropy_loss": adapter_sample_entropy_loss.detach(),
                 "adapter_common_mode_loss": adapter_common_mode_loss.detach(),
                 "adapter_usage_balance_loss_scaled": scaled_adapter_usage_balance_loss.detach(),
                 "adapter_sample_entropy_loss_scaled": scaled_adapter_sample_entropy_loss.detach(),
                 "adapter_common_mode_loss_scaled": scaled_adapter_common_mode_loss.detach(),
-                "text_common_mode_loss_raw": text_common_mode_loss.detach(),
-                "text_common_mode_loss_scaled": scaled_text_common_mode_loss.detach(),
-                "text_intervention_loss_raw": text_intervention_loss.detach(),
-                "text_intervention_loss_scaled": scaled_text_intervention_loss.detach(),
-                "text_adapter_balance_loss": text_adapter_balance_loss.detach(),
-                "text_adapter_balance_loss_scaled": scaled_text_adapter_balance_loss.detach(),
-                "text_adapter_sample_entropy_loss": text_adapter_sample_entropy_loss.detach(),
-                "text_adapter_sample_entropy_loss_scaled": scaled_text_adapter_sample_entropy_loss.detach(),
                 "alpha_mae": alpha_mae.detach(),
-                "k_general_mean": k_general_mean.detach(),
-                "k_expert_mean": k_expert_mean.detach(),
-                "expert_sample_count": expert_sample_count.detach(),
-                "general_sample_count": general_sample_count.detach(),
-                "anti_collapse_weight": torch.tensor(float(self.anti_collapse_weight), device=input_ids.device),
-                "group_usage_max": group_usage_max.detach(),
-                "group_usage_min": group_usage_min.detach(),
-                "group_usage_entropy": group_usage_entropy.detach(),
-                "group_usage_entropy_norm": group_usage_entropy_norm.detach(),
-                "group_usage_dead_ratio": group_usage_dead_ratio.detach(),
                 "temperature": torch.tensor(float(self.temperature_override) if self.temperature_override is not None else float("nan"), device=input_ids.device),
                 "adapter_usage_balance_weight": torch.tensor(float(self.adapter_usage_balance_loss_weight), device=input_ids.device),
                 "adapter_sample_entropy_weight": torch.tensor(float(self.adapter_sample_entropy_loss_weight), device=input_ids.device),
                 "adapter_common_mode_weight": torch.tensor(float(self.adapter_common_mode_loss_weight), device=input_ids.device),
-                "text_common_mode_loss_weight": torch.tensor(float(self.text_common_mode_loss_weight), device=input_ids.device),
-                "text_intervention_loss_weight": torch.tensor(float(self.text_intervention_loss_weight), device=input_ids.device),
-                "text_adapter_balance_loss_weight": torch.tensor(float(self.text_adapter_balance_loss_weight), device=input_ids.device),
-                "text_adapter_sample_entropy_loss_weight": torch.tensor(float(self.text_adapter_sample_entropy_loss_weight), device=input_ids.device),
             }
-            if text_gating is not None:
-                dbg = getattr(text_gating, "debug_context", {}) or {}
-                for key, value in dbg.items():
-                    self._last_metrics[key] = value
-                if self.enable_collapse_loss and self.group_usage_ema is not None:
-                    for idx, value in enumerate(self.group_usage_ema.detach().float().tolist()):
-                        self._last_metrics[f"group_usage_ema_{idx}"] = float(value)
             visual_dbg = getattr(self.model.visual, "debug_context", {}) or {}
             for key, value in visual_dbg.items():
                 self._last_metrics[key] = value
@@ -967,15 +728,7 @@ class Qwen3VLMMRLForStages(Qwen3VLForConditionalGeneration):
 def build_model_and_processor(model_path, experiment_cfg=None):
     experiment_cfg = experiment_cfg or {}
     config = AutoConfig.from_pretrained(model_path, trust_remote_code=True)
-    active_rep_token_count = int(experiment_cfg.get("active_rep_token_count", getattr(cfg, "ACTIVE_REP_TOKEN_COUNT", 40)))
-    cfg.ACTIVE_REP_TOKEN_COUNT = active_rep_token_count
-    cfg.SPECIAL_TOKENS = cfg.build_special_tokens(active_rep_token_count)
-
-    config.ACTIVE_REP_TOKEN_COUNT = active_rep_token_count
     config.RP_SPACE_LENGTH = int(experiment_cfg.get("rp_space_length", 40))
-    config.TEXT_GATE_SELECTION_MODE = str(experiment_cfg.get("text_gate_selection_mode", "text_adapter_router"))
-    config.TEXT_GATE_GROUP_COUNT = int(experiment_cfg.get("text_gate_group_count", 1))
-    config.TOP4_GROUP_COUNT = int(experiment_cfg.get("top4_group_count", 1))
     config.ABLATE_VISUAL_GATE = bool(experiment_cfg.get(
         "ablate_visual_gate",
         os.getenv("MMRL_ABLATE_VISUAL_GATE", "0") == "1"
@@ -984,58 +737,9 @@ def build_model_and_processor(model_path, experiment_cfg=None):
         "ablate_direct_learnable_rep",
         os.getenv("MMRL_ABLATE_DIRECT_LEARNABLE_REP", "0") == "1"
     ))
-    config.DISABLE_TEXT_GATE = bool(experiment_cfg.get(
-        "disable_text_gate",
-        os.getenv("MMRL_DISABLE_TEXT_GATE", "0") == "1"
-    ))
-    config.DISABLE_TEXT_PROMPT_INSERT = bool(experiment_cfg.get(
-        "disable_text_prompt_insert",
-        os.getenv("MMRL_DISABLE_TEXT_PROMPT_INSERT", "0") == "1"
-    ))
-    config.MASK_REP_PLACEHOLDERS_WHEN_TEXT_DISABLED = bool(experiment_cfg.get(
-        "mask_rep_placeholders_when_text_disabled",
-        os.getenv("MMRL_MASK_REP_PLACEHOLDERS_WHEN_TEXT_DISABLED", "1") == "1"
-    ))
-    config.TEXT_REP_INIT_SCALE = float(experiment_cfg.get("text_rep_init_scale", 1e-3))
     config.VISUAL_RESIDUAL_ADAPTER_COUNT = int(experiment_cfg.get(
         "visual_residual_adapter_count",
         os.getenv("MMRL_VISUAL_RESIDUAL_ADAPTER_COUNT", "4"),
-    ))
-    config.TEXT_ADAPTER_TOKEN_COUNT = int(experiment_cfg.get(
-        "text_adapter_token_count",
-        os.getenv("MMRL_TEXT_ADAPTER_TOKEN_COUNT", "5"),
-    ))
-    config.TEXT_RESIDUAL_ADAPTER_COUNT = int(experiment_cfg.get(
-        "text_residual_adapter_count",
-        os.getenv("MMRL_TEXT_RESIDUAL_ADAPTER_COUNT", "4"),
-    ))
-    config.TEXT_COMMON_MODE_LOSS_WEIGHT = float(experiment_cfg.get(
-        "text_common_mode_loss_weight",
-        os.getenv("MMRL_TEXT_COMMON_MODE_LOSS_WEIGHT", "0.0"),
-    ))
-    config.TEXT_COMMON_MODE_TARGET = float(experiment_cfg.get(
-        "text_common_mode_target",
-        os.getenv("MMRL_TEXT_COMMON_MODE_TARGET", "0.85"),
-    ))
-    config.TEXT_INTERVENTION_LOSS_WEIGHT = float(experiment_cfg.get(
-        "text_intervention_loss_weight",
-        os.getenv("MMRL_TEXT_INTERVENTION_LOSS_WEIGHT", "0.0"),
-    ))
-    config.TEXT_INTERVENTION_TARGET = float(experiment_cfg.get(
-        "text_intervention_target",
-        os.getenv("MMRL_TEXT_INTERVENTION_TARGET", "1.45"),
-    ))
-    config.TEXT_ADAPTER_BALANCE_LOSS_WEIGHT = float(experiment_cfg.get(
-        "text_adapter_balance_loss_weight",
-        os.getenv("MMRL_TEXT_ADAPTER_BALANCE_LOSS_WEIGHT", "0.0"),
-    ))
-    config.TEXT_ADAPTER_SAMPLE_ENTROPY_LOSS_WEIGHT = float(experiment_cfg.get(
-        "text_adapter_sample_entropy_loss_weight",
-        os.getenv("MMRL_TEXT_ADAPTER_SAMPLE_ENTROPY_LOSS_WEIGHT", "0.0"),
-    ))
-    config.TEXT_ADAPTER_SAMPLE_ENTROPY_TARGET = float(experiment_cfg.get(
-        "text_adapter_sample_entropy_target",
-        os.getenv("MMRL_TEXT_ADAPTER_SAMPLE_ENTROPY_TARGET", "1.0"),
     ))
     config.ADAPTER_USAGE_BALANCE_LOSS_WEIGHT = float(experiment_cfg.get(
         "adapter_usage_balance_loss_weight",
@@ -1059,19 +763,11 @@ def build_model_and_processor(model_path, experiment_cfg=None):
     ))
     tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
     image_processor = AutoImageProcessor.from_pretrained(model_path, trust_remote_code=True)
-    tokenizer.add_special_tokens(cfg.SPECIAL_TOKENS)
     base = Qwen3VLForConditionalGeneration.from_pretrained(
         model_path, device_map="cpu", torch_dtype=torch.bfloat16, trust_remote_code=True
     )
     print("Base model loaded. ")
-    emb = base.get_input_embeddings().weight.shape[0]
-    tok = len(tokenizer)
-    if tok > emb:
-        base.resize_token_embeddings(tok)
-        print(f"[Resize] expand embedding: {emb} -> {tok}")
-    else:
-        print(f"[Resize] skip (tokenizer={tok}, embedding={emb})")
-    print("Tokenizer resized. Now building MMRL model...")
+    print("Tokenizer loaded. Now building MMRL model...")
     model = Qwen3VLMMRLForStages(config, tokenizer).to("cuda").to(torch.bfloat16)
     model._ensure_shared_rep_grad_hook()
     model.model.load_state_dict(base.model.state_dict(), strict=False)
@@ -1090,23 +786,14 @@ def build_model_and_processor(model_path, experiment_cfg=None):
         image_processor=image_processor, tokenizer=tokenizer, cfg=cfg
     )
     print(
-        f"[Experiment] mode={config.TEXT_GATE_SELECTION_MODE} active_rep_token_count={config.ACTIVE_REP_TOKEN_COUNT} "
-        f"group_count={config.TEXT_GATE_GROUP_COUNT} "
         f"ablate_visual_gate={config.ABLATE_VISUAL_GATE} "
         f"ablate_direct_learnable_rep={config.ABLATE_DIRECT_LEARNABLE_REP} "
         f"visual_residual_adapter_count={config.VISUAL_RESIDUAL_ADAPTER_COUNT} "
         f"adapter_usage_balance_loss_weight={config.ADAPTER_USAGE_BALANCE_LOSS_WEIGHT} "
         f"adapter_sample_entropy_loss_weight={config.ADAPTER_SAMPLE_ENTROPY_LOSS_WEIGHT} "
         f"adapter_common_mode_loss_weight={config.ADAPTER_COMMON_MODE_LOSS_WEIGHT} "
-        f"text_common_mode_loss_weight={config.TEXT_COMMON_MODE_LOSS_WEIGHT} "
-        f"text_intervention_loss_weight={config.TEXT_INTERVENTION_LOSS_WEIGHT} "
-        f"text_adapter_balance_loss_weight={config.TEXT_ADAPTER_BALANCE_LOSS_WEIGHT} "
-        f"text_adapter_sample_entropy_loss_weight={config.TEXT_ADAPTER_SAMPLE_ENTROPY_LOSS_WEIGHT} "
-        f"text_adapter_token_count={config.TEXT_ADAPTER_TOKEN_COUNT} "
-        f"text_residual_adapter_count={config.TEXT_RESIDUAL_ADAPTER_COUNT} "
-        f"disable_text_gate={config.DISABLE_TEXT_GATE} "
-        f"disable_text_prompt_insert={config.DISABLE_TEXT_PROMPT_INSERT} "
-        f"mask_rep_placeholders_when_text_disabled={config.MASK_REP_PLACEHOLDERS_WHEN_TEXT_DISABLED}"
+        f"adapter_sample_entropy_target={config.ADAPTER_SAMPLE_ENTROPY_TARGET} "
+        f"adapter_common_mode_target={config.ADAPTER_COMMON_MODE_TARGET}"
     )
     print("Processor built.")
     return model, processor
@@ -1115,7 +802,7 @@ def build_model_and_processor(model_path, experiment_cfg=None):
 # =========================
 #  Freeze policy
 # =========================
-def set_trainable_stage(model, stage):
+def set_trainable_stage(model, stage, train_cfg=None):
     for p in model.parameters():
         p.requires_grad = False
 
@@ -1131,27 +818,16 @@ def set_trainable_stage(model, stage):
                 v.embedding_pooling,
                 v.adapter_router,
                 v.residual_adapters,
-                v.visionGating, 
-                model.model.text_adapter_router,
-                model.model.text_residual_adapters,
-                ]
+                v.visionGating]
     else:
         raise ValueError("stage must be 1/2/3/4")
 
     for m in mods:
-        for p in m.parameters():
-            p.requires_grad = True
-
-    if getattr(model.model, "disable_text_prompt_insert", False):
-        for p in model.model.MMRL.t_r_token_projector.parameters():
-            p.requires_grad = False
-        for p in getattr(model.model.MMRL, "direct_t_tokens", []):
-            p.requires_grad = False
-        model.model.text_rep_scale.requires_grad = False
-        for p in model.model.text_adapter_router.parameters():
-            p.requires_grad = False
-        for p in model.model.text_residual_adapters.parameters():
-            p.requires_grad = False
+        if isinstance(m, nn.Parameter):
+            m.requires_grad = True
+        else:
+            for p in m.parameters():
+                p.requires_grad = True
 
 
 def print_stage4_trainable_params_before_stage1(model):
@@ -1171,11 +847,8 @@ def print_stage4_trainable_params_before_stage1(model):
 # =========================
 #  轻前向工具（Stage1/2）
 # =========================
-def _build_text_pool_mask(attention_mask, input_ids, rep_placeholder_ids, device):
-    placeholder_ids_tensor = torch.tensor(rep_placeholder_ids, device=device)
-    is_placeholder = (input_ids.unsqueeze(-1) == placeholder_ids_tensor).any(dim=-1)
-    text_pooling_mask = attention_mask.bool() & (~is_placeholder)
-    return text_pooling_mask
+def _build_text_pool_mask(attention_mask):
+    return attention_mask.bool()
 
 
 @torch.no_grad()
@@ -1258,7 +931,6 @@ def run_stage12_light(stage_id, model, processor, data_cfg, train_cfg, output_di
     )
 
     v = model.model.visual
-    rep_placeholder_ids = model.model.rep_placeholder_ids
 
     global_step = 0
     for ep in range(epochs):
@@ -1274,7 +946,7 @@ def run_stage12_light(stage_id, model, processor, data_cfg, train_cfg, output_di
 
             # text embedding + pooling
             text_emb = model.model.get_input_embeddings()(input_ids).to(dtype=v.dtype)
-            text_pool_mask = _build_text_pool_mask(attention_mask, input_ids, rep_placeholder_ids, input_ids.device)
+            text_pool_mask = _build_text_pool_mask(attention_mask)
             text_pooled = v.embedding_pooling(text_emb, mask=text_pool_mask)
 
             # vision pooled（仅mm样本有意义）
@@ -1348,7 +1020,7 @@ def run_stage12_light(stage_id, model, processor, data_cfg, train_cfg, output_di
 # =========================
 def run_stage34_full(stage_id, model, processor, data_cfg, train_cfg, output_dir):
     assert stage_id in [3, 4]
-    set_trainable_stage(model, stage_id)
+    set_trainable_stage(model, stage_id, train_cfg=train_cfg)
 
     if stage_id == 3:
         model.ce_loss_weight = 1.0
@@ -1379,11 +1051,6 @@ def run_stage34_full(stage_id, model, processor, data_cfg, train_cfg, output_dir
     model.adapter_usage_balance_loss_weight = float(train_cfg.get("adapter_usage_balance_loss_weight", 0.0))
     model.adapter_sample_entropy_loss_weight = float(train_cfg.get("adapter_sample_entropy_loss_weight", 0.0))
     model.adapter_common_mode_loss_weight = float(train_cfg.get("adapter_common_mode_loss_weight", 0.0))
-    model.text_common_mode_loss_weight = float(train_cfg.get("text_common_mode_loss_weight", 0.0))
-    model.text_intervention_loss_weight = float(train_cfg.get("text_intervention_loss_weight", 0.0))
-    model.text_intervention_target = float(train_cfg.get("text_intervention_target", 1.45))
-    model.text_adapter_balance_loss_weight = float(train_cfg.get("text_adapter_balance_loss_weight", 0.0))
-    model.text_adapter_sample_entropy_loss_weight = float(train_cfg.get("text_adapter_sample_entropy_loss_weight", 0.0))
     model.enable_gate_loss_stage2 = train_cfg.get("enable_gate_loss_stage2", True)
 
     stage34_views = ("expert-mm",)

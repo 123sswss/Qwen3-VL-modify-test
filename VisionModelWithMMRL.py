@@ -202,13 +202,11 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
         self.k_mask_results = None
         self.tax_loss = None
         self.capacity_prior_loss = None
-        self.text_router_visual_pooled = None
 
 
         self.null_image_token = nn.Parameter(torch.zeros(1, self.cfg.vision_token_dim))
         nn.init.normal_(self.null_image_token, std=0.02)
         self.ablate_visual_gate = bool(getattr(self.cfg, "ABLATE_VISUAL_GATE", False))
-        self.disable_text_gate = bool(getattr(self.cfg, "DISABLE_TEXT_GATE", False))
         self.debug_context = {}
 
     def _pool_tokens_by_image_mean(self, token_states: torch.Tensor, cu_seqlens: torch.Tensor):
@@ -401,18 +399,6 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
             common_mode_loss.to(device=device, dtype=final_delta.dtype),
         )
 
-    def _return_text_gate_disabled(self, hidden_states, deepstack_feature_lists, batch_size):
-        k_results = torch.zeros(batch_size, device=hidden_states.device, dtype=hidden_states.dtype)
-        self.k_results = k_results
-        self.k_mask_results = None
-        self.tax_loss = hidden_states.new_tensor(0.0)
-        self.capacity_prior_loss = self.tax_loss
-        self.debug_context.update({
-            "text_gate_disabled_flag": hidden_states.new_tensor(1.0),
-            "k_mask_is_none_flag": hidden_states.new_tensor(1.0),
-        })
-        return hidden_states, deepstack_feature_lists, k_results
-
     def forward(self,
                 hidden_states: torch.Tensor,
                 grid_thw: torch.Tensor,
@@ -429,7 +415,6 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
         self.alpha_list = None 
         self.G_list = []
         self.route_probs = None
-        self.text_router_visual_pooled = None
 
 
         rotary_pos_emb_with_rep = None
@@ -645,74 +630,13 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
             "adapter_usage_balance_loss": self.adapter_usage_balance_loss.detach(),
             "adapter_sample_entropy_loss": self.adapter_sample_entropy_loss.detach(),
             "adapter_common_mode_loss": self.adapter_common_mode_loss.detach(),
-            "text_gate_disabled_flag": hidden_states.new_tensor(1.0 if self.disable_text_gate else 0.0),
-            "k_mask_is_none_flag": hidden_states.new_tensor(1.0),
             **residual_debug,
         }
 
-        if cu_seqlens is not None and cu_seqlens.numel() > 1:
-            img_seqlens = cu_seqlens[1:] - cu_seqlens[:-1]
-            img_indices = torch.repeat_interleave(
-                torch.arange(total_pic_num, device=hidden_states.device),
-                img_seqlens,
-            )
-            pooled_visual_per_image = self.hidden_state_pooling.forward_vectorized(
-                hidden_states,
-                img_indices,
-                total_pic_num,
-            )
-
-            pooled_visual_per_sample = torch.zeros(
-                batch_size,
-                pooled_visual_per_image.shape[-1],
-                device=hidden_states.device,
-                dtype=hidden_states.dtype,
-            )
-            cursor = 0
-            for sample_idx, count in enumerate(images_per_sample):
-                count = int(count)
-                if count > 0:
-                    pooled_visual_per_sample[sample_idx] = pooled_visual_per_image[cursor:cursor + count].mean(dim=0)
-                cursor += count
-
-            self.text_router_visual_pooled = pooled_visual_per_sample.detach()
-        else:
-            self.text_router_visual_pooled = None
-
         hidden_states = self.merger(hidden_states)
-        ########### text gating ###########
-        k_results = hidden_states.new_full((batch_size,), float(getattr(self.cfg, "TEXT_ADAPTER_TOKEN_COUNT", 5)))
-        self.k_results = k_results
+        k_results = None
+        self.k_results = None
         self.k_mask_results = None
         self.tax_loss = hidden_states.new_tensor(0.0)
         self.capacity_prior_loss = self.tax_loss
-        self.debug_context.update({
-            "text_gate_disabled_flag": hidden_states.new_tensor(1.0),
-            "k_mask_is_none_flag": hidden_states.new_tensor(1.0),
-        })
         return hidden_states, deepstack_feature_lists, k_results
-
-    def compute_text_only_gating(self, embedding, text_pooling_mask=None, gating_temperature_override=None):
-        self.text_router_visual_pooled = None
-        batch_size = embedding.shape[0]
-        embedding_after_pooling = self.embedding_pooling(embedding, mask=text_pooling_mask)  # [B, Dt]
-        dummy_vision_states = self.null_image_token.expand(batch_size, -1)
-        if self.ablate_visual_gate:
-            self.alpha_list = torch.ones(
-                (batch_size, 1),
-                device=embedding.device,
-                dtype=embedding_after_pooling.dtype,
-            )
-        else:
-            self.alpha_list = self.Task_classifier(dummy_vision_states, embedding_after_pooling)
-
-        self.debug_context = {
-            "text_gate_disabled_flag": embedding.new_tensor(1.0),
-            "k_mask_is_none_flag": embedding.new_tensor(1.0),
-        }
-        k_results = embedding.new_full((batch_size,), float(getattr(self.cfg, "TEXT_ADAPTER_TOKEN_COUNT", 5)))
-        self.k_results = k_results
-        self.k_mask_results = None
-        self.tax_loss = embedding.new_tensor(0.0)
-        self.capacity_prior_loss = self.tax_loss
-        return k_results

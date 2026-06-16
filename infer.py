@@ -9,7 +9,6 @@ from transformers import (
     GenerationConfig
 )
 from safetensors.torch import load_file
-import config as cfg
 import QWen3WithMMRL
 import processingWithMMRL
 
@@ -108,9 +107,7 @@ def inference():
     except Exception as e:
         raise ValueError(f"无法从 {BASE_MODEL_PATH} 加载 Tokenizer，请检查路径是否正确。错误: {e}")
 
-    # 【修复步骤 B】: 重新添加特殊 Token (必须与训练时完全一致)
-    tokenizer.add_special_tokens(cfg.SPECIAL_TOKENS)
-    print(f"    -> Tokenizer 加载完毕，当前词表大小: {len(tokenizer)} (应约为 151709)")
+    print(f"    -> Tokenizer 加载完毕，当前词表大小: {len(tokenizer)}")
 
     # 【修复步骤 C】: Config 优先尝试从训练目录加载 (为了获取 mmrl_config)，失败则用基座
     try:
@@ -243,14 +240,12 @@ def inference():
             if hasattr(model.model.visual, "alpha_list") and model.model.visual.alpha_list is not None:
                 alpha_logits = model.model.visual.alpha_list  # [Total_Images, 1]
                 alpha_probs = torch.sigmoid(alpha_logits)
-                k = model.model.k_results  # [Batch, Total_Experts]
                 G = model.model.visual.G_list  # [Total_Images, 1]
 
                 print(f"[Debug] 门控状态:")
                 print(f"  ├─ Alpha Logits (原始): {alpha_logits.squeeze().detach().cpu().tolist()}")
                 print(f"  ├─ Alpha Probs (sigmoid): {alpha_probs.squeeze().detach().cpu().tolist()}")
                 print(f"  ├─ G 值: {G.squeeze().detach().cpu().tolist()}")
-                print(f"  ├─ K 值: {k.squeeze().detach().cpu().tolist()}")
                 print(f"  └─ 平均激活值: {alpha_probs.mean().item():.4f}")
                 print(f"     (>0.5=专家模式, <0.5=通用模式)")
 

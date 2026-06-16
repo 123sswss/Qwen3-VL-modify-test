@@ -122,43 +122,6 @@ class StageMetricLogger:
     def _has_valid_data(self, df, column):
         return column in df.columns and pd.to_numeric(df[column], errors="coerce").notna().any()
 
-    def _resolve_text_gate_mode(self, df=None):
-        experiment_cfg = self.experiment_config.get("experiment_cfg", {}) or {}
-        mode = experiment_cfg.get("text_gate_selection_mode", None)
-        if isinstance(mode, str) and mode.strip():
-            return mode.strip().lower()
-        if self.experiment_name:
-            name = str(self.experiment_name).lower()
-            if "group_threshold_prior" in name:
-                return "group_threshold_prior"
-            if "group_top4" in name:
-                return "group_top4"
-            if "token_top20" in name:
-                return "token_top20"
-            if "fixed_group20" in name:
-                return "fixed_group20"
-        return None
-
-    def _is_text_gate_disabled(self, df=None):
-        experiment_cfg = self.experiment_config.get("experiment_cfg", {}) or {}
-        if bool(experiment_cfg.get("disable_text_gate", False)):
-            return True
-        if df is not None and self._has_valid_data(df, "text_gate_disabled_flag"):
-            val = pd.to_numeric(df["text_gate_disabled_flag"], errors="coerce").dropna()
-            if len(val) > 0:
-                return float(val.iloc[-1]) > 0.5
-        return False
-
-    def _group_usage_columns(self, df):
-        cols = []
-        for c in df.columns:
-            if c.startswith("group_usage_"):
-                suffix = c[len("group_usage_"):]
-                if suffix.isdigit():
-                    cols.append(c)
-        cols.sort(key=lambda c: int(c.split("_")[-1]))
-        return cols
-
     def _adapter_usage_columns(self, df):
         cols = []
         for c in df.columns:
@@ -169,84 +132,24 @@ class StageMetricLogger:
         cols.sort(key=lambda c: int(c.split("_")[-1]))
         return cols
 
-    def _plot_group_usage_bar(self, ax, df):
-        usage_cols = self._group_usage_columns(df)
-        if not usage_cols:
-            ax.set_visible(False)
-            return
-
-        usage = df[usage_cols].apply(pd.to_numeric, errors="coerce").mean(axis=0)
-        usage = usage.fillna(0.0)
-        total = float(usage.sum())
-        if total > 0:
-            usage = usage / total
-
-        group_ids = [int(c.split("_")[-1]) for c in usage_cols]
-        values = usage.values.astype(float)
-        bars = ax.bar(group_ids, values, color="#4c78a8", alpha=0.9)
-        ax.set_title("Global Group Usage")
-        ax.set_xlabel("Group ID")
-        ax.set_ylabel("Normalized Usage")
-        ax.set_xticks(group_ids)
-        ax.set_ylim(0.0, max(0.2, float(values.max()) * 1.15 if len(values) > 0 else 0.2))
-        ax.grid(axis="y", alpha=0.25, linestyle="--")
-        for bar, v in zip(bars, values):
-            ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.005, f"{v:.2f}",
-                    ha="center", va="bottom", fontsize=8)
-
     def _plot_paper_figure(self, df):
         self._setup_style()
         x = df["step"].values
-        stage_id = self.experiment_config.get("stage_id")
-        gate_mode = self._resolve_text_gate_mode(df)
-        text_gate_disabled = self._is_text_gate_disabled(df)
         has_adapter_usage = len(self._adapter_usage_columns(df)) > 0
 
-        # 配色统一
         C = {
             "total": "#222222",
             "ce": "#1f77b4",
             "alpha": "#d62728",
-            "tax": "#9467bd",
-            "kg": "#2ca02c",
-            "ke": "#ff7f0e",
             "temp": "#17becf",
             "lr": "#8c564b",
-            "lambda_g": "#2ca02c",
-            "lambda_e": "#ff7f0e",
             "std_alpha": "#e377c2",
-            "std_label": "#7f7f7f",
             "cls": "#1f77b4",
             "gate": "#d62728",
         }
+        fig, axes = plt.subplots(2, 2, figsize=(14, 9))
+        axes = axes.flatten()
 
-        if stage_id is not None:
-            stage_id = int(stage_id)
-            is_stage34 = stage_id in (3, 4)
-            is_stage4 = stage_id == 4
-        else:
-            is_stage34 = (
-                ("k_general_mean" in df.columns and df["k_general_mean"].notna().any()) or
-                ("k_expert_mean" in df.columns and df["k_expert_mean"].notna().any()) or
-                ("k_general_loss" in df.columns and df["k_general_loss"].notna().any()) or
-                ("k_expert_loss" in df.columns and df["k_expert_loss"].notna().any()) or
-                ("capacity_prior_loss" in df.columns and df["capacity_prior_loss"].notna().any())
-            )
-            is_stage4 = is_stage34 and len(self._group_usage_columns(df)) > 0
-        has_group_usage = len(self._group_usage_columns(df)) > 0
-
-        # group-threshold-prior：8组门控，额外展示 group usage 面板
-        if is_stage4 and has_group_usage:
-            fig, axes = plt.subplots(2, 3, figsize=(18, 9))
-            axes = axes.flatten()
-        elif is_stage4:
-            fig, axes = plt.subplots(2, 2, figsize=(14, 9))
-            axes = axes.flatten()
-        else:
-            fig, axes = plt.subplots(1, 3, figsize=(16, 4.6))
-            axes = axes.flatten()
-
-        # ---------------- Panel 1: Loss ----------------
         ax = axes[0]
         loss_candidates = [
             ("total_loss", "Total", C["total"]),
@@ -255,22 +158,12 @@ class StageMetricLogger:
             ("adapter_usage_balance_loss_scaled", "Route-Balance", "#72b7b2"),
             ("adapter_sample_entropy_loss_scaled", "Route-Entropy", "#eeca3b"),
             ("adapter_common_mode_loss_scaled", "Common-Mode Penalty", "#b279a2"),
-            ("top4_group_balance_loss", "Top4 Balance", "#ff9da6"),
-            ("text_common_mode_loss_scaled", "Text CM Penalty", "#7a5195"),
-            ("expert_floor_loss", "Expert-Floor", C["ke"]),
-            ("anti_collapse_loss", "Anti-Collapse", "#bc5090"),
             ("cls_loss", "Cls", C["cls"]),
             ("gate_loss", "Gate", C["gate"]),
-            ("raw_top4_group_balance_loss", "Raw Top4 Balance", C["tax"]),
-            ("k_general_loss", "K-General", C["kg"]),
-            ("k_expert_loss", "K-Expert", C["ke"]),
         ]
         plotted = 0
         for k, label, color in loss_candidates:
             if k in df.columns and df[k].notna().any():
-                # 避免 stage4 的 loss panel 太花：只保留最核心几个
-                if is_stage4 and k in ("k_general_loss", "k_expert_loss") and "capacity_prior_loss" in df.columns:
-                    continue
                 self._plot_series(ax, x, df[k], label, color)
                 plotted += 1
         ax.set_title("Loss Dynamics")
@@ -280,283 +173,69 @@ class StageMetricLogger:
         if plotted > 0:
             ax.legend(frameon=False, ncol=min(3, plotted))
 
-        # ---------------- Panel 2 ----------------
         ax = axes[1]
-        if is_stage34:
-            plotted = 0
-            if gate_mode in ("group_threshold_prior", "group_top4") or not text_gate_disabled:
-                if self._has_valid_data(df, "active_token_count_mean"):
-                    self._plot_series(ax, x, df["active_token_count_mean"], "Active Tokens", C["kg"])
-                    plotted += 1
-                if self._has_valid_data(df, "hard_group_count_post_G_mean"):
-                    self._plot_series(ax, x, df["hard_group_count_post_G_mean"], "Hard Groups Post-G", C["tax"])
-                    plotted += 1
-                if self._has_valid_data(df, "group_entropy_norm"):
-                    self._plot_series(ax, x, df["group_entropy_norm"], "Group Entropy", C["alpha"])
-                    plotted += 1
-                if self._has_valid_data(df, "group_usage_max"):
-                    self._plot_series(ax, x, df["group_usage_max"], "Usage Max", C["ke"])
-                    plotted += 1
-                if self._has_valid_data(df, "group_usage_min"):
-                    self._plot_series(ax, x, df["group_usage_min"], "Usage Min", C["tax"])
-                    plotted += 1
-                if self._has_valid_data(df, "rep_placeholder_attention_ratio"):
-                    self._plot_series(ax, x, df["rep_placeholder_attention_ratio"], "Rep Attention Ratio", "#72b7b2")
-                    plotted += 1
-                if self._has_valid_data(df, "batch_G_on_ratio"):
-                    self._plot_series(ax, x, df["batch_G_on_ratio"], "Batch G On", "#b279a2")
-                    plotted += 1
-                ax.set_title("Text Gate Usage")
-                ax.set_ylabel("Value")
-            elif gate_mode in ("group_threshold_prior", "group_top4"):
-                if self._has_valid_data(df, "group_count_loss"):
-                    self._plot_series(ax, x, df["group_count_loss"], "Group Count Loss", C["tax"])
-                    plotted += 1
-                if self._has_valid_data(df, "group_usage_entropy"):
-                    self._plot_series(ax, x, df["group_usage_entropy"], "Usage Entropy", C["kg"])
-                    plotted += 1
-                if self._has_valid_data(df, "group_usage_dead_ratio"):
-                    self._plot_series(ax, x, df["group_usage_dead_ratio"], "Dead Group Ratio", C["ke"])
-                    plotted += 1
-                ax.set_title("Group Statistics")
-                ax.set_ylabel("Value")
-            elif gate_mode == "token_top20":
-                if self._has_valid_data(df, "active_token_count_mean"):
-                    self._plot_series(ax, x, df["active_token_count_mean"], "Active Tokens", C["kg"])
-                    plotted += 1
-                if self._has_valid_data(df, "token_count_loss"):
-                    self._plot_series(ax, x, df["token_count_loss"], "Token Count Loss", C["ke"])
-                    plotted += 1
-                if self._has_valid_data(df, "token_balance_loss"):
-                    self._plot_series(ax, x, df["token_balance_loss"], "Token Balance Loss", C["tax"])
-                    plotted += 1
-                ax.set_title("Token Statistics")
-                ax.set_ylabel("Value")
-            else:
-                if self._has_valid_data(df, "active_token_count_mean"):
-                    self._plot_series(ax, x, df["active_token_count_mean"], "Active Tokens", C["kg"])
-                    plotted += 1
-                if self._has_valid_data(df, "k_expert_mean"):
-                    self._plot_series(ax, x, df["k_expert_mean"], "Expert K", C["ke"])
-                    plotted += 1
-                if self._has_valid_data(df, "k_budget_mean"):
-                    self._plot_series(ax, x, df["k_budget_mean"], "K Budget", C["tax"])
-                    plotted += 1
-                if self._has_valid_data(df, "raw_budget_mean"):
-                    self._plot_series(ax, x, df["raw_budget_mean"], "Raw Budget", C["temp"])
-                    plotted += 1
-                if plotted == 0:
-                    if self._has_valid_data(df, "k_general_mean"):
-                        self._plot_series(ax, x, df["k_general_mean"], "General K", C["kg"])
-                        plotted += 1
-                ax.set_title("Routing Budget")
-                ax.set_ylabel("K / Budget")
-            ax.set_xlabel("Global Step")
-            ax.grid(alpha=0.25, linestyle="--")
-            if plotted > 0:
-                ax.legend(frameon=False)
-        else:
-            # alpha std
-            plotted = 0
-            if "alpha_mae" in df.columns and df["alpha_mae"].notna().any():
-                self._plot_series(ax, x, df["alpha_mae"], "Alpha MAE", C["std_alpha"])
-                plotted += 1
-            elif "alpha_std" in df.columns and df["alpha_std"].notna().any():
-                self._plot_series(ax, x, df["alpha_std"], "Alpha Std", C["std_alpha"])
-                plotted += 1
-            if "label_alpha_std" in df.columns and df["label_alpha_std"].notna().any():
-                self._plot_series(ax, x, df["label_alpha_std"], "Label Std", C["std_label"])
-                plotted += 1
-            ax.set_title("Alpha Error")
-            ax.set_xlabel("Global Step")
-            ax.set_ylabel("Value")
-            ax.grid(alpha=0.25, linestyle="--")
-            if plotted > 0:
-                ax.legend(frameon=False)
+        plotted = 0
+        if "alpha_mae" in df.columns and df["alpha_mae"].notna().any():
+            self._plot_series(ax, x, df["alpha_mae"], "Alpha MAE", C["std_alpha"])
+            plotted += 1
+        if self._has_valid_data(df, "adapter_route_entropy_norm"):
+            self._plot_series(ax, x, df["adapter_route_entropy_norm"], "Route Entropy", C["alpha"])
+            plotted += 1
+        if self._has_valid_data(df, "adapter_usage_max"):
+            self._plot_series(ax, x, df["adapter_usage_max"], "Usage Max", "#f58518")
+            plotted += 1
+        if self._has_valid_data(df, "adapter_usage_min"):
+            self._plot_series(ax, x, df["adapter_usage_min"], "Usage Min", "#72b7b2")
+            plotted += 1
+        ax.set_title("Routing Health")
+        ax.set_xlabel("Global Step")
+        ax.set_ylabel("Value")
+        ax.grid(alpha=0.25, linestyle="--")
+        if plotted > 0:
+            ax.legend(frameon=False)
 
-        # ---------------- Panel 3 ----------------
         ax = axes[2]
-        if is_stage34:
-            plotted = 0
-            if self._has_valid_data(df, "text_insert_to_base_embed_ratio") or self._has_valid_data(df, "text_insert_pool_common_mode_ratio"):
-                if self._has_valid_data(df, "text_insert_delta_norm_mean"):
-                    self._plot_series(ax, x, df["text_insert_delta_norm_mean"], "Text Δ Norm", "#4c78a8")
-                    plotted += 1
-                if self._has_valid_data(df, "text_insert_to_base_embed_ratio"):
-                    self._plot_series(ax, x, df["text_insert_to_base_embed_ratio"], "Text Δ / Base", "#f58518")
-                    plotted += 1
-                if self._has_valid_data(df, "text_insert_pool_common_mode_ratio"):
-                    self._plot_series(ax, x, df["text_insert_pool_common_mode_ratio"], "Text Common-Mode", "#72b7b2")
-                    plotted += 1
-                if self._has_valid_data(df, "text_common_mode_ratio_train"):
-                    self._plot_series(ax, x, df["text_common_mode_ratio_train"], "Text CM Train", "#54a24b")
-                    plotted += 1
-                if self._has_valid_data(df, "text_insert_pool_specificity_ratio"):
-                    self._plot_series(ax, x, df["text_insert_pool_specificity_ratio"], "Text Specificity", "#eeca3b")
-                    plotted += 1
-                if self._has_valid_data(df, "text_insert_pool_pairwise_cos_mean"):
-                    self._plot_series(ax, x, df["text_insert_pool_pairwise_cos_mean"], "Text Pairwise Cos", "#b279a2")
-                    plotted += 1
-                ax.set_title("Text Insert Geometry")
-                ax.set_ylabel("Value")
-            elif gate_mode in ("group_threshold_prior", "group_top4"):
-                if self._has_valid_data(df, "batch_alpha_mean"):
-                    self._plot_series(ax, x, df["batch_alpha_mean"], "Batch Alpha", C["alpha"])
-                    plotted += 1
-                if self._has_valid_data(df, "group_usage_max"):
-                    self._plot_series(ax, x, df["group_usage_max"], "Usage Max", C["kg"])
-                    plotted += 1
-                if self._has_valid_data(df, "group_usage_min"):
-                    self._plot_series(ax, x, df["group_usage_min"], "Usage Min", C["ke"])
-                    plotted += 1
-                if self._has_valid_data(df, "hard_group_count_post_G_mean"):
-                    self._plot_series(ax, x, df["hard_group_count_post_G_mean"], "Hard Groups Post-G", C["tax"])
-                    plotted += 1
-                ax.set_title("Group Routing")
-                ax.set_ylabel("Value")
-            elif gate_mode == "token_top20":
-                if self._has_valid_data(df, "k_budget_mean"):
-                    self._plot_series(ax, x, df["k_budget_mean"], "K Budget", C["kg"])
-                    plotted += 1
-                if self._has_valid_data(df, "batch_alpha_mean"):
-                    self._plot_series(ax, x, df["batch_alpha_mean"], "Batch Alpha", C["alpha"])
-                    plotted += 1
-                if self._has_valid_data(df, "text_rel_mean"):
-                    self._plot_series(ax, x, df["text_rel_mean"], "Text Relevance", C["temp"])
-                    plotted += 1
-                ax.set_title("Token Routing")
-                ax.set_ylabel("Value")
-            else:
-                if self._has_valid_data(df, "batch_alpha_mean"):
-                    self._plot_series(ax, x, df["batch_alpha_mean"], "Batch Alpha", C["alpha"])
-                    plotted += 1
-                if self._has_valid_data(df, "text_rel_mean"):
-                    self._plot_series(ax, x, df["text_rel_mean"], "Text Relevance", C["temp"])
-                    plotted += 1
-                if self._has_valid_data(df, "text_rep_scale"):
-                    self._plot_series(ax, x, df["text_rep_scale"], "Text Rep Scale", C["lr"])
-                    plotted += 1
-                if self._has_valid_data(df, "gated_delta_norm_mean"):
-                    self._plot_series(ax, x, df["gated_delta_norm_mean"], "Gated Δ Norm", "#4c78a8")
-                    plotted += 1
-                if self._has_valid_data(df, "final_delta_norm_mean"):
-                    self._plot_series(ax, x, df["final_delta_norm_mean"], "Final Δ Norm", "#f58518")
-                    plotted += 1
-                if self._has_valid_data(df, "delta_to_org_ratio"):
-                    self._plot_series(ax, x, df["delta_to_org_ratio"], "Δ / Org", "#54a24b")
-                    plotted += 1
-                if self._has_valid_data(df, "final_to_gated_ratio"):
-                    self._plot_series(ax, x, df["final_to_gated_ratio"], "Final / Gated", "#e45756")
-                    plotted += 1
-                if self._has_valid_data(df, "delta_pool_pairwise_cos_mean"):
-                    self._plot_series(ax, x, df["delta_pool_pairwise_cos_mean"], "Δ Pairwise Cos", "#72b7b2")
-                    plotted += 1
-                if self._has_valid_data(df, "delta_pool_common_mode_ratio"):
-                    self._plot_series(ax, x, df["delta_pool_common_mode_ratio"], "Common-Mode", "#54a24b")
-                    plotted += 1
-                if self._has_valid_data(df, "delta_pool_specificity_ratio"):
-                    self._plot_series(ax, x, df["delta_pool_specificity_ratio"], "Specificity", "#eeca3b")
-                    plotted += 1
-                if self._has_valid_data(df, "delta_org_pool_cos_mean"):
-                    self._plot_series(ax, x, df["delta_org_pool_cos_mean"], "Δ-Org Cos", "#b279a2")
-                    plotted += 1
-                if self._has_valid_data(df, "delta_token_top10_mass"):
-                    self._plot_series(ax, x, df["delta_token_top10_mass"], "Δ Top10 Mass", "#ff9da6")
-                    plotted += 1
-                if self._has_valid_data(df, "shared_rep_grad_norm"):
-                    self._plot_series(ax, x, df["shared_rep_grad_norm"], "Shared Rep Grad", C["lambda_g"])
-                    plotted += 1
-                if self._has_valid_data(df, "shared_rep_grad_ema"):
-                    self._plot_series(ax, x, df["shared_rep_grad_ema"], "Grad EMA", "#bc5090")
-                    plotted += 1
-                if self._has_valid_data(df, "shared_rep_grad_ratio"):
-                    self._plot_series(ax, x, df["shared_rep_grad_ratio"], "Grad Ratio", "#7a5195")
-                    plotted += 1
-                if self._has_valid_data(df, "t_projector_grad_norm_mean"):
-                    self._plot_series(ax, x, df["t_projector_grad_norm_mean"], "Text Projector Grad", C["lambda_e"])
-                    plotted += 1
-                ax.set_title("Gate / Rep Diagnostics")
-                ax.set_ylabel("Value")
-            ax.set_xlabel("Global Step")
-            ax.grid(alpha=0.25, linestyle="--")
-            if plotted > 0:
-                ax.legend(frameon=False)
-        else:
-            plotted = 0
-            if "temperature" in df.columns and df["temperature"].notna().any():
-                self._plot_series(ax, x, df["temperature"], "Temperature", C["temp"])
-                plotted += 1
-            if "learning_rate" in df.columns and df["learning_rate"].notna().any():
-                self._plot_series(ax, x, df["learning_rate"], "Learning Rate", C["lr"])
-                plotted += 1
-            ax.set_title("Schedule")
-            ax.set_xlabel("Global Step")
-            ax.set_ylabel("Value")
-            ax.grid(alpha=0.25, linestyle="--")
-            if plotted > 0:
-                ax.legend(frameon=False)
+        plotted = 0
+        if self._has_valid_data(df, "gated_delta_norm_mean"):
+            self._plot_series(ax, x, df["gated_delta_norm_mean"], "Gated Δ Norm", "#4c78a8")
+            plotted += 1
+        if self._has_valid_data(df, "final_delta_norm_mean"):
+            self._plot_series(ax, x, df["final_delta_norm_mean"], "Final Δ Norm", "#f58518")
+            plotted += 1
+        if self._has_valid_data(df, "delta_to_org_ratio"):
+            self._plot_series(ax, x, df["delta_to_org_ratio"], "Δ / Org", "#54a24b")
+            plotted += 1
+        if self._has_valid_data(df, "delta_pool_common_mode_ratio"):
+            self._plot_series(ax, x, df["delta_pool_common_mode_ratio"], "Common-Mode", "#72b7b2")
+            plotted += 1
+        if self._has_valid_data(df, "delta_pool_specificity_ratio"):
+            self._plot_series(ax, x, df["delta_pool_specificity_ratio"], "Specificity", "#eeca3b")
+            plotted += 1
+        ax.set_title("Residual Health")
+        ax.set_xlabel("Global Step")
+        ax.set_ylabel("Value")
+        ax.grid(alpha=0.25, linestyle="--")
+        if plotted > 0:
+            ax.legend(frameon=False)
 
-        # ---------------- Panel 4 (only Stage4) ----------------
-        if is_stage4:
-            ax = axes[3]
-            plotted = 0
-            if self._has_valid_data(df, "adapter_route_entropy_norm"):
-                self._plot_series(ax, x, df["adapter_route_entropy_norm"], "Route Entropy", C["alpha"])
+        ax = axes[3]
+        plotted = 0
+        if "temperature" in df.columns and df["temperature"].notna().any():
+            self._plot_series(ax, x, df["temperature"], "Temperature", C["temp"])
+            plotted += 1
+        if "learning_rate" in df.columns and df["learning_rate"].notna().any():
+            self._plot_series(ax, x, df["learning_rate"], "Learning Rate", C["lr"])
+            plotted += 1
+        if has_adapter_usage:
+            for col in self._adapter_usage_columns(df):
+                self._plot_series(ax, x, df[col], col.replace("adapter_usage_", "Adapter "), "#9c755f", draw_raw=False)
                 plotted += 1
-            if self._has_valid_data(df, "adapter_usage_max"):
-                self._plot_series(ax, x, df["adapter_usage_max"], "Usage Max", C["ke"])
-                plotted += 1
-            if self._has_valid_data(df, "adapter_usage_min"):
-                self._plot_series(ax, x, df["adapter_usage_min"], "Usage Min", C["tax"])
-                plotted += 1
-            if self._has_valid_data(df, "final_delta_norm_mean"):
-                self._plot_series(ax, x, df["final_delta_norm_mean"], "Final Δ Norm", "#4c78a8")
-                plotted += 1
-            if self._has_valid_data(df, "delta_to_org_ratio"):
-                self._plot_series(ax, x, df["delta_to_org_ratio"], "Δ / Org", "#f58518")
-                plotted += 1
-            if self._has_valid_data(df, "delta_pool_common_mode_ratio"):
-                self._plot_series(ax, x, df["delta_pool_common_mode_ratio"], "Common-Mode", "#72b7b2")
-                plotted += 1
-            if self._has_valid_data(df, "delta_pool_specificity_ratio"):
-                self._plot_series(ax, x, df["delta_pool_specificity_ratio"], "Specificity", "#eeca3b")
-                plotted += 1
-            ax.set_title("Minimal Visual Health")
-            ax.set_xlabel("Global Step")
-            ax.set_ylabel("Value")
-            ax.grid(alpha=0.25, linestyle="--")
-            if plotted > 0:
-                ax.legend(frameon=False)
-
-        if is_stage4 and has_group_usage:
-            ax = axes[4]
-            plotted = 0
-            if "temperature" in df.columns and df["temperature"].notna().any():
-                self._plot_series(ax, x, df["temperature"], "Temperature", C["temp"])
-                plotted += 1
-            if "top4_group_balance_loss_weight" in df.columns and df["top4_group_balance_loss_weight"].notna().any():
-                self._plot_series(ax, x, df["top4_group_balance_loss_weight"], "Top4 Balance Weight", C["tax"])
-                plotted += 1
-            if "top4_group_balance_loss" in df.columns and df["top4_group_balance_loss"].notna().any():
-                self._plot_series(ax, x, df["top4_group_balance_loss"], "Top4 Balance", "#7a5195")
-                plotted += 1
-            if "text_common_mode_loss_effective_weight" in df.columns and df["text_common_mode_loss_effective_weight"].notna().any():
-                self._plot_series(ax, x, df["text_common_mode_loss_effective_weight"], "Text CM Eff.W", "#bc5090")
-                plotted += 1
-            if "text_common_mode_loss_scaled" in df.columns and df["text_common_mode_loss_scaled"].notna().any():
-                self._plot_series(ax, x, df["text_common_mode_loss_scaled"], "Text CM Loss", "#4c78a8")
-                plotted += 1
-            if "learning_rate" in df.columns and df["learning_rate"].notna().any():
-                self._plot_series(ax, x, df["learning_rate"], "Learning Rate", C["lr"])
-                plotted += 1
-            ax.set_title("Schedule & Regularization")
-            ax.set_xlabel("Global Step")
-            ax.set_ylabel("Value")
-            ax.grid(alpha=0.25, linestyle="--")
-            if plotted > 0:
-                ax.legend(frameon=False)
-            if len(axes) > 5:
-                self._plot_group_usage_bar(axes[5], df)
+        ax.set_title("Schedule")
+        ax.set_xlabel("Global Step")
+        ax.set_ylabel("Value")
+        ax.grid(alpha=0.25, linestyle="--")
+        if plotted > 0:
+            ax.legend(frameon=False)
 
         fig_title = self.stage_name if not self.experiment_name else f"{self.experiment_name} / {self.stage_name}"
         fig.suptitle(f"Training Metrics - {fig_title}", fontsize=15, y=0.98)
@@ -613,22 +292,12 @@ class TrainerMetricsCallback(TrainerCallback):
             print(f"  ├─ CE Loss:               {_fmt(row.get('ce_loss')):>10}")
         if "alpha_guide_loss" in row:
             print(f"  ├─ Alpha Guide Loss:      {_fmt(row.get('alpha_guide_loss')):>10}")
-        if "expert_floor_loss" in row:
-            print(f"  ├─ Expert Floor Loss:     {_fmt(row.get('expert_floor_loss')):>10}")
-        if "anti_collapse_loss" in row:
-            print(f"  ├─ Anti-Collapse Loss:    {_fmt(row.get('anti_collapse_loss')):>10}")
         if "cls_loss" in row:
             print(f"  ├─ Cls Loss:              {_fmt(row.get('cls_loss')):>10}")
         if "gate_loss" in row:
             print(f"  ├─ Gate Loss:             {_fmt(row.get('gate_loss')):>10}")
-        if "k_general_loss" in row:
-            print(f"  ├─ General K Proxy Loss:  {_fmt(row.get('k_general_loss')):>10}")
-        if "k_expert_loss" in row:
-            print(f"  ├─ Expert K Proxy Loss:   {_fmt(row.get('k_expert_loss')):>10}")
         if "capacity_prior_loss" in row:
             print(f"  ├─ Capacity Prior Loss:   {_fmt(row.get('capacity_prior_loss')):>10}")
-        if "text_common_mode_loss_scaled" in row:
-            print(f"  ├─ Text Common Loss:      {_fmt(row.get('text_common_mode_loss_scaled')):>10}")
         if "adapter_usage_balance_loss_scaled" in row:
             print(f"  ├─ Route Balance Loss:    {_fmt(row.get('adapter_usage_balance_loss_scaled')):>10}")
         if "adapter_sample_entropy_loss_scaled" in row:
@@ -637,43 +306,21 @@ class TrainerMetricsCallback(TrainerCallback):
             print(f"  ├─ Common-Mode Penalty:   {_fmt(row.get('adapter_common_mode_loss_scaled')):>10}")
         if "raw_capacity_prior_loss" in row:
             print(f"  ├─ Raw Capacity Prior:    {_fmt(row.get('raw_capacity_prior_loss')):>10}")
-        if "text_common_mode_loss_raw" in row:
-            print(f"  ├─ Raw Text Common:       {_fmt(row.get('text_common_mode_loss_raw')):>10}")
-        if "group_usage_max" in row or "group_usage_min" in row or "group_usage_entropy" in row:
-            print(f"[Group Usage]")
-            if "group_usage_max" in row:
-                print(f"  ├─ Usage Max:             {_fmt(row.get('group_usage_max')):>10}")
-            if "group_usage_min" in row:
-                print(f"  ├─ Usage Min:             {_fmt(row.get('group_usage_min')):>10}")
-            if "group_usage_dead_ratio" in row:
-                print(f"  ├─ Dead Group Ratio:      {_fmt(row.get('group_usage_dead_ratio')):>10}")
-            if "group_usage_entropy" in row:
-                print(f"  └─ Usage Entropy:         {_fmt(row.get('group_usage_entropy')):>10}")
 
         # Routing 统计
-        has_k = (
-            ("k_general_mean" in row) or
-            ("k_expert_mean" in row) or
+        has_route = (
             ("active_token_count_mean" in row) or
-            ("k_budget_mean" in row) or
-            ("raw_budget_mean" in row)
+            ("batch_alpha_mean" in row) or
+            ("adapter_route_entropy_norm" in row)
         )
-        if has_k:
+        if has_route:
             print(f"[Routing Statistics]")
-            if "k_expert_mean" in row:
-                print(f"  ├─ Expert Mean K:         {_fmt(row.get('k_expert_mean'), nd=3):>10}")
             if "active_token_count_mean" in row:
                 print(f"  ├─ Active Tokens:         {_fmt(row.get('active_token_count_mean'), nd=3):>10}")
-            if "k_budget_mean" in row:
-                print(f"  ├─ K Budget:              {_fmt(row.get('k_budget_mean'), nd=3):>10}")
-            if "raw_budget_mean" in row:
-                print(f"  ├─ Raw Budget:            {_fmt(row.get('raw_budget_mean'), nd=3):>10}")
-            if "k_general_mean" in row:
-                print(f"  ├─ General Mean K:        {_fmt(row.get('k_general_mean'), nd=3):>10}")
             if "batch_alpha_mean" in row:
                 print(f"  ├─ Batch Alpha:           {_fmt(row.get('batch_alpha_mean'), nd=4):>10}")
-            if "text_rel_mean" in row:
-                print(f"  └─ Text Relevance:        {_fmt(row.get('text_rel_mean'), nd=4):>10}")
+            if "adapter_route_entropy_norm" in row:
+                print(f"  └─ Route Entropy:         {_fmt(row.get('adapter_route_entropy_norm'), nd=4):>10}")
 
         # Alpha 统计
         has_alpha = ("alpha_mae" in row) or ("alpha_std" in row) or ("label_alpha_std" in row)
@@ -717,36 +364,6 @@ class TrainerMetricsCallback(TrainerCallback):
             ("delta_pool_common_mode_ratio" in row) or
             ("delta_pool_specificity_ratio" in row)
         )
-        has_text_insert_geometry = (
-            ("text_insert_delta_norm_mean" in row) or
-            ("text_insert_to_base_embed_ratio" in row) or
-            ("text_insert_pool_common_mode_ratio" in row) or
-            ("text_insert_pool_specificity_ratio" in row) or
-            ("text_insert_pool_pairwise_cos_mean" in row)
-        )
-        if has_text_insert_geometry:
-            print(f"[Text Insert Geometry]")
-            if "text_insert_delta_norm_mean" in row:
-                print(f"  ├─ Text Δ Norm:         {_fmt(row.get('text_insert_delta_norm_mean'), nd=4):>10}")
-            if "text_insert_to_base_embed_ratio" in row:
-                print(f"  ├─ Text Δ / Base:       {_fmt(row.get('text_insert_to_base_embed_ratio'), nd=4):>10}")
-            if "text_insert_pool_common_mode_ratio" in row:
-                print(f"  ├─ Text Common-Mode:    {_fmt(row.get('text_insert_pool_common_mode_ratio'), nd=4):>10}")
-            if "text_common_mode_ratio_train" in row:
-                print(f"  ├─ Text CM Train:       {_fmt(row.get('text_common_mode_ratio_train'), nd=4):>10}")
-            if "text_insert_pool_specificity_ratio" in row:
-                print(f"  ├─ Text Specificity:    {_fmt(row.get('text_insert_pool_specificity_ratio'), nd=4):>10}")
-            if "text_insert_pool_pairwise_cos_mean" in row:
-                print(f"  ├─ Text Pairwise Cos:   {_fmt(row.get('text_insert_pool_pairwise_cos_mean'), nd=4):>10}")
-            if "text_common_mode_mean_norm" in row:
-                print(f"  ├─ CM Mean Norm:        {_fmt(row.get('text_common_mode_mean_norm'), nd=4):>10}")
-            if "text_common_mode_common_norm" in row:
-                print(f"  ├─ CM Common Norm:      {_fmt(row.get('text_common_mode_common_norm'), nd=4):>10}")
-            if "text_common_mode_valid_sample_ratio" in row:
-                print(f"  ├─ CM Valid Ratio:      {_fmt(row.get('text_common_mode_valid_sample_ratio'), nd=4):>10}")
-            if "rep_placeholder_attention_ratio" in row:
-                print(f"  └─ Rep Attention Ratio: {_fmt(row.get('rep_placeholder_attention_ratio'), nd=4):>10}")
-
         if has_visual_branch_probe:
             print(f"[Visual Adapter Routing]")
             if "adapter_route_entropy_norm" in row:
@@ -777,14 +394,6 @@ class TrainerMetricsCallback(TrainerCallback):
             print(f"  ├─ Temperature:           {_fmt(row.get('temperature'), nd=4):>10}")
         if "capacity_prior_weight" in row:
             print(f"  ├─ Capacity Prior Weight: {_fmt(row.get('capacity_prior_weight'), nd=4):>10}")
-        if "text_common_mode_loss_weight" in row:
-            print(f"  ├─ Text Common W:        {_fmt(row.get('text_common_mode_loss_weight'), nd=4):>10}")
-        if "text_common_mode_loss_effective_weight" in row:
-            print(f"  ├─ Text CM Eff.W:        {_fmt(row.get('text_common_mode_loss_effective_weight'), nd=4):>10}")
-        if "text_common_mode_warmup_factor" in row:
-            print(f"  ├─ Text CM Warmup:       {_fmt(row.get('text_common_mode_warmup_factor'), nd=4):>10}")
-        if "text_common_mode_target" in row:
-            print(f"  ├─ Text Common Target:   {_fmt(row.get('text_common_mode_target'), nd=4):>10}")
         if "learning_rate" in row:
             print(f"  └─ Learning Rate:         {_fmt(row.get('learning_rate'), nd=8):>10}")
         if "adapter_usage_balance_weight" in row:

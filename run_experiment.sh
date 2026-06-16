@@ -126,18 +126,9 @@ run_N() {
 # 4) ablation_replace_mmrl_with_40_learnable_tokens：直接可学习文本rep消融
 # run_one "ablation_replace_mmrl_with_40_learnable_tokens" "ablation_replace_mmrl_with_40_learnable_tokens"
 
-# 当前启用的文本门控实验：
-# 当前代码中真实可用的实验名见 train/train.py: EXPERIMENTS
-# run_one "visual_router_v2_1_text_off" "visual_router_v2_1_text_off_safe"
-# run_one "visual_router_v2_text_off" "visual_router_v2_text_off_test2"
-# run_N "top4_group" "top4_group" 3
+# 当前可用实验名见 train/train.py: EXPERIMENTS
+run_N "visual_router_v1" "visual_router_v1" 3
 
-# 6/6: 复验 0p07 / 0p08，并新增 0p06 与 0p075 以定位 sweet spot 与 cliff。
-# run_N   "text5_adapter_router_v5"  "text5_adapter_router_v5"  2
-run_one "text5_adapter_router_v6_safe"  "text5_adapter_router_v6_safe"
-run_one "text5_adapter_router_v6_safe_1"  "text5_adapter_router_v6_safe_1"
-run_one "text5_adapter_router_v6_aggr"  "text5_adapter_router_v6_aggr"
-run_one "text5_adapter_router_v6_aggr_1"  "text5_adapter_router_v6_aggr_1"
 
 # run_one "ablation_full_model" "ablation_full_model"
 # run_one "ablation_wo_visual_gate" "ablation_wo_visual_gate"

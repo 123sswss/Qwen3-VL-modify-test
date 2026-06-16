@@ -89,6 +89,19 @@ EXPERIMENTS = {
         "adapter_sample_entropy_loss_weight": 0.02,
         "diag_every_steps": 500,
     },
+    "visual_router_v2_1_text_on_monitor": {
+        **BASE_VISUAL_ROUTER_MODEL,
+        "disable_text_gate": False,
+        "disable_text_prompt_insert": False,
+        "mask_rep_placeholders_when_text_disabled": True,
+        "disable_general_mm_stage34": False,
+        "enable_capacity_prior_loss_s4": True,
+        "capacity_prior_loss_weight": 0.03,
+        "adapter_usage_balance_loss_weight": 0.005,
+        "adapter_common_mode_loss_weight": 0.03,
+        "adapter_sample_entropy_loss_weight": 0.02,
+        "diag_every_steps": 500,
+    },
 }
 
 SELECTED_EXPERIMENT = os.getenv("MMRL_EXPERIMENT", "visual_router_v1")

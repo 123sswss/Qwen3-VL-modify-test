@@ -104,6 +104,80 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
         self.text_rep_scale = nn.Parameter(torch.tensor(float(_cfg_attr(config, "TEXT_REP_INIT_SCALE", 1e-3))))
         ###################
 
+    def _text_insert_debug_defaults(self, device, dtype):
+        nan = torch.tensor(float("nan"), device=device, dtype=dtype)
+        return {
+            "text_insert_delta_norm_mean": nan,
+            "text_insert_delta_norm_p95": nan,
+            "text_insert_to_base_embed_ratio": nan,
+            "text_insert_pool_common_mode_ratio": nan,
+            "text_insert_pool_specificity_ratio": nan,
+            "text_insert_pool_pairwise_cos_mean": nan,
+            "text_rep_scale_abs": self.text_rep_scale.detach().abs().to(device=device, dtype=dtype),
+        }
+
+    def _compute_text_insert_debug_metrics(
+        self,
+        base_embeds: torch.Tensor,
+        target_embeds: torch.Tensor,
+        gate_soft_mask: torch.Tensor,
+        is_placeholder: torch.Tensor,
+    ):
+        metrics = self._text_insert_debug_defaults(base_embeds.device, base_embeds.dtype)
+        with torch.no_grad():
+            if base_embeds.numel() == 0 or target_embeds.numel() == 0:
+                return metrics
+
+            placeholder_mask = is_placeholder.unsqueeze(-1)
+            text_insert_delta = target_embeds * gate_soft_mask
+            placeholder_delta = text_insert_delta[placeholder_mask.expand_as(text_insert_delta)].view(-1, text_insert_delta.shape[-1]) if is_placeholder.any() else None
+            placeholder_base = base_embeds[placeholder_mask.expand_as(base_embeds)].view(-1, base_embeds.shape[-1]) if is_placeholder.any() else None
+
+            if placeholder_delta is None or placeholder_delta.numel() == 0:
+                return metrics
+
+            delta_norm = placeholder_delta.detach().float().norm(dim=-1)
+            base_norm = placeholder_base.detach().float().norm(dim=-1)
+            metrics["text_insert_delta_norm_mean"] = delta_norm.mean().to(device=base_embeds.device, dtype=base_embeds.dtype)
+            metrics["text_insert_delta_norm_p95"] = torch.quantile(delta_norm, 0.95).to(device=base_embeds.device, dtype=base_embeds.dtype)
+            metrics["text_insert_to_base_embed_ratio"] = (
+                delta_norm.mean() / base_norm.mean().clamp_min(1e-8)
+            ).to(device=base_embeds.device, dtype=base_embeds.dtype)
+
+            sample_mask = is_placeholder.detach().float()
+            sample_count = sample_mask.sum(dim=1, keepdim=True)
+            valid_samples = sample_count.squeeze(-1) > 0
+            if valid_samples.any():
+                pooled_delta = (text_insert_delta.detach().float() * sample_mask.unsqueeze(-1)).sum(dim=1)
+                pooled_delta = pooled_delta / sample_count.clamp_min(1.0).unsqueeze(-1)
+                pooled_delta = pooled_delta[valid_samples]
+                pooled_norm = pooled_delta.norm(dim=-1)
+                valid_pool = pooled_norm > 1e-8
+                if valid_pool.any():
+                    pooled_delta = pooled_delta[valid_pool]
+                    pooled_norm = pooled_norm[valid_pool]
+                    pooled_mean_norm = pooled_norm.mean().clamp_min(1e-8)
+                    pooled_common = pooled_delta.mean(dim=0)
+                    pooled_specific = pooled_delta - pooled_common
+                    metrics["text_insert_pool_common_mode_ratio"] = (
+                        pooled_common.norm() / pooled_mean_norm
+                    ).to(device=base_embeds.device, dtype=base_embeds.dtype)
+                    metrics["text_insert_pool_specificity_ratio"] = (
+                        pooled_specific.norm(dim=-1).mean() / pooled_mean_norm
+                    ).to(device=base_embeds.device, dtype=base_embeds.dtype)
+
+                    if pooled_delta.shape[0] >= 2:
+                        pooled_unit = pooled_delta / pooled_delta.norm(dim=-1, keepdim=True).clamp_min(1e-8)
+                        pairwise = pooled_unit @ pooled_unit.transpose(0, 1)
+                        tri = torch.triu_indices(pairwise.shape[0], pairwise.shape[1], offset=1, device=pairwise.device)
+                        pairwise_vals = pairwise[tri[0], tri[1]]
+                        if pairwise_vals.numel() > 0:
+                            metrics["text_insert_pool_pairwise_cos_mean"] = pairwise_vals.mean().to(
+                                device=base_embeds.device, dtype=base_embeds.dtype
+                            )
+
+        return metrics
+
     def get_image_features(self,
                         pixel_values: torch.FloatTensor,
                         image_grid_thw: Optional[torch.LongTensor] = None,
@@ -271,6 +345,7 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
             self.k_results = k_sums
             placeholder_cumsum = is_placeholder.cumsum(dim=-1)
             placeholder_idx = (placeholder_cumsum - 1).clamp(min=0)
+            self.debug_context.update(self._text_insert_debug_defaults(inputs_embeds.device, inputs_embeds.dtype))
 
             if self.disable_text_prompt_insert:
                 if self.mask_rep_placeholders_when_text_disabled:
@@ -283,6 +358,7 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
                     "rep_placeholder_attention_ratio": rep_attn.to(device=inputs_embeds.device, dtype=inputs_embeds.dtype),
                 })
             else:
+                placeholder_base_embeds = inputs_embeds.detach().clone()
                 target_embeds = self.text_rep_scale.to(device=inputs_embeds.device, dtype=inputs_embeds.dtype) * t_r_tokens[placeholder_idx]
                 k_mask = getattr(self.visual, "k_mask_results", None)
                 if k_mask is None:
@@ -295,6 +371,12 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
                     gather_idx = placeholder_idx.clamp(max=k_mask.shape[-1] - 1)
                     gate_soft_mask = k_mask.gather(dim=1, index=gather_idx).unsqueeze(-1)
                 gate_soft_mask = gate_soft_mask.to(inputs_embeds.dtype)
+                self.debug_context.update(self._compute_text_insert_debug_metrics(
+                    base_embeds=placeholder_base_embeds,
+                    target_embeds=target_embeds,
+                    gate_soft_mask=gate_soft_mask,
+                    is_placeholder=is_placeholder,
+                ))
                 inputs_embeds = torch.where(is_placeholder.unsqueeze(-1), target_embeds * gate_soft_mask, inputs_embeds)
                 dynamic_gate_mask = (gate_soft_mask.squeeze(-1) > 0.5)
                 attention_mask = attention_mask & ((~is_placeholder) | dynamic_gate_mask)

@@ -127,7 +127,7 @@ run_N() {
 # run_one "ablation_replace_mmrl_with_40_learnable_tokens" "ablation_replace_mmrl_with_40_learnable_tokens"
 
 # 当前可用实验名见 train/train.py: EXPERIMENTS
-run_N "visual_router_v1" "visual_router_v1" 3
+run_N "visual_router_v2" "visual_router_v2" 3
 
 
 # run_one "ablation_full_model" "ablation_full_model"

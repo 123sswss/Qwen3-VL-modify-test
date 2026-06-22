@@ -15,13 +15,18 @@ BASE_VISUAL_ROUTER_MODEL = {
     "ablate_visual_gate": False,
     "ablate_direct_learnable_rep": False,
     "disable_general_mm_stage34": False,
-    "diag_every_steps": 1000,
+    "diag_every_steps": 500,
 }
 
 
 EXPERIMENTS = {
-    "visual_router_v1": {
+    "visual_router_v2": {
         **BASE_VISUAL_ROUTER_MODEL,
+        "adapter_usage_balance_loss_weight": 0.003,
+        "adapter_sample_entropy_loss_weight": 0.05,
+        "adapter_common_mode_loss_weight": 0.07,
+        "adapter_sample_entropy_target": 0.55,
+        "adapter_common_mode_target": 0.80,
     },
 }
 SELECTED_EXPERIMENT = os.getenv("MMRL_EXPERIMENT", "visual_router_v1")

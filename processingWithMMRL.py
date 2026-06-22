@@ -17,6 +17,7 @@ class Qwen3ProcessorWithMMRL(Qwen3VLProcessor):
                  cfg = None,
                  **kwargs):
         super().__init__(image_processor=image_processor, tokenizer=tokenizer, video_processor=None, **kwargs)
+        self.chat_template = tokenizer.chat_template
 
     def __call__(
             self,

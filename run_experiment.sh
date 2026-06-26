@@ -113,21 +113,9 @@ run_N() {
   done
 }
 
-# 可选实验列表（保留注释，便于后续继续切换/复用）：
-# 1) group_threshold_prior：8组门控 + capacity prior，主实验
-# run_one "group_threshold_prior" "group_threshold_prior"
-#
-# 2) ablation_full_model：同主实验，用于显式消融命名
-# run_one "ablation_full_model" "ablation_full_model"
-#
-# 3) ablation_wo_visual_gate：视觉门控消融
-# run_one "ablation_wo_visual_gate" "ablation_wo_visual_gate"
-#
-# 4) ablation_replace_mmrl_with_40_learnable_tokens：直接可学习文本rep消融
-# run_one "ablation_replace_mmrl_with_40_learnable_tokens" "ablation_replace_mmrl_with_40_learnable_tokens"
-
 # 当前可用实验名见 train/train.py: EXPERIMENTS
-run_N "visual_router_v2" "visual_router_v2" 3
+run_N "visual_router_v5_safe" "visual_router_v5_safe" 2
+run_N "visual_router_v5_unsafe" "visual_router_v5_unsafe" 2
 
 
 # run_one "ablation_full_model" "ablation_full_model"

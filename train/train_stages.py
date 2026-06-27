@@ -51,8 +51,20 @@ def _build_experiment_context(train_cfg, output_dir, stage_id):
             "adapter_usage_balance_loss_weight": train_cfg.get("adapter_usage_balance_loss_weight"),
             "adapter_sample_entropy_loss_weight": train_cfg.get("adapter_sample_entropy_loss_weight"),
             "adapter_common_mode_loss_weight": train_cfg.get("adapter_common_mode_loss_weight"),
+            "adapter_effective_delta_loss_weight": train_cfg.get(
+                "adapter_effective_delta_loss_weight",
+                experiment_cfg.get("adapter_effective_delta_loss_weight"),
+            ),
             "adapter_sample_entropy_target": train_cfg.get("adapter_sample_entropy_target"),
             "adapter_common_mode_target": train_cfg.get("adapter_common_mode_target"),
+            "adapter_effective_delta_target_low": train_cfg.get(
+                "adapter_effective_delta_target_low",
+                experiment_cfg.get("adapter_effective_delta_target_low"),
+            ),
+            "adapter_effective_delta_target_high": train_cfg.get(
+                "adapter_effective_delta_target_high",
+                experiment_cfg.get("adapter_effective_delta_target_high"),
+            ),
             "diag_every_steps": train_cfg.get("diag_every_steps"),
             "enable_expert_floor_loss_s4": train_cfg.get("enable_expert_floor_loss_s4"),
             "expert_floor_loss_weight": train_cfg.get("expert_floor_loss_weight"),
@@ -459,6 +471,7 @@ class Qwen3VLMMRLForStages(Qwen3VLForConditionalGeneration):
         self.adapter_usage_balance_loss_weight = 0.0
         self.adapter_sample_entropy_loss_weight = 0.0
         self.adapter_common_mode_loss_weight = 0.0
+        self.adapter_effective_delta_loss_weight = 0.0
         self.enable_expert_floor_loss = False
         self.expert_floor_loss_weight = 0.0
         self.expert_min_active_tokens = 4.0
@@ -637,6 +650,7 @@ class Qwen3VLMMRLForStages(Qwen3VLForConditionalGeneration):
         adapter_usage_balance_loss = getattr(self.model.visual, "adapter_usage_balance_loss", torch.tensor(0.0, device=input_ids.device))
         adapter_sample_entropy_loss = getattr(self.model.visual, "adapter_sample_entropy_loss", torch.tensor(0.0, device=input_ids.device))
         adapter_common_mode_loss = getattr(self.model.visual, "adapter_common_mode_loss", torch.tensor(0.0, device=input_ids.device))
+        adapter_effective_delta_loss = getattr(self.model.visual, "adapter_effective_delta_loss", torch.tensor(0.0, device=input_ids.device))
         if not torch.is_tensor(adapter_usage_balance_loss):
             adapter_usage_balance_loss = torch.tensor(adapter_usage_balance_loss, device=input_ids.device, dtype=ce_loss.dtype)
         else:
@@ -649,9 +663,14 @@ class Qwen3VLMMRLForStages(Qwen3VLForConditionalGeneration):
             adapter_common_mode_loss = torch.tensor(adapter_common_mode_loss, device=input_ids.device, dtype=ce_loss.dtype)
         else:
             adapter_common_mode_loss = adapter_common_mode_loss.to(device=input_ids.device, dtype=ce_loss.dtype)
+        if not torch.is_tensor(adapter_effective_delta_loss):
+            adapter_effective_delta_loss = torch.tensor(adapter_effective_delta_loss, device=input_ids.device, dtype=ce_loss.dtype)
+        else:
+            adapter_effective_delta_loss = adapter_effective_delta_loss.to(device=input_ids.device, dtype=ce_loss.dtype)
         scaled_adapter_usage_balance_loss = adapter_usage_balance_loss * float(self.adapter_usage_balance_loss_weight)
         scaled_adapter_sample_entropy_loss = adapter_sample_entropy_loss * float(self.adapter_sample_entropy_loss_weight)
         scaled_adapter_common_mode_loss = adapter_common_mode_loss * float(self.adapter_common_mode_loss_weight)
+        scaled_adapter_effective_delta_loss = adapter_effective_delta_loss * float(self.adapter_effective_delta_loss_weight)
 
         outputs.loss = (
             self.ce_loss_weight * ce_loss
@@ -659,6 +678,7 @@ class Qwen3VLMMRLForStages(Qwen3VLForConditionalGeneration):
             + scaled_adapter_usage_balance_loss
             + scaled_adapter_sample_entropy_loss
             + scaled_adapter_common_mode_loss
+            + scaled_adapter_effective_delta_loss
         )
 
         # ---- cache metrics for external logger ----
@@ -680,14 +700,17 @@ class Qwen3VLMMRLForStages(Qwen3VLForConditionalGeneration):
                 "adapter_usage_balance_loss": adapter_usage_balance_loss.detach(),
                 "adapter_sample_entropy_loss": adapter_sample_entropy_loss.detach(),
                 "adapter_common_mode_loss": adapter_common_mode_loss.detach(),
+                "adapter_effective_delta_loss": adapter_effective_delta_loss.detach(),
                 "adapter_usage_balance_loss_scaled": scaled_adapter_usage_balance_loss.detach(),
                 "adapter_sample_entropy_loss_scaled": scaled_adapter_sample_entropy_loss.detach(),
                 "adapter_common_mode_loss_scaled": scaled_adapter_common_mode_loss.detach(),
+                "adapter_effective_delta_loss_scaled": scaled_adapter_effective_delta_loss.detach(),
                 "alpha_mae": alpha_mae.detach(),
                 "temperature": torch.tensor(float(self.temperature_override) if self.temperature_override is not None else float("nan"), device=input_ids.device),
                 "adapter_usage_balance_weight": torch.tensor(float(self.adapter_usage_balance_loss_weight), device=input_ids.device),
                 "adapter_sample_entropy_weight": torch.tensor(float(self.adapter_sample_entropy_loss_weight), device=input_ids.device),
                 "adapter_common_mode_weight": torch.tensor(float(self.adapter_common_mode_loss_weight), device=input_ids.device),
+                "adapter_effective_delta_weight": torch.tensor(float(self.adapter_effective_delta_loss_weight), device=input_ids.device),
             }
             visual_dbg = getattr(self.model.visual, "debug_context", {}) or {}
             for key, value in visual_dbg.items():
@@ -753,6 +776,10 @@ def build_model_and_processor(model_path, experiment_cfg=None):
         "adapter_common_mode_loss_weight",
         os.getenv("MMRL_ADAPTER_COMMON_MODE_LOSS_WEIGHT", "0.0"),
     ))
+    config.ADAPTER_EFFECTIVE_DELTA_LOSS_WEIGHT = float(experiment_cfg.get(
+        "adapter_effective_delta_loss_weight",
+        os.getenv("MMRL_ADAPTER_EFFECTIVE_DELTA_LOSS_WEIGHT", "0.0"),
+    ))
     config.ADAPTER_SAMPLE_ENTROPY_TARGET = float(experiment_cfg.get(
         "adapter_sample_entropy_target",
         os.getenv("MMRL_ADAPTER_SAMPLE_ENTROPY_TARGET", "0.40"),
@@ -760,6 +787,14 @@ def build_model_and_processor(model_path, experiment_cfg=None):
     config.ADAPTER_COMMON_MODE_TARGET = float(experiment_cfg.get(
         "adapter_common_mode_target",
         os.getenv("MMRL_ADAPTER_COMMON_MODE_TARGET", "0.85"),
+    ))
+    config.ADAPTER_EFFECTIVE_DELTA_TARGET_LOW = float(experiment_cfg.get(
+        "adapter_effective_delta_target_low",
+        os.getenv("MMRL_ADAPTER_EFFECTIVE_DELTA_TARGET_LOW", "0.78"),
+    ))
+    config.ADAPTER_EFFECTIVE_DELTA_TARGET_HIGH = float(experiment_cfg.get(
+        "adapter_effective_delta_target_high",
+        os.getenv("MMRL_ADAPTER_EFFECTIVE_DELTA_TARGET_HIGH", "1.10"),
     ))
     tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
     image_processor = AutoImageProcessor.from_pretrained(model_path, trust_remote_code=True)
@@ -792,8 +827,11 @@ def build_model_and_processor(model_path, experiment_cfg=None):
         f"adapter_usage_balance_loss_weight={config.ADAPTER_USAGE_BALANCE_LOSS_WEIGHT} "
         f"adapter_sample_entropy_loss_weight={config.ADAPTER_SAMPLE_ENTROPY_LOSS_WEIGHT} "
         f"adapter_common_mode_loss_weight={config.ADAPTER_COMMON_MODE_LOSS_WEIGHT} "
+        f"adapter_effective_delta_loss_weight={config.ADAPTER_EFFECTIVE_DELTA_LOSS_WEIGHT} "
         f"adapter_sample_entropy_target={config.ADAPTER_SAMPLE_ENTROPY_TARGET} "
-        f"adapter_common_mode_target={config.ADAPTER_COMMON_MODE_TARGET}"
+        f"adapter_common_mode_target={config.ADAPTER_COMMON_MODE_TARGET} "
+        f"adapter_effective_delta_target_low={config.ADAPTER_EFFECTIVE_DELTA_TARGET_LOW} "
+        f"adapter_effective_delta_target_high={config.ADAPTER_EFFECTIVE_DELTA_TARGET_HIGH}"
     )
     print("Processor built.")
     return model, processor
@@ -1051,6 +1089,11 @@ def run_stage34_full(stage_id, model, processor, data_cfg, train_cfg, output_dir
     model.adapter_usage_balance_loss_weight = float(train_cfg.get("adapter_usage_balance_loss_weight", 0.0))
     model.adapter_sample_entropy_loss_weight = float(train_cfg.get("adapter_sample_entropy_loss_weight", 0.0))
     model.adapter_common_mode_loss_weight = float(train_cfg.get("adapter_common_mode_loss_weight", 0.0))
+    experiment_cfg = train_cfg.get("experiment_cfg", {}) or {}
+    model.adapter_effective_delta_loss_weight = float(train_cfg.get(
+        "adapter_effective_delta_loss_weight",
+        experiment_cfg.get("adapter_effective_delta_loss_weight", 0.0),
+    ))
     model.enable_gate_loss_stage2 = train_cfg.get("enable_gate_loss_stage2", True)
 
     stage34_views = ("expert-mm",)

@@ -193,8 +193,14 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
         self.adapter_usage_balance_loss = torch.tensor(0.0)
         self.adapter_sample_entropy_loss = torch.tensor(0.0)
         self.adapter_common_mode_loss = torch.tensor(0.0)
+        self.adapter_effective_delta_loss = torch.tensor(0.0)
         self.adapter_sample_entropy_target = float(getattr(self.cfg, "ADAPTER_SAMPLE_ENTROPY_TARGET", 0.40))
         self.adapter_common_mode_target = float(getattr(self.cfg, "ADAPTER_COMMON_MODE_TARGET", 0.85))
+        self.adapter_effective_delta_target_low = float(getattr(self.cfg, "ADAPTER_EFFECTIVE_DELTA_TARGET_LOW", 0.78))
+        self.adapter_effective_delta_target_high = float(getattr(self.cfg, "ADAPTER_EFFECTIVE_DELTA_TARGET_HIGH", 1.10))
+        self.adapter_effective_delta_ratio_mean = torch.tensor(float("nan"))
+        self.adapter_effective_delta_ratio_min = torch.tensor(float("nan"))
+        self.adapter_effective_delta_ratio_max = torch.tensor(float("nan"))
         self.alpha_list = []
         self.G_list = []
         self.route_probs = None
@@ -361,9 +367,13 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
     def _compute_router_aux_losses(self, final_delta, cu_seqlens, org_hidden_states=None):
         device = final_delta.device
         zero = final_delta.new_tensor(0.0)
+        nan = final_delta.new_tensor(float("nan"))
+        self.adapter_effective_delta_ratio_mean = nan
+        self.adapter_effective_delta_ratio_min = nan
+        self.adapter_effective_delta_ratio_max = nan
         route_probs = self.route_probs
         if not torch.is_tensor(route_probs) or route_probs.numel() == 0:
-            return zero, zero, zero
+            return zero, zero, zero, zero
 
         route_probs = route_probs.float()
         adapter_count = route_probs.shape[-1]
@@ -393,10 +403,33 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
                 common_ratio - float(self.adapter_common_mode_target)
             ).pow(2)
 
+        effective_delta_loss = zero
+        if org_hidden_states is not None:
+            pooled_org = self._pool_tokens_by_image_mean(org_hidden_states.detach().float(), cu_seqlens)
+            if pooled_delta is not None and pooled_org is not None and pooled_delta.numel() > 0:
+                n = min(pooled_delta.shape[0], pooled_org.shape[0], route_probs.shape[0])
+                if n > 0:
+                    delta_ratio = (
+                        pooled_delta[:n].norm(dim=-1)
+                        / pooled_org[:n].norm(dim=-1).clamp_min(1e-8)
+                    )
+                    confidence = route_probs[:n].max(dim=-1).values.detach().to(delta_ratio.device)
+                    floor_loss = confidence * torch.relu(
+                        delta_ratio.new_tensor(float(self.adapter_effective_delta_target_low)) - delta_ratio
+                    ).pow(2)
+                    ceiling_loss = torch.relu(
+                        delta_ratio - delta_ratio.new_tensor(float(self.adapter_effective_delta_target_high))
+                    ).pow(2)
+                    effective_delta_loss = floor_loss.mean() + ceiling_loss.mean()
+                    self.adapter_effective_delta_ratio_mean = delta_ratio.detach().mean().to(device=device, dtype=final_delta.dtype)
+                    self.adapter_effective_delta_ratio_min = delta_ratio.detach().min().to(device=device, dtype=final_delta.dtype)
+                    self.adapter_effective_delta_ratio_max = delta_ratio.detach().max().to(device=device, dtype=final_delta.dtype)
+
         return (
             usage_balance_loss.to(device=device, dtype=final_delta.dtype),
             sample_entropy_loss.to(device=device, dtype=final_delta.dtype),
             common_mode_loss.to(device=device, dtype=final_delta.dtype),
+            effective_delta_loss.to(device=device, dtype=final_delta.dtype),
         )
 
     def forward(self,
@@ -601,6 +634,7 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
             self.adapter_usage_balance_loss,
             self.adapter_sample_entropy_loss,
             self.adapter_common_mode_loss,
+            self.adapter_effective_delta_loss,
         ) = self._compute_router_aux_losses(final_delta, cu_seqlens, org_hidden_states=org_hidden_states)
 
         org_hidden_norm = org_hidden_states.detach().float().norm(dim=-1).mean()
@@ -630,6 +664,10 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
             "adapter_usage_balance_loss": self.adapter_usage_balance_loss.detach(),
             "adapter_sample_entropy_loss": self.adapter_sample_entropy_loss.detach(),
             "adapter_common_mode_loss": self.adapter_common_mode_loss.detach(),
+            "adapter_effective_delta_loss": self.adapter_effective_delta_loss.detach(),
+            "adapter_effective_delta_ratio_mean": self.adapter_effective_delta_ratio_mean.detach(),
+            "adapter_effective_delta_ratio_min": self.adapter_effective_delta_ratio_min.detach(),
+            "adapter_effective_delta_ratio_max": self.adapter_effective_delta_ratio_max.detach(),
             **residual_debug,
         }
 

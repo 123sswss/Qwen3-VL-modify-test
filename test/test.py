@@ -249,12 +249,12 @@ def run_evaluation(json_paths, model, image_dirs=None, max_new_tokens=256, tempe
     print(f"{'='*60}")
 
     # 保存日志
-    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-    log_filename = f"eval_log_{timestamp}.json"
-    output_data = {"summary": summary, "logs": logs}
-    with open(log_filename, 'w', encoding='utf-8') as f:
-        json.dump(output_data, f, ensure_ascii=False, indent=2)
-    print(f"详细日志已保存至: {log_filename}")
+    # timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    # log_filename = f"eval_log_{timestamp}.json"
+    # output_data = {"summary": summary, "logs": logs}
+    # with open(log_filename, 'w', encoding='utf-8') as f:
+    #     json.dump(output_data, f, ensure_ascii=False, indent=2)
+    # print(f"详细日志已保存至: {log_filename}")
 
     return summary
 

@@ -23,40 +23,6 @@ BASE_VISUAL_ROUTER_MODEL = {
 
 
 EXPERIMENTS = {
-    "visual_router_v2": {
-        **BASE_VISUAL_ROUTER_MODEL,
-        "adapter_usage_balance_loss_weight": 0.003,
-        "adapter_sample_entropy_loss_weight": 0.05,
-        "adapter_common_mode_loss_weight": 0.07,
-        "adapter_sample_entropy_target": 0.55,
-        "adapter_common_mode_target": 0.80,
-    },
-    "visual_router_v3": {
-        **BASE_VISUAL_ROUTER_MODEL,
-        "adapter_usage_balance_loss_weight": 0.0035,
-        "adapter_sample_entropy_loss_weight": 0.035,
-        "adapter_common_mode_loss_weight": 0.055,
-        "adapter_sample_entropy_target": 0.55,
-        "adapter_common_mode_target": 0.82,
-    },
-    "visual_router_v5_safe": {
-        **BASE_VISUAL_ROUTER_MODEL,
-        "adapter_usage_balance_loss_weight": 0.002,
-        "adapter_sample_entropy_loss_weight": 0.018,
-        "adapter_common_mode_loss_weight": 0.022,
-        "adapter_sample_entropy_target": 0.58,
-        "adapter_common_mode_target": 0.90,
-        "diag_every_steps": 250,
-    },
-    "visual_router_v5_unsafe": {
-        **BASE_VISUAL_ROUTER_MODEL,
-        "adapter_usage_balance_loss_weight": 0.001,
-        "adapter_sample_entropy_loss_weight": 0.010,
-        "adapter_common_mode_loss_weight": 0.015,
-        "adapter_sample_entropy_target": 0.54,
-        "adapter_common_mode_target": 0.91,
-        "diag_every_steps": 250,
-    },
     "visual_router_v8_effective_delta": {
         **BASE_VISUAL_ROUTER_MODEL,
         "adapter_usage_balance_loss_weight": 0.001,
@@ -81,23 +47,33 @@ EXPERIMENTS = {
         "adapter_effective_delta_target_high": 1.30,
         "diag_every_steps": 250,
     },
-    "visual_router_v7": {
+    "visual_router_v9_stable_high": {
         **BASE_VISUAL_ROUTER_MODEL,
-        "adapter_usage_balance_loss_weight": 0.0022,
-        "adapter_sample_entropy_loss_weight": 0.016,
+        "adapter_usage_balance_loss_weight": 0.0013,
+        "adapter_sample_entropy_loss_weight": 0.012,
         "adapter_common_mode_loss_weight": 0.018,
-        "adapter_sample_entropy_target": 0.57,
+        "adapter_effective_delta_loss_weight": 0.010,
+    
+        "adapter_sample_entropy_target": 0.55,
         "adapter_common_mode_target": 0.90,
-        "diag_every_steps": 320,
+        "adapter_effective_delta_target_low": 0.82,
+        "adapter_effective_delta_target_high": 1.22,
+    
+        "diag_every_steps": 250,
     },
-    "visual_router_v7_entropy_probe": {
+    "visual_router_v9_specificity_probe": {
         **BASE_VISUAL_ROUTER_MODEL,
-        "adapter_usage_balance_loss_weight": 0.0016,
-        "adapter_sample_entropy_loss_weight": 0.024,
-        "adapter_common_mode_loss_weight": 0.014,
-        "adapter_sample_entropy_target": 0.62,
-        "adapter_common_mode_target": 0.92,
-        "diag_every_steps": 320,
+        "adapter_usage_balance_loss_weight": 0.0012,
+        "adapter_sample_entropy_loss_weight": 0.011,
+        "adapter_common_mode_loss_weight": 0.024,
+        "adapter_effective_delta_loss_weight": 0.009,
+    
+        "adapter_sample_entropy_target": 0.54,
+        "adapter_common_mode_target": 0.88,
+        "adapter_effective_delta_target_low": 0.80,
+        "adapter_effective_delta_target_high": 1.25,
+    
+        "diag_every_steps": 125,
     },
 }
 SELECTED_EXPERIMENT = os.getenv("MMRL_EXPERIMENT", "visual_router_v1")
@@ -215,12 +191,9 @@ CFG = {
         )),
         "mmrl_diagnostics_keep_keys": [
             "ce_loss",
-            "alpha_prob_mean",
             "delta_to_org_ratio",
-            "final_to_gated_ratio",
             "delta_pool_common_mode_ratio",
             "delta_pool_specificity_ratio",
-            "delta_token_norm_entropy_norm",
             "adapter_route_entropy_norm",
             "adapter_route_confidence",
             "adapter_usage_max",
@@ -229,22 +202,11 @@ CFG = {
             "adapter_usage_1",
             "adapter_usage_2",
             "adapter_usage_3",
-            "adapter_usage_balance_loss",
-            "adapter_sample_entropy_loss",
-            "adapter_common_mode_loss",
-            "adapter_effective_delta_loss",
             "adapter_usage_balance_loss_scaled",
             "adapter_sample_entropy_loss_scaled",
             "adapter_common_mode_loss_scaled",
             "adapter_effective_delta_loss_scaled",
             "adapter_effective_delta_ratio_mean",
-            "adapter_effective_delta_ratio_min",
-            "adapter_effective_delta_ratio_max",
-            "shared_rep_grad_norm",
-            "shared_rep_grad_ratio",
-            "shared_rep_grad_spike_flag",
-            "adapter_router_grad_norm_mean",
-            "visual_adapter_grad_norm_mean",
         ],
 
         "learning_rate": {

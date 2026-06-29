@@ -1,16 +1,16 @@
 ﻿#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Evaluate trained Qwen3-VL visual-encoder LoRA adapters with ../test/test.py.
+Evaluate trained Qwen3-VL visual-encoder IA3 adapter with ../test/test.py.
 
 Run from this folder:
-    python loraTest.py
+    python ia3Test.py
 """
 
 import importlib.util
 import os
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict
 
 import torch
 from peft import PeftModel
@@ -25,8 +25,7 @@ except ImportError:
 
 CFG = {
     "base_model_path": "/root/autodl-tmp/model",
-    "lora_root": "./runs/lora",
-    "ranks": [8, 16, 32],
+    "adapter_path": "./runs/ia3/final",
     "test_script_path": "../test/test.py",
     "json_paths": [
         "/root/autodl-tmp/dataset/test2_val.json",
@@ -53,7 +52,7 @@ def load_test_module(test_script_path: str) -> Any:
     script_path = Path(test_script_path).resolve()
     if not script_path.exists():
         raise FileNotFoundError(f"test.py not found: {script_path}")
-    spec = importlib.util.spec_from_file_location("qwen_lora_eval_test", script_path)
+    spec = importlib.util.spec_from_file_location("qwen_ia3_eval_test", script_path)
     if spec is None or spec.loader is None:
         raise RuntimeError(f"Failed to import test module from {script_path}")
     module = importlib.util.module_from_spec(spec)
@@ -67,7 +66,6 @@ def load_base_model(model_path: str) -> Any:
     if Qwen3VLForConditionalGeneration is not None:
         loaders.append(Qwen3VLForConditionalGeneration)
     loaders.extend([AutoModelForVision2Seq, AutoModelForCausalLM])
-
     last_error = None
     for loader in loaders:
         try:
@@ -90,54 +88,37 @@ def move_inputs_to_device(inputs: Dict[str, torch.Tensor], device: torch.device)
     return moved
 
 
-class LoraModelInterface:
+class IA3ModelInterface:
     def __init__(self, adapter_path: str, base_model_path: str) -> None:
         adapter_dir = Path(adapter_path).resolve()
         if not adapter_dir.exists():
-            raise FileNotFoundError(f"LoRA adapter not found: {adapter_dir}")
-
+            raise FileNotFoundError(f"IA3 adapter not found: {adapter_dir}")
         self.processor = AutoProcessor.from_pretrained(base_model_path, trust_remote_code=True)
         base_model = load_base_model(base_model_path)
         self.model = PeftModel.from_pretrained(base_model, str(adapter_dir))
         self.model.eval()
         self.device = next(self.model.parameters()).device
-        print(f"[lora] loaded adapter: {adapter_dir}")
+        print(f"[ia3] loaded adapter: {adapter_dir}")
 
     def infer(self, image: Image.Image, prompt: str, max_new_tokens: int = 256, temperature: float = 0.2) -> str:
-        messages = [
-            {
-                "role": "user",
-                "content": [
-                    {"type": "image", "image": image},
-                    {"type": "text", "text": prompt},
-                ],
-            }
-        ]
+        messages = [{"role": "user", "content": [{"type": "image", "image": image}, {"type": "text", "text": prompt}]}]
         text = self.processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
         inputs = self.processor(images=image, text=text, return_tensors="pt")
         inputs = move_inputs_to_device(inputs, self.device)
-
-        gen_cfg = CFG["generation"]
-        do_sample = bool(gen_cfg["do_sample"])
-        generate_kwargs = {
-            "max_new_tokens": max_new_tokens,
-            "do_sample": do_sample,
-        }
-        if do_sample:
+        generate_kwargs = {"max_new_tokens": max_new_tokens, "do_sample": bool(CFG["generation"]["do_sample"])}
+        if generate_kwargs["do_sample"]:
             generate_kwargs["temperature"] = temperature
-
         with torch.inference_mode():
             output_ids = self.model.generate(**inputs, **generate_kwargs)
-
         input_len = inputs["input_ids"].shape[-1]
         generated_ids = output_ids[:, input_len:]
         return self.processor.batch_decode(generated_ids, skip_special_tokens=True)[0].strip()
 
 
-def evaluate_one_rank(rank: int, test_module: Any) -> Dict[str, Any]:
-    adapter_path = Path(CFG["lora_root"]) / f"rank{rank}" / "final"
-    print(f"\n========== Evaluating LoRA rank {rank} ==========")
-    model = LoraModelInterface(str(adapter_path), CFG["base_model_path"])
+def main() -> None:
+    os.chdir(Path(__file__).resolve().parent)
+    test_module = load_test_module(CFG["test_script_path"])
+    model = IA3ModelInterface(CFG["adapter_path"], CFG["base_model_path"])
     summary = test_module.run_evaluation(
         CFG["json_paths"],
         model,
@@ -145,23 +126,8 @@ def evaluate_one_rank(rank: int, test_module: Any) -> Dict[str, Any]:
         max_new_tokens=CFG["generation"]["max_new_tokens"],
         temperature=CFG["generation"]["temperature"],
     )
-    print(f"[summary] rank={rank} score={summary.get('score')} evaluated={summary.get('evaluated')}")
-    return summary
-
-
-def main() -> None:
-    os.chdir(Path(__file__).resolve().parent)
-    test_module = load_test_module(CFG["test_script_path"])
-    summaries = {}
-    for rank in CFG["ranks"]:
-        summaries[f"rank{rank}"] = evaluate_one_rank(rank, test_module)
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
-    print("\n========== LoRA evaluation finished ==========")
-    for name, summary in summaries.items():
-        print(f"{name}: score={summary.get('score')} evaluated={summary.get('evaluated')}")
+    print(f"[summary] ia3 score={summary.get('score')} evaluated={summary.get('evaluated')}")
 
 
 if __name__ == "__main__":
     main()
-

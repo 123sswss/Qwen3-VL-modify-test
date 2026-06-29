@@ -1,10 +1,10 @@
 ﻿#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-One-click LoRA training for Qwen3-VL visual encoder comparison.
+One-click DoRA training for Qwen3-VL visual encoder comparison.
 
 Run from this folder:
-    python trainLora.py
+    python trainDora.py
 """
 
 import json
@@ -34,7 +34,7 @@ except ImportError:
 
 CFG = {
     "model_path": "/root/autodl-tmp/model",
-    "work_dir": "./runs/lora",
+    "work_dir": "./runs/dora",
     "seed": 42,
     "max_length": 1024,
     "data": {
@@ -80,7 +80,7 @@ CFG = {
         "report_to": "none",
     },
     "lora": {
-        "ranks": [8, 16, 32],
+        "ranks": [8, 16],
         "alpha_multiplier": 2,
         "dropout": 0.05,
         "bias": "none",
@@ -249,8 +249,8 @@ def find_visual_linear_targets(model: nn.Module) -> List[str]:
             continue
         targets.append(name)
     if not targets:
-        raise RuntimeError("No visual Linear modules found for LoRA. Please inspect Qwen3-VL module names.")
-    print(f"[lora] visual Linear target modules: {len(targets)}")
+        raise RuntimeError("No visual Linear modules found for DoRA. Please inspect Qwen3-VL module names.")
+    print(f"[dora] visual Linear target modules: {len(targets)}")
     for name in targets[:20]:
         print(f"  - {name}")
     if len(targets) > 20:
@@ -288,10 +288,11 @@ def train_one_rank(rank: int, dataset: Dataset, target_modules: List[str]) -> No
         lora_dropout=CFG["lora"]["dropout"],
         bias=CFG["lora"]["bias"],
         target_modules=target_modules,
+        use_dora=True,
     )
     model = get_peft_model(model, lora_cfg)
     counts = count_parameters(model)
-    print_trainable_banner(f"LoRA rank {rank}", counts)
+    print_trainable_banner(f"DoRA rank {rank}", counts)
     model.print_trainable_parameters()
 
     output_dir = Path(CFG["work_dir"]) / f"rank{rank}"
@@ -323,7 +324,7 @@ def train_one_rank(rank: int, dataset: Dataset, target_modules: List[str]) -> No
     trainer.train()
     trainer.save_model(str(output_dir / "final"))
     processor.save_pretrained(str(output_dir / "final"))
-    print(f"[done] rank {rank} LoRA saved to {output_dir / 'final'}")
+    print(f"[done] rank {rank} DoRA saved to {output_dir / 'final'}")
 
 
 def main() -> None:
@@ -340,8 +341,10 @@ def main() -> None:
     dataset = QwenVLConversationDataset(processor=processor, cfg=CFG["data"])
     for rank in CFG["lora"]["ranks"]:
         train_one_rank(rank, dataset, target_modules)
-    print("All LoRA rank experiments finished.")
+    print("All DoRA rank experiments finished.")
 
 
 if __name__ == "__main__":
     main()
+
+

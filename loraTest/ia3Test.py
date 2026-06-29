@@ -15,12 +15,17 @@ from typing import Any, Dict
 import torch
 from peft import PeftModel
 from PIL import Image
-from transformers import AutoModelForCausalLM, AutoModelForVision2Seq, AutoProcessor
+from transformers import AutoModelForCausalLM, AutoProcessor
 
 try:
     from transformers import Qwen3VLForConditionalGeneration
 except ImportError:
     Qwen3VLForConditionalGeneration = None
+
+try:
+    from transformers import AutoModelForImageTextToText
+except ImportError:
+    AutoModelForImageTextToText = None
 
 
 CFG = {
@@ -65,7 +70,9 @@ def load_base_model(model_path: str) -> Any:
     loaders = []
     if Qwen3VLForConditionalGeneration is not None:
         loaders.append(Qwen3VLForConditionalGeneration)
-    loaders.extend([AutoModelForVision2Seq, AutoModelForCausalLM])
+    if AutoModelForImageTextToText is not None:
+        loaders.append(AutoModelForImageTextToText)
+    loaders.append(AutoModelForCausalLM)
     last_error = None
     for loader in loaders:
         try:

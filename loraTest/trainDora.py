@@ -19,7 +19,6 @@ from torch import nn
 from torch.utils.data import Dataset
 from transformers import (
     AutoModelForCausalLM,
-    AutoModelForVision2Seq,
     AutoProcessor,
     Trainer,
     TrainingArguments,
@@ -30,6 +29,11 @@ try:
     from transformers import Qwen3VLForConditionalGeneration
 except ImportError:
     Qwen3VLForConditionalGeneration = None
+
+try:
+    from transformers import AutoModelForImageTextToText
+except ImportError:
+    AutoModelForImageTextToText = None
 
 
 CFG = {
@@ -223,7 +227,9 @@ def load_model_and_processor(model_path: str) -> Any:
     loaders = []
     if Qwen3VLForConditionalGeneration is not None:
         loaders.append(Qwen3VLForConditionalGeneration)
-    loaders.extend([AutoModelForVision2Seq, AutoModelForCausalLM])
+    if AutoModelForImageTextToText is not None:
+        loaders.append(AutoModelForImageTextToText)
+    loaders.append(AutoModelForCausalLM)
     last_error = None
     for loader in loaders:
         try:

@@ -76,9 +76,8 @@ CFG = {
 }
 
 
-def find_visual_ia3_targets(model: nn.Module) -> Tuple[List[str], List[str]]:
-    visual_keywords = ("visual", "vision", "vision_tower", "vision_model")
-    blocked_keywords = ("lm_head", "language", "text", "embed_tokens")
+def find_full_ia3_targets(model: nn.Module) -> Tuple[List[str], List[str]]:
+    blocked_keywords = ("lm_head", "embed_tokens")
     feedforward_keywords = ("mlp", "ffn", "feed_forward", "fc", "gate_proj", "up_proj", "down_proj")
     attention_keywords = ("attn", "attention", "q_proj", "k_proj", "v_proj", "o_proj")
     target_modules: List[str] = []
@@ -87,8 +86,6 @@ def find_visual_ia3_targets(model: nn.Module) -> Tuple[List[str], List[str]]:
     for name, module in model.named_modules():
         lname = name.lower()
         if not isinstance(module, nn.Linear):
-            continue
-        if not any(keyword in lname for keyword in visual_keywords):
             continue
         if any(keyword in lname for keyword in blocked_keywords):
             continue
@@ -99,12 +96,12 @@ def find_visual_ia3_targets(model: nn.Module) -> Tuple[List[str], List[str]]:
             feedforward_modules.append(name)
 
     if not target_modules:
-        raise RuntimeError("No visual Linear modules found for IA3. Please inspect Qwen3-VL module names.")
+        raise RuntimeError("No full-model Linear modules found for IA3. Please inspect Qwen3-VL module names.")
     if not feedforward_modules:
         feedforward_modules = list(target_modules)
 
-    print(f"[ia3] visual target modules: {len(target_modules)}")
-    print(f"[ia3] visual feedforward modules: {len(feedforward_modules)}")
+    print(f"[ia3] full-model target modules: {len(target_modules)}")
+    print(f"[ia3] full-model feedforward modules: {len(feedforward_modules)}")
     for name in target_modules[:20]:
         print(f"  - {name}")
     if len(target_modules) > 20:
@@ -168,7 +165,7 @@ def main() -> None:
     Path(CFG["work_dir"]).mkdir(parents=True, exist_ok=True)
 
     probe_model, processor = load_model_and_processor(CFG["model_path"])
-    target_modules, feedforward_modules = find_visual_ia3_targets(probe_model)
+    target_modules, feedforward_modules = find_full_ia3_targets(probe_model)
     del probe_model
     if torch.cuda.is_available():
         torch.cuda.empty_cache()

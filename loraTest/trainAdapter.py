@@ -114,15 +114,12 @@ def get_parent_module(model: nn.Module, module_name: str) -> Any:
     return parent, parts[-1]
 
 
-def find_visual_adapter_targets(model: nn.Module) -> List[str]:
-    visual_keywords = ("visual", "vision", "vision_tower", "vision_model")
-    blocked_keywords = ("lm_head", "language", "text", "embed_tokens")
+def find_full_adapter_targets(model: nn.Module) -> List[str]:
+    blocked_keywords = ("lm_head", "embed_tokens")
     targets: List[str] = []
     for name, module in model.named_modules():
         lname = name.lower()
         if not isinstance(module, nn.Linear):
-            continue
-        if not any(keyword in lname for keyword in visual_keywords):
             continue
         if any(keyword in lname for keyword in blocked_keywords):
             continue
@@ -131,8 +128,8 @@ def find_visual_adapter_targets(model: nn.Module) -> List[str]:
     if limit is not None:
         targets = targets[: int(limit)]
     if not targets:
-        raise RuntimeError("No visual Linear modules found for Adapter. Please inspect Qwen3-VL module names.")
-    print(f"[adapter] visual Linear target modules: {len(targets)}")
+        raise RuntimeError("No full-model Linear modules found for Adapter. Please inspect Qwen3-VL module names.")
+    print(f"[adapter] full-model Linear target modules: {len(targets)}")
     for name in targets[:20]:
         print(f"  - {name}")
     if len(targets) > 20:
@@ -226,7 +223,7 @@ def main() -> None:
     Path(CFG["work_dir"]).mkdir(parents=True, exist_ok=True)
 
     probe_model, processor = load_model_and_processor(CFG["model_path"])
-    target_modules = find_visual_adapter_targets(probe_model)
+    target_modules = find_full_adapter_targets(probe_model)
     del probe_model
     if torch.cuda.is_available():
         torch.cuda.empty_cache()

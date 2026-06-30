@@ -113,7 +113,7 @@ CFG = {
             "/root/autodl-tmp/dataset/gen/train2017",
             "/root/autodl-tmp/dataset/gen/val2017",
         ],
-        "total_limit": 20000,  # Stage1/2: expert 20000 + general 20000；Stage3/4: expert-only 20000
+        "total_limit": 200,  # Stage1/2: expert 20000 + general 20000；Stage3/4: expert-only 20000
     },
     "train": {
         "experiment_name": SELECTED_EXPERIMENT,

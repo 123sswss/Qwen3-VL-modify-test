@@ -18,8 +18,8 @@ from transformers import Trainer, TrainingArguments
 from peft import IA3Config, TaskType, get_peft_model
 
 from trainLora import (
-    QwenVLConversationDataset,
-    QwenVLDataCollator,
+    build_fair_collator,
+    build_fair_dataset,
     count_parameters,
     load_model_and_processor,
     print_trainable_banner,
@@ -32,7 +32,7 @@ CFG = {
     "work_dir": "./runs/ia3",
     "seed": 42,
     "data": {
-        "json_files": [
+        "expert_json": [
             "/root/autodl-tmp/dataset/1json.json",
             "/root/autodl-tmp/dataset/2conv_c.json",
             "/root/autodl-tmp/dataset/1conv_c.json",
@@ -41,20 +41,27 @@ CFG = {
             "/root/autodl-tmp/dataset/prof_test.json",
             "/root/autodl-tmp/dataset/test2_train.json",
             "/root/autodl-tmp/dataset/test7_train.json",
-            "/root/autodl-tmp/dataset/llava_instruct_150k.json",
-            "/root/autodl-tmp/dataset/gen_test.json",
-            "/root/autodl-tmp/dataset/conversation_58k.json",
         ],
-        "image_dirs": [
+        "expert_img_dir": [
             "/root/autodl-tmp/dataset/1/train",
             "/root/autodl-tmp/dataset/2/train",
             "/root/autodl-tmp/dataset/4/train",
             "/root/autodl-tmp/dataset/14",
+        ],
+        "general_json": [
+            "/root/autodl-tmp/dataset/llava_instruct_150k.json",
+            "/root/autodl-tmp/dataset/gen_test.json",
+            "/root/autodl-tmp/dataset/conversation_58k.json",
+        ],
+        "general_img_dir": [
             "/root/autodl-tmp/dataset/gen/train2017",
             "/root/autodl-tmp/dataset/gen/val2017",
         ],
-        "sample_limit": 20000,
-        "shuffle": True,
+        "total_limit": 20000,
+        "enable_views": ("expert-mm",),
+        "mode": "peft_ce",
+        "ce_enabled": True,
+        "deterministic_sampling": False,
     },
     "train": {
         "num_train_epochs": 1,
@@ -76,10 +83,10 @@ CFG = {
 }
 
 
-def find_full_ia3_targets(model: nn.Module) -> Tuple[List[str], List[str]]:
+def find_ia3_kv_ffn_targets(model: nn.Module) -> Tuple[List[str], List[str]]:
     blocked_keywords = ("lm_head", "embed_tokens")
-    feedforward_keywords = ("mlp", "ffn", "feed_forward", "fc", "gate_proj", "up_proj", "down_proj")
-    attention_keywords = ("attn", "attention", "q_proj", "k_proj", "v_proj", "o_proj")
+    attention_suffixes = ("k_proj", "v_proj")
+    feedforward_suffixes = ("down_proj", "fc2")
     target_modules: List[str] = []
     feedforward_modules: List[str] = []
 
@@ -89,19 +96,21 @@ def find_full_ia3_targets(model: nn.Module) -> Tuple[List[str], List[str]]:
             continue
         if any(keyword in lname for keyword in blocked_keywords):
             continue
-        if not any(keyword in lname for keyword in feedforward_keywords + attention_keywords):
+        is_attention_target = lname.endswith(attention_suffixes)
+        is_feedforward_target = lname.endswith(feedforward_suffixes)
+        if not (is_attention_target or is_feedforward_target):
             continue
         target_modules.append(name)
-        if any(keyword in lname for keyword in feedforward_keywords):
+        if is_feedforward_target:
             feedforward_modules.append(name)
 
     if not target_modules:
-        raise RuntimeError("No full-model Linear modules found for IA3. Please inspect Qwen3-VL module names.")
+        raise RuntimeError("No k/v or FFN Linear modules found for IA3. Please inspect Qwen3-VL module names.")
     if not feedforward_modules:
         feedforward_modules = list(target_modules)
 
-    print(f"[ia3] full-model target modules: {len(target_modules)}")
-    print(f"[ia3] full-model feedforward modules: {len(feedforward_modules)}")
+    print(f"[ia3] k/v + FFN target modules: {len(target_modules)}")
+    print(f"[ia3] FFN feedforward modules: {len(feedforward_modules)}")
     for name in target_modules[:20]:
         print(f"  - {name}")
     if len(target_modules) > 20:
@@ -150,7 +159,7 @@ def train_ia3(dataset: Dataset, target_modules: List[str], feedforward_modules: 
         model=model,
         args=args,
         train_dataset=dataset,
-        data_collator=QwenVLDataCollator(),
+        data_collator=build_fair_collator(processor),
         processing_class=processor,
     )
     trainer.train()
@@ -165,12 +174,12 @@ def main() -> None:
     Path(CFG["work_dir"]).mkdir(parents=True, exist_ok=True)
 
     probe_model, processor = load_model_and_processor(CFG["model_path"])
-    target_modules, feedforward_modules = find_full_ia3_targets(probe_model)
+    target_modules, feedforward_modules = find_ia3_kv_ffn_targets(probe_model)
     del probe_model
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
 
-    dataset = QwenVLConversationDataset(processor=processor, cfg=CFG["data"])
+    dataset = build_fair_dataset(processor=processor, data_cfg=CFG["data"])
     train_ia3(dataset, target_modules, feedforward_modules)
     print("IA3 experiment finished.")
 

@@ -10,6 +10,7 @@ Run from this folder:
 import json
 import os
 import random
+import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -24,6 +25,12 @@ from transformers import (
     TrainingArguments,
 )
 from peft import LoraConfig, TaskType, get_peft_model
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+TRAIN_DIR = PROJECT_ROOT / "train"
+if str(TRAIN_DIR) not in sys.path:
+    sys.path.insert(0, str(TRAIN_DIR))
+from data_pipeline import FourViewMMRLDataset, MMRLDataCollator
 
 try:
     from transformers import Qwen3VLForConditionalGeneration
@@ -42,7 +49,7 @@ CFG = {
     "seed": 42,
     "max_length": 1024,
     "data": {
-        "json_files": [
+        "expert_json": [
             "/root/autodl-tmp/dataset/1json.json",
             "/root/autodl-tmp/dataset/2conv_c.json",
             "/root/autodl-tmp/dataset/1conv_c.json",
@@ -51,20 +58,27 @@ CFG = {
             "/root/autodl-tmp/dataset/prof_test.json",
             "/root/autodl-tmp/dataset/test2_train.json",
             "/root/autodl-tmp/dataset/test7_train.json",
-            "/root/autodl-tmp/dataset/llava_instruct_150k.json",
-            "/root/autodl-tmp/dataset/gen_test.json",
-            "/root/autodl-tmp/dataset/conversation_58k.json",
         ],
-        "image_dirs": [
+        "expert_img_dir": [
             "/root/autodl-tmp/dataset/1/train",
             "/root/autodl-tmp/dataset/2/train",
             "/root/autodl-tmp/dataset/4/train",
             "/root/autodl-tmp/dataset/14",
+        ],
+        "general_json": [
+            "/root/autodl-tmp/dataset/llava_instruct_150k.json",
+            "/root/autodl-tmp/dataset/gen_test.json",
+            "/root/autodl-tmp/dataset/conversation_58k.json",
+        ],
+        "general_img_dir": [
             "/root/autodl-tmp/dataset/gen/train2017",
             "/root/autodl-tmp/dataset/gen/val2017",
         ],
-        "sample_limit": 20000,
-        "shuffle": True,
+        "total_limit": 20000,
+        "enable_views": ("expert-mm",),
+        "mode": "peft_ce",
+        "ce_enabled": True,
+        "deterministic_sampling": False,
     },
     "train": {
         "num_train_epochs": 1,
@@ -92,129 +106,30 @@ CFG = {
 }
 
 
+def build_fair_dataset(processor: Any, data_cfg: Dict[str, Any]) -> FourViewMMRLDataset:
+    return FourViewMMRLDataset(
+        processor=processor,
+        expert_json=data_cfg["expert_json"],
+        expert_img_dir=data_cfg["expert_img_dir"],
+        general_json=data_cfg["general_json"],
+        general_img_dir=data_cfg["general_img_dir"],
+        total_limit=data_cfg["total_limit"],
+        enable_views=tuple(data_cfg["enable_views"]),
+        mode=data_cfg["mode"],
+        ce_enabled=data_cfg["ce_enabled"],
+        seed=CFG["seed"],
+        deterministic_sampling=data_cfg.get("deterministic_sampling", False),
+    )
+
+
+def build_fair_collator(processor: Any) -> MMRLDataCollator:
+    return MMRLDataCollator(processor)
+
+
 def set_seed(seed: int) -> None:
     random.seed(seed)
     torch.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
-
-
-def load_json_files(paths: List[str]) -> List[Dict[str, Any]]:
-    items: List[Dict[str, Any]] = []
-    for path in paths:
-        if not os.path.exists(path):
-            print(f"[data] skip missing json: {path}")
-            continue
-        with open(path, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        if not isinstance(data, list):
-            print(f"[data] skip non-list json: {path}")
-            continue
-        for item in data:
-            if isinstance(item, dict) and item.get("conversations"):
-                copied = dict(item)
-                copied["__source_json_path"] = path
-                items.append(copied)
-    return items
-
-
-def build_image_index(image_dirs: List[str]) -> Dict[str, str]:
-    index: Dict[str, str] = {}
-    for image_dir in image_dirs:
-        if not os.path.isdir(image_dir):
-            print(f"[data] skip missing image dir: {image_dir}")
-            continue
-        for root, _, files in os.walk(image_dir):
-            for filename in files:
-                index.setdefault(filename, os.path.join(root, filename))
-    return index
-
-
-class QwenVLConversationDataset(Dataset):
-    def __init__(self, processor: Any, cfg: Dict[str, Any]) -> None:
-        self.processor = processor
-        self.max_length = CFG["max_length"]
-        self.image_index = build_image_index(cfg["image_dirs"])
-        raw_items = load_json_files(cfg["json_files"])
-        self.items = [x for x in raw_items if self._resolve_image(x) is not None]
-        if cfg["shuffle"]:
-            random.shuffle(self.items)
-        limit = cfg["sample_limit"]
-        if limit is not None:
-            self.items = self.items[:limit]
-        print(f"[data] usable multimodal samples: {len(self.items)}")
-        if not self.items:
-            raise RuntimeError("No usable multimodal training samples found.")
-
-    def __len__(self) -> int:
-        return len(self.items)
-
-    def _resolve_image(self, item: Dict[str, Any]) -> Optional[str]:
-        image_name = item.get("image")
-        if not image_name:
-            return None
-        if os.path.isabs(image_name) and os.path.exists(image_name):
-            return image_name
-        return self.image_index.get(os.path.basename(image_name))
-
-    def _to_qwen_messages(self, conversations: List[Dict[str, str]], image: Image.Image) -> List[Dict[str, Any]]:
-        messages: List[Dict[str, Any]] = []
-        image_used = False
-        for turn in conversations:
-            role = "user" if turn.get("from") == "human" else "assistant"
-            text = str(turn.get("value", "")).strip()
-            if role == "user" and not image_used:
-                text = text.replace("<image>", "").strip()
-                content = [{"type": "image", "image": image}, {"type": "text", "text": text}]
-                image_used = True
-            else:
-                content = [{"type": "text", "text": text.replace("<image>", "").strip()}]
-            messages.append({"role": role, "content": content})
-        return messages
-
-    def __getitem__(self, idx: int) -> Dict[str, torch.Tensor]:
-        item = self.items[idx]
-        image_path = self._resolve_image(item)
-        if image_path is None:
-            raise RuntimeError(f"Image disappeared for sample index {idx}")
-        image = Image.open(image_path).convert("RGB")
-        messages = self._to_qwen_messages(item["conversations"], image)
-        text = self.processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=False)
-        inputs = self.processor(
-            images=image,
-            text=text,
-            padding="max_length",
-            max_length=self.max_length,
-            truncation=True,
-            return_tensors="pt",
-        )
-        inputs = {k: v.squeeze(0) if torch.is_tensor(v) and v.dim() > 0 and v.shape[0] == 1 else v for k, v in inputs.items()}
-        labels = inputs["input_ids"].clone()
-        labels[inputs["attention_mask"] == 0] = -100
-        im_start_id = self.processor.tokenizer.convert_tokens_to_ids("<|im_start|>")
-        assistant_positions = (inputs["input_ids"] == im_start_id).nonzero(as_tuple=True)[0]
-        if len(assistant_positions) >= 2:
-            labels[: assistant_positions[1].item() + 2] = -100
-        inputs["labels"] = labels
-        return inputs
-
-
-class QwenVLDataCollator:
-    def __call__(self, features: List[Dict[str, torch.Tensor]]) -> Dict[str, torch.Tensor]:
-        batch: Dict[str, Any] = {}
-        keys = set().union(*(feature.keys() for feature in features))
-        for key in keys:
-            values = [feature.get(key) for feature in features]
-            if any(value is None for value in values):
-                continue
-            if key == "pixel_values":
-                batch[key] = torch.cat(values, dim=0)
-            elif key == "image_grid_thw":
-                batch[key] = torch.stack(values, dim=0) if values[0].dim() == 1 else torch.cat(values, dim=0)
-            elif torch.is_tensor(values[0]):
-                batch[key] = torch.stack(values, dim=0)
-            else:
-                batch[key] = values
-        return batch
 
 
 def load_model_and_processor(model_path: str) -> Any:
@@ -241,8 +156,9 @@ def load_model_and_processor(model_path: str) -> Any:
     raise RuntimeError(f"Failed to load model from {model_path}") from last_error
 
 
-def find_full_linear_targets(model: nn.Module) -> List[str]:
+def find_attention_linear_targets(model: nn.Module) -> List[str]:
     blocked_keywords = ("lm_head", "embed_tokens")
+    target_suffixes = ("q_proj", "k_proj", "v_proj", "o_proj")
     targets: List[str] = []
     for name, module in model.named_modules():
         lname = name.lower()
@@ -250,10 +166,12 @@ def find_full_linear_targets(model: nn.Module) -> List[str]:
             continue
         if any(keyword in lname for keyword in blocked_keywords):
             continue
+        if not lname.endswith(target_suffixes):
+            continue
         targets.append(name)
     if not targets:
-        raise RuntimeError("No full-model Linear modules found for DoRA. Please inspect Qwen3-VL module names.")
-    print(f"[dora] full-model Linear target modules: {len(targets)}")
+        raise RuntimeError("No attention Linear modules found for DoRA. Please inspect Qwen3-VL module names.")
+    print(f"[dora] attention Linear target modules: {len(targets)}")
     for name in targets[:20]:
         print(f"  - {name}")
     if len(targets) > 20:
@@ -321,7 +239,7 @@ def train_one_rank(rank: int, dataset: Dataset, target_modules: List[str]) -> No
         model=model,
         args=args,
         train_dataset=dataset,
-        data_collator=QwenVLDataCollator(),
+        data_collator=build_fair_collator(processor),
         processing_class=processor,
     )
     trainer.train()
@@ -336,12 +254,12 @@ def main() -> None:
     Path(CFG["work_dir"]).mkdir(parents=True, exist_ok=True)
 
     probe_model, processor = load_model_and_processor(CFG["model_path"])
-    target_modules = find_full_linear_targets(probe_model)
+    target_modules = find_attention_linear_targets(probe_model)
     del probe_model
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
 
-    dataset = QwenVLConversationDataset(processor=processor, cfg=CFG["data"])
+    dataset = build_fair_dataset(processor=processor, data_cfg=CFG["data"])
     for rank in CFG["lora"]["ranks"]:
         train_one_rank(rank, dataset, target_modules)
     print("All DoRA rank experiments finished.")
@@ -349,5 +267,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
-

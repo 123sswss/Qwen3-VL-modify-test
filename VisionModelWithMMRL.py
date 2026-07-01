@@ -202,6 +202,9 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
         self.adapter_effective_delta_target_high = float(getattr(self.cfg, "ADAPTER_EFFECTIVE_DELTA_TARGET_HIGH", 1.10))
         self.prototype_anchor_temperature = float(getattr(self.cfg, "PROTOTYPE_ANCHOR_TEMPERATURE", 0.20))
         self.prototype_anchor_momentum = float(getattr(self.cfg, "PROTOTYPE_ANCHOR_MOMENTUM", 0.95))
+        self.prototype_anchor_min_confidence = float(getattr(self.cfg, "PROTOTYPE_ANCHOR_MIN_CONFIDENCE", 0.40))
+        self.prototype_anchor_assignment_power = float(getattr(self.cfg, "PROTOTYPE_ANCHOR_ASSIGNMENT_POWER", 2.0))
+        self.prototype_anchor_init_noise = float(getattr(self.cfg, "PROTOTYPE_ANCHOR_INIT_NOISE", 0.10))
         self.adapter_diversity_target = float(getattr(self.cfg, "ADAPTER_DIVERSITY_TARGET", 0.35))
         self.adapter_effective_delta_ratio_mean = torch.tensor(float("nan"))
         self.adapter_effective_delta_ratio_min = torch.tensor(float("nan"))
@@ -223,6 +226,17 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
             "prototype_initialized",
             torch.zeros(self.visual_residual_adapter_count, dtype=torch.bool),
             persistent=True,
+        )
+        slot_offsets = torch.zeros(self.visual_residual_adapter_count, self.cfg.vision_token_dim)
+        for idx in range(self.visual_residual_adapter_count):
+            slot_offsets[idx, idx::self.visual_residual_adapter_count] = 1.0
+            if idx % 2 == 1:
+                slot_offsets[idx, (idx + 1)::self.visual_residual_adapter_count] = -1.0
+        slot_offsets = F.normalize(slot_offsets, dim=-1)
+        self.register_buffer(
+            "prototype_slot_offsets",
+            slot_offsets,
+            persistent=False,
         )
         self.alpha_list = []
         self.G_list = []
@@ -403,35 +417,64 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
         return torch.stack(pooled, dim=0)
 
     @torch.no_grad()
+    def _initialize_prototypes_from_batch(self, features: torch.Tensor):
+        if features is None or features.numel() == 0:
+            return
+        features = F.normalize(features.detach().float(), dim=-1)
+        n = features.shape[0]
+        if n <= 0:
+            return
+
+        offsets = self.prototype_slot_offsets.to(device=features.device, dtype=features.dtype)
+        init_noise = max(float(self.prototype_anchor_init_noise), 0.0)
+        proto = []
+        for idx in range(self.visual_residual_adapter_count):
+            base = features[idx % n]
+            proto.append(F.normalize(base + offsets[idx] * init_noise, dim=-1))
+        proto = torch.stack(proto, dim=0)
+        self.prototype_vectors.copy_(proto.to(device=self.prototype_vectors.device, dtype=self.prototype_vectors.dtype))
+        self.prototype_initialized.fill_(True)
+
+    @torch.no_grad()
     def _update_prototypes(self, pooled_vision_states: torch.Tensor, route_probs: torch.Tensor):
         if pooled_vision_states is None or route_probs is None:
             return
         if pooled_vision_states.numel() == 0 or route_probs.numel() == 0:
             return
 
-        features = pooled_vision_states.detach().float()
-        assignments = route_probs.detach().float()
-        n = min(features.shape[0], assignments.shape[0])
+        features = F.normalize(pooled_vision_states.detach().float(), dim=-1)
+        routes = route_probs.detach().float()
+        n = min(features.shape[0], routes.shape[0])
         if n <= 0:
             return
         features = features[:n]
-        assignments = assignments[:n]
-        usage = assignments.sum(dim=0)
-        weighted = assignments.transpose(0, 1) @ features
-        batch_proto = weighted / usage.clamp_min(1e-8).unsqueeze(-1)
-        active = usage > 1e-6
-        if not active.any():
+        routes = routes[:n]
+
+        if not bool(self.prototype_initialized.all().item()):
+            self._initialize_prototypes_from_batch(features)
+
+        confidence, winners = routes.max(dim=-1)
+        active_sample = confidence >= float(self.prototype_anchor_min_confidence)
+        if not active_sample.any():
             return
 
-        proto = self.prototype_vectors.to(device=features.device, dtype=features.dtype)
+        assignment_power = max(float(self.prototype_anchor_assignment_power), 1.0)
+        weights = routes.clamp_min(1e-8).pow(assignment_power)
+
+        proto = self.prototype_vectors.to(device=features.device, dtype=features.dtype).clone()
         initialized = self.prototype_initialized.to(device=features.device)
         momentum = float(self.prototype_anchor_momentum)
-        for idx in active.nonzero(as_tuple=False).flatten().tolist():
-            if bool(initialized[idx]):
-                proto[idx].mul_(momentum).add_(batch_proto[idx], alpha=1.0 - momentum)
-            else:
-                proto[idx].copy_(batch_proto[idx])
-                initialized[idx] = True
+        for idx in range(self.visual_residual_adapter_count):
+            mask = active_sample & (winners == idx)
+            if not mask.any():
+                continue
+            slot_weights = weights[mask, idx]
+            batch_proto = (features[mask] * slot_weights.unsqueeze(-1)).sum(dim=0)
+            batch_proto = batch_proto / slot_weights.sum().clamp_min(1e-8)
+            batch_proto = F.normalize(batch_proto, dim=-1)
+            proto[idx].mul_(momentum).add_(batch_proto, alpha=1.0 - momentum)
+            proto[idx] = F.normalize(proto[idx], dim=-1)
+            initialized[idx] = True
         self.prototype_vectors.copy_(proto.to(device=self.prototype_vectors.device, dtype=self.prototype_vectors.dtype))
         self.prototype_initialized.copy_(initialized.to(device=self.prototype_initialized.device))
 

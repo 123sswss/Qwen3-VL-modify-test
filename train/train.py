@@ -16,6 +16,9 @@ BASE_VISUAL_ROUTER_MODEL = {
     "prototype_anchor_loss_weight": 0.0,
     "prototype_anchor_temperature": 0.20,
     "prototype_anchor_momentum": 0.95,
+    "prototype_anchor_min_confidence": 0.40,
+    "prototype_anchor_assignment_power": 2.0,
+    "prototype_anchor_init_noise": 0.10,
     "adapter_sample_entropy_target": 0.55,
     "adapter_common_mode_target": 0.85,
     "adapter_effective_delta_target_low": 0.78,
@@ -100,6 +103,35 @@ EXPERIMENTS = {
         "adapter_diversity_loss_weight_s3": 0.0,
         "adapter_diversity_loss_weight_s4": 0.006,
         "adapter_diversity_target": 0.35,
+
+        "adapter_sample_entropy_target": 0.54,
+        "adapter_effective_delta_target_low": 0.78,
+        "adapter_effective_delta_target_high": 1.12,
+        "diag_every_steps": 125,
+    },
+    "visual_router_v10_proto_diversity_fixed": {
+        **BASE_VISUAL_ROUTER_MODEL,
+        "adapter_usage_balance_loss_weight": 0.001,
+        "adapter_sample_entropy_loss_weight": 0.010,
+        "adapter_common_mode_loss_weight": 0.0,
+
+        "adapter_effective_delta_loss_weight": 0.008,
+        "adapter_effective_delta_loss_weight_s3": 0.001,
+        "adapter_effective_delta_loss_weight_s4": 0.008,
+
+        "prototype_anchor_loss_weight": 0.0,
+        "prototype_anchor_loss_weight_s3": 0.0015,
+        "prototype_anchor_loss_weight_s4": 0.0005,
+        "prototype_anchor_temperature": 0.25,
+        "prototype_anchor_momentum": 0.97,
+        "prototype_anchor_min_confidence": 0.45,
+        "prototype_anchor_assignment_power": 3.0,
+        "prototype_anchor_init_noise": 0.35,
+
+        "adapter_diversity_loss_weight": 0.0,
+        "adapter_diversity_loss_weight_s3": 0.0,
+        "adapter_diversity_loss_weight_s4": 0.010,
+        "adapter_diversity_target": 0.30,
 
         "adapter_sample_entropy_target": 0.54,
         "adapter_effective_delta_target_low": 0.78,
@@ -214,6 +246,18 @@ CFG = {
         "prototype_anchor_momentum": float(os.getenv(
             "MMRL_PROTOTYPE_ANCHOR_MOMENTUM",
             str(EXP_CFG.get("prototype_anchor_momentum", 0.95)),
+        )),
+        "prototype_anchor_min_confidence": float(os.getenv(
+            "MMRL_PROTOTYPE_ANCHOR_MIN_CONFIDENCE",
+            str(EXP_CFG.get("prototype_anchor_min_confidence", 0.40)),
+        )),
+        "prototype_anchor_assignment_power": float(os.getenv(
+            "MMRL_PROTOTYPE_ANCHOR_ASSIGNMENT_POWER",
+            str(EXP_CFG.get("prototype_anchor_assignment_power", 2.0)),
+        )),
+        "prototype_anchor_init_noise": float(os.getenv(
+            "MMRL_PROTOTYPE_ANCHOR_INIT_NOISE",
+            str(EXP_CFG.get("prototype_anchor_init_noise", 0.10)),
         )),
         "adapter_sample_entropy_target": float(os.getenv(
             "MMRL_ADAPTER_SAMPLE_ENTROPY_TARGET",

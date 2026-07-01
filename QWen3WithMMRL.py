@@ -54,6 +54,9 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
             "PROTOTYPE_ANCHOR_LOSS_WEIGHT": _cfg_attr(config, "PROTOTYPE_ANCHOR_LOSS_WEIGHT", 0.0),
             "PROTOTYPE_ANCHOR_TEMPERATURE": _cfg_attr(config, "PROTOTYPE_ANCHOR_TEMPERATURE", 0.20),
             "PROTOTYPE_ANCHOR_MOMENTUM": _cfg_attr(config, "PROTOTYPE_ANCHOR_MOMENTUM", 0.95),
+            "PROTOTYPE_ANCHOR_MIN_CONFIDENCE": _cfg_attr(config, "PROTOTYPE_ANCHOR_MIN_CONFIDENCE", 0.40),
+            "PROTOTYPE_ANCHOR_ASSIGNMENT_POWER": _cfg_attr(config, "PROTOTYPE_ANCHOR_ASSIGNMENT_POWER", 2.0),
+            "PROTOTYPE_ANCHOR_INIT_NOISE": _cfg_attr(config, "PROTOTYPE_ANCHOR_INIT_NOISE", 0.10),
             "vision_token_dim": vision_dim,
             "text_token_dim": text_dim
         }

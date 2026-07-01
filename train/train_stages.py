@@ -109,6 +109,18 @@ def _build_experiment_context(train_cfg, output_dir, stage_id):
                 "prototype_anchor_momentum",
                 experiment_cfg.get("prototype_anchor_momentum"),
             ),
+            "prototype_anchor_min_confidence": train_cfg.get(
+                "prototype_anchor_min_confidence",
+                experiment_cfg.get("prototype_anchor_min_confidence"),
+            ),
+            "prototype_anchor_assignment_power": train_cfg.get(
+                "prototype_anchor_assignment_power",
+                experiment_cfg.get("prototype_anchor_assignment_power"),
+            ),
+            "prototype_anchor_init_noise": train_cfg.get(
+                "prototype_anchor_init_noise",
+                experiment_cfg.get("prototype_anchor_init_noise"),
+            ),
             "diag_every_steps": train_cfg.get("diag_every_steps"),
             "enable_expert_floor_loss_s4": train_cfg.get("enable_expert_floor_loss_s4"),
             "expert_floor_loss_weight": train_cfg.get("expert_floor_loss_weight"),
@@ -920,6 +932,18 @@ def build_model_and_processor(model_path, experiment_cfg=None):
         "prototype_anchor_momentum",
         os.getenv("MMRL_PROTOTYPE_ANCHOR_MOMENTUM", "0.95"),
     ))
+    config.PROTOTYPE_ANCHOR_MIN_CONFIDENCE = float(experiment_cfg.get(
+        "prototype_anchor_min_confidence",
+        os.getenv("MMRL_PROTOTYPE_ANCHOR_MIN_CONFIDENCE", "0.40"),
+    ))
+    config.PROTOTYPE_ANCHOR_ASSIGNMENT_POWER = float(experiment_cfg.get(
+        "prototype_anchor_assignment_power",
+        os.getenv("MMRL_PROTOTYPE_ANCHOR_ASSIGNMENT_POWER", "2.0"),
+    ))
+    config.PROTOTYPE_ANCHOR_INIT_NOISE = float(experiment_cfg.get(
+        "prototype_anchor_init_noise",
+        os.getenv("MMRL_PROTOTYPE_ANCHOR_INIT_NOISE", "0.10"),
+    ))
     tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
     image_processor = AutoImageProcessor.from_pretrained(model_path, trust_remote_code=True)
     base = Qwen3VLForConditionalGeneration.from_pretrained(
@@ -960,7 +984,10 @@ def build_model_and_processor(model_path, experiment_cfg=None):
         f"adapter_diversity_target={config.ADAPTER_DIVERSITY_TARGET} "
         f"prototype_anchor_loss_weight={config.PROTOTYPE_ANCHOR_LOSS_WEIGHT} "
         f"prototype_anchor_temperature={config.PROTOTYPE_ANCHOR_TEMPERATURE} "
-        f"prototype_anchor_momentum={config.PROTOTYPE_ANCHOR_MOMENTUM}"
+        f"prototype_anchor_momentum={config.PROTOTYPE_ANCHOR_MOMENTUM} "
+        f"prototype_anchor_min_confidence={config.PROTOTYPE_ANCHOR_MIN_CONFIDENCE} "
+        f"prototype_anchor_assignment_power={config.PROTOTYPE_ANCHOR_ASSIGNMENT_POWER} "
+        f"prototype_anchor_init_noise={config.PROTOTYPE_ANCHOR_INIT_NOISE}"
     )
     print("Processor built.")
     return model, processor

@@ -49,6 +49,11 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
             "ADAPTER_EFFECTIVE_DELTA_LOSS_WEIGHT": _cfg_attr(config, "ADAPTER_EFFECTIVE_DELTA_LOSS_WEIGHT", 0.0),
             "ADAPTER_EFFECTIVE_DELTA_TARGET_LOW": _cfg_attr(config, "ADAPTER_EFFECTIVE_DELTA_TARGET_LOW", 0.78),
             "ADAPTER_EFFECTIVE_DELTA_TARGET_HIGH": _cfg_attr(config, "ADAPTER_EFFECTIVE_DELTA_TARGET_HIGH", 1.10),
+            "ADAPTER_DIVERSITY_LOSS_WEIGHT": _cfg_attr(config, "ADAPTER_DIVERSITY_LOSS_WEIGHT", 0.0),
+            "ADAPTER_DIVERSITY_TARGET": _cfg_attr(config, "ADAPTER_DIVERSITY_TARGET", 0.35),
+            "PROTOTYPE_ANCHOR_LOSS_WEIGHT": _cfg_attr(config, "PROTOTYPE_ANCHOR_LOSS_WEIGHT", 0.0),
+            "PROTOTYPE_ANCHOR_TEMPERATURE": _cfg_attr(config, "PROTOTYPE_ANCHOR_TEMPERATURE", 0.20),
+            "PROTOTYPE_ANCHOR_MOMENTUM": _cfg_attr(config, "PROTOTYPE_ANCHOR_MOMENTUM", 0.95),
             "vision_token_dim": vision_dim,
             "text_token_dim": text_dim
         }

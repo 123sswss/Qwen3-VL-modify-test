@@ -11,6 +11,11 @@ BASE_VISUAL_ROUTER_MODEL = {
     "adapter_sample_entropy_loss_weight": 0.02,
     "adapter_common_mode_loss_weight": 0.03,
     "adapter_effective_delta_loss_weight": 0.0,
+    "adapter_diversity_loss_weight": 0.0,
+    "adapter_diversity_target": 0.35,
+    "prototype_anchor_loss_weight": 0.0,
+    "prototype_anchor_temperature": 0.20,
+    "prototype_anchor_momentum": 0.95,
     "adapter_sample_entropy_target": 0.55,
     "adapter_common_mode_target": 0.85,
     "adapter_effective_delta_target_low": 0.78,
@@ -73,6 +78,32 @@ EXPERIMENTS = {
         "adapter_effective_delta_target_low": 0.80,
         "adapter_effective_delta_target_high": 1.25,
     
+        "diag_every_steps": 125,
+    },
+    "visual_router_v10_proto_diversity": {
+        **BASE_VISUAL_ROUTER_MODEL,
+        "adapter_usage_balance_loss_weight": 0.001,
+        "adapter_sample_entropy_loss_weight": 0.010,
+        "adapter_common_mode_loss_weight": 0.0,
+
+        "adapter_effective_delta_loss_weight": 0.008,
+        "adapter_effective_delta_loss_weight_s3": 0.001,
+        "adapter_effective_delta_loss_weight_s4": 0.008,
+
+        "prototype_anchor_loss_weight": 0.0,
+        "prototype_anchor_loss_weight_s3": 0.003,
+        "prototype_anchor_loss_weight_s4": 0.001,
+        "prototype_anchor_temperature": 0.20,
+        "prototype_anchor_momentum": 0.95,
+
+        "adapter_diversity_loss_weight": 0.0,
+        "adapter_diversity_loss_weight_s3": 0.0,
+        "adapter_diversity_loss_weight_s4": 0.006,
+        "adapter_diversity_target": 0.35,
+
+        "adapter_sample_entropy_target": 0.54,
+        "adapter_effective_delta_target_low": 0.78,
+        "adapter_effective_delta_target_high": 1.12,
         "diag_every_steps": 125,
     },
 }
@@ -140,6 +171,50 @@ CFG = {
             "MMRL_ADAPTER_EFFECTIVE_DELTA_LOSS_WEIGHT",
             str(EXP_CFG.get("adapter_effective_delta_loss_weight", 0.0)),
         )),
+        "adapter_effective_delta_loss_weight_s3": float(os.getenv(
+            "MMRL_ADAPTER_EFFECTIVE_DELTA_LOSS_WEIGHT_S3",
+            str(EXP_CFG.get("adapter_effective_delta_loss_weight_s3", EXP_CFG.get("adapter_effective_delta_loss_weight", 0.0))),
+        )),
+        "adapter_effective_delta_loss_weight_s4": float(os.getenv(
+            "MMRL_ADAPTER_EFFECTIVE_DELTA_LOSS_WEIGHT_S4",
+            str(EXP_CFG.get("adapter_effective_delta_loss_weight_s4", EXP_CFG.get("adapter_effective_delta_loss_weight", 0.0))),
+        )),
+        "adapter_diversity_loss_weight": float(os.getenv(
+            "MMRL_ADAPTER_DIVERSITY_LOSS_WEIGHT",
+            str(EXP_CFG.get("adapter_diversity_loss_weight", 0.0)),
+        )),
+        "adapter_diversity_loss_weight_s3": float(os.getenv(
+            "MMRL_ADAPTER_DIVERSITY_LOSS_WEIGHT_S3",
+            str(EXP_CFG.get("adapter_diversity_loss_weight_s3", EXP_CFG.get("adapter_diversity_loss_weight", 0.0))),
+        )),
+        "adapter_diversity_loss_weight_s4": float(os.getenv(
+            "MMRL_ADAPTER_DIVERSITY_LOSS_WEIGHT_S4",
+            str(EXP_CFG.get("adapter_diversity_loss_weight_s4", EXP_CFG.get("adapter_diversity_loss_weight", 0.0))),
+        )),
+        "adapter_diversity_target": float(os.getenv(
+            "MMRL_ADAPTER_DIVERSITY_TARGET",
+            str(EXP_CFG.get("adapter_diversity_target", 0.35)),
+        )),
+        "prototype_anchor_loss_weight": float(os.getenv(
+            "MMRL_PROTOTYPE_ANCHOR_LOSS_WEIGHT",
+            str(EXP_CFG.get("prototype_anchor_loss_weight", 0.0)),
+        )),
+        "prototype_anchor_loss_weight_s3": float(os.getenv(
+            "MMRL_PROTOTYPE_ANCHOR_LOSS_WEIGHT_S3",
+            str(EXP_CFG.get("prototype_anchor_loss_weight_s3", EXP_CFG.get("prototype_anchor_loss_weight", 0.0))),
+        )),
+        "prototype_anchor_loss_weight_s4": float(os.getenv(
+            "MMRL_PROTOTYPE_ANCHOR_LOSS_WEIGHT_S4",
+            str(EXP_CFG.get("prototype_anchor_loss_weight_s4", EXP_CFG.get("prototype_anchor_loss_weight", 0.0))),
+        )),
+        "prototype_anchor_temperature": float(os.getenv(
+            "MMRL_PROTOTYPE_ANCHOR_TEMPERATURE",
+            str(EXP_CFG.get("prototype_anchor_temperature", 0.20)),
+        )),
+        "prototype_anchor_momentum": float(os.getenv(
+            "MMRL_PROTOTYPE_ANCHOR_MOMENTUM",
+            str(EXP_CFG.get("prototype_anchor_momentum", 0.95)),
+        )),
         "adapter_sample_entropy_target": float(os.getenv(
             "MMRL_ADAPTER_SAMPLE_ENTROPY_TARGET",
             str(EXP_CFG.get("adapter_sample_entropy_target", 0.40)),
@@ -204,9 +279,26 @@ CFG = {
             "adapter_usage_3",
             "adapter_usage_balance_loss_scaled",
             "adapter_sample_entropy_loss_scaled",
-            "adapter_common_mode_loss_scaled",
             "adapter_effective_delta_loss_scaled",
             "adapter_effective_delta_ratio_mean",
+            "prototype_anchor_loss",
+            "prototype_anchor_loss_scaled",
+            "route_proto_kl",
+            "route_proto_agreement",
+            "prototype_usage_max",
+            "prototype_usage_min",
+            "prototype_usage_0",
+            "prototype_usage_1",
+            "prototype_usage_2",
+            "prototype_usage_3",
+            "adapter_diversity_loss",
+            "adapter_diversity_loss_scaled",
+            "adapter_pairwise_cos_mean",
+            "adapter_pairwise_cos_max",
+            "adapter_effective_delta_weight",
+            "prototype_anchor_weight",
+            "adapter_diversity_weight",
+            "stage_progress",
         ],
 
         "learning_rate": {

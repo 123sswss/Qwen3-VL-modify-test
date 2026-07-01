@@ -194,13 +194,36 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
         self.adapter_sample_entropy_loss = torch.tensor(0.0)
         self.adapter_common_mode_loss = torch.tensor(0.0)
         self.adapter_effective_delta_loss = torch.tensor(0.0)
+        self.prototype_anchor_loss = torch.tensor(0.0)
+        self.adapter_diversity_loss = torch.tensor(0.0)
         self.adapter_sample_entropy_target = float(getattr(self.cfg, "ADAPTER_SAMPLE_ENTROPY_TARGET", 0.40))
         self.adapter_common_mode_target = float(getattr(self.cfg, "ADAPTER_COMMON_MODE_TARGET", 0.85))
         self.adapter_effective_delta_target_low = float(getattr(self.cfg, "ADAPTER_EFFECTIVE_DELTA_TARGET_LOW", 0.78))
         self.adapter_effective_delta_target_high = float(getattr(self.cfg, "ADAPTER_EFFECTIVE_DELTA_TARGET_HIGH", 1.10))
+        self.prototype_anchor_temperature = float(getattr(self.cfg, "PROTOTYPE_ANCHOR_TEMPERATURE", 0.20))
+        self.prototype_anchor_momentum = float(getattr(self.cfg, "PROTOTYPE_ANCHOR_MOMENTUM", 0.95))
+        self.adapter_diversity_target = float(getattr(self.cfg, "ADAPTER_DIVERSITY_TARGET", 0.35))
         self.adapter_effective_delta_ratio_mean = torch.tensor(float("nan"))
         self.adapter_effective_delta_ratio_min = torch.tensor(float("nan"))
         self.adapter_effective_delta_ratio_max = torch.tensor(float("nan"))
+        self.route_proto_kl = torch.tensor(float("nan"))
+        self.route_proto_agreement = torch.tensor(float("nan"))
+        self.prototype_usage_max = torch.tensor(float("nan"))
+        self.prototype_usage_min = torch.tensor(float("nan"))
+        self.adapter_pairwise_cos_mean = torch.tensor(float("nan"))
+        self.adapter_pairwise_cos_max = torch.tensor(float("nan"))
+        for idx in range(self.visual_residual_adapter_count):
+            setattr(self, f"prototype_usage_{idx}", torch.tensor(float("nan")))
+        self.register_buffer(
+            "prototype_vectors",
+            torch.zeros(self.visual_residual_adapter_count, self.cfg.vision_token_dim),
+            persistent=True,
+        )
+        self.register_buffer(
+            "prototype_initialized",
+            torch.zeros(self.visual_residual_adapter_count, dtype=torch.bool),
+            persistent=True,
+        )
         self.alpha_list = []
         self.G_list = []
         self.route_probs = None
@@ -364,16 +387,157 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
             return torch.tensor(float("nan"), device=device)
         return torch.stack(vals).norm().to(device)
 
-    def _compute_router_aux_losses(self, final_delta, cu_seqlens, org_hidden_states=None):
+    def _pool_adapter_outputs_by_image_mean(self, adapter_outputs: torch.Tensor, cu_seqlens: torch.Tensor):
+        if adapter_outputs is None or cu_seqlens is None or cu_seqlens.numel() <= 1 or adapter_outputs.numel() == 0:
+            return None
+        pooled = []
+        starts = cu_seqlens[:-1].tolist()
+        ends = cu_seqlens[1:].tolist()
+        for s, e in zip(starts, ends):
+            s, e = int(s), int(e)
+            if e <= s:
+                continue
+            pooled.append(adapter_outputs[s:e].mean(dim=0))
+        if not pooled:
+            return None
+        return torch.stack(pooled, dim=0)
+
+    @torch.no_grad()
+    def _update_prototypes(self, pooled_vision_states: torch.Tensor, route_probs: torch.Tensor):
+        if pooled_vision_states is None or route_probs is None:
+            return
+        if pooled_vision_states.numel() == 0 or route_probs.numel() == 0:
+            return
+
+        features = pooled_vision_states.detach().float()
+        assignments = route_probs.detach().float()
+        n = min(features.shape[0], assignments.shape[0])
+        if n <= 0:
+            return
+        features = features[:n]
+        assignments = assignments[:n]
+        usage = assignments.sum(dim=0)
+        weighted = assignments.transpose(0, 1) @ features
+        batch_proto = weighted / usage.clamp_min(1e-8).unsqueeze(-1)
+        active = usage > 1e-6
+        if not active.any():
+            return
+
+        proto = self.prototype_vectors.to(device=features.device, dtype=features.dtype)
+        initialized = self.prototype_initialized.to(device=features.device)
+        momentum = float(self.prototype_anchor_momentum)
+        for idx in active.nonzero(as_tuple=False).flatten().tolist():
+            if bool(initialized[idx]):
+                proto[idx].mul_(momentum).add_(batch_proto[idx], alpha=1.0 - momentum)
+            else:
+                proto[idx].copy_(batch_proto[idx])
+                initialized[idx] = True
+        self.prototype_vectors.copy_(proto.to(device=self.prototype_vectors.device, dtype=self.prototype_vectors.dtype))
+        self.prototype_initialized.copy_(initialized.to(device=self.prototype_initialized.device))
+
+    def _compute_prototype_anchor_loss(self, pooled_vision_states, route_probs, dtype, device):
+        zero = torch.tensor(0.0, device=device, dtype=dtype)
+        nan = torch.tensor(float("nan"), device=device, dtype=dtype)
+        self.route_proto_kl = nan
+        self.route_proto_agreement = nan
+        self.prototype_usage_max = nan
+        self.prototype_usage_min = nan
+
+        if pooled_vision_states is None or route_probs is None:
+            return zero
+        if pooled_vision_states.numel() == 0 or route_probs.numel() == 0:
+            return zero
+        initialized_before = bool(self.prototype_initialized.any().item())
+        if not initialized_before:
+            self._update_prototypes(pooled_vision_states, route_probs)
+        if not bool(self.prototype_initialized.any().item()):
+            return zero
+
+        features = pooled_vision_states.detach().float()
+        routes = route_probs.float()
+        n = min(features.shape[0], routes.shape[0])
+        if n <= 0:
+            return zero
+        features = F.normalize(features[:n], dim=-1)
+        prototypes = self.prototype_vectors.detach().to(device=features.device, dtype=features.dtype)
+        prototypes = F.normalize(prototypes, dim=-1)
+        valid = self.prototype_initialized.to(device=features.device)
+        logits = features @ prototypes.transpose(0, 1)
+        logits = logits / max(float(self.prototype_anchor_temperature), 1e-4)
+        if (~valid).any():
+            logits[:, ~valid] = -1e4
+        proto_probs = torch.softmax(logits, dim=-1)
+        proto_probs = proto_probs.detach()
+        routes = routes[:n].clamp_min(1e-8)
+        loss = (proto_probs * (proto_probs.clamp_min(1e-8).log() - routes.log())).sum(dim=-1).mean()
+
+        with torch.no_grad():
+            usage = proto_probs.mean(dim=0)
+            self.route_proto_kl = loss.detach().to(device=device, dtype=dtype)
+            self.route_proto_agreement = (
+                routes.detach().argmax(dim=-1) == proto_probs.argmax(dim=-1)
+            ).float().mean().to(device=device, dtype=dtype)
+            self.prototype_usage_max = usage.max().to(device=device, dtype=dtype)
+            self.prototype_usage_min = usage.min().to(device=device, dtype=dtype)
+            for idx, value in enumerate(usage.tolist()):
+                setattr(self, f"prototype_usage_{idx}", torch.tensor(float(value), device=device, dtype=dtype))
+
+        if self.training and initialized_before:
+            self._update_prototypes(pooled_vision_states, route_probs)
+
+        return loss.to(device=device, dtype=dtype)
+
+    def _compute_adapter_diversity_loss(self, adapter_outputs, cu_seqlens, dtype, device):
+        zero = torch.tensor(0.0, device=device, dtype=dtype)
+        nan = torch.tensor(float("nan"), device=device, dtype=dtype)
+        self.adapter_pairwise_cos_mean = nan
+        self.adapter_pairwise_cos_max = nan
+
+        pooled = self._pool_adapter_outputs_by_image_mean(adapter_outputs, cu_seqlens)
+        if pooled is None or pooled.numel() == 0 or pooled.shape[1] <= 1:
+            return zero
+
+        pooled = pooled.float()
+        unit = F.normalize(pooled, dim=-1)
+        pairwise = torch.matmul(unit, unit.transpose(1, 2))
+        tri = torch.triu_indices(pairwise.shape[1], pairwise.shape[2], offset=1, device=pairwise.device)
+        vals = pairwise[:, tri[0], tri[1]].reshape(-1)
+        if vals.numel() == 0:
+            return zero
+
+        loss = torch.relu(vals - float(self.adapter_diversity_target)).pow(2).mean()
+        with torch.no_grad():
+            self.adapter_pairwise_cos_mean = vals.detach().mean().to(device=device, dtype=dtype)
+            self.adapter_pairwise_cos_max = vals.detach().max().to(device=device, dtype=dtype)
+        return loss.to(device=device, dtype=dtype)
+
+    def _compute_router_aux_losses(
+        self,
+        final_delta,
+        cu_seqlens,
+        org_hidden_states=None,
+        pooled_vision_states=None,
+        adapter_outputs=None,
+    ):
         device = final_delta.device
         zero = final_delta.new_tensor(0.0)
         nan = final_delta.new_tensor(float("nan"))
         self.adapter_effective_delta_ratio_mean = nan
         self.adapter_effective_delta_ratio_min = nan
         self.adapter_effective_delta_ratio_max = nan
+        self.prototype_anchor_loss = zero
+        self.adapter_diversity_loss = zero
+        self.route_proto_kl = nan
+        self.route_proto_agreement = nan
+        self.prototype_usage_max = nan
+        self.prototype_usage_min = nan
+        self.adapter_pairwise_cos_mean = nan
+        self.adapter_pairwise_cos_max = nan
+        for idx in range(self.visual_residual_adapter_count):
+            setattr(self, f"prototype_usage_{idx}", nan)
         route_probs = self.route_probs
         if not torch.is_tensor(route_probs) or route_probs.numel() == 0:
-            return zero, zero, zero, zero
+            return zero, zero, zero, zero, zero, zero
 
         route_probs = route_probs.float()
         adapter_count = route_probs.shape[-1]
@@ -425,11 +589,26 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
                     self.adapter_effective_delta_ratio_min = delta_ratio.detach().min().to(device=device, dtype=final_delta.dtype)
                     self.adapter_effective_delta_ratio_max = delta_ratio.detach().max().to(device=device, dtype=final_delta.dtype)
 
+        prototype_anchor_loss = self._compute_prototype_anchor_loss(
+            pooled_vision_states,
+            route_probs,
+            final_delta.dtype,
+            device,
+        )
+        adapter_diversity_loss = self._compute_adapter_diversity_loss(
+            adapter_outputs,
+            cu_seqlens,
+            final_delta.dtype,
+            device,
+        )
+
         return (
             usage_balance_loss.to(device=device, dtype=final_delta.dtype),
             sample_entropy_loss.to(device=device, dtype=final_delta.dtype),
             common_mode_loss.to(device=device, dtype=final_delta.dtype),
             effective_delta_loss.to(device=device, dtype=final_delta.dtype),
+            prototype_anchor_loss.to(device=device, dtype=final_delta.dtype),
+            adapter_diversity_loss.to(device=device, dtype=final_delta.dtype),
         )
 
     def forward(self,
@@ -448,6 +627,7 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
         self.alpha_list = None 
         self.G_list = []
         self.route_probs = None
+        pooled_vision_states = None
 
 
         rotary_pos_emb_with_rep = None
@@ -629,13 +809,22 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
             hidden_states = org_hidden_states
             gated_delta = torch.zeros_like(hidden_states)
             final_delta = torch.zeros_like(hidden_states)
+            adapter_outputs = None
 
         (
             self.adapter_usage_balance_loss,
             self.adapter_sample_entropy_loss,
             self.adapter_common_mode_loss,
             self.adapter_effective_delta_loss,
-        ) = self._compute_router_aux_losses(final_delta, cu_seqlens, org_hidden_states=org_hidden_states)
+            self.prototype_anchor_loss,
+            self.adapter_diversity_loss,
+        ) = self._compute_router_aux_losses(
+            final_delta,
+            cu_seqlens,
+            org_hidden_states=org_hidden_states,
+            pooled_vision_states=pooled_vision_states,
+            adapter_outputs=adapter_outputs,
+        )
 
         org_hidden_norm = org_hidden_states.detach().float().norm(dim=-1).mean()
         final_delta_norm = final_delta.detach().float().norm(dim=-1).mean()
@@ -665,11 +854,26 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
             "adapter_sample_entropy_loss": self.adapter_sample_entropy_loss.detach(),
             "adapter_common_mode_loss": self.adapter_common_mode_loss.detach(),
             "adapter_effective_delta_loss": self.adapter_effective_delta_loss.detach(),
+            "prototype_anchor_loss": self.prototype_anchor_loss.detach(),
+            "adapter_diversity_loss": self.adapter_diversity_loss.detach(),
             "adapter_effective_delta_ratio_mean": self.adapter_effective_delta_ratio_mean.detach(),
             "adapter_effective_delta_ratio_min": self.adapter_effective_delta_ratio_min.detach(),
             "adapter_effective_delta_ratio_max": self.adapter_effective_delta_ratio_max.detach(),
+            "route_proto_kl": self.route_proto_kl.detach(),
+            "route_proto_agreement": self.route_proto_agreement.detach(),
+            "prototype_usage_max": self.prototype_usage_max.detach(),
+            "prototype_usage_min": self.prototype_usage_min.detach(),
+            "adapter_pairwise_cos_mean": self.adapter_pairwise_cos_mean.detach(),
+            "adapter_pairwise_cos_max": self.adapter_pairwise_cos_max.detach(),
             **residual_debug,
         }
+        for idx in range(self.visual_residual_adapter_count):
+            value = getattr(
+                self,
+                f"prototype_usage_{idx}",
+                hidden_states.new_tensor(float("nan")),
+            )
+            self.debug_context[f"prototype_usage_{idx}"] = value.detach() if torch.is_tensor(value) else hidden_states.new_tensor(float(value))
 
         hidden_states = self.merger(hidden_states)
         k_results = None

@@ -114,8 +114,7 @@ run_N() {
 }
 
 # 当前可用实验名见 train/train.py: EXPERIMENTS
-run_N "visual_router_v9_stable_high" "visual_router_v9_stable_high" 2
-run_N "visual_router_v9_specificity_probe" "visual_router_v9_specificity_probe" 2
+run_N "visual_router_v10_proto_diversity_fixed" "visual_router_v10_proto_diversity_fixed" 3
 
 
 # run_one "ablation_full_model" "ablation_full_model"

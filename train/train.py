@@ -31,84 +31,6 @@ BASE_VISUAL_ROUTER_MODEL = {
 
 
 EXPERIMENTS = {
-    "visual_router_v8_effective_delta": {
-        **BASE_VISUAL_ROUTER_MODEL,
-        "adapter_usage_balance_loss_weight": 0.001,
-        "adapter_sample_entropy_loss_weight": 0.010,
-        "adapter_common_mode_loss_weight": 0.015,
-        "adapter_effective_delta_loss_weight": 0.008,
-        "adapter_sample_entropy_target": 0.54,
-        "adapter_common_mode_target": 0.91,
-        "adapter_effective_delta_target_low": 0.78,
-        "adapter_effective_delta_target_high": 1.10,
-        "diag_every_steps": 250,
-    },
-    "visual_router_v8_delta_floor_probe": {
-        **BASE_VISUAL_ROUTER_MODEL,
-        "adapter_usage_balance_loss_weight": 0.001,
-        "adapter_sample_entropy_loss_weight": 0.010,
-        "adapter_common_mode_loss_weight": 0.012,
-        "adapter_effective_delta_loss_weight": 0.012,
-        "adapter_sample_entropy_target": 0.54,
-        "adapter_common_mode_target": 0.92,
-        "adapter_effective_delta_target_low": 0.86,
-        "adapter_effective_delta_target_high": 1.30,
-        "diag_every_steps": 250,
-    },
-    "visual_router_v9_stable_high": {
-        **BASE_VISUAL_ROUTER_MODEL,
-        "adapter_usage_balance_loss_weight": 0.0013,
-        "adapter_sample_entropy_loss_weight": 0.012,
-        "adapter_common_mode_loss_weight": 0.018,
-        "adapter_effective_delta_loss_weight": 0.010,
-    
-        "adapter_sample_entropy_target": 0.55,
-        "adapter_common_mode_target": 0.90,
-        "adapter_effective_delta_target_low": 0.82,
-        "adapter_effective_delta_target_high": 1.22,
-    
-        "diag_every_steps": 250,
-    },
-    "visual_router_v9_specificity_probe": {
-        **BASE_VISUAL_ROUTER_MODEL,
-        "adapter_usage_balance_loss_weight": 0.0012,
-        "adapter_sample_entropy_loss_weight": 0.011,
-        "adapter_common_mode_loss_weight": 0.024,
-        "adapter_effective_delta_loss_weight": 0.009,
-    
-        "adapter_sample_entropy_target": 0.54,
-        "adapter_common_mode_target": 0.88,
-        "adapter_effective_delta_target_low": 0.80,
-        "adapter_effective_delta_target_high": 1.25,
-    
-        "diag_every_steps": 125,
-    },
-    "visual_router_v10_proto_diversity": {
-        **BASE_VISUAL_ROUTER_MODEL,
-        "adapter_usage_balance_loss_weight": 0.001,
-        "adapter_sample_entropy_loss_weight": 0.010,
-        "adapter_common_mode_loss_weight": 0.0,
-
-        "adapter_effective_delta_loss_weight": 0.008,
-        "adapter_effective_delta_loss_weight_s3": 0.001,
-        "adapter_effective_delta_loss_weight_s4": 0.008,
-
-        "prototype_anchor_loss_weight": 0.0,
-        "prototype_anchor_loss_weight_s3": 0.003,
-        "prototype_anchor_loss_weight_s4": 0.001,
-        "prototype_anchor_temperature": 0.20,
-        "prototype_anchor_momentum": 0.95,
-
-        "adapter_diversity_loss_weight": 0.0,
-        "adapter_diversity_loss_weight_s3": 0.0,
-        "adapter_diversity_loss_weight_s4": 0.006,
-        "adapter_diversity_target": 0.35,
-
-        "adapter_sample_entropy_target": 0.54,
-        "adapter_effective_delta_target_low": 0.78,
-        "adapter_effective_delta_target_high": 1.12,
-        "diag_every_steps": 125,
-    },
     "visual_router_v10_proto_diversity_fixed": {
         **BASE_VISUAL_ROUTER_MODEL,
         "adapter_usage_balance_loss_weight": 0.001,
@@ -136,7 +58,7 @@ EXPERIMENTS = {
         "adapter_sample_entropy_target": 0.54,
         "adapter_effective_delta_target_low": 0.78,
         "adapter_effective_delta_target_high": 1.12,
-        "diag_every_steps": 125,
+        "diag_every_steps": 250,
     },
 }
 SELECTED_EXPERIMENT = os.getenv("MMRL_EXPERIMENT", "visual_router_v1")
@@ -176,7 +98,7 @@ CFG = {
             "/root/autodl-tmp/dataset/gen/train2017",
             "/root/autodl-tmp/dataset/gen/val2017",
         ],
-        "total_limit": 200,  # Stage1/2: expert 20000 + general 20000；Stage3/4: expert-only 20000
+        "total_limit": 20000,  # Stage1/2: expert 20000 + general 20000；Stage3/4: expert-only 20000
     },
     "train": {
         "experiment_name": SELECTED_EXPERIMENT,

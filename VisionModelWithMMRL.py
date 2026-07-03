@@ -206,6 +206,8 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
         self.prototype_anchor_assignment_power = float(getattr(self.cfg, "PROTOTYPE_ANCHOR_ASSIGNMENT_POWER", 2.0))
         self.prototype_anchor_init_noise = float(getattr(self.cfg, "PROTOTYPE_ANCHOR_INIT_NOISE", 0.10))
         self.adapter_diversity_target = float(getattr(self.cfg, "ADAPTER_DIVERSITY_TARGET", 0.35))
+        self.enable_deepstack_mmrl_residual = bool(getattr(self.cfg, "ENABLE_DEEPSTACK_MMRL_RESIDUAL", False))
+        self.deepstack_mmrl_residual_scale = float(getattr(self.cfg, "DEEPSTACK_MMRL_RESIDUAL_SCALE", 0.0))
         self.adapter_effective_delta_ratio_mean = torch.tensor(float("nan"))
         self.adapter_effective_delta_ratio_min = torch.tensor(float("nan"))
         self.adapter_effective_delta_ratio_max = torch.tensor(float("nan"))
@@ -215,6 +217,9 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
         self.prototype_usage_min = torch.tensor(float("nan"))
         self.adapter_pairwise_cos_mean = torch.tensor(float("nan"))
         self.adapter_pairwise_cos_max = torch.tensor(float("nan"))
+        self.deepstack_delta_norm_mean = torch.tensor(float("nan"))
+        self.deepstack_delta_to_org_ratio = torch.tensor(float("nan"))
+        self.deepstack_residual_layers = torch.tensor(0.0)
         for idx in range(self.visual_residual_adapter_count):
             setattr(self, f"prototype_usage_{idx}", torch.tensor(float("nan")))
         self.register_buffer(
@@ -698,6 +703,9 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
         current_num_r_token = self.cfg.RP_SPACE_LENGTH
 
         deepstack_feature_lists = []
+        deepstack_delta_norm_values = []
+        deepstack_delta_ratio_values = []
+        deepstack_residual_layer_count = 0
         cu_seqlens_with_rep, position_embeddings_with_rep = None, None
         hidden_states_with_rep, org_hidden_states= None, None
         total_pic_num = cu_seqlens.size(0) - 1
@@ -820,6 +828,32 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
                     feature_to_save = hidden_states
                 else:
                     feature_to_save = org_hidden_states
+                    if (
+                        self.enable_deepstack_mmrl_residual
+                        and self.deepstack_mmrl_residual_scale != 0.0
+                        and (self.training or run_mmrl_branch)
+                        and hidden_states_with_rep is not None
+                        and isinstance(self.G_list, torch.Tensor)
+                    ):
+                        deepstack_rep_states = _strip_r_token(
+                            hidden_states_with_rep,
+                            original_seq_lens_list,
+                            current_num_r_token,
+                        )
+                        local_delta = deepstack_rep_states - org_hidden_states
+                        seqlens = cu_seqlens[1:] - cu_seqlens[:-1]
+                        g_mask = torch.repeat_interleave(self.G_list, seqlens, dim=0).to(
+                            device=local_delta.device,
+                            dtype=local_delta.dtype,
+                        )
+                        local_delta = local_delta * g_mask
+                        feature_to_save = org_hidden_states + local_delta * float(self.deepstack_mmrl_residual_scale)
+                        with torch.no_grad():
+                            local_delta_norm = local_delta.detach().float().norm(dim=-1).mean()
+                            local_org_norm = org_hidden_states.detach().float().norm(dim=-1).mean().clamp_min(1e-8)
+                            deepstack_delta_norm_values.append(local_delta_norm)
+                            deepstack_delta_ratio_values.append(local_delta_norm / local_org_norm)
+                            deepstack_residual_layer_count += 1
                 deepstack_feature = self.deepstack_merger_list[
                     self.deepstack_visual_indexes.index(layer_num)
                 ](feature_to_save)
@@ -869,6 +903,20 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
             adapter_outputs=adapter_outputs,
         )
 
+        if deepstack_delta_norm_values:
+            self.deepstack_delta_norm_mean = torch.stack(deepstack_delta_norm_values).mean().to(
+                device=hidden_states.device,
+                dtype=hidden_states.dtype,
+            )
+            self.deepstack_delta_to_org_ratio = torch.stack(deepstack_delta_ratio_values).mean().to(
+                device=hidden_states.device,
+                dtype=hidden_states.dtype,
+            )
+        else:
+            self.deepstack_delta_norm_mean = hidden_states.new_tensor(float("nan"))
+            self.deepstack_delta_to_org_ratio = hidden_states.new_tensor(float("nan"))
+        self.deepstack_residual_layers = hidden_states.new_tensor(float(deepstack_residual_layer_count))
+
         org_hidden_norm = org_hidden_states.detach().float().norm(dim=-1).mean()
         final_delta_norm = final_delta.detach().float().norm(dim=-1).mean()
         delta_to_org_ratio = final_delta_norm / org_hidden_norm.clamp_min(1e-8)
@@ -908,6 +956,10 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
             "prototype_usage_min": self.prototype_usage_min.detach(),
             "adapter_pairwise_cos_mean": self.adapter_pairwise_cos_mean.detach(),
             "adapter_pairwise_cos_max": self.adapter_pairwise_cos_max.detach(),
+            "deepstack_mmrl_residual_scale": hidden_states.new_tensor(float(self.deepstack_mmrl_residual_scale)),
+            "deepstack_delta_norm_mean": self.deepstack_delta_norm_mean.detach(),
+            "deepstack_delta_to_org_ratio": self.deepstack_delta_to_org_ratio.detach(),
+            "deepstack_residual_layers": self.deepstack_residual_layers.detach(),
             **residual_debug,
         }
         for idx in range(self.visual_residual_adapter_count):

@@ -121,6 +121,14 @@ def _build_experiment_context(train_cfg, output_dir, stage_id):
                 "prototype_anchor_init_noise",
                 experiment_cfg.get("prototype_anchor_init_noise"),
             ),
+            "enable_deepstack_mmrl_residual": train_cfg.get(
+                "enable_deepstack_mmrl_residual",
+                experiment_cfg.get("enable_deepstack_mmrl_residual"),
+            ),
+            "deepstack_mmrl_residual_scale": train_cfg.get(
+                "deepstack_mmrl_residual_scale",
+                experiment_cfg.get("deepstack_mmrl_residual_scale"),
+            ),
             "diag_every_steps": train_cfg.get("diag_every_steps"),
             "enable_expert_floor_loss_s4": train_cfg.get("enable_expert_floor_loss_s4"),
             "expert_floor_loss_weight": train_cfg.get("expert_floor_loss_weight"),
@@ -944,6 +952,14 @@ def build_model_and_processor(model_path, experiment_cfg=None):
         "prototype_anchor_init_noise",
         os.getenv("MMRL_PROTOTYPE_ANCHOR_INIT_NOISE", "0.10"),
     ))
+    config.ENABLE_DEEPSTACK_MMRL_RESIDUAL = os.getenv(
+        "MMRL_ENABLE_DEEPSTACK_MMRL_RESIDUAL",
+        "1" if experiment_cfg.get("enable_deepstack_mmrl_residual", False) else "0",
+    ) == "1"
+    config.DEEPSTACK_MMRL_RESIDUAL_SCALE = float(os.getenv(
+        "MMRL_DEEPSTACK_MMRL_RESIDUAL_SCALE",
+        str(experiment_cfg.get("deepstack_mmrl_residual_scale", 0.0)),
+    ))
     tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
     image_processor = AutoImageProcessor.from_pretrained(model_path, trust_remote_code=True)
     base = Qwen3VLForConditionalGeneration.from_pretrained(
@@ -987,7 +1003,9 @@ def build_model_and_processor(model_path, experiment_cfg=None):
         f"prototype_anchor_momentum={config.PROTOTYPE_ANCHOR_MOMENTUM} "
         f"prototype_anchor_min_confidence={config.PROTOTYPE_ANCHOR_MIN_CONFIDENCE} "
         f"prototype_anchor_assignment_power={config.PROTOTYPE_ANCHOR_ASSIGNMENT_POWER} "
-        f"prototype_anchor_init_noise={config.PROTOTYPE_ANCHOR_INIT_NOISE}"
+        f"prototype_anchor_init_noise={config.PROTOTYPE_ANCHOR_INIT_NOISE} "
+        f"enable_deepstack_mmrl_residual={config.ENABLE_DEEPSTACK_MMRL_RESIDUAL} "
+        f"deepstack_mmrl_residual_scale={config.DEEPSTACK_MMRL_RESIDUAL_SCALE}"
     )
     print("Processor built.")
     return model, processor

@@ -172,7 +172,8 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
         self.cfg.INSERT_LAYER = self.insert_layers
         self.blocks_with_rep = nn.ModuleList([MMRLVitBlock(config)
                                               for _ in self.insert_layers])
-        self._printed_forward_layer_audit = False
+        self._printed_forward_layer_entry_audit = False
+        self._printed_forward_layer_hit_audit = False
         self._print_layer_audit()
         self.hidden_state_pooling = utils.attention_pooling(self.cfg.vision_token_dim,
                                                             self.cfg.POOLING_DIM)
@@ -744,6 +745,15 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
         hidden_states_with_rep, org_hidden_states= None, None
         total_pic_num = cu_seqlens.size(0) - 1
         run_mmrl_branch = True
+        forward_hit_layers = []
+        if not self._printed_forward_layer_entry_audit:
+            print("[MMRL_FORWARD_ENTRY_AUDIT]")
+            print(f"  v_r_token_list_is_none={v_r_token_list is None}")
+            print(f"  planned_insert_layers_0based={self.insert_layers}")
+            print(f"  planned_insert_layers_natural={[idx + 1 for idx in self.insert_layers]}")
+            print(f"  deepstack_visual_indexes_0based={self.deepstack_visual_indexes}")
+            print(f"  deepstack_visual_indexes_natural={[idx + 1 for idx in self.deepstack_visual_indexes]}")
+            self._printed_forward_layer_entry_audit = True
         for layer_num, blk in enumerate(self.blocks):
             if layer_num not in self.insert_layers or v_r_token_list is None:
                 hidden_states = blk(
@@ -812,13 +822,7 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
 
                 ############ N图切分+门控 ############
                 idx = self.insert_layers.index(layer_num)
-                if not self._printed_forward_layer_audit:
-                    print("[MMRL_FORWARD_LAYER_AUDIT]")
-                    print(f"  hit_insert_layer_0based={layer_num}")
-                    print(f"  hit_insert_layer_natural={layer_num + 1}")
-                    print(f"  insert_layers_0based={self.insert_layers}")
-                    print(f"  insert_layers_natural={[layer_idx + 1 for layer_idx in self.insert_layers]}")
-                    self._printed_forward_layer_audit = True
+                forward_hit_layers.append(layer_num)
                 assert v_r_token_list[idx] is not None
                 r_tokens_input = v_r_token_list[idx]
                 assert r_tokens_input is not None
@@ -899,6 +903,14 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
                     self.deepstack_visual_indexes.index(layer_num)
                 ](feature_to_save)
                 deepstack_feature_lists.append(deepstack_feature)
+
+        if not self._printed_forward_layer_hit_audit:
+            print("[MMRL_FORWARD_HIT_AUDIT]")
+            print(f"  actual_hit_layers_0based={forward_hit_layers}")
+            print(f"  actual_hit_layers_natural={[idx + 1 for idx in forward_hit_layers]}")
+            print(f"  expected_insert_layers_0based={self.insert_layers if v_r_token_list is not None else []}")
+            print(f"  expected_insert_layers_natural={[idx + 1 for idx in self.insert_layers] if v_r_token_list is not None else []}")
+            self._printed_forward_layer_hit_audit = True
 
         if run_mmrl_branch and hidden_states_with_rep is not None:
             hidden_states_with_rep = _strip_r_token(hidden_states_with_rep,

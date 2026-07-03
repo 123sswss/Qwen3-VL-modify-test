@@ -974,11 +974,28 @@ def build_model_and_processor(model_path, experiment_cfg=None):
     del base
     torch.cuda.empty_cache()
     print("MMRL model built and loaded with base weights.")
-    print(f"[DBG] blocks={len(model.model.visual.blocks)}, blocks_with_rep={len(model.model.visual.blocks_with_rep)}, INSERT_LAYER={list(model.model.visual.cfg.INSERT_LAYER)}")
+    insert_layers = list(model.model.visual.insert_layers)
+    print(
+        "[MMRL_REP_INIT_AUDIT] "
+        f"blocks={len(model.model.visual.blocks)} "
+        f"blocks_with_rep={len(model.model.visual.blocks_with_rep)} "
+        f"insert_layers_0based={insert_layers} "
+        f"insert_layers_natural={[idx + 1 for idx in insert_layers]}"
+    )
+    if len(model.model.visual.blocks_with_rep) != len(insert_layers):
+        raise ValueError(
+            "blocks_with_rep count does not match insert layer count: "
+            f"{len(model.model.visual.blocks_with_rep)} != {len(insert_layers)}"
+        )
     with torch.no_grad():
-        for idx, layer_num in enumerate(model.model.visual.cfg.INSERT_LAYER):
+        for idx, layer_num in enumerate(insert_layers):
+            print(
+                "[MMRL_REP_INIT] "
+                f"rep_idx={idx} <- visual.blocks[{layer_num}] "
+                f"natural_layer={layer_num + 1}"
+            )
             model.model.visual.blocks_with_rep[idx].load_state_dict(
-                model.model.visual.blocks[layer_num-1].state_dict(),
+                model.model.visual.blocks[layer_num].state_dict(),
                 strict=False
             )
     processor = processingWithMMRL.Qwen3ProcessorWithMMRL(

@@ -8,7 +8,9 @@ RP_SPACE_DIM = 512 # 一千二百万参数左右
 # V:5*DIM -(DIM*1024)> 5*1024
 # T:5*DIM -(DIM*2560)> 5*2560
 
-INSERT_LAYER = range(17,25)
+# 0-based vision block indexes. Python range is left-closed/right-open.
+# range(16, 24) means natural-language layers 17..24.
+INSERT_LAYER = range(16, 24)
 
 INSERT_METHOD = "replace"
 # INSERT_METHOD = "add"

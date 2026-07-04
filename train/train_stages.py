@@ -353,7 +353,7 @@ class MMRLDiagnosticsCallback(TrainerCallback):
     def _flush(self):
         if not self.buffer:
             return
-        payload = self._aggregate(self.buffer)
+        payload = self._round_payload(self._aggregate(self.buffer))
         with open(self.jsonl_path, "a", encoding="utf-8") as f:
             f.write(json.dumps(payload, ensure_ascii=False) + "\n")
         self._append_csv(payload)

@@ -282,6 +282,13 @@ class TrainerMetricsCallback(TrainerCallback):
         self.print_every = int(max(1, print_every))
         self.stage_name = stage_name
 
+    def _round_payload(self, value):
+        if isinstance(value, float):
+            return round(value, 6)
+        if isinstance(value, list):
+            return [self._round_payload(v) for v in value]
+        return value
+
     def _print_compact_summary(self, step, row):
         print("\n" + "=" * 72)
         print(f"[{self.stage_name} | Training Step {step}] Loss Breakdown")

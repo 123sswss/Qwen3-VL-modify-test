@@ -33,66 +33,116 @@ BASE_VISUAL_ROUTER_MODEL = {
 
 
 EXPERIMENTS = {
-    "visual_router_v10_proto_diversity_fixed": {
+    "visual_router_layer_fixed_v2_soft_balance": {
         **BASE_VISUAL_ROUTER_MODEL,
-        "adapter_usage_balance_loss_weight": 0.001,
-        "adapter_sample_entropy_loss_weight": 0.010,
-        "adapter_common_mode_loss_weight": 0.0,
-
-        "adapter_effective_delta_loss_weight": 0.008,
-        "adapter_effective_delta_loss_weight_s3": 0.001,
-        "adapter_effective_delta_loss_weight_s4": 0.008,
-
+        "adapter_usage_balance_loss_weight": 0.0030,
+        "adapter_sample_entropy_loss_weight": 0.028,
+        "adapter_common_mode_loss_weight": 0.006,
+    
+        "adapter_effective_delta_loss_weight": 0.003,
+        "adapter_effective_delta_loss_weight_s3": 0.0003,
+        "adapter_effective_delta_loss_weight_s4": 0.003,
+    
         "prototype_anchor_loss_weight": 0.0,
-        "prototype_anchor_loss_weight_s3": 0.0015,
-        "prototype_anchor_loss_weight_s4": 0.0005,
-        "prototype_anchor_temperature": 0.25,
-        "prototype_anchor_momentum": 0.97,
-        "prototype_anchor_min_confidence": 0.45,
-        "prototype_anchor_assignment_power": 3.0,
-        "prototype_anchor_init_noise": 0.35,
-
-        "adapter_diversity_loss_weight": 0.0,
-        "adapter_diversity_loss_weight_s3": 0.0,
-        "adapter_diversity_loss_weight_s4": 0.010,
-        "adapter_diversity_target": 0.30,
-
-        "adapter_sample_entropy_target": 0.54,
-        "adapter_effective_delta_target_low": 0.78,
-        "adapter_effective_delta_target_high": 1.12,
-        "diag_every_steps": 250,
-    },
-    "visual_router_v11_deepstack_delta_probe": {
-        **BASE_VISUAL_ROUTER_MODEL,
-        "adapter_usage_balance_loss_weight": 0.001,
-        "adapter_sample_entropy_loss_weight": 0.009,
-        "adapter_common_mode_loss_weight": 0.0,
-
-        "adapter_effective_delta_loss_weight": 0.009,
-        "adapter_effective_delta_loss_weight_s3": 0.001,
-        "adapter_effective_delta_loss_weight_s4": 0.009,
-
-        "prototype_anchor_loss_weight": 0.0,
-        "prototype_anchor_loss_weight_s3": 0.0010,
-        "prototype_anchor_loss_weight_s4": 0.0003,
-        "prototype_anchor_temperature": 0.28,
-        "prototype_anchor_momentum": 0.98,
-        "prototype_anchor_min_confidence": 0.45,
-        "prototype_anchor_assignment_power": 3.0,
-        "prototype_anchor_init_noise": 0.35,
-
+        "prototype_anchor_loss_weight_s3": 0.0,
+        "prototype_anchor_loss_weight_s4": 0.0,
+    
         "adapter_diversity_loss_weight": 0.0,
         "adapter_diversity_loss_weight_s3": 0.0,
         "adapter_diversity_loss_weight_s4": 0.0,
-        "adapter_diversity_target": 0.32,
-
-        "adapter_sample_entropy_target": 0.53,
-        "adapter_effective_delta_target_low": 0.80,
-        "adapter_effective_delta_target_high": 1.18,
-
-        "enable_deepstack_mmrl_residual": True,
-        "deepstack_mmrl_residual_scale": 0.25,
-        "diag_every_steps": 125,
+    
+        "adapter_sample_entropy_target": 0.82,
+        "adapter_common_mode_target": 0.90,
+        "adapter_effective_delta_target_low": 0.45,
+        "adapter_effective_delta_target_high": 0.85,
+    
+        "enable_deepstack_mmrl_residual": False,
+        "deepstack_mmrl_residual_scale": 0.0,
+        "diag_every_steps": 250,
+    },
+    
+    "visual_router_layer_fixed_v2_common_suppress": {
+        **BASE_VISUAL_ROUTER_MODEL,
+        "adapter_usage_balance_loss_weight": 0.0025,
+        "adapter_sample_entropy_loss_weight": 0.024,
+        "adapter_common_mode_loss_weight": 0.012,
+    
+        "adapter_effective_delta_loss_weight": 0.004,
+        "adapter_effective_delta_loss_weight_s3": 0.0004,
+        "adapter_effective_delta_loss_weight_s4": 0.004,
+    
+        "prototype_anchor_loss_weight": 0.0,
+        "prototype_anchor_loss_weight_s3": 0.0,
+        "prototype_anchor_loss_weight_s4": 0.0,
+    
+        "adapter_diversity_loss_weight": 0.0,
+        "adapter_diversity_loss_weight_s3": 0.0,
+        "adapter_diversity_loss_weight_s4": 0.0,
+    
+        "adapter_sample_entropy_target": 0.78,
+        "adapter_common_mode_target": 0.88,
+        "adapter_effective_delta_target_low": 0.50,
+        "adapter_effective_delta_target_high": 0.90,
+    
+        "enable_deepstack_mmrl_residual": False,
+        "deepstack_mmrl_residual_scale": 0.0,
+        "diag_every_steps": 250,
+    },
+    
+    "visual_router_layer_fixed_v2_entropy_lock": {
+        **BASE_VISUAL_ROUTER_MODEL,
+        "adapter_usage_balance_loss_weight": 0.0040,
+        "adapter_sample_entropy_loss_weight": 0.040,
+        "adapter_common_mode_loss_weight": 0.0,
+    
+        "adapter_effective_delta_loss_weight": 0.002,
+        "adapter_effective_delta_loss_weight_s3": 0.0002,
+        "adapter_effective_delta_loss_weight_s4": 0.002,
+    
+        "prototype_anchor_loss_weight": 0.0,
+        "prototype_anchor_loss_weight_s3": 0.0,
+        "prototype_anchor_loss_weight_s4": 0.0,
+    
+        "adapter_diversity_loss_weight": 0.0,
+        "adapter_diversity_loss_weight_s3": 0.0,
+        "adapter_diversity_loss_weight_s4": 0.0,
+    
+        "adapter_sample_entropy_target": 0.88,
+        "adapter_common_mode_target": 0.90,
+        "adapter_effective_delta_target_low": 0.42,
+        "adapter_effective_delta_target_high": 0.80,
+    
+        "enable_deepstack_mmrl_residual": False,
+        "deepstack_mmrl_residual_scale": 0.0,
+        "diag_every_steps": 250,
+    },
+    
+    "visual_router_layer_fixed_v2_controlled_recover": {
+        **BASE_VISUAL_ROUTER_MODEL,
+        "adapter_usage_balance_loss_weight": 0.0030,
+        "adapter_sample_entropy_loss_weight": 0.025,
+        "adapter_common_mode_loss_weight": 0.008,
+    
+        "adapter_effective_delta_loss_weight": 0.006,
+        "adapter_effective_delta_loss_weight_s3": 0.0005,
+        "adapter_effective_delta_loss_weight_s4": 0.006,
+    
+        "prototype_anchor_loss_weight": 0.0,
+        "prototype_anchor_loss_weight_s3": 0.0,
+        "prototype_anchor_loss_weight_s4": 0.0,
+    
+        "adapter_diversity_loss_weight": 0.0,
+        "adapter_diversity_loss_weight_s3": 0.0,
+        "adapter_diversity_loss_weight_s4": 0.0,
+    
+        "adapter_sample_entropy_target": 0.80,
+        "adapter_common_mode_target": 0.90,
+        "adapter_effective_delta_target_low": 0.58,
+        "adapter_effective_delta_target_high": 0.95,
+    
+        "enable_deepstack_mmrl_residual": False,
+        "deepstack_mmrl_residual_scale": 0.0,
+        "diag_every_steps": 250,
     },
 }
 SELECTED_EXPERIMENT = os.getenv("MMRL_EXPERIMENT", "visual_router_v1")

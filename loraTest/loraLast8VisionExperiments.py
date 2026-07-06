@@ -151,7 +151,7 @@ def extract_vision_layer_index(module_name: str) -> Optional[int]:
 
 def find_last8_vision_targets(model: nn.Module, target_mode: str) -> List[str]:
     blocked_keywords = ("lm_head", "language", "text", "embed_tokens")
-    attention_suffixes = ("q_proj", "k_proj", "v_proj", "o_proj")
+    attention_suffixes = ("q_proj", "k_proj", "v_proj", "o_proj", "qkv", "proj")
     layer_indexes = sorted({
         idx
         for name, module in model.named_modules()
@@ -173,8 +173,10 @@ def find_last8_vision_targets(model: nn.Module, target_mode: str) -> List[str]:
         layer_idx = extract_vision_layer_index(name)
         if layer_idx not in selected_layers:
             continue
-        if target_mode == "last8_attention" and not lname.endswith(attention_suffixes):
-            continue
+        if target_mode == "last8_attention":
+            is_attention_module = ".attn." in lname or ".attention." in lname or "self_attn" in lname
+            if not is_attention_module or not lname.endswith(attention_suffixes):
+                continue
         targets.append(name)
 
     if not targets:

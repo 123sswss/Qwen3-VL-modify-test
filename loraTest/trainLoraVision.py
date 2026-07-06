@@ -159,7 +159,7 @@ def load_model_and_processor(model_path: str) -> Any:
 def find_vision_attention_linear_targets(model: nn.Module) -> List[str]:
     visual_keywords = ("visual", "vision", "vision_tower", "vision_model")
     blocked_keywords = ("lm_head", "language", "text", "embed_tokens")
-    target_suffixes = ("q_proj", "k_proj", "v_proj", "o_proj")
+    target_suffixes = ("q_proj", "k_proj", "v_proj", "o_proj", "qkv", "proj")
     targets: List[str] = []
     for name, module in model.named_modules():
         lname = name.lower()
@@ -168,6 +168,8 @@ def find_vision_attention_linear_targets(model: nn.Module) -> List[str]:
         if any(keyword in lname for keyword in blocked_keywords):
             continue
         if not any(keyword in lname for keyword in visual_keywords):
+            continue
+        if ".attn." not in lname and ".attention." not in lname and "self_attn" not in lname:
             continue
         if not lname.endswith(target_suffixes):
             continue

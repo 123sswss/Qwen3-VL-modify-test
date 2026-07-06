@@ -11,7 +11,6 @@ Run from this folder:
     python loraLast8VisionExperiments.py
 """
 
-import quiet_hf  # noqa: F401
 import importlib.util
 import os
 import re

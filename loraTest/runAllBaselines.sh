@@ -5,6 +5,7 @@ cd "$(dirname "$0")"
 mkdir -p logs
 
 FAILED_STEPS=()
+LOG_FILTER_PATTERN='Loading weights:|Materializing param='
 
 finish_with_shutdown() {
     local exit_code="$1"
@@ -33,7 +34,10 @@ run_step() {
     shift 2
 
     echo "========== ${name} =========="
-    "$@" 2>&1 | tee "${logfile}"
+    "$@" 2>&1 \
+        | tr '\r' '\n' \
+        | grep -v -E "${LOG_FILTER_PATTERN}" \
+        | tee "${logfile}"
     local status=${PIPESTATUS[0]}
 
     if [ "${status}" -ne 0 ]; then

@@ -1,4 +1,3 @@
-# infer_baseline.py
 from transformers import AutoModelForImageTextToText, AutoProcessor
 from PIL import Image
 
@@ -37,12 +36,18 @@ class BaselineModelInterface:
 
 
 if __name__ == "__main__":
+    import os
     import sys
-    from test import run_evaluation
+    from test import (
+        DEFAULT_IMAGE_DIRS,
+        DEFAULT_JSON_PATHS,
+        parse_cli_or_default,
+        run_evaluation,
+    )
 
-    MODEL_PATH = sys.argv[1] if len(sys.argv) > 1 else "/root/autodl-tmp/model"
-    JSON_PATH = sys.argv[2] if len(sys.argv) > 2 else "/root/autodl-tmp/dataset/test2_val.json"
-    IMAGE_DIR = sys.argv[3] if len(sys.argv) > 3 else "/root/autodl-tmp/dataset/2/train"
+    MODEL_PATH = sys.argv[1] if len(sys.argv) > 1 else os.getenv("QWEN3VL_MODEL_PATH", "/root/autodl-tmp/model")
+    JSON_PATHS = parse_cli_or_default(sys.argv[2] if len(sys.argv) > 2 else None, DEFAULT_JSON_PATHS)
+    IMAGE_DIRS = parse_cli_or_default(sys.argv[3] if len(sys.argv) > 3 else None, DEFAULT_IMAGE_DIRS)
 
     model = BaselineModelInterface(MODEL_PATH)
-    run_evaluation(JSON_PATH, model, image_dir=IMAGE_DIR)
+    run_evaluation(JSON_PATHS, model, image_dirs=IMAGE_DIRS)

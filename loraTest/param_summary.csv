@@ -1,0 +1,15 @@
+method,scope,module,trainable_params,inference_added_params,total_params,peft_type,source,path
+LoRA-r8,Full VLM,Attention Linear Layers,"3,620,864","3,620,864","4,441,436,672",--,logs,E:\AAA24105033\project\py\visionOnly\Qwen3-VL-modify-test\loraTest\runs\lora\rank8\final
+LoRA-r16,Full VLM,Attention Linear Layers,"7,241,728","7,241,728","4,445,057,536",--,logs,E:\AAA24105033\project\py\visionOnly\Qwen3-VL-modify-test\loraTest\runs\lora\rank16\final
+LoRA-r32,Full VLM,Attention Linear Layers,"14,483,456","14,483,456","4,452,299,264",--,logs,E:\AAA24105033\project\py\visionOnly\Qwen3-VL-modify-test\loraTest\runs\lora\rank32\final
+LoRA-r8,Vision Encoder,Vision Attention qkv/proj,"3,620,864","3,620,864","4,441,436,672",--,logs,E:\AAA24105033\project\py\visionOnly\Qwen3-VL-modify-test\loraTest\runs\lora_vision_attn\rank8\final
+LoRA-r16,Vision Encoder,Vision Attention qkv/proj,"7,241,728","7,241,728","4,445,057,536",--,logs,E:\AAA24105033\project\py\visionOnly\Qwen3-VL-modify-test\loraTest\runs\lora_vision_attn\rank16\final
+LoRA-r32,Vision Encoder,Vision Attention qkv/proj,"14,483,456","14,483,456","4,452,299,264",--,logs,E:\AAA24105033\project\py\visionOnly\Qwen3-VL-modify-test\loraTest\runs\lora_vision_attn\rank32\final
+LoRA-r32,Last-8 Vision Encoder,All Linear Layers,--,--,--,--,missing,E:\AAA24105033\project\py\visionOnly\Qwen3-VL-modify-test\loraTest\runs\lora_vision_last8\last8_full_linear_rank32\final
+LoRA-r32,Last-8 Vision Encoder,Vision Attention qkv/proj,--,--,--,--,missing,E:\AAA24105033\project\py\visionOnly\Qwen3-VL-modify-test\loraTest\runs\lora_vision_last8\last8_attention_rank32\final
+DoRA-r8,Full VLM,Attention Linear Layers,"3,868,672","3,868,672","4,441,684,480",--,logs,E:\AAA24105033\project\py\visionOnly\Qwen3-VL-modify-test\loraTest\runs\dora\rank8\final
+DoRA-r16,Full VLM,Attention Linear Layers,"7,489,536","7,489,536","4,445,305,344",--,logs,E:\AAA24105033\project\py\visionOnly\Qwen3-VL-modify-test\loraTest\runs\dora\rank16\final
+DoRA-r8,Vision Encoder,Vision Attention qkv/proj,"3,868,672","3,868,672","4,441,684,480",--,logs,E:\AAA24105033\project\py\visionOnly\Qwen3-VL-modify-test\loraTest\runs\dora_vision_attn\rank8\final
+DoRA-r16,Vision Encoder,Vision Attention qkv/proj,"7,489,536","7,489,536","4,445,305,344",--,logs,E:\AAA24105033\project\py\visionOnly\Qwen3-VL-modify-test\loraTest\runs\dora_vision_attn\rank16\final
+IA3,Full VLM,Attention k/v + FFN,"253,952","253,952","4,438,069,760",--,logs,E:\AAA24105033\project\py\visionOnly\Qwen3-VL-modify-test\loraTest\runs\ia3\final
+Adapter,Full VLM,Attention o-proj Adapter,"31,719,424","31,719,424","4,469,535,232",--,logs,E:\AAA24105033\project\py\visionOnly\Qwen3-VL-modify-test\loraTest\runs\adapter\final

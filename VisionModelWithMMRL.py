@@ -213,8 +213,8 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
         self.prototype_anchor_min_confidence = float(getattr(self.cfg, "PROTOTYPE_ANCHOR_MIN_CONFIDENCE", 0.40))
         self.prototype_anchor_assignment_power = float(getattr(self.cfg, "PROTOTYPE_ANCHOR_ASSIGNMENT_POWER", 2.0))
         self.prototype_anchor_init_noise = float(getattr(self.cfg, "PROTOTYPE_ANCHOR_INIT_NOISE", 0.10))
-        self.adapter_diversity_target = float(getattr(self.cfg, "ADAPTER_DIVERSITY_TARGET", 0.47))
-        self.adapter_diversity_band_width = 0.11
+        self.adapter_diversity_target_low = float(getattr(self.cfg, "ADAPTER_DIVERSITY_TARGET_LOW", 0.30))
+        self.adapter_diversity_target_high = float(getattr(self.cfg, "ADAPTER_DIVERSITY_TARGET_HIGH", 0.58))
         self.enable_deepstack_mmrl_residual = bool(getattr(self.cfg, "ENABLE_DEEPSTACK_MMRL_RESIDUAL", False))
         self.deepstack_mmrl_residual_scale = float(getattr(self.cfg, "DEEPSTACK_MMRL_RESIDUAL_SCALE", 0.0))
         self.adapter_effective_delta_ratio_mean = torch.tensor(float("nan"))
@@ -593,10 +593,10 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
         if vals.numel() == 0:
             return zero
 
-        target = float(self.adapter_diversity_target)
-        width = max(float(self.adapter_diversity_band_width), 0.0)
-        low = target - width
-        high = target + width
+        low = float(self.adapter_diversity_target_low)
+        high = float(self.adapter_diversity_target_high)
+        if high < low:
+            low, high = high, low
         loss = (
             torch.relu(vals.new_tensor(low) - vals).pow(2)
             + torch.relu(vals - vals.new_tensor(high)).pow(2)

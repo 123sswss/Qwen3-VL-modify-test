@@ -12,7 +12,8 @@ BASE_VISUAL_ROUTER_MODEL = {
     "adapter_common_mode_loss_weight": 0.03,
     "adapter_effective_delta_loss_weight": 0.0,
     "adapter_diversity_loss_weight": 0.0,
-    "adapter_diversity_target": 0.47,
+    "adapter_diversity_target_low": 0.30,
+    "adapter_diversity_target_high": 0.58,
     "prototype_anchor_loss_weight": 0.0,
     "prototype_anchor_temperature": 0.20,
     "prototype_anchor_momentum": 0.95,
@@ -162,7 +163,8 @@ EXPERIMENTS = {
         "adapter_diversity_loss_weight": 0.0,
         "adapter_diversity_loss_weight_s3": 0.0,
         "adapter_diversity_loss_weight_s4": 0.0027,
-        "adapter_diversity_target": 0.47,
+        "adapter_diversity_target_low": 0.30,
+        "adapter_diversity_target_high": 0.58,
 
         "adapter_sample_entropy_target": 0.72,
         "adapter_common_mode_target": 0.94,
@@ -257,9 +259,13 @@ CFG = {
             "MMRL_ADAPTER_DIVERSITY_LOSS_WEIGHT_S4",
             str(EXP_CFG.get("adapter_diversity_loss_weight_s4", EXP_CFG.get("adapter_diversity_loss_weight", 0.0))),
         )),
-        "adapter_diversity_target": float(os.getenv(
-            "MMRL_ADAPTER_DIVERSITY_TARGET",
-            str(EXP_CFG.get("adapter_diversity_target", 0.47)),
+        "adapter_diversity_target_low": float(os.getenv(
+            "MMRL_ADAPTER_DIVERSITY_TARGET_LOW",
+            str(EXP_CFG.get("adapter_diversity_target_low", 0.30)),
+        )),
+        "adapter_diversity_target_high": float(os.getenv(
+            "MMRL_ADAPTER_DIVERSITY_TARGET_HIGH",
+            str(EXP_CFG.get("adapter_diversity_target_high", 0.58)),
         )),
         "prototype_anchor_loss_weight": float(os.getenv(
             "MMRL_PROTOTYPE_ANCHOR_LOSS_WEIGHT",

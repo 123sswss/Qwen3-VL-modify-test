@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env python3
+#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
 Evaluate trained Qwen3-VL visual-encoder IA3 adapter with ../test/test.py.

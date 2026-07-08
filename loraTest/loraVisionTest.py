@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Evaluate trained Qwen3-VL visual-encoder LoRA adapters with ../test/test.py.
+Evaluate trained Qwen3-VL visual-encoder LoRA vision-attention adapters with ../test/test.py.
 
 Run from this folder:
-    python loraTest.py
+    python loraVisionTest.py
 """
 
 import importlib.util
@@ -30,7 +30,7 @@ except ImportError:
 
 CFG = {
     "base_model_path": "/root/autodl-tmp/model",
-    "lora_root": "./runs/lora",
+    "lora_root": "./runs/lora_vision_attn",
     "ranks": [8, 16, 32],
     "test_script_path": "../test/test.py",
     "json_paths": [
@@ -143,7 +143,7 @@ class LoraModelInterface:
 
 def evaluate_one_rank(rank: int, test_module: Any) -> Dict[str, Any]:
     adapter_path = Path(CFG["lora_root"]) / f"rank{rank}" / "final"
-    print(f"\n========== Evaluating LoRA rank {rank} ==========")
+    print(f"\n========== Evaluating LoRA vision-attention rank {rank} ==========")
     model = LoraModelInterface(str(adapter_path), CFG["base_model_path"])
     summary = test_module.run_evaluation(
         CFG["json_paths"],
@@ -164,7 +164,7 @@ def main() -> None:
         summaries[f"rank{rank}"] = evaluate_one_rank(rank, test_module)
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
-    print("\n========== LoRA evaluation finished ==========")
+    print("\n========== LoRA vision-attention evaluation finished ==========")
     for name, summary in summaries.items():
         print(f"{name}: score={summary.get('score')} evaluated={summary.get('evaluated')}")
 

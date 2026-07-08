@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env python3
+#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
 One-click bottleneck Adapter training for Qwen3-VL visual encoder comparison.

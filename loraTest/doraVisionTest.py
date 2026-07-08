@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Evaluate trained Qwen3-VL visual-encoder LoRA adapters with ../test/test.py.
+Evaluate trained Qwen3-VL visual-encoder DoRA vision-attention adapters with ../test/test.py.
 
 Run from this folder:
-    python loraTest.py
+    python doraVisionTest.py
 """
 
 import importlib.util
@@ -30,8 +30,8 @@ except ImportError:
 
 CFG = {
     "base_model_path": "/root/autodl-tmp/model",
-    "lora_root": "./runs/lora",
-    "ranks": [8, 16, 32],
+    "dora_root": "./runs/dora_vision_attn",
+    "ranks": [8, 16],
     "test_script_path": "../test/test.py",
     "json_paths": [
         "/root/autodl-tmp/dataset/test2_val.json",
@@ -58,7 +58,7 @@ def load_test_module(test_script_path: str) -> Any:
     script_path = Path(test_script_path).resolve()
     if not script_path.exists():
         raise FileNotFoundError(f"test.py not found: {script_path}")
-    spec = importlib.util.spec_from_file_location("qwen_lora_eval_test", script_path)
+    spec = importlib.util.spec_from_file_location("qwen_dora_eval_test", script_path)
     if spec is None or spec.loader is None:
         raise RuntimeError(f"Failed to import test module from {script_path}")
     module = importlib.util.module_from_spec(spec)
@@ -97,18 +97,18 @@ def move_inputs_to_device(inputs: Dict[str, torch.Tensor], device: torch.device)
     return moved
 
 
-class LoraModelInterface:
+class DoraModelInterface:
     def __init__(self, adapter_path: str, base_model_path: str) -> None:
         adapter_dir = Path(adapter_path).resolve()
         if not adapter_dir.exists():
-            raise FileNotFoundError(f"LoRA adapter not found: {adapter_dir}")
+            raise FileNotFoundError(f"DoRA adapter not found: {adapter_dir}")
 
         self.processor = AutoProcessor.from_pretrained(base_model_path, trust_remote_code=True)
         base_model = load_base_model(base_model_path)
         self.model = PeftModel.from_pretrained(base_model, str(adapter_dir))
         self.model.eval()
         self.device = next(self.model.parameters()).device
-        print(f"[lora] loaded adapter: {adapter_dir}")
+        print(f"[dora] loaded adapter: {adapter_dir}")
 
     def infer(self, image: Image.Image, prompt: str, max_new_tokens: int = 256, temperature: float = 0.2) -> str:
         messages = [
@@ -142,9 +142,9 @@ class LoraModelInterface:
 
 
 def evaluate_one_rank(rank: int, test_module: Any) -> Dict[str, Any]:
-    adapter_path = Path(CFG["lora_root"]) / f"rank{rank}" / "final"
-    print(f"\n========== Evaluating LoRA rank {rank} ==========")
-    model = LoraModelInterface(str(adapter_path), CFG["base_model_path"])
+    adapter_path = Path(CFG["dora_root"]) / f"rank{rank}" / "final"
+    print(f"\n========== Evaluating DoRA vision-attention rank {rank} ==========")
+    model = DoraModelInterface(str(adapter_path), CFG["base_model_path"])
     summary = test_module.run_evaluation(
         CFG["json_paths"],
         model,
@@ -164,7 +164,7 @@ def main() -> None:
         summaries[f"rank{rank}"] = evaluate_one_rank(rank, test_module)
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
-    print("\n========== LoRA evaluation finished ==========")
+    print("\n========== DoRA vision-attention evaluation finished ==========")
     for name, summary in summaries.items():
         print(f"{name}: score={summary.get('score')} evaluated={summary.get('evaluated')}")
 

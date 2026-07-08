@@ -939,7 +939,7 @@ def build_model_and_processor(model_path, experiment_cfg=None):
     ))
     config.ADAPTER_DIVERSITY_TARGET = float(experiment_cfg.get(
         "adapter_diversity_target",
-        os.getenv("MMRL_ADAPTER_DIVERSITY_TARGET", "0.35"),
+        os.getenv("MMRL_ADAPTER_DIVERSITY_TARGET", "0.47"),
     ))
     config.PROTOTYPE_ANCHOR_LOSS_WEIGHT = float(experiment_cfg.get(
         "prototype_anchor_loss_weight",

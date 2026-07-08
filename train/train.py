@@ -12,7 +12,7 @@ BASE_VISUAL_ROUTER_MODEL = {
     "adapter_common_mode_loss_weight": 0.03,
     "adapter_effective_delta_loss_weight": 0.0,
     "adapter_diversity_loss_weight": 0.0,
-    "adapter_diversity_target": 0.35,
+    "adapter_diversity_target": 0.47,
     "prototype_anchor_loss_weight": 0.0,
     "prototype_anchor_temperature": 0.20,
     "prototype_anchor_momentum": 0.95,
@@ -115,7 +115,7 @@ EXPERIMENTS = {
         "deepstack_mmrl_residual_scale": 0.0,
     }
 }
-SELECTED_EXPERIMENT = os.getenv("MMRL_EXPERIMENT", "visual_router_v1")
+SELECTED_EXPERIMENT = os.getenv("MMRL_EXPERIMENT", "visual_router_layer_fixed_v8_div_band")
 if SELECTED_EXPERIMENT not in EXPERIMENTS:
     raise ValueError(f"Unknown MMRL_EXPERIMENT={SELECTED_EXPERIMENT!r}, choices={sorted(EXPERIMENTS)}")
 EXP_CFG = EXPERIMENTS[SELECTED_EXPERIMENT]
@@ -201,7 +201,7 @@ CFG = {
         )),
         "adapter_diversity_target": float(os.getenv(
             "MMRL_ADAPTER_DIVERSITY_TARGET",
-            str(EXP_CFG.get("adapter_diversity_target", 0.35)),
+            str(EXP_CFG.get("adapter_diversity_target", 0.47)),
         )),
         "prototype_anchor_loss_weight": float(os.getenv(
             "MMRL_PROTOTYPE_ANCHOR_LOSS_WEIGHT",
@@ -323,6 +323,8 @@ CFG = {
             "adapter_diversity_loss_scaled",
             "adapter_pairwise_cos_mean",
             "adapter_pairwise_cos_max",
+            "adapter_pairwise_cos_below_band",
+            "adapter_pairwise_cos_above_band",
             "deepstack_mmrl_residual_scale",
             "deepstack_delta_norm_mean",
             "deepstack_delta_to_org_ratio",

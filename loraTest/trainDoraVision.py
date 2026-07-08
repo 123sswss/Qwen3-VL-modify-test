@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-One-click LoRA training for Qwen3-VL visual encoder comparison.
+One-click DoRA training for Qwen3-VL visual encoder comparison.
 
 Run from this folder:
-    python trainLora.py
+    python trainDoraVision.py
 """
 
 import json
@@ -45,7 +45,7 @@ except ImportError:
 
 CFG = {
     "model_path": "/root/autodl-tmp/model",
-    "work_dir": "./runs/lora",
+    "work_dir": "./runs/dora_vision_attn",
     "seed": 42,
     "max_length": 1024,
     "data": {
@@ -98,7 +98,7 @@ CFG = {
         "report_to": "none",
     },
     "lora": {
-        "ranks": [8, 16, 32],
+        "ranks": [8, 16],
         "alpha_multiplier": 2,
         "dropout": 0.05,
         "bias": "none",
@@ -156,9 +156,10 @@ def load_model_and_processor(model_path: str) -> Any:
     raise RuntimeError(f"Failed to load model from {model_path}") from last_error
 
 
-def find_attention_linear_targets(model: nn.Module) -> List[str]:
-    blocked_keywords = ("lm_head", "embed_tokens")
-    target_suffixes = ("q_proj", "k_proj", "v_proj", "o_proj")
+def find_vision_attention_linear_targets(model: nn.Module) -> List[str]:
+    visual_keywords = ("visual", "vision", "vision_tower", "vision_model")
+    blocked_keywords = ("lm_head", "language", "text", "embed_tokens")
+    target_suffixes = ("q_proj", "k_proj", "v_proj", "o_proj", "qkv", "proj")
     targets: List[str] = []
     for name, module in model.named_modules():
         lname = name.lower()
@@ -166,12 +167,16 @@ def find_attention_linear_targets(model: nn.Module) -> List[str]:
             continue
         if any(keyword in lname for keyword in blocked_keywords):
             continue
+        if not any(keyword in lname for keyword in visual_keywords):
+            continue
+        if ".attn." not in lname and ".attention." not in lname and "self_attn" not in lname:
+            continue
         if not lname.endswith(target_suffixes):
             continue
         targets.append(name)
     if not targets:
-        raise RuntimeError("No attention Linear modules found for LoRA. Please inspect Qwen3-VL module names.")
-    print(f"[lora] attention Linear target modules: {len(targets)}")
+        raise RuntimeError("No vision attention Linear modules found for DoRA. Please inspect Qwen3-VL module names.")
+    print(f"[dora-vision] vision attention Linear target modules: {len(targets)}")
     for name in targets[:20]:
         print(f"  - {name}")
     if len(targets) > 20:
@@ -209,10 +214,11 @@ def train_one_rank(rank: int, dataset: Dataset, target_modules: List[str]) -> No
         lora_dropout=CFG["lora"]["dropout"],
         bias=CFG["lora"]["bias"],
         target_modules=target_modules,
+        use_dora=True,
     )
     model = get_peft_model(model, lora_cfg)
     counts = count_parameters(model)
-    print_trainable_banner(f"LoRA rank {rank}", counts)
+    print_trainable_banner(f"DoRA rank {rank}", counts)
     model.print_trainable_parameters()
 
     output_dir = Path(CFG["work_dir"]) / f"rank{rank}"
@@ -244,7 +250,7 @@ def train_one_rank(rank: int, dataset: Dataset, target_modules: List[str]) -> No
     trainer.train()
     trainer.save_model(str(output_dir / "final"))
     processor.save_pretrained(str(output_dir / "final"))
-    print(f"[done] rank {rank} LoRA saved to {output_dir / 'final'}")
+    print(f"[done] rank {rank} DoRA saved to {output_dir / 'final'}")
 
 
 def main() -> None:
@@ -253,7 +259,7 @@ def main() -> None:
     Path(CFG["work_dir"]).mkdir(parents=True, exist_ok=True)
 
     probe_model, processor = load_model_and_processor(CFG["model_path"])
-    target_modules = find_attention_linear_targets(probe_model)
+    target_modules = find_vision_attention_linear_targets(probe_model)
     del probe_model
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
@@ -261,7 +267,7 @@ def main() -> None:
     dataset = build_fair_dataset(processor=processor, data_cfg=CFG["data"])
     for rank in CFG["lora"]["ranks"]:
         train_one_rank(rank, dataset, target_modules)
-    print("All LoRA rank experiments finished.")
+    print("All DoRA vision-attention rank experiments finished.")
 
 
 if __name__ == "__main__":

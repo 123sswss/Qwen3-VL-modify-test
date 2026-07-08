@@ -22,6 +22,8 @@ import json
 
 from logger import StageMetricLogger, TrainerMetricsCallback
 
+import numbers
+
 
 def _build_experiment_context(train_cfg, output_dir, stage_id):
     experiment_name = train_cfg.get("experiment_name", "experiment")
@@ -353,6 +355,17 @@ class MMRLDiagnosticsCallback(TrainerCallback):
                 writer.writeheader()
                 self.csv_header_written = True
             writer.writerow(flat_payload)
+            
+    def _round_payload(self, value):
+        if isinstance(value, numbers.Real):
+            return round(float(value), 6)
+        if isinstance(value, np.ndarray):
+            return self._round_payload(value.tolist())
+        if isinstance(value, list):
+            return [self._round_payload(v) for v in value]
+        if isinstance(value, dict):
+            return {k: self._round_payload(v) for k, v in value.items()}
+        return value
 
     def _flush(self):
         if not self.buffer:

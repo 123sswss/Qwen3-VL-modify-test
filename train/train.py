@@ -12,7 +12,7 @@ BASE_VISUAL_ROUTER_MODEL = {
     "adapter_common_mode_loss_weight": 0.03,
     "adapter_effective_delta_loss_weight": 0.0,
     "adapter_diversity_loss_weight": 0.0,
-    "adapter_diversity_target": 0.35,
+    "adapter_diversity_target": 0.47,
     "prototype_anchor_loss_weight": 0.0,
     "prototype_anchor_temperature": 0.20,
     "prototype_anchor_momentum": 0.95,
@@ -144,8 +144,36 @@ EXPERIMENTS = {
         "deepstack_mmrl_residual_scale": 0.0,
         "diag_every_steps": 250,
     },
+
+    "visual_router_layer_fixed_v8_div_band": {
+        **BASE_VISUAL_ROUTER_MODEL,
+        "adapter_usage_balance_loss_weight": 0.00275,
+        "adapter_sample_entropy_loss_weight": 0.020,
+        "adapter_common_mode_loss_weight": 0.0,
+
+        "adapter_effective_delta_loss_weight": 0.0037,
+        "adapter_effective_delta_loss_weight_s3": 0.0003,
+        "adapter_effective_delta_loss_weight_s4": 0.0037,
+
+        "prototype_anchor_loss_weight": 0.0,
+        "prototype_anchor_loss_weight_s3": 0.0,
+        "prototype_anchor_loss_weight_s4": 0.0,
+
+        "adapter_diversity_loss_weight": 0.0,
+        "adapter_diversity_loss_weight_s3": 0.0,
+        "adapter_diversity_loss_weight_s4": 0.0027,
+        "adapter_diversity_target": 0.47,
+
+        "adapter_sample_entropy_target": 0.72,
+        "adapter_common_mode_target": 0.94,
+        "adapter_effective_delta_target_low": 0.52,
+        "adapter_effective_delta_target_high": 0.98,
+
+        "enable_deepstack_mmrl_residual": False,
+        "deepstack_mmrl_residual_scale": 0.0,
+    },
 }
-SELECTED_EXPERIMENT = os.getenv("MMRL_EXPERIMENT", "visual_router_v1")
+SELECTED_EXPERIMENT = os.getenv("MMRL_EXPERIMENT", "visual_router_layer_fixed_v8_div_band")
 if SELECTED_EXPERIMENT not in EXPERIMENTS:
     raise ValueError(f"Unknown MMRL_EXPERIMENT={SELECTED_EXPERIMENT!r}, choices={sorted(EXPERIMENTS)}")
 EXP_CFG = EXPERIMENTS[SELECTED_EXPERIMENT]
@@ -231,7 +259,7 @@ CFG = {
         )),
         "adapter_diversity_target": float(os.getenv(
             "MMRL_ADAPTER_DIVERSITY_TARGET",
-            str(EXP_CFG.get("adapter_diversity_target", 0.35)),
+            str(EXP_CFG.get("adapter_diversity_target", 0.47)),
         )),
         "prototype_anchor_loss_weight": float(os.getenv(
             "MMRL_PROTOTYPE_ANCHOR_LOSS_WEIGHT",
@@ -353,6 +381,8 @@ CFG = {
             "adapter_diversity_loss_scaled",
             "adapter_pairwise_cos_mean",
             "adapter_pairwise_cos_max",
+            "adapter_pairwise_cos_below_band",
+            "adapter_pairwise_cos_above_band",
             "deepstack_mmrl_residual_scale",
             "deepstack_delta_norm_mean",
             "deepstack_delta_to_org_ratio",

@@ -131,10 +131,22 @@ def load_manifest(dataset_json: str, image_dir: str, limit: int) -> List[Dict[st
 
     root = Path(image_dir)
     samples = []
+    scanned = 0
+    missing_image_field = 0
+    missing_image_file = 0
+    empty_prompt = 0
     for index, item in enumerate(raw):
+        scanned += 1
         prompt = _conversation_text(item)
         image_path = _image_path(item, root)
-        if not prompt or image_path is None:
+        if not prompt:
+            empty_prompt += 1
+            continue
+        if image_path is None:
+            missing_image_field += 1
+            continue
+        if not image_path.is_file():
+            missing_image_file += 1
             continue
         stable_id = str(item.get("id", item.get("sample_id", index)))
         samples.append(
@@ -147,8 +159,20 @@ def load_manifest(dataset_json: str, image_dir: str, limit: int) -> List[Dict[st
         )
         if len(samples) >= limit:
             break
+
+    print(
+        "[dataset] "
+        f"scanned={scanned}, selected={len(samples)}, "
+        f"missing_image_file={missing_image_file}, "
+        f"missing_image_field={missing_image_field}, "
+        f"empty_prompt={empty_prompt}"
+    )
     if len(samples) < limit:
-        raise RuntimeError(f"Only found {len(samples)} usable image-text samples; requested {limit}.")
+        raise RuntimeError(
+            f"Only found {len(samples)} usable image-text samples after scanning "
+            f"{scanned} records; requested {limit}. Missing image files: "
+            f"{missing_image_file}. Check IMAGE_DIR if most or all images are missing."
+        )
     return samples
 
 

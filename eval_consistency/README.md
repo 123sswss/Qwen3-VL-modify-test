@@ -171,6 +171,14 @@ python eval_consistency/run_all.py \
     --output-root ./eval_consistency/results
 ```
 
+构建评测样本清单时，程序会检查图片文件是否真实存在。图片字段缺失、图片文件丢失或问题文本为空的样本会被自动跳过，并输出类似统计：
+
+```text
+[dataset] scanned=6, selected=2, missing_image_file=4, missing_image_field=0, empty_prompt=0
+```
+
+所有实验读取相同的数据集并执行相同的筛选规则，因此缺图样本不会导致不同模型之间发生样本错位。如果扫描完整个数据集后仍无法获得指定数量的有效样本，程序会停止并提示检查 `IMAGE_DIR`。如果绝大多数图片都被判定为缺失，通常代表图片根目录配置错误，而不是数据集中恰好丢失了大量图片。
+
 ## 六、单独运行某个实验
 
 第一次原模型运行：

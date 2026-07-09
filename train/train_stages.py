@@ -95,6 +95,14 @@ def _build_experiment_context(train_cfg, output_dir, stage_id):
                 "adapter_diversity_target_high",
                 experiment_cfg.get("adapter_diversity_target_high"),
             ),
+            "adapter_diversity_upper_weight": train_cfg.get(
+                "adapter_diversity_upper_weight",
+                experiment_cfg.get("adapter_diversity_upper_weight"),
+            ),
+            "adapter_diversity_worst_pair_weight": train_cfg.get(
+                "adapter_diversity_worst_pair_weight",
+                experiment_cfg.get("adapter_diversity_worst_pair_weight"),
+            ),
             "prototype_anchor_loss_weight": train_cfg.get(
                 "prototype_anchor_loss_weight",
                 experiment_cfg.get("prototype_anchor_loss_weight"),
@@ -949,6 +957,14 @@ def build_model_and_processor(model_path, experiment_cfg=None):
         "adapter_diversity_target_high",
         os.getenv("MMRL_ADAPTER_DIVERSITY_TARGET_HIGH", "0.58"),
     ))
+    config.ADAPTER_DIVERSITY_UPPER_WEIGHT = float(experiment_cfg.get(
+        "adapter_diversity_upper_weight",
+        os.getenv("MMRL_ADAPTER_DIVERSITY_UPPER_WEIGHT", "2.0"),
+    ))
+    config.ADAPTER_DIVERSITY_WORST_PAIR_WEIGHT = float(experiment_cfg.get(
+        "adapter_diversity_worst_pair_weight",
+        os.getenv("MMRL_ADAPTER_DIVERSITY_WORST_PAIR_WEIGHT", "1.0"),
+    ))
     config.PROTOTYPE_ANCHOR_LOSS_WEIGHT = float(experiment_cfg.get(
         "prototype_anchor_loss_weight",
         os.getenv("MMRL_PROTOTYPE_ANCHOR_LOSS_WEIGHT", "0.0"),
@@ -1037,6 +1053,8 @@ def build_model_and_processor(model_path, experiment_cfg=None):
         f"adapter_diversity_loss_weight={config.ADAPTER_DIVERSITY_LOSS_WEIGHT} "
         f"adapter_diversity_target_low={config.ADAPTER_DIVERSITY_TARGET_LOW} "
         f"adapter_diversity_target_high={config.ADAPTER_DIVERSITY_TARGET_HIGH} "
+        f"adapter_diversity_upper_weight={config.ADAPTER_DIVERSITY_UPPER_WEIGHT} "
+        f"adapter_diversity_worst_pair_weight={config.ADAPTER_DIVERSITY_WORST_PAIR_WEIGHT} "
         f"prototype_anchor_loss_weight={config.PROTOTYPE_ANCHOR_LOSS_WEIGHT} "
         f"prototype_anchor_temperature={config.PROTOTYPE_ANCHOR_TEMPERATURE} "
         f"prototype_anchor_momentum={config.PROTOTYPE_ANCHOR_MOMENTUM} "

@@ -14,6 +14,8 @@ BASE_VISUAL_ROUTER_MODEL = {
     "adapter_diversity_loss_weight": 0.0,
     "adapter_diversity_target_low": 0.30,
     "adapter_diversity_target_high": 0.58,
+    "adapter_diversity_upper_weight": 2.0,
+    "adapter_diversity_worst_pair_weight": 1.0,
     "prototype_anchor_loss_weight": 0.0,
     "prototype_anchor_temperature": 0.20,
     "prototype_anchor_momentum": 0.95,
@@ -209,6 +211,14 @@ CFG = {
             "MMRL_ADAPTER_DIVERSITY_TARGET_HIGH",
             str(EXP_CFG.get("adapter_diversity_target_high", 0.58)),
         )),
+        "adapter_diversity_upper_weight": float(os.getenv(
+            "MMRL_ADAPTER_DIVERSITY_UPPER_WEIGHT",
+            str(EXP_CFG.get("adapter_diversity_upper_weight", 2.0)),
+        )),
+        "adapter_diversity_worst_pair_weight": float(os.getenv(
+            "MMRL_ADAPTER_DIVERSITY_WORST_PAIR_WEIGHT",
+            str(EXP_CFG.get("adapter_diversity_worst_pair_weight", 1.0)),
+        )),
         "prototype_anchor_loss_weight": float(os.getenv(
             "MMRL_PROTOTYPE_ANCHOR_LOSS_WEIGHT",
             str(EXP_CFG.get("prototype_anchor_loss_weight", 0.0)),
@@ -331,6 +341,8 @@ CFG = {
             "adapter_pairwise_cos_max",
             "adapter_pairwise_cos_below_band",
             "adapter_pairwise_cos_above_band",
+            "adapter_diversity_mean_component",
+            "adapter_diversity_worst_component",
             "deepstack_mmrl_residual_scale",
             "deepstack_delta_norm_mean",
             "deepstack_delta_to_org_ratio",

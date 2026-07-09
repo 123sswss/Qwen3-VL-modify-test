@@ -52,6 +52,10 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
             "ADAPTER_DIVERSITY_LOSS_WEIGHT": _cfg_attr(config, "ADAPTER_DIVERSITY_LOSS_WEIGHT", 0.0),
             "ADAPTER_DIVERSITY_TARGET_LOW": _cfg_attr(config, "ADAPTER_DIVERSITY_TARGET_LOW", 0.30),
             "ADAPTER_DIVERSITY_TARGET_HIGH": _cfg_attr(config, "ADAPTER_DIVERSITY_TARGET_HIGH", 0.58),
+            "ADAPTER_DIVERSITY_UPPER_WEIGHT": _cfg_attr(config, "ADAPTER_DIVERSITY_UPPER_WEIGHT", 2.0),
+            "ADAPTER_DIVERSITY_WORST_PAIR_WEIGHT": _cfg_attr(
+                config, "ADAPTER_DIVERSITY_WORST_PAIR_WEIGHT", 1.0
+            ),
             "PROTOTYPE_ANCHOR_LOSS_WEIGHT": _cfg_attr(config, "PROTOTYPE_ANCHOR_LOSS_WEIGHT", 0.0),
             "PROTOTYPE_ANCHOR_TEMPERATURE": _cfg_attr(config, "PROTOTYPE_ANCHOR_TEMPERATURE", 0.20),
             "PROTOTYPE_ANCHOR_MOMENTUM": _cfg_attr(config, "PROTOTYPE_ANCHOR_MOMENTUM", 0.95),

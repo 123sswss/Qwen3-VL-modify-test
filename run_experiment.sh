@@ -114,8 +114,10 @@ run_N() {
 }
 
 # 当前可用实验名见 train/train.py: EXPERIMENTS
-run_N "visual_router_layer_fixed_v1_stable" "visual_router_layer_fixed_v1_stable" 2
-run_N "visual_router_layer_fixed_v1_recover_high" "visual_router_layer_fixed_v1_recover_high" 2
+run_N "visual_router_layer_fixed_v6_recover_usage_guard" "visual_router_layer_fixed_v6_recover_usage_guard" 1
+run_N "visual_router_layer_fixed_v7_usage_guard_soft_div" "visual_router_layer_fixed_v7_usage_guard_soft_div" 1
+
+
 
 
 # run_one "ablation_full_model" "ablation_full_model"

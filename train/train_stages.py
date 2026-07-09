@@ -22,6 +22,8 @@ import json
 
 from logger import StageMetricLogger, TrainerMetricsCallback
 
+import numbers
+
 
 def _build_experiment_context(train_cfg, output_dir, stage_id):
     experiment_name = train_cfg.get("experiment_name", "experiment")
@@ -85,9 +87,21 @@ def _build_experiment_context(train_cfg, output_dir, stage_id):
                 "adapter_diversity_loss_weight_s4",
                 experiment_cfg.get("adapter_diversity_loss_weight_s4"),
             ),
-            "adapter_diversity_target": train_cfg.get(
-                "adapter_diversity_target",
-                experiment_cfg.get("adapter_diversity_target"),
+            "adapter_diversity_target_low": train_cfg.get(
+                "adapter_diversity_target_low",
+                experiment_cfg.get("adapter_diversity_target_low"),
+            ),
+            "adapter_diversity_target_high": train_cfg.get(
+                "adapter_diversity_target_high",
+                experiment_cfg.get("adapter_diversity_target_high"),
+            ),
+            "adapter_diversity_upper_weight": train_cfg.get(
+                "adapter_diversity_upper_weight",
+                experiment_cfg.get("adapter_diversity_upper_weight"),
+            ),
+            "adapter_diversity_worst_pair_weight": train_cfg.get(
+                "adapter_diversity_worst_pair_weight",
+                experiment_cfg.get("adapter_diversity_worst_pair_weight"),
             ),
             "prototype_anchor_loss_weight": train_cfg.get(
                 "prototype_anchor_loss_weight",
@@ -349,6 +363,17 @@ class MMRLDiagnosticsCallback(TrainerCallback):
                 writer.writeheader()
                 self.csv_header_written = True
             writer.writerow(flat_payload)
+            
+    def _round_payload(self, value):
+        if isinstance(value, numbers.Real):
+            return round(float(value), 6)
+        if isinstance(value, np.ndarray):
+            return self._round_payload(value.tolist())
+        if isinstance(value, list):
+            return [self._round_payload(v) for v in value]
+        if isinstance(value, dict):
+            return {k: self._round_payload(v) for k, v in value.items()}
+        return value
 
     def _flush(self):
         if not self.buffer:
@@ -924,9 +949,21 @@ def build_model_and_processor(model_path, experiment_cfg=None):
         "adapter_diversity_loss_weight",
         os.getenv("MMRL_ADAPTER_DIVERSITY_LOSS_WEIGHT", "0.0"),
     ))
-    config.ADAPTER_DIVERSITY_TARGET = float(experiment_cfg.get(
-        "adapter_diversity_target",
-        os.getenv("MMRL_ADAPTER_DIVERSITY_TARGET", "0.35"),
+    config.ADAPTER_DIVERSITY_TARGET_LOW = float(experiment_cfg.get(
+        "adapter_diversity_target_low",
+        os.getenv("MMRL_ADAPTER_DIVERSITY_TARGET_LOW", "0.30"),
+    ))
+    config.ADAPTER_DIVERSITY_TARGET_HIGH = float(experiment_cfg.get(
+        "adapter_diversity_target_high",
+        os.getenv("MMRL_ADAPTER_DIVERSITY_TARGET_HIGH", "0.58"),
+    ))
+    config.ADAPTER_DIVERSITY_UPPER_WEIGHT = float(experiment_cfg.get(
+        "adapter_diversity_upper_weight",
+        os.getenv("MMRL_ADAPTER_DIVERSITY_UPPER_WEIGHT", "2.0"),
+    ))
+    config.ADAPTER_DIVERSITY_WORST_PAIR_WEIGHT = float(experiment_cfg.get(
+        "adapter_diversity_worst_pair_weight",
+        os.getenv("MMRL_ADAPTER_DIVERSITY_WORST_PAIR_WEIGHT", "1.0"),
     ))
     config.PROTOTYPE_ANCHOR_LOSS_WEIGHT = float(experiment_cfg.get(
         "prototype_anchor_loss_weight",
@@ -1014,7 +1051,10 @@ def build_model_and_processor(model_path, experiment_cfg=None):
         f"adapter_effective_delta_target_low={config.ADAPTER_EFFECTIVE_DELTA_TARGET_LOW} "
         f"adapter_effective_delta_target_high={config.ADAPTER_EFFECTIVE_DELTA_TARGET_HIGH} "
         f"adapter_diversity_loss_weight={config.ADAPTER_DIVERSITY_LOSS_WEIGHT} "
-        f"adapter_diversity_target={config.ADAPTER_DIVERSITY_TARGET} "
+        f"adapter_diversity_target_low={config.ADAPTER_DIVERSITY_TARGET_LOW} "
+        f"adapter_diversity_target_high={config.ADAPTER_DIVERSITY_TARGET_HIGH} "
+        f"adapter_diversity_upper_weight={config.ADAPTER_DIVERSITY_UPPER_WEIGHT} "
+        f"adapter_diversity_worst_pair_weight={config.ADAPTER_DIVERSITY_WORST_PAIR_WEIGHT} "
         f"prototype_anchor_loss_weight={config.PROTOTYPE_ANCHOR_LOSS_WEIGHT} "
         f"prototype_anchor_temperature={config.PROTOTYPE_ANCHOR_TEMPERATURE} "
         f"prototype_anchor_momentum={config.PROTOTYPE_ANCHOR_MOMENTUM} "

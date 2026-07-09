@@ -213,7 +213,12 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
         self.prototype_anchor_min_confidence = float(getattr(self.cfg, "PROTOTYPE_ANCHOR_MIN_CONFIDENCE", 0.40))
         self.prototype_anchor_assignment_power = float(getattr(self.cfg, "PROTOTYPE_ANCHOR_ASSIGNMENT_POWER", 2.0))
         self.prototype_anchor_init_noise = float(getattr(self.cfg, "PROTOTYPE_ANCHOR_INIT_NOISE", 0.10))
-        self.adapter_diversity_target = float(getattr(self.cfg, "ADAPTER_DIVERSITY_TARGET", 0.35))
+        self.adapter_diversity_target_low = float(getattr(self.cfg, "ADAPTER_DIVERSITY_TARGET_LOW", 0.30))
+        self.adapter_diversity_target_high = float(getattr(self.cfg, "ADAPTER_DIVERSITY_TARGET_HIGH", 0.58))
+        self.adapter_diversity_upper_weight = float(getattr(self.cfg, "ADAPTER_DIVERSITY_UPPER_WEIGHT", 2.0))
+        self.adapter_diversity_worst_pair_weight = float(
+            getattr(self.cfg, "ADAPTER_DIVERSITY_WORST_PAIR_WEIGHT", 1.0)
+        )
         self.enable_deepstack_mmrl_residual = bool(getattr(self.cfg, "ENABLE_DEEPSTACK_MMRL_RESIDUAL", False))
         self.deepstack_mmrl_residual_scale = float(getattr(self.cfg, "DEEPSTACK_MMRL_RESIDUAL_SCALE", 0.0))
         self.adapter_effective_delta_ratio_mean = torch.tensor(float("nan"))
@@ -225,6 +230,10 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
         self.prototype_usage_min = torch.tensor(float("nan"))
         self.adapter_pairwise_cos_mean = torch.tensor(float("nan"))
         self.adapter_pairwise_cos_max = torch.tensor(float("nan"))
+        self.adapter_pairwise_cos_below_band = torch.tensor(float("nan"))
+        self.adapter_pairwise_cos_above_band = torch.tensor(float("nan"))
+        self.adapter_diversity_mean_component = torch.tensor(float("nan"))
+        self.adapter_diversity_worst_component = torch.tensor(float("nan"))
         self.deepstack_delta_norm_mean = torch.tensor(float("nan"))
         self.deepstack_delta_to_org_ratio = torch.tensor(float("nan"))
         self.deepstack_residual_layers = torch.tensor(0.0)
@@ -575,6 +584,10 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
         nan = torch.tensor(float("nan"), device=device, dtype=dtype)
         self.adapter_pairwise_cos_mean = nan
         self.adapter_pairwise_cos_max = nan
+        self.adapter_pairwise_cos_below_band = nan
+        self.adapter_pairwise_cos_above_band = nan
+        self.adapter_diversity_mean_component = nan
+        self.adapter_diversity_worst_component = nan
 
         pooled = self._pool_adapter_outputs_by_image_mean(adapter_outputs, cu_seqlens)
         if pooled is None or pooled.numel() == 0 or pooled.shape[1] <= 1:
@@ -588,10 +601,33 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
         if vals.numel() == 0:
             return zero
 
-        loss = torch.relu(vals - float(self.adapter_diversity_target)).pow(2).mean()
+        low = float(self.adapter_diversity_target_low)
+        high = float(self.adapter_diversity_target_high)
+        if high < low:
+            low, high = high, low
+        lower_violation = torch.relu(vals.new_tensor(low) - vals).pow(2)
+        upper_violation = torch.relu(vals - vals.new_tensor(high)).pow(2)
+        weighted_violation = (
+            lower_violation
+            + float(self.adapter_diversity_upper_weight) * upper_violation
+        )
+        mean_component = weighted_violation.mean()
+        worst_component = weighted_violation.max()
+        loss = (
+            mean_component
+            + float(self.adapter_diversity_worst_pair_weight) * worst_component
+        )
         with torch.no_grad():
             self.adapter_pairwise_cos_mean = vals.detach().mean().to(device=device, dtype=dtype)
             self.adapter_pairwise_cos_max = vals.detach().max().to(device=device, dtype=dtype)
+            self.adapter_pairwise_cos_below_band = (
+                (vals.detach() < low).float().mean().to(device=device, dtype=dtype)
+            )
+            self.adapter_pairwise_cos_above_band = (
+                (vals.detach() > high).float().mean().to(device=device, dtype=dtype)
+            )
+            self.adapter_diversity_mean_component = mean_component.detach().to(device=device, dtype=dtype)
+            self.adapter_diversity_worst_component = worst_component.detach().to(device=device, dtype=dtype)
         return loss.to(device=device, dtype=dtype)
 
     def _compute_router_aux_losses(
@@ -616,6 +652,10 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
         self.prototype_usage_min = nan
         self.adapter_pairwise_cos_mean = nan
         self.adapter_pairwise_cos_max = nan
+        self.adapter_pairwise_cos_below_band = nan
+        self.adapter_pairwise_cos_above_band = nan
+        self.adapter_diversity_mean_component = nan
+        self.adapter_diversity_worst_component = nan
         for idx in range(self.visual_residual_adapter_count):
             setattr(self, f"prototype_usage_{idx}", nan)
         route_probs = self.route_probs
@@ -1009,6 +1049,10 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
             "prototype_usage_min": self.prototype_usage_min.detach(),
             "adapter_pairwise_cos_mean": self.adapter_pairwise_cos_mean.detach(),
             "adapter_pairwise_cos_max": self.adapter_pairwise_cos_max.detach(),
+            "adapter_pairwise_cos_below_band": self.adapter_pairwise_cos_below_band.detach(),
+            "adapter_pairwise_cos_above_band": self.adapter_pairwise_cos_above_band.detach(),
+            "adapter_diversity_mean_component": self.adapter_diversity_mean_component.detach(),
+            "adapter_diversity_worst_component": self.adapter_diversity_worst_component.detach(),
             "deepstack_mmrl_residual_scale": hidden_states.new_tensor(float(self.deepstack_mmrl_residual_scale)),
             "deepstack_delta_norm_mean": self.deepstack_delta_norm_mean.detach(),
             "deepstack_delta_to_org_ratio": self.deepstack_delta_to_org_ratio.detach(),

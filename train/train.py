@@ -7,119 +7,44 @@ from train_stages import build_model_and_processor, run_stage
 BASE_VISUAL_ROUTER_MODEL = {
     "rp_space_length": 40,
     "visual_residual_adapter_count": 4,
-    "adapter_usage_balance_loss_weight": 0.005,
-    "adapter_sample_entropy_loss_weight": 0.02,
-    "adapter_common_mode_loss_weight": 0.03,
-    "adapter_effective_delta_loss_weight": 0.0,
+
+    "prototype_router_dim": 128,
+    "prototype_router_temperature": 0.35,
+    "prototype_router_cluster_loss_weight": 0.010,
+    "prototype_router_usage_loss_weight": 0.012,
+    "prototype_router_confidence_loss_weight": 0.003,
+    "prototype_router_confidence_target": 0.55,
+
+    "adapter_common_mode_loss_weight": 0.0,
+    "adapter_effective_delta_loss_weight": 0.004,
+    "adapter_effective_delta_loss_weight_s3": 0.0005,
+    "adapter_effective_delta_loss_weight_s4": 0.004,
+    "adapter_effective_delta_target_low": 0.45,
+    "adapter_effective_delta_target_high": 0.62,
+
     "adapter_diversity_loss_weight": 0.0,
-    "adapter_diversity_target_low": 0.30,
-    "adapter_diversity_target_high": 0.58,
+    "adapter_diversity_loss_weight_s3": 0.0,
+    "adapter_diversity_loss_weight_s4": 0.004,
+    "adapter_diversity_target_low": 0.0,
+    "adapter_diversity_target_high": 0.55,
     "adapter_diversity_upper_weight": 2.0,
     "adapter_diversity_worst_pair_weight": 1.0,
-    "prototype_anchor_loss_weight": 0.0,
-    "prototype_anchor_temperature": 0.20,
-    "prototype_anchor_momentum": 0.95,
-    "prototype_anchor_min_confidence": 0.40,
-    "prototype_anchor_assignment_power": 2.0,
-    "prototype_anchor_init_noise": 0.10,
+
     "enable_deepstack_mmrl_residual": False,
     "deepstack_mmrl_residual_scale": 0.0,
-    "adapter_sample_entropy_target": 0.55,
     "adapter_common_mode_target": 0.85,
-    "adapter_effective_delta_target_low": 0.78,
-    "adapter_effective_delta_target_high": 1.10,
     "ablate_visual_gate": False,
     "ablate_direct_learnable_rep": False,
     "disable_general_mm_stage34": False,
-    "diag_every_steps": 250,
 }
 
 
 EXPERIMENTS = {
-    "visual_router_layer_fixed_v4_diversity_recover": { # 64.99
+    "visual_router_proto_v1": {
         **BASE_VISUAL_ROUTER_MODEL,
-        "adapter_usage_balance_loss_weight": 0.0026,
-        "adapter_sample_entropy_loss_weight": 0.020,
-        "adapter_common_mode_loss_weight": 0.0,
-    
-        "adapter_effective_delta_loss_weight": 0.0037,
-        "adapter_effective_delta_loss_weight_s3": 0.0003,
-        "adapter_effective_delta_loss_weight_s4": 0.0037,
-    
-        "prototype_anchor_loss_weight": 0.0,
-        "prototype_anchor_loss_weight_s3": 0.0,
-        "prototype_anchor_loss_weight_s4": 0.0,
-    
-        "adapter_diversity_loss_weight": 0.0,
-        "adapter_diversity_loss_weight_s3": 0.0,
-        "adapter_diversity_loss_weight_s4": 0.0027,
-        "adapter_diversity_target_low": 0.30,
-        "adapter_diversity_target_high": 0.58,
-
-        "adapter_sample_entropy_target": 0.72,
-        "adapter_common_mode_target": 0.94,
-        "adapter_effective_delta_target_low": 0.52,
-        "adapter_effective_delta_target_high": 0.98,
-    
-        "enable_deepstack_mmrl_residual": False,
-        "deepstack_mmrl_residual_scale": 0.0,
-    },
-    "visual_router_layer_fixed_v6_recover_usage_guard": { # 65.51
-        **BASE_VISUAL_ROUTER_MODEL,
-        "adapter_usage_balance_loss_weight": 0.00275,
-        "adapter_sample_entropy_loss_weight": 0.020,
-        "adapter_common_mode_loss_weight": 0.0,
-    
-        "adapter_effective_delta_loss_weight": 0.0037,
-        "adapter_effective_delta_loss_weight_s3": 0.0003,
-        "adapter_effective_delta_loss_weight_s4": 0.0037,
-    
-        "prototype_anchor_loss_weight": 0.0,
-        "prototype_anchor_loss_weight_s3": 0.0,
-        "prototype_anchor_loss_weight_s4": 0.0,
-    
-        "adapter_diversity_loss_weight": 0.0,
-        "adapter_diversity_loss_weight_s3": 0.0,
-        "adapter_diversity_loss_weight_s4": 0.0027,
-        "adapter_diversity_target": 0.50,
-    
-        "adapter_sample_entropy_target": 0.72,
-        "adapter_common_mode_target": 0.94,
-        "adapter_effective_delta_target_low": 0.52,
-        "adapter_effective_delta_target_high": 0.98,
-    
-        "enable_deepstack_mmrl_residual": False,
-        "deepstack_mmrl_residual_scale": 0.0,
-    },
-    "visual_router_layer_fixed_v7_usage_guard_soft_div": {
-        **BASE_VISUAL_ROUTER_MODEL,
-        "adapter_usage_balance_loss_weight": 0.00275,
-        "adapter_sample_entropy_loss_weight": 0.020,
-        "adapter_common_mode_loss_weight": 0.0,
-    
-        "adapter_effective_delta_loss_weight": 0.0037,
-        "adapter_effective_delta_loss_weight_s3": 0.0003,
-        "adapter_effective_delta_loss_weight_s4": 0.0037,
-    
-        "prototype_anchor_loss_weight": 0.0,
-        "prototype_anchor_loss_weight_s3": 0.0,
-        "prototype_anchor_loss_weight_s4": 0.0,
-    
-        "adapter_diversity_loss_weight": 0.0,
-        "adapter_diversity_loss_weight_s3": 0.0,
-        "adapter_diversity_loss_weight_s4": 0.0025,
-        "adapter_diversity_target": 0.50,
-    
-        "adapter_sample_entropy_target": 0.72,
-        "adapter_common_mode_target": 0.94,
-        "adapter_effective_delta_target_low": 0.52,
-        "adapter_effective_delta_target_high": 0.98,
-    
-        "enable_deepstack_mmrl_residual": False,
-        "deepstack_mmrl_residual_scale": 0.0,
     }
 }
-SELECTED_EXPERIMENT = os.getenv("MMRL_EXPERIMENT", "visual_router_layer_fixed_v8_div_band")
+SELECTED_EXPERIMENT = os.getenv("MMRL_EXPERIMENT", "visual_router_proto_v1")
 if SELECTED_EXPERIMENT not in EXPERIMENTS:
     raise ValueError(f"Unknown MMRL_EXPERIMENT={SELECTED_EXPERIMENT!r}, choices={sorted(EXPERIMENTS)}")
 EXP_CFG = EXPERIMENTS[SELECTED_EXPERIMENT]
@@ -167,13 +92,29 @@ CFG = {
             "MMRL_VISUAL_RESIDUAL_ADAPTER_COUNT",
             str(EXP_CFG.get("visual_residual_adapter_count", 4)),
         )),
-        "adapter_usage_balance_loss_weight": float(os.getenv(
-            "MMRL_ADAPTER_USAGE_BALANCE_LOSS_WEIGHT",
-            str(EXP_CFG.get("adapter_usage_balance_loss_weight", 0.0)),
+        "prototype_router_dim": int(os.getenv(
+            "MMRL_PROTOTYPE_ROUTER_DIM",
+            str(EXP_CFG.get("prototype_router_dim", 128)),
         )),
-        "adapter_sample_entropy_loss_weight": float(os.getenv(
-            "MMRL_ADAPTER_SAMPLE_ENTROPY_LOSS_WEIGHT",
-            str(EXP_CFG.get("adapter_sample_entropy_loss_weight", 0.0)),
+        "prototype_router_temperature": float(os.getenv(
+            "MMRL_PROTOTYPE_ROUTER_TEMPERATURE",
+            str(EXP_CFG.get("prototype_router_temperature", 0.35)),
+        )),
+        "prototype_router_cluster_loss_weight": float(os.getenv(
+            "MMRL_PROTOTYPE_ROUTER_CLUSTER_LOSS_WEIGHT",
+            str(EXP_CFG.get("prototype_router_cluster_loss_weight", 0.0)),
+        )),
+        "prototype_router_usage_loss_weight": float(os.getenv(
+            "MMRL_PROTOTYPE_ROUTER_USAGE_LOSS_WEIGHT",
+            str(EXP_CFG.get("prototype_router_usage_loss_weight", 0.0)),
+        )),
+        "prototype_router_confidence_loss_weight": float(os.getenv(
+            "MMRL_PROTOTYPE_ROUTER_CONFIDENCE_LOSS_WEIGHT",
+            str(EXP_CFG.get("prototype_router_confidence_loss_weight", 0.0)),
+        )),
+        "prototype_router_confidence_target": float(os.getenv(
+            "MMRL_PROTOTYPE_ROUTER_CONFIDENCE_TARGET",
+            str(EXP_CFG.get("prototype_router_confidence_target", 0.55)),
         )),
         "adapter_common_mode_loss_weight": float(os.getenv(
             "MMRL_ADAPTER_COMMON_MODE_LOSS_WEIGHT",
@@ -205,7 +146,7 @@ CFG = {
         )),
         "adapter_diversity_target_low": float(os.getenv(
             "MMRL_ADAPTER_DIVERSITY_TARGET_LOW",
-            str(EXP_CFG.get("adapter_diversity_target_low", 0.30)),
+            str(EXP_CFG.get("adapter_diversity_target_low", 0.0)),
         )),
         "adapter_diversity_target_high": float(os.getenv(
             "MMRL_ADAPTER_DIVERSITY_TARGET_HIGH",
@@ -219,38 +160,6 @@ CFG = {
             "MMRL_ADAPTER_DIVERSITY_WORST_PAIR_WEIGHT",
             str(EXP_CFG.get("adapter_diversity_worst_pair_weight", 1.0)),
         )),
-        "prototype_anchor_loss_weight": float(os.getenv(
-            "MMRL_PROTOTYPE_ANCHOR_LOSS_WEIGHT",
-            str(EXP_CFG.get("prototype_anchor_loss_weight", 0.0)),
-        )),
-        "prototype_anchor_loss_weight_s3": float(os.getenv(
-            "MMRL_PROTOTYPE_ANCHOR_LOSS_WEIGHT_S3",
-            str(EXP_CFG.get("prototype_anchor_loss_weight_s3", EXP_CFG.get("prototype_anchor_loss_weight", 0.0))),
-        )),
-        "prototype_anchor_loss_weight_s4": float(os.getenv(
-            "MMRL_PROTOTYPE_ANCHOR_LOSS_WEIGHT_S4",
-            str(EXP_CFG.get("prototype_anchor_loss_weight_s4", EXP_CFG.get("prototype_anchor_loss_weight", 0.0))),
-        )),
-        "prototype_anchor_temperature": float(os.getenv(
-            "MMRL_PROTOTYPE_ANCHOR_TEMPERATURE",
-            str(EXP_CFG.get("prototype_anchor_temperature", 0.20)),
-        )),
-        "prototype_anchor_momentum": float(os.getenv(
-            "MMRL_PROTOTYPE_ANCHOR_MOMENTUM",
-            str(EXP_CFG.get("prototype_anchor_momentum", 0.95)),
-        )),
-        "prototype_anchor_min_confidence": float(os.getenv(
-            "MMRL_PROTOTYPE_ANCHOR_MIN_CONFIDENCE",
-            str(EXP_CFG.get("prototype_anchor_min_confidence", 0.40)),
-        )),
-        "prototype_anchor_assignment_power": float(os.getenv(
-            "MMRL_PROTOTYPE_ANCHOR_ASSIGNMENT_POWER",
-            str(EXP_CFG.get("prototype_anchor_assignment_power", 2.0)),
-        )),
-        "prototype_anchor_init_noise": float(os.getenv(
-            "MMRL_PROTOTYPE_ANCHOR_INIT_NOISE",
-            str(EXP_CFG.get("prototype_anchor_init_noise", 0.10)),
-        )),
         "enable_deepstack_mmrl_residual": os.getenv(
             "MMRL_ENABLE_DEEPSTACK_MMRL_RESIDUAL",
             "1" if EXP_CFG.get("enable_deepstack_mmrl_residual", False) else "0",
@@ -258,10 +167,6 @@ CFG = {
         "deepstack_mmrl_residual_scale": float(os.getenv(
             "MMRL_DEEPSTACK_MMRL_RESIDUAL_SCALE",
             str(EXP_CFG.get("deepstack_mmrl_residual_scale", 0.0)),
-        )),
-        "adapter_sample_entropy_target": float(os.getenv(
-            "MMRL_ADAPTER_SAMPLE_ENTROPY_TARGET",
-            str(EXP_CFG.get("adapter_sample_entropy_target", 0.40)),
         )),
         "adapter_common_mode_target": float(os.getenv(
             "MMRL_ADAPTER_COMMON_MODE_TARGET",
@@ -321,20 +226,19 @@ CFG = {
             "adapter_usage_1",
             "adapter_usage_2",
             "adapter_usage_3",
-            "adapter_usage_balance_loss_scaled",
-            "adapter_sample_entropy_loss_scaled",
             "adapter_effective_delta_loss_scaled",
             "adapter_effective_delta_ratio_mean",
-            "prototype_anchor_loss",
-            "prototype_anchor_loss_scaled",
-            "route_proto_kl",
-            "route_proto_agreement",
-            "prototype_usage_max",
-            "prototype_usage_min",
-            "prototype_usage_0",
-            "prototype_usage_1",
-            "prototype_usage_2",
-            "prototype_usage_3",
+            "prototype_router_cluster_loss",
+            "prototype_router_usage_loss",
+            "prototype_router_confidence_loss",
+            "prototype_router_confidence",
+            "prototype_router_entropy_norm",
+            "prototype_router_usage_max",
+            "prototype_router_usage_min",
+            "prototype_router_usage_0",
+            "prototype_router_usage_1",
+            "prototype_router_usage_2",
+            "prototype_router_usage_3",
             "adapter_diversity_loss",
             "adapter_diversity_loss_scaled",
             "adapter_pairwise_cos_mean",
@@ -348,7 +252,6 @@ CFG = {
             "deepstack_delta_to_org_ratio",
             "deepstack_residual_layers",
             "adapter_effective_delta_weight",
-            "prototype_anchor_weight",
             "adapter_diversity_weight",
             "stage_progress",
         ],

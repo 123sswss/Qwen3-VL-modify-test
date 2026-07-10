@@ -50,14 +50,17 @@ def _build_experiment_context(train_cfg, output_dir, stage_id):
             "enable_alpha_guide_loss_s4": train_cfg.get("enable_alpha_guide_loss_s4"),
             "alpha_loss_weight_s4": train_cfg.get("alpha_loss_weight_s4"),
             "visual_residual_adapter_count": train_cfg.get("visual_residual_adapter_count"),
-            "adapter_usage_balance_loss_weight": train_cfg.get("adapter_usage_balance_loss_weight"),
-            "adapter_sample_entropy_loss_weight": train_cfg.get("adapter_sample_entropy_loss_weight"),
+            "prototype_router_dim": train_cfg.get("prototype_router_dim"),
+            "prototype_router_temperature": train_cfg.get("prototype_router_temperature"),
+            "prototype_router_cluster_loss_weight": train_cfg.get("prototype_router_cluster_loss_weight"),
+            "prototype_router_usage_loss_weight": train_cfg.get("prototype_router_usage_loss_weight"),
+            "prototype_router_confidence_loss_weight": train_cfg.get("prototype_router_confidence_loss_weight"),
+            "prototype_router_confidence_target": train_cfg.get("prototype_router_confidence_target"),
             "adapter_common_mode_loss_weight": train_cfg.get("adapter_common_mode_loss_weight"),
             "adapter_effective_delta_loss_weight": train_cfg.get(
                 "adapter_effective_delta_loss_weight",
                 experiment_cfg.get("adapter_effective_delta_loss_weight"),
             ),
-            "adapter_sample_entropy_target": train_cfg.get("adapter_sample_entropy_target"),
             "adapter_common_mode_target": train_cfg.get("adapter_common_mode_target"),
             "adapter_effective_delta_target_low": train_cfg.get(
                 "adapter_effective_delta_target_low",
@@ -102,38 +105,6 @@ def _build_experiment_context(train_cfg, output_dir, stage_id):
             "adapter_diversity_worst_pair_weight": train_cfg.get(
                 "adapter_diversity_worst_pair_weight",
                 experiment_cfg.get("adapter_diversity_worst_pair_weight"),
-            ),
-            "prototype_anchor_loss_weight": train_cfg.get(
-                "prototype_anchor_loss_weight",
-                experiment_cfg.get("prototype_anchor_loss_weight"),
-            ),
-            "prototype_anchor_loss_weight_s3": train_cfg.get(
-                "prototype_anchor_loss_weight_s3",
-                experiment_cfg.get("prototype_anchor_loss_weight_s3"),
-            ),
-            "prototype_anchor_loss_weight_s4": train_cfg.get(
-                "prototype_anchor_loss_weight_s4",
-                experiment_cfg.get("prototype_anchor_loss_weight_s4"),
-            ),
-            "prototype_anchor_temperature": train_cfg.get(
-                "prototype_anchor_temperature",
-                experiment_cfg.get("prototype_anchor_temperature"),
-            ),
-            "prototype_anchor_momentum": train_cfg.get(
-                "prototype_anchor_momentum",
-                experiment_cfg.get("prototype_anchor_momentum"),
-            ),
-            "prototype_anchor_min_confidence": train_cfg.get(
-                "prototype_anchor_min_confidence",
-                experiment_cfg.get("prototype_anchor_min_confidence"),
-            ),
-            "prototype_anchor_assignment_power": train_cfg.get(
-                "prototype_anchor_assignment_power",
-                experiment_cfg.get("prototype_anchor_assignment_power"),
-            ),
-            "prototype_anchor_init_noise": train_cfg.get(
-                "prototype_anchor_init_noise",
-                experiment_cfg.get("prototype_anchor_init_noise"),
             ),
             "enable_deepstack_mmrl_residual": train_cfg.get(
                 "enable_deepstack_mmrl_residual",
@@ -560,15 +531,10 @@ class Qwen3VLMMRLForStages(Qwen3VLForConditionalGeneration):
         self.current_stage_progress = 0.0
         self.enable_alpha_guide_loss = False
         self.enable_gate_loss_stage2 = True
-        self.adapter_usage_balance_loss_weight = 0.0
-        self.adapter_sample_entropy_loss_weight = 0.0
         self.adapter_common_mode_loss_weight = 0.0
         self.adapter_effective_delta_loss_weight = 0.0
         self.adapter_effective_delta_loss_weight_s3 = None
         self.adapter_effective_delta_loss_weight_s4 = None
-        self.prototype_anchor_loss_weight = 0.0
-        self.prototype_anchor_loss_weight_s3 = None
-        self.prototype_anchor_loss_weight_s4 = None
         self.adapter_diversity_loss_weight = 0.0
         self.adapter_diversity_loss_weight_s3 = None
         self.adapter_diversity_loss_weight_s4 = None
@@ -655,7 +621,7 @@ class Qwen3VLMMRLForStages(Qwen3VLForConditionalGeneration):
                     result[f"{prefix}_grad_norm_mean"] = torch.tensor(0.0, device=device)
                     result[f"{prefix}_grad_norm_max"] = torch.tensor(0.0, device=device)
 
-            _module_grad_stats(getattr(visual, "adapter_router", nn.Module()), "adapter_router")
+            _module_grad_stats(getattr(visual, "prototype_router", nn.Module()), "prototype_router")
             _module_grad_stats(getattr(visual, "residual_adapters", nn.Module()), "visual_adapter")
             _module_grad_stats(getattr(visual, "visionGating", nn.Module()), "vision_gate")
             blocks_with_rep = getattr(visual, "blocks_with_rep", [])
@@ -759,20 +725,9 @@ class Qwen3VLMMRLForStages(Qwen3VLForConditionalGeneration):
                         alpha_logits[:n], expanded_labels[:n].to(alpha_logits.dtype)
                     ) * self.alpha_loss_weight
 
-        adapter_usage_balance_loss = getattr(self.model.visual, "adapter_usage_balance_loss", torch.tensor(0.0, device=input_ids.device))
-        adapter_sample_entropy_loss = getattr(self.model.visual, "adapter_sample_entropy_loss", torch.tensor(0.0, device=input_ids.device))
         adapter_common_mode_loss = getattr(self.model.visual, "adapter_common_mode_loss", torch.tensor(0.0, device=input_ids.device))
         adapter_effective_delta_loss = getattr(self.model.visual, "adapter_effective_delta_loss", torch.tensor(0.0, device=input_ids.device))
-        prototype_anchor_loss = getattr(self.model.visual, "prototype_anchor_loss", torch.tensor(0.0, device=input_ids.device))
         adapter_diversity_loss = getattr(self.model.visual, "adapter_diversity_loss", torch.tensor(0.0, device=input_ids.device))
-        if not torch.is_tensor(adapter_usage_balance_loss):
-            adapter_usage_balance_loss = torch.tensor(adapter_usage_balance_loss, device=input_ids.device, dtype=ce_loss.dtype)
-        else:
-            adapter_usage_balance_loss = adapter_usage_balance_loss.to(device=input_ids.device, dtype=ce_loss.dtype)
-        if not torch.is_tensor(adapter_sample_entropy_loss):
-            adapter_sample_entropy_loss = torch.tensor(adapter_sample_entropy_loss, device=input_ids.device, dtype=ce_loss.dtype)
-        else:
-            adapter_sample_entropy_loss = adapter_sample_entropy_loss.to(device=input_ids.device, dtype=ce_loss.dtype)
         if not torch.is_tensor(adapter_common_mode_loss):
             adapter_common_mode_loss = torch.tensor(adapter_common_mode_loss, device=input_ids.device, dtype=ce_loss.dtype)
         else:
@@ -781,10 +736,6 @@ class Qwen3VLMMRLForStages(Qwen3VLForConditionalGeneration):
             adapter_effective_delta_loss = torch.tensor(adapter_effective_delta_loss, device=input_ids.device, dtype=ce_loss.dtype)
         else:
             adapter_effective_delta_loss = adapter_effective_delta_loss.to(device=input_ids.device, dtype=ce_loss.dtype)
-        if not torch.is_tensor(prototype_anchor_loss):
-            prototype_anchor_loss = torch.tensor(prototype_anchor_loss, device=input_ids.device, dtype=ce_loss.dtype)
-        else:
-            prototype_anchor_loss = prototype_anchor_loss.to(device=input_ids.device, dtype=ce_loss.dtype)
         if not torch.is_tensor(adapter_diversity_loss):
             adapter_diversity_loss = torch.tensor(adapter_diversity_loss, device=input_ids.device, dtype=ce_loss.dtype)
         else:
@@ -794,32 +745,21 @@ class Qwen3VLMMRLForStages(Qwen3VLForConditionalGeneration):
             self.adapter_effective_delta_loss_weight_s3,
             self.adapter_effective_delta_loss_weight_s4,
         )
-        prototype_anchor_weight = self._scheduled_weight(
-            self.prototype_anchor_loss_weight,
-            self.prototype_anchor_loss_weight_s3,
-            self.prototype_anchor_loss_weight_s4,
-        )
         adapter_diversity_weight = self._scheduled_weight(
             self.adapter_diversity_loss_weight,
             self.adapter_diversity_loss_weight_s3,
             self.adapter_diversity_loss_weight_s4,
             ramp_stage4=True,
         )
-        scaled_adapter_usage_balance_loss = adapter_usage_balance_loss * float(self.adapter_usage_balance_loss_weight)
-        scaled_adapter_sample_entropy_loss = adapter_sample_entropy_loss * float(self.adapter_sample_entropy_loss_weight)
         scaled_adapter_common_mode_loss = adapter_common_mode_loss * float(self.adapter_common_mode_loss_weight)
         scaled_adapter_effective_delta_loss = adapter_effective_delta_loss * float(effective_delta_weight)
-        scaled_prototype_anchor_loss = prototype_anchor_loss * float(prototype_anchor_weight)
         scaled_adapter_diversity_loss = adapter_diversity_loss * float(adapter_diversity_weight)
 
         outputs.loss = (
             self.ce_loss_weight * ce_loss
             + alpha_guide_loss
-            + scaled_adapter_usage_balance_loss
-            + scaled_adapter_sample_entropy_loss
             + scaled_adapter_common_mode_loss
             + scaled_adapter_effective_delta_loss
-            + scaled_prototype_anchor_loss
             + scaled_adapter_diversity_loss
         )
 
@@ -839,25 +779,16 @@ class Qwen3VLMMRLForStages(Qwen3VLForConditionalGeneration):
                 "total_loss": outputs.loss.detach(),
                 "ce_loss": ce_loss.detach(),
                 "alpha_guide_loss": alpha_guide_loss.detach(),
-                "adapter_usage_balance_loss": adapter_usage_balance_loss.detach(),
-                "adapter_sample_entropy_loss": adapter_sample_entropy_loss.detach(),
                 "adapter_common_mode_loss": adapter_common_mode_loss.detach(),
                 "adapter_effective_delta_loss": adapter_effective_delta_loss.detach(),
-                "prototype_anchor_loss": prototype_anchor_loss.detach(),
                 "adapter_diversity_loss": adapter_diversity_loss.detach(),
-                "adapter_usage_balance_loss_scaled": scaled_adapter_usage_balance_loss.detach(),
-                "adapter_sample_entropy_loss_scaled": scaled_adapter_sample_entropy_loss.detach(),
                 "adapter_common_mode_loss_scaled": scaled_adapter_common_mode_loss.detach(),
                 "adapter_effective_delta_loss_scaled": scaled_adapter_effective_delta_loss.detach(),
-                "prototype_anchor_loss_scaled": scaled_prototype_anchor_loss.detach(),
                 "adapter_diversity_loss_scaled": scaled_adapter_diversity_loss.detach(),
                 "alpha_mae": alpha_mae.detach(),
                 "temperature": torch.tensor(float(self.temperature_override) if self.temperature_override is not None else float("nan"), device=input_ids.device),
-                "adapter_usage_balance_weight": torch.tensor(float(self.adapter_usage_balance_loss_weight), device=input_ids.device),
-                "adapter_sample_entropy_weight": torch.tensor(float(self.adapter_sample_entropy_loss_weight), device=input_ids.device),
                 "adapter_common_mode_weight": torch.tensor(float(self.adapter_common_mode_loss_weight), device=input_ids.device),
                 "adapter_effective_delta_weight": torch.tensor(float(effective_delta_weight), device=input_ids.device),
-                "prototype_anchor_weight": torch.tensor(float(prototype_anchor_weight), device=input_ids.device),
                 "adapter_diversity_weight": torch.tensor(float(adapter_diversity_weight), device=input_ids.device),
                 "stage_progress": torch.tensor(float(getattr(self, "current_stage_progress", 0.0)), device=input_ids.device),
             }
@@ -913,13 +844,17 @@ def build_model_and_processor(model_path, experiment_cfg=None):
         "visual_residual_adapter_count",
         os.getenv("MMRL_VISUAL_RESIDUAL_ADAPTER_COUNT", "4"),
     ))
-    config.ADAPTER_USAGE_BALANCE_LOSS_WEIGHT = float(experiment_cfg.get(
-        "adapter_usage_balance_loss_weight",
-        os.getenv("MMRL_ADAPTER_USAGE_BALANCE_LOSS_WEIGHT", "0.0"),
+    config.PROTOTYPE_ROUTER_DIM = int(experiment_cfg.get(
+        "prototype_router_dim",
+        os.getenv("MMRL_PROTOTYPE_ROUTER_DIM", "128"),
     ))
-    config.ADAPTER_SAMPLE_ENTROPY_LOSS_WEIGHT = float(experiment_cfg.get(
-        "adapter_sample_entropy_loss_weight",
-        os.getenv("MMRL_ADAPTER_SAMPLE_ENTROPY_LOSS_WEIGHT", "0.0"),
+    config.PROTOTYPE_ROUTER_TEMPERATURE = float(experiment_cfg.get(
+        "prototype_router_temperature",
+        os.getenv("MMRL_PROTOTYPE_ROUTER_TEMPERATURE", "0.35"),
+    ))
+    config.PROTOTYPE_ROUTER_CONFIDENCE_TARGET = float(experiment_cfg.get(
+        "prototype_router_confidence_target",
+        os.getenv("MMRL_PROTOTYPE_ROUTER_CONFIDENCE_TARGET", "0.55"),
     ))
     config.ADAPTER_COMMON_MODE_LOSS_WEIGHT = float(experiment_cfg.get(
         "adapter_common_mode_loss_weight",
@@ -928,10 +863,6 @@ def build_model_and_processor(model_path, experiment_cfg=None):
     config.ADAPTER_EFFECTIVE_DELTA_LOSS_WEIGHT = float(experiment_cfg.get(
         "adapter_effective_delta_loss_weight",
         os.getenv("MMRL_ADAPTER_EFFECTIVE_DELTA_LOSS_WEIGHT", "0.0"),
-    ))
-    config.ADAPTER_SAMPLE_ENTROPY_TARGET = float(experiment_cfg.get(
-        "adapter_sample_entropy_target",
-        os.getenv("MMRL_ADAPTER_SAMPLE_ENTROPY_TARGET", "0.40"),
     ))
     config.ADAPTER_COMMON_MODE_TARGET = float(experiment_cfg.get(
         "adapter_common_mode_target",
@@ -951,7 +882,7 @@ def build_model_and_processor(model_path, experiment_cfg=None):
     ))
     config.ADAPTER_DIVERSITY_TARGET_LOW = float(experiment_cfg.get(
         "adapter_diversity_target_low",
-        os.getenv("MMRL_ADAPTER_DIVERSITY_TARGET_LOW", "0.30"),
+        os.getenv("MMRL_ADAPTER_DIVERSITY_TARGET_LOW", "0.0"),
     ))
     config.ADAPTER_DIVERSITY_TARGET_HIGH = float(experiment_cfg.get(
         "adapter_diversity_target_high",
@@ -964,30 +895,6 @@ def build_model_and_processor(model_path, experiment_cfg=None):
     config.ADAPTER_DIVERSITY_WORST_PAIR_WEIGHT = float(experiment_cfg.get(
         "adapter_diversity_worst_pair_weight",
         os.getenv("MMRL_ADAPTER_DIVERSITY_WORST_PAIR_WEIGHT", "1.0"),
-    ))
-    config.PROTOTYPE_ANCHOR_LOSS_WEIGHT = float(experiment_cfg.get(
-        "prototype_anchor_loss_weight",
-        os.getenv("MMRL_PROTOTYPE_ANCHOR_LOSS_WEIGHT", "0.0"),
-    ))
-    config.PROTOTYPE_ANCHOR_TEMPERATURE = float(experiment_cfg.get(
-        "prototype_anchor_temperature",
-        os.getenv("MMRL_PROTOTYPE_ANCHOR_TEMPERATURE", "0.20"),
-    ))
-    config.PROTOTYPE_ANCHOR_MOMENTUM = float(experiment_cfg.get(
-        "prototype_anchor_momentum",
-        os.getenv("MMRL_PROTOTYPE_ANCHOR_MOMENTUM", "0.95"),
-    ))
-    config.PROTOTYPE_ANCHOR_MIN_CONFIDENCE = float(experiment_cfg.get(
-        "prototype_anchor_min_confidence",
-        os.getenv("MMRL_PROTOTYPE_ANCHOR_MIN_CONFIDENCE", "0.40"),
-    ))
-    config.PROTOTYPE_ANCHOR_ASSIGNMENT_POWER = float(experiment_cfg.get(
-        "prototype_anchor_assignment_power",
-        os.getenv("MMRL_PROTOTYPE_ANCHOR_ASSIGNMENT_POWER", "2.0"),
-    ))
-    config.PROTOTYPE_ANCHOR_INIT_NOISE = float(experiment_cfg.get(
-        "prototype_anchor_init_noise",
-        os.getenv("MMRL_PROTOTYPE_ANCHOR_INIT_NOISE", "0.10"),
     ))
     config.ENABLE_DEEPSTACK_MMRL_RESIDUAL = os.getenv(
         "MMRL_ENABLE_DEEPSTACK_MMRL_RESIDUAL",
@@ -1042,11 +949,11 @@ def build_model_and_processor(model_path, experiment_cfg=None):
         f"ablate_visual_gate={config.ABLATE_VISUAL_GATE} "
         f"ablate_direct_learnable_rep={config.ABLATE_DIRECT_LEARNABLE_REP} "
         f"visual_residual_adapter_count={config.VISUAL_RESIDUAL_ADAPTER_COUNT} "
-        f"adapter_usage_balance_loss_weight={config.ADAPTER_USAGE_BALANCE_LOSS_WEIGHT} "
-        f"adapter_sample_entropy_loss_weight={config.ADAPTER_SAMPLE_ENTROPY_LOSS_WEIGHT} "
+        f"prototype_router_dim={config.PROTOTYPE_ROUTER_DIM} "
+        f"prototype_router_temperature={config.PROTOTYPE_ROUTER_TEMPERATURE} "
+        f"prototype_router_confidence_target={config.PROTOTYPE_ROUTER_CONFIDENCE_TARGET} "
         f"adapter_common_mode_loss_weight={config.ADAPTER_COMMON_MODE_LOSS_WEIGHT} "
         f"adapter_effective_delta_loss_weight={config.ADAPTER_EFFECTIVE_DELTA_LOSS_WEIGHT} "
-        f"adapter_sample_entropy_target={config.ADAPTER_SAMPLE_ENTROPY_TARGET} "
         f"adapter_common_mode_target={config.ADAPTER_COMMON_MODE_TARGET} "
         f"adapter_effective_delta_target_low={config.ADAPTER_EFFECTIVE_DELTA_TARGET_LOW} "
         f"adapter_effective_delta_target_high={config.ADAPTER_EFFECTIVE_DELTA_TARGET_HIGH} "
@@ -1055,12 +962,6 @@ def build_model_and_processor(model_path, experiment_cfg=None):
         f"adapter_diversity_target_high={config.ADAPTER_DIVERSITY_TARGET_HIGH} "
         f"adapter_diversity_upper_weight={config.ADAPTER_DIVERSITY_UPPER_WEIGHT} "
         f"adapter_diversity_worst_pair_weight={config.ADAPTER_DIVERSITY_WORST_PAIR_WEIGHT} "
-        f"prototype_anchor_loss_weight={config.PROTOTYPE_ANCHOR_LOSS_WEIGHT} "
-        f"prototype_anchor_temperature={config.PROTOTYPE_ANCHOR_TEMPERATURE} "
-        f"prototype_anchor_momentum={config.PROTOTYPE_ANCHOR_MOMENTUM} "
-        f"prototype_anchor_min_confidence={config.PROTOTYPE_ANCHOR_MIN_CONFIDENCE} "
-        f"prototype_anchor_assignment_power={config.PROTOTYPE_ANCHOR_ASSIGNMENT_POWER} "
-        f"prototype_anchor_init_noise={config.PROTOTYPE_ANCHOR_INIT_NOISE} "
         f"enable_deepstack_mmrl_residual={config.ENABLE_DEEPSTACK_MMRL_RESIDUAL} "
         f"deepstack_mmrl_residual_scale={config.DEEPSTACK_MMRL_RESIDUAL_SCALE}"
     )
@@ -1077,15 +978,12 @@ def set_trainable_stage(model, stage, train_cfg=None):
 
     v = model.model.visual
     if stage == 1:
-        mods = [v.hidden_state_pooling, v.embedding_pooling, v.Task_classifier, v.adapter_router]
+        mods = [v.hidden_state_pooling, v.embedding_pooling, v.Task_classifier]
     elif stage == 2:
-        mods = [v.hidden_state_pooling, v.embedding_pooling, v.Task_classifier, v.adapter_router, v.visionGating]
+        mods = [v.hidden_state_pooling, v.embedding_pooling, v.Task_classifier, v.prototype_router, v.visionGating]
     elif stage in [3, 4]:
         mods = [model.model.MMRL,
                 # v.blocks_with_rep, # ablation: keep rep-token branch forward, but freeze branch blocks
-                v.hidden_state_pooling, 
-                v.embedding_pooling,
-                v.adapter_router,
                 v.residual_adapters,
                 v.visionGating]
     else:
@@ -1238,14 +1136,49 @@ def run_stage12_light(stage_id, model, processor, data_cfg, train_cfg, output_di
             else:
                 cls_loss = torch.nn.functional.binary_cross_entropy_with_logits(alpha_logits, alpha_labels)
 
-            # stage2：把分类结果传递给gate（轻量约束）
+            # stage2: train the prototype router before adapters receive CE feedback.
             gate_loss = torch.tensor(0.0, device=cls_loss.device)
+            prototype_router_cluster_loss = torch.tensor(0.0, device=cls_loss.device)
+            prototype_router_usage_loss = torch.tensor(0.0, device=cls_loss.device)
+            prototype_router_confidence_loss = torch.tensor(0.0, device=cls_loss.device)
             if stage_id == 2 and getattr(model, "enable_gate_loss_stage2", True):
                 g = v.visionGating(alpha_logits, getattr(model, "temperature_override", None))
                 target = alpha_labels
                 gate_loss = torch.nn.functional.mse_loss(g, target)
+            if stage_id == 2 and mm_idx.numel() > 0:
+                route_probs, route_logits = v.prototype_router(
+                    vision_pooled[mm_idx],
+                    text_pooled[mm_idx],
+                    alpha_logits[mm_idx],
+                    return_logits=True,
+                )
+                (
+                    prototype_router_cluster_loss,
+                    prototype_router_usage_loss,
+                    prototype_router_confidence_loss,
+                ) = v._compute_prototype_router_losses(
+                    route_probs,
+                    route_logits,
+                    cls_loss.dtype,
+                    cls_loss.device,
+                )
 
-            loss = (cls_loss + gate_loss) / steps_per_update
+            scaled_cluster_loss = prototype_router_cluster_loss * float(
+                train_cfg.get("prototype_router_cluster_loss_weight", 0.0)
+            )
+            scaled_usage_loss = prototype_router_usage_loss * float(
+                train_cfg.get("prototype_router_usage_loss_weight", 0.0)
+            )
+            scaled_confidence_loss = prototype_router_confidence_loss * float(
+                train_cfg.get("prototype_router_confidence_loss_weight", 0.0)
+            )
+            loss = (
+                cls_loss
+                + gate_loss
+                + scaled_cluster_loss
+                + scaled_usage_loss
+                + scaled_confidence_loss
+            ) / steps_per_update
             loss.backward()
 
             if ((i + 1) % steps_per_update == 0) or (i + 1 == len(dl)):
@@ -1259,9 +1192,24 @@ def run_stage12_light(stage_id, model, processor, data_cfg, train_cfg, output_di
 
                     metric_logger.log(
                         step=global_step,
-                        total_loss=(cls_loss.detach() + gate_loss.detach()),
+                        total_loss=(
+                            cls_loss.detach()
+                            + gate_loss.detach()
+                            + scaled_cluster_loss.detach()
+                            + scaled_usage_loss.detach()
+                            + scaled_confidence_loss.detach()
+                        ),
                         cls_loss=cls_loss.detach(),
                         gate_loss=gate_loss.detach(),
+                        prototype_router_cluster_loss=prototype_router_cluster_loss.detach(),
+                        prototype_router_usage_loss=prototype_router_usage_loss.detach(),
+                        prototype_router_confidence_loss=prototype_router_confidence_loss.detach(),
+                        prototype_router_cluster_loss_scaled=scaled_cluster_loss.detach(),
+                        prototype_router_usage_loss_scaled=scaled_usage_loss.detach(),
+                        prototype_router_confidence_loss_scaled=scaled_confidence_loss.detach(),
+                        prototype_router_confidence=v.prototype_router_confidence.detach(),
+                        prototype_router_usage_max=v.prototype_router_usage_max.detach(),
+                        prototype_router_usage_min=v.prototype_router_usage_min.detach(),
                         alpha_mae=alpha_mae,
                         temperature=getattr(model, "temperature_override", float("nan")),
                         learning_rate=opt.param_groups[0]["lr"],
@@ -1269,9 +1217,18 @@ def run_stage12_light(stage_id, model, processor, data_cfg, train_cfg, output_di
                 print_every = train_cfg.get("console_log_every", 50)
                 if global_step % print_every == 0:
                     row = {
-                        "total_loss": (cls_loss.detach() + gate_loss.detach()),
+                        "total_loss": (
+                            cls_loss.detach()
+                            + gate_loss.detach()
+                            + scaled_cluster_loss.detach()
+                            + scaled_usage_loss.detach()
+                            + scaled_confidence_loss.detach()
+                        ),
                         "cls_loss": cls_loss.detach(),
                         "gate_loss": gate_loss.detach(),
+                        "prototype_router_cluster_loss": prototype_router_cluster_loss.detach(),
+                        "prototype_router_usage_loss": prototype_router_usage_loss.detach(),
+                        "prototype_router_confidence_loss": prototype_router_confidence_loss.detach(),
                         "alpha_mae": alpha_mae,
                         "temperature": getattr(model, "temperature_override", float("nan")),
                         "learning_rate": opt.param_groups[0]["lr"],
@@ -1318,8 +1275,6 @@ def run_stage34_full(stage_id, model, processor, data_cfg, train_cfg, output_dir
     model.current_stage_id = int(stage_id)
     model.current_stage_step = 0
     model.current_stage_progress = 0.0
-    model.adapter_usage_balance_loss_weight = float(train_cfg.get("adapter_usage_balance_loss_weight", 0.0))
-    model.adapter_sample_entropy_loss_weight = float(train_cfg.get("adapter_sample_entropy_loss_weight", 0.0))
     model.adapter_common_mode_loss_weight = float(train_cfg.get("adapter_common_mode_loss_weight", 0.0))
     experiment_cfg = train_cfg.get("experiment_cfg", {}) or {}
     model.adapter_effective_delta_loss_weight = float(train_cfg.get(
@@ -1333,18 +1288,6 @@ def run_stage34_full(stage_id, model, processor, data_cfg, train_cfg, output_dir
     model.adapter_effective_delta_loss_weight_s4 = train_cfg.get(
         "adapter_effective_delta_loss_weight_s4",
         experiment_cfg.get("adapter_effective_delta_loss_weight_s4"),
-    )
-    model.prototype_anchor_loss_weight = float(train_cfg.get(
-        "prototype_anchor_loss_weight",
-        experiment_cfg.get("prototype_anchor_loss_weight", 0.0),
-    ))
-    model.prototype_anchor_loss_weight_s3 = train_cfg.get(
-        "prototype_anchor_loss_weight_s3",
-        experiment_cfg.get("prototype_anchor_loss_weight_s3"),
-    )
-    model.prototype_anchor_loss_weight_s4 = train_cfg.get(
-        "prototype_anchor_loss_weight_s4",
-        experiment_cfg.get("prototype_anchor_loss_weight_s4"),
     )
     model.adapter_diversity_loss_weight = float(train_cfg.get(
         "adapter_diversity_loss_weight",

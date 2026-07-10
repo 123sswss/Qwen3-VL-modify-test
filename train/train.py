@@ -10,6 +10,7 @@ BASE_VISUAL_ROUTER_MODEL = {
 
     "prototype_router_dim": 128,
     "prototype_router_temperature": 0.35,
+    "prototype_router_hard_route": False,
     "prototype_router_cluster_loss_weight": 0.010,
     "prototype_router_usage_loss_weight": 0.012,
     "prototype_router_confidence_loss_weight": 0.003,
@@ -42,6 +43,10 @@ BASE_VISUAL_ROUTER_MODEL = {
 EXPERIMENTS = {
     "visual_router_proto_v1": {
         **BASE_VISUAL_ROUTER_MODEL,
+    },
+    "visual_router_proto_hard_diag": {
+        **BASE_VISUAL_ROUTER_MODEL,
+        "prototype_router_hard_route": True,
     }
 }
 SELECTED_EXPERIMENT = os.getenv("MMRL_EXPERIMENT", "visual_router_proto_v1")
@@ -100,6 +105,10 @@ CFG = {
             "MMRL_PROTOTYPE_ROUTER_TEMPERATURE",
             str(EXP_CFG.get("prototype_router_temperature", 0.35)),
         )),
+        "prototype_router_hard_route": os.getenv(
+            "MMRL_PROTOTYPE_ROUTER_HARD_ROUTE",
+            str(EXP_CFG.get("prototype_router_hard_route", False)),
+        ).lower() in {"1", "true", "yes", "y"},
         "prototype_router_cluster_loss_weight": float(os.getenv(
             "MMRL_PROTOTYPE_ROUTER_CLUSTER_LOSS_WEIGHT",
             str(EXP_CFG.get("prototype_router_cluster_loss_weight", 0.0)),

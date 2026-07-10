@@ -52,6 +52,7 @@ def _build_experiment_context(train_cfg, output_dir, stage_id):
             "visual_residual_adapter_count": train_cfg.get("visual_residual_adapter_count"),
             "prototype_router_dim": train_cfg.get("prototype_router_dim"),
             "prototype_router_temperature": train_cfg.get("prototype_router_temperature"),
+            "prototype_router_hard_route": train_cfg.get("prototype_router_hard_route"),
             "prototype_router_cluster_loss_weight": train_cfg.get("prototype_router_cluster_loss_weight"),
             "prototype_router_usage_loss_weight": train_cfg.get("prototype_router_usage_loss_weight"),
             "prototype_router_confidence_loss_weight": train_cfg.get("prototype_router_confidence_loss_weight"),
@@ -852,6 +853,10 @@ def build_model_and_processor(model_path, experiment_cfg=None):
         "prototype_router_temperature",
         os.getenv("MMRL_PROTOTYPE_ROUTER_TEMPERATURE", "0.35"),
     ))
+    config.PROTOTYPE_ROUTER_HARD_ROUTE = os.getenv(
+        "MMRL_PROTOTYPE_ROUTER_HARD_ROUTE",
+        "1" if experiment_cfg.get("prototype_router_hard_route", False) else "0",
+    ) == "1"
     config.PROTOTYPE_ROUTER_CONFIDENCE_TARGET = float(experiment_cfg.get(
         "prototype_router_confidence_target",
         os.getenv("MMRL_PROTOTYPE_ROUTER_CONFIDENCE_TARGET", "0.55"),
@@ -951,6 +956,7 @@ def build_model_and_processor(model_path, experiment_cfg=None):
         f"visual_residual_adapter_count={config.VISUAL_RESIDUAL_ADAPTER_COUNT} "
         f"prototype_router_dim={config.PROTOTYPE_ROUTER_DIM} "
         f"prototype_router_temperature={config.PROTOTYPE_ROUTER_TEMPERATURE} "
+        f"prototype_router_hard_route={config.PROTOTYPE_ROUTER_HARD_ROUTE} "
         f"prototype_router_confidence_target={config.PROTOTYPE_ROUTER_CONFIDENCE_TARGET} "
         f"adapter_common_mode_loss_weight={config.ADAPTER_COMMON_MODE_LOSS_WEIGHT} "
         f"adapter_effective_delta_loss_weight={config.ADAPTER_EFFECTIVE_DELTA_LOSS_WEIGHT} "

@@ -117,11 +117,12 @@ class zeroInit(nn.Module):
 
 
 class PrototypeRouter(nn.Module):
-    def __init__(self, vision_dim, text_dim, route_dim, adapter_count, temperature=0.35):
+    def __init__(self, vision_dim, text_dim, route_dim, adapter_count, temperature=0.35, hard_route=False):
         super().__init__()
         self.adapter_count = int(max(adapter_count, 1))
         self.route_dim = int(max(route_dim, 8))
         self.temperature = float(max(temperature, 1e-4))
+        self.hard_route = bool(hard_route)
         self.vision_proj = nn.Linear(vision_dim, self.route_dim)
         self.text_proj = nn.Linear(text_dim, self.route_dim)
         self.alpha_proj = nn.Linear(1, self.route_dim)
@@ -187,6 +188,9 @@ class PrototypeRouter(nn.Module):
     ):
         logits = self.compute_logits(pooled_vision_states, pooled_text_states, alpha_logits)
         probs = torch.softmax(logits, dim=-1)
+        if self.hard_route and probs.numel() > 0:
+            hard_idx = probs.argmax(dim=-1)
+            probs = F.one_hot(hard_idx, num_classes=self.adapter_count).to(dtype=probs.dtype, device=probs.device)
         if return_logits:
             return probs, logits
         return probs
@@ -226,6 +230,7 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
             int(getattr(self.cfg, "PROTOTYPE_ROUTER_DIM", 128)),
             self.visual_residual_adapter_count,
             float(getattr(self.cfg, "PROTOTYPE_ROUTER_TEMPERATURE", 0.35)),
+            bool(getattr(self.cfg, "PROTOTYPE_ROUTER_HARD_ROUTE", False)),
         )
         self.residual_adapters = nn.ModuleList([
             zeroInit(self.cfg.vision_token_dim)

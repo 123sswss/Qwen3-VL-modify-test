@@ -701,6 +701,8 @@ class Qwen3VLMMRLForStages(Qwen3VLForConditionalGeneration):
     def forward(self, input_ids=None, alpha_labels=None, images_per_sample=None, task_type_ids=None, **kwargs):
         self._last_shared_rep_grad = {}
         self._ensure_shared_rep_grad_hook()
+        self.model.visual.current_stage_id = int(self.current_stage_id)
+        self.model.visual.current_stage_progress = float(self.current_stage_progress)
         if hasattr(self, "temperature_override") and self.temperature_override is not None:
             self.model.temperature_override = self.temperature_override
             kwargs["gating_temperature_override"] = self.temperature_override
@@ -901,6 +903,8 @@ def build_model_and_processor(model_path, experiment_cfg=None):
         "adapter_usage_balance_loss_weight",
         os.getenv("MMRL_ADAPTER_USAGE_BALANCE_LOSS_WEIGHT", "0.0"),
     ))
+    config.ADAPTER_ROUTER_TOPK_S3 = int(experiment_cfg.get("adapter_router_topk_s3", 2))
+    config.ADAPTER_ROUTER_TOPK_S4 = int(experiment_cfg.get("adapter_router_topk_s4", 1))
     config.ADAPTER_SAMPLE_ENTROPY_LOSS_WEIGHT = float(experiment_cfg.get(
         "adapter_sample_entropy_loss_weight",
         os.getenv("MMRL_ADAPTER_SAMPLE_ENTROPY_LOSS_WEIGHT", "0.0"),
@@ -1010,6 +1014,8 @@ def build_model_and_processor(model_path, experiment_cfg=None):
         f"ablate_visual_gate={config.ABLATE_VISUAL_GATE} "
         f"ablate_direct_learnable_rep={config.ABLATE_DIRECT_LEARNABLE_REP} "
         f"visual_residual_adapter_count={config.VISUAL_RESIDUAL_ADAPTER_COUNT} "
+        f"adapter_router_topk_s3={config.ADAPTER_ROUTER_TOPK_S3} "
+        f"adapter_router_topk_s4={config.ADAPTER_ROUTER_TOPK_S4} "
         f"adapter_usage_balance_loss_weight={config.ADAPTER_USAGE_BALANCE_LOSS_WEIGHT} "
         f"adapter_sample_entropy_loss_weight={config.ADAPTER_SAMPLE_ENTROPY_LOSS_WEIGHT} "
         f"adapter_common_mode_loss_weight={config.ADAPTER_COMMON_MODE_LOSS_WEIGHT} "

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import argparse
 import re
+import shutil
 from pathlib import Path
 
 
@@ -10,6 +12,7 @@ TARGET_NAME = "test.log"
 STEP_MARKER = "[330/972]"
 ACC_PATTERN = re.compile(r"Acc=\d+\.\d%")
 SCORE_KEYWORD = "百分制分数"
+SCORE_VALUE_PATTERN = re.compile(r"百分制分数[^\d+-]*([+-]?\d+(?:\.\d+)?)")
 DIAGNOSTICS_FILENAME = "mmrl_diagnostics.jsonl"
 DIAGNOSTIC_STAGES = (3, 4)
 
@@ -83,7 +86,80 @@ def extract_info(log_path: Path) -> dict[str, str]:
     }
 
 
-def main() -> None:
+def extract_score_value(log_path: Path) -> float | None:
+    try:
+        with log_path.open("r", encoding="utf-8", errors="ignore") as f:
+            for raw_line in f:
+                if SCORE_KEYWORD not in raw_line:
+                    continue
+                match = SCORE_VALUE_PATTERN.search(raw_line)
+                if match:
+                    return float(match.group(1))
+    except OSError:
+        return None
+    return None
+
+
+def manage_best_checkpoint(checkpoint_root: Path, current_experiment_dir: Path) -> None:
+    checkpoint_root = checkpoint_root.resolve()
+    current_experiment_dir = current_experiment_dir.resolve()
+    current_final_dir = current_experiment_dir / "final"
+    current_log = current_experiment_dir / "eval" / TARGET_NAME
+
+    if current_experiment_dir.parent != checkpoint_root:
+        print(f"[KEEP][WARN] 当前实验目录不直属于 checkpoint 根目录，跳过清理: {current_experiment_dir}")
+        return
+
+    experiment_dirs = sorted(
+        path.resolve()
+        for path in checkpoint_root.iterdir()
+        if path.is_dir() and path.name != "trash"
+    )
+    previous_dirs = [path for path in experiment_dirs if path != current_experiment_dir]
+
+    # 第一次启用策略时，当前目录之外没有历史实验，直接保留第一个模型。
+    if not previous_dirs:
+        print(f"[KEEP] 首次使用保留策略，无条件保留: {current_final_dir}")
+        return
+
+    current_score = extract_score_value(current_log)
+    if current_score is None:
+        print(f"[KEEP][WARN] 无法解析当前百分制分数，为防止误删而保留: {current_final_dir}")
+        return
+
+    historical_scores: list[tuple[float, Path]] = []
+    for experiment_dir in previous_dirs:
+        score = extract_score_value(experiment_dir / "eval" / TARGET_NAME)
+        if score is not None:
+            historical_scores.append((score, experiment_dir))
+
+    if not historical_scores:
+        print(f"[KEEP] 未找到可解析的历史分数，将当前模型作为首个基准保留: score={current_score:.4f}")
+        return
+
+    historical_best = max(score for score, _ in historical_scores)
+    if current_score < historical_best:
+        print(
+            f"[KEEP] 当前分数 {current_score:.4f} 低于历史最高分 "
+            f"{historical_best:.4f}，删除当前 final。"
+        )
+        if current_final_dir.is_dir():
+            shutil.rmtree(current_final_dir)
+        return
+
+    print(
+        f"[KEEP] 当前分数 {current_score:.4f} 达到或刷新历史最高分 "
+        f"{historical_best:.4f}，保留当前 final。"
+    )
+    if current_score > historical_best:
+        for score, experiment_dir in historical_scores:
+            old_final_dir = experiment_dir / "final"
+            if score < current_score and old_final_dir.is_dir():
+                shutil.rmtree(old_final_dir)
+                print(f"[KEEP] 已删除旧低分 final: score={score:.4f} path={old_final_dir}")
+
+
+def print_score_report() -> None:
     log_files = sorted(
         log_path
         for log_path in OUTPUT_DIR.glob(f"*/eval/{TARGET_NAME}")
@@ -109,6 +185,18 @@ def main() -> None:
             print(f"stage{stage_id}/metrics/{DIAGNOSTICS_FILENAME} 内容:")
             print(diagnostics_content)
         print()
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--manage-best", type=Path, metavar="CURRENT_EXPERIMENT_DIR")
+    parser.add_argument("--checkpoint-root", type=Path, default=OUTPUT_DIR)
+    args = parser.parse_args()
+
+    if args.manage_best is not None:
+        manage_best_checkpoint(args.checkpoint_root, args.manage_best)
+    else:
+        print_score_report()
 
 
 if __name__ == "__main__":

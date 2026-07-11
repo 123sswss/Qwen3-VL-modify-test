@@ -124,7 +124,9 @@ class ResidualRouter(nn.Module):
         self.text_proj = nn.Linear(text_dim, hidden_dim)
         self.fusion = nn.Linear(hidden_dim * 2 + 1, hidden_dim)
         self.output_head = nn.Linear(hidden_dim, self.adapter_count)
-        nn.init.zeros_(self.output_head.weight)
+        # Sparse routing needs a tiny sample-dependent asymmetry; exact zero logits
+        # make top-k select the same experts for every sample on the first step.
+        nn.init.normal_(self.output_head.weight, mean=0.0, std=1e-3)
         nn.init.zeros_(self.output_head.bias)
         self.relu = nn.ReLU()
 
@@ -215,6 +217,8 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
         self.adapter_diversity_worst_pair_weight = float(
             getattr(self.cfg, "ADAPTER_DIVERSITY_WORST_PAIR_WEIGHT", 1.0)
         )
+        self.adapter_router_topk_s3 = int(getattr(self.cfg, "ADAPTER_ROUTER_TOPK_S3", 2))
+        self.adapter_router_topk_s4 = int(getattr(self.cfg, "ADAPTER_ROUTER_TOPK_S4", 1))
         self.enable_deepstack_mmrl_residual = bool(getattr(self.cfg, "ENABLE_DEEPSTACK_MMRL_RESIDUAL", False))
         self.deepstack_mmrl_residual_scale = float(getattr(self.cfg, "DEEPSTACK_MMRL_RESIDUAL_SCALE", 0.0))
         self.adapter_effective_delta_ratio_mean = torch.tensor(float("nan"))
@@ -245,6 +249,7 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
         self.alpha_list = []
         self.G_list = []
         self.route_probs = None
+        self.route_weights = None
         self.k_results = None
         self.k_mask_results = None
         self.tax_loss = None
@@ -255,6 +260,29 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
         nn.init.normal_(self.null_image_token, std=0.02)
         self.ablate_visual_gate = bool(getattr(self.cfg, "ABLATE_VISUAL_GATE", False))
         self.debug_context = {}
+
+    def _compute_sparse_route_weights(self, route_probs: torch.Tensor) -> torch.Tensor:
+        stage_id = int(getattr(self, "current_stage_id", 0) or 0)
+        if stage_id == 3:
+            topk = self.adapter_router_topk_s3
+        elif stage_id == 4:
+            topk = self.adapter_router_topk_s4
+        else:
+            return route_probs
+
+        adapter_count = route_probs.shape[-1]
+        topk = max(1, min(int(topk), adapter_count))
+        if topk >= adapter_count:
+            return route_probs
+
+        topk_probs, topk_indices = route_probs.topk(topk, dim=-1)
+        sparse_weights = torch.zeros_like(route_probs)
+        sparse_weights.scatter_(-1, topk_indices, topk_probs)
+        sparse_weights = sparse_weights / sparse_weights.sum(dim=-1, keepdim=True).clamp_min(1e-8)
+
+        # Sparse values drive the forward/adapter gradients; dense probabilities
+        # provide a smooth straight-through gradient to the router.
+        return sparse_weights.detach() + route_probs - route_probs.detach()
 
     @staticmethod
     def _validate_layer_indexes(name, indexes, depth):
@@ -574,10 +602,14 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
         route_probs = route_probs.float()
         adapter_count = route_probs.shape[-1]
 
-        usage = route_probs.mean(dim=0)
+        balance_routes = self.route_weights
+        if not torch.is_tensor(balance_routes) or balance_routes.numel() == 0:
+            balance_routes = route_probs
+        balance_routes = balance_routes.float()
+        usage = balance_routes.mean(dim=0)
         usage = usage / usage.sum().clamp_min(1e-8)
         uniform = torch.full_like(usage, 1.0 / max(adapter_count, 1))
-        usage_balance_loss = (usage * (usage.clamp_min(1e-8).log() - uniform.log())).sum()
+        usage_balance_loss = adapter_count * (usage - uniform).pow(2).mean()
 
         if adapter_count > 1:
             sample_entropy = -(route_probs * route_probs.clamp_min(1e-8).log()).sum(dim=-1)
@@ -659,6 +691,7 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
         self.alpha_list = None 
         self.G_list = []
         self.route_probs = None
+        self.route_weights = None
         pooled_vision_states = None
 
 
@@ -753,6 +786,7 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
                             expanded_text_embedding,
                             self.alpha_list,
                         ).to(dtype=hidden_states.dtype)
+                        self.route_weights = self._compute_sparse_route_weights(self.route_probs)
                         # G_list: [Total_Images, 1]
                         if self.training:
                             # 训练时保留 soft gate，保证梯度可过
@@ -871,8 +905,8 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
             delta = hidden_states_with_rep - org_hidden_states
             G_mask = torch.repeat_interleave(self.G_list, seqlens, dim=0)
             gated_delta = delta * G_mask
-            if torch.is_tensor(self.route_probs) and self.route_probs.numel() > 0:
-                token_route_probs = torch.repeat_interleave(self.route_probs, seqlens, dim=0)
+            if torch.is_tensor(self.route_weights) and self.route_weights.numel() > 0:
+                token_route_probs = torch.repeat_interleave(self.route_weights, seqlens, dim=0)
             else:
                 token_route_probs = gated_delta.new_ones(
                     (gated_delta.shape[0], self.visual_residual_adapter_count),
@@ -931,7 +965,13 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
             gated_delta,
             org_hidden_states,
             cu_seqlens,
-            route_probs=self.route_probs,
+            route_probs=self.route_weights if torch.is_tensor(self.route_weights) else self.route_probs,
+        )
+        stage_id = int(getattr(self, "current_stage_id", 0) or 0)
+        active_topk = (
+            self.adapter_router_topk_s3 if stage_id == 3
+            else self.adapter_router_topk_s4 if stage_id == 4
+            else self.visual_residual_adapter_count
         )
         self.debug_context = {
             "alpha_prob_mean": alpha_mean,
@@ -942,6 +982,7 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
             "org_hidden_norm_mean": org_hidden_norm,
             "delta_to_org_ratio": delta_to_org_ratio,
             "visual_adapter_count": hidden_states.new_tensor(float(self.visual_residual_adapter_count)),
+            "adapter_router_topk": hidden_states.new_tensor(float(active_topk)),
             "adapter_weight_norm": self._adapter_weight_norm(hidden_states.device),
             "adapter_usage_balance_loss": self.adapter_usage_balance_loss.detach(),
             "adapter_sample_entropy_loss": self.adapter_sample_entropy_loss.detach(),

@@ -56,6 +56,8 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
             "ADAPTER_DIVERSITY_WORST_PAIR_WEIGHT": _cfg_attr(
                 config, "ADAPTER_DIVERSITY_WORST_PAIR_WEIGHT", 1.0
             ),
+            "ADAPTER_ROUTER_TOPK_S3": _cfg_attr(config, "ADAPTER_ROUTER_TOPK_S3", 2),
+            "ADAPTER_ROUTER_TOPK_S4": _cfg_attr(config, "ADAPTER_ROUTER_TOPK_S4", 1),
             "PROTOTYPE_ANCHOR_LOSS_WEIGHT": _cfg_attr(config, "PROTOTYPE_ANCHOR_LOSS_WEIGHT", 0.0),
             "PROTOTYPE_ANCHOR_TEMPERATURE": _cfg_attr(config, "PROTOTYPE_ANCHOR_TEMPERATURE", 0.20),
             "ENABLE_DEEPSTACK_MMRL_RESIDUAL": _cfg_attr(config, "ENABLE_DEEPSTACK_MMRL_RESIDUAL", False),

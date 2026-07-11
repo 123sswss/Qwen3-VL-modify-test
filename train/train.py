@@ -7,6 +7,8 @@ from train_stages import build_model_and_processor, run_stage
 BASE_VISUAL_ROUTER_MODEL = {
     "rp_space_length": 40,
     "visual_residual_adapter_count": 4,
+    "adapter_router_topk_s3": 2,
+    "adapter_router_topk_s4": 1,
     "adapter_usage_balance_loss_weight": 0.005,
     "adapter_sample_entropy_loss_weight": 0.02,
     "adapter_common_mode_loss_weight": 0.03,
@@ -32,6 +34,32 @@ BASE_VISUAL_ROUTER_MODEL = {
 
 
 EXPERIMENTS = {
+    "visual_router_sparse_topk_v1": {
+        **BASE_VISUAL_ROUTER_MODEL,
+        "adapter_router_topk_s3": 2,
+        "adapter_router_topk_s4": 1,
+
+        "adapter_usage_balance_loss_weight": 0.010,
+        "adapter_sample_entropy_loss_weight": 0.008,
+        "adapter_sample_entropy_target": 0.50,
+        "adapter_common_mode_loss_weight": 0.0,
+
+        "adapter_effective_delta_loss_weight": 0.0037,
+        "adapter_effective_delta_loss_weight_s3": 0.0003,
+        "adapter_effective_delta_loss_weight_s4": 0.0037,
+        "adapter_effective_delta_target_low": 0.52,
+        "adapter_effective_delta_target_high": 0.98,
+
+        "prototype_anchor_loss_weight": 0.0,
+        "prototype_anchor_loss_weight_s3": 0.0,
+        "prototype_anchor_loss_weight_s4": 0.0,
+        "adapter_diversity_loss_weight": 0.0,
+        "adapter_diversity_loss_weight_s3": 0.0,
+        "adapter_diversity_loss_weight_s4": 0.0,
+
+        "enable_deepstack_mmrl_residual": False,
+        "deepstack_mmrl_residual_scale": 0.0,
+    },
     "visual_router_layer_fixed_v4_diversity_recover": { # 64.99
         **BASE_VISUAL_ROUTER_MODEL,
         "adapter_usage_balance_loss_weight": 0.0026,
@@ -146,7 +174,7 @@ EXPERIMENTS = {
         "deepstack_mmrl_residual_scale": 0.0,
     },
 }
-SELECTED_EXPERIMENT = os.getenv("MMRL_EXPERIMENT", "visual_router_orth_anchor_v1")
+SELECTED_EXPERIMENT = os.getenv("MMRL_EXPERIMENT", "visual_router_sparse_topk_v1")
 if SELECTED_EXPERIMENT not in EXPERIMENTS:
     raise ValueError(f"Unknown MMRL_EXPERIMENT={SELECTED_EXPERIMENT!r}, choices={sorted(EXPERIMENTS)}")
 EXP_CFG = EXPERIMENTS[SELECTED_EXPERIMENT]
@@ -326,6 +354,7 @@ CFG = {
             "delta_pool_specificity_ratio",
             "adapter_route_entropy_norm",
             "adapter_route_confidence",
+            "adapter_router_topk",
             "adapter_usage_max",
             "adapter_usage_min",
             "adapter_usage_0",

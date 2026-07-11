@@ -276,6 +276,14 @@ class StageScheduleCallback(TrainerCallback):
 
 
 class MMRLDiagnosticsCallback(TrainerCallback):
+    MAX_KEYS = {
+        "router_probe_kl_to_prev",
+        "router_probe_top1_flip_rate",
+        "router_param_delta_ratio",
+        "adapter_param_delta_ratio",
+        "gate_probe_prob_delta",
+        "gate_probe_flip_rate",
+    }
     DEFAULT_KEEP_KEYS = {
         "ce_loss",
         "active_token_count_mean",
@@ -346,6 +354,8 @@ class MMRLDiagnosticsCallback(TrainerCallback):
                 scalar_stats[f"{key}_std"] = float(finite.std())
                 latest_finite = arr[np.isfinite(arr)][-1]
                 scalar_stats[f"{key}_latest"] = float(latest_finite)
+                if key in self.MAX_KEYS:
+                    scalar_stats[f"{key}_max"] = float(finite.max())
         return {
             "stage_name": self.stage_name,
             "step_start": int(start_step),
@@ -717,6 +727,9 @@ class Qwen3VLMMRLForStages(Qwen3VLForConditionalGeneration):
     def forward(self, input_ids=None, alpha_labels=None, images_per_sample=None, task_type_ids=None, **kwargs):
         self._last_shared_rep_grad = {}
         self._ensure_shared_rep_grad_hook()
+        self.model.visual.current_stage_id = int(self.current_stage_id)
+        self.model.visual.current_stage_step = int(self.current_stage_step)
+        self.model.visual.current_stage_progress = float(self.current_stage_progress)
         if hasattr(self, "temperature_override") and self.temperature_override is not None:
             self.model.temperature_override = self.temperature_override
             kwargs["gating_temperature_override"] = self.temperature_override

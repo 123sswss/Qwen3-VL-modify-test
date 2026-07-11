@@ -263,6 +263,18 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
         self.alpha_list = []
         self.G_list = []
         self.route_probs = None
+        self.router_probe_size = 16
+        self._router_probe_vision = None
+        self._router_probe_text = None
+        self._router_probe_alpha = None
+        self._router_probe_prev_probs = None
+        self._router_probe_stage_start_probs = None
+        self._router_probe_prev_params = None
+        self._adapter_probe_prev_params = None
+        self._gate_probe_prev_probs = None
+        self._router_probe_last_step = None
+        self._router_probe_stage_id = None
+        self._router_probe_metrics = {}
         self.k_results = None
         self.k_mask_results = None
         self.tax_loss = None
@@ -273,6 +285,112 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
         nn.init.normal_(self.null_image_token, std=0.02)
         self.ablate_visual_gate = bool(getattr(self.cfg, "ABLATE_VISUAL_GATE", False))
         self.debug_context = {}
+
+    @torch.no_grad()
+    def _update_router_probe(self, pooled_vision_states, pooled_text_states, alpha_logits):
+        stage_id = int(getattr(self, "current_stage_id", 0) or 0)
+        if stage_id not in (3, 4):
+            return
+
+        if self._router_probe_vision is None or self._router_probe_vision.shape[0] < self.router_probe_size:
+            current_size = 0 if self._router_probe_vision is None else self._router_probe_vision.shape[0]
+            take = min(self.router_probe_size - current_size, pooled_vision_states.shape[0])
+            if take > 0:
+                vision = pooled_vision_states[:take].detach().clone()
+                text = pooled_text_states[:take].detach().clone()
+                alpha = alpha_logits[:take].detach().clone() if alpha_logits is not None else None
+                if self._router_probe_vision is None:
+                    self._router_probe_vision = vision
+                    self._router_probe_text = text
+                    self._router_probe_alpha = alpha
+                else:
+                    self._router_probe_vision = torch.cat([self._router_probe_vision, vision], dim=0)
+                    self._router_probe_text = torch.cat([self._router_probe_text, text], dim=0)
+                    if self._router_probe_alpha is not None and alpha is not None:
+                        self._router_probe_alpha = torch.cat([self._router_probe_alpha, alpha], dim=0)
+            if self._router_probe_vision.shape[0] < self.router_probe_size:
+                return
+
+        step = int(getattr(self, "current_stage_step", 0) or 0)
+        if self._router_probe_last_step == step and self._router_probe_stage_id == stage_id:
+            return
+
+        probs = self.adapter_router(
+            self._router_probe_vision,
+            self._router_probe_text,
+            self._router_probe_alpha,
+        ).detach().float()
+        params = torch.cat([parameter.detach().float().reshape(-1) for parameter in self.adapter_router.parameters()])
+        adapter_params = torch.cat([
+            parameter.detach().float().reshape(-1)
+            for adapter in self.residual_adapters
+            for parameter in adapter.parameters()
+        ])
+        gate_probs = torch.sigmoid(self.Task_classifier(
+            self._router_probe_vision,
+            self._router_probe_text,
+        ).detach().float()).reshape(-1)
+
+        if self._router_probe_stage_id != stage_id or self._router_probe_stage_start_probs is None:
+            self._router_probe_stage_start_probs = probs.clone()
+
+        zero = probs.new_tensor(0.0)
+        if self._router_probe_prev_probs is None:
+            kl_to_prev = zero
+            top1_flip_rate = zero
+        else:
+            prev_probs = self._router_probe_prev_probs.clamp_min(1e-8)
+            current_probs = probs.clamp_min(1e-8)
+            kl_to_prev = (prev_probs * (prev_probs.log() - current_probs.log())).sum(dim=-1).mean()
+            top1_flip_rate = (probs.argmax(dim=-1) != self._router_probe_prev_probs.argmax(dim=-1)).float().mean()
+
+        stage_start = self._router_probe_stage_start_probs.clamp_min(1e-8)
+        current_probs = probs.clamp_min(1e-8)
+        kl_to_stage_start = (stage_start * (stage_start.log() - current_probs.log())).sum(dim=-1).mean()
+        top2 = probs.topk(min(2, probs.shape[-1]), dim=-1).values
+        margin = top2[:, 0] - top2[:, 1] if top2.shape[-1] > 1 else top2[:, 0]
+
+        if self._router_probe_prev_params is None:
+            param_delta_ratio = zero
+        else:
+            param_delta_ratio = (
+                (params - self._router_probe_prev_params).norm()
+                / self._router_probe_prev_params.norm().clamp_min(1e-8)
+            )
+
+        if self._adapter_probe_prev_params is None:
+            adapter_param_delta_ratio = zero
+        else:
+            adapter_param_delta_ratio = (
+                (adapter_params - self._adapter_probe_prev_params).norm()
+                / self._adapter_probe_prev_params.norm().clamp_min(1e-8)
+            )
+
+        if self._gate_probe_prev_probs is None:
+            gate_prob_delta = zero
+            gate_flip_rate = zero
+        else:
+            gate_prob_delta = (gate_probs - self._gate_probe_prev_probs).abs().mean()
+            gate_flip_rate = (
+                (gate_probs >= 0.5) != (self._gate_probe_prev_probs >= 0.5)
+            ).float().mean()
+
+        self._router_probe_metrics = {
+            "router_probe_kl_to_prev": kl_to_prev,
+            "router_probe_top1_flip_rate": top1_flip_rate,
+            "router_probe_margin_mean": margin.mean(),
+            "router_probe_kl_to_stage_start": kl_to_stage_start,
+            "router_param_delta_ratio": param_delta_ratio,
+            "adapter_param_delta_ratio": adapter_param_delta_ratio,
+            "gate_probe_prob_delta": gate_prob_delta,
+            "gate_probe_flip_rate": gate_flip_rate,
+        }
+        self._router_probe_prev_probs = probs.clone()
+        self._router_probe_prev_params = params.clone()
+        self._adapter_probe_prev_params = adapter_params.clone()
+        self._gate_probe_prev_probs = gate_probs.clone()
+        self._router_probe_last_step = step
+        self._router_probe_stage_id = stage_id
 
     @staticmethod
     def _validate_layer_indexes(name, indexes, depth):
@@ -844,6 +962,11 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
                             expanded_text_embedding,
                             self.alpha_list,
                         ).to(dtype=hidden_states.dtype)
+                        self._update_router_probe(
+                            pooled_vision_states,
+                            expanded_text_embedding,
+                            self.alpha_list,
+                        )
                         # G_list: [Total_Images, 1]
                         if self.training:
                             # 训练时保留 soft gate，保证梯度可过
@@ -1057,6 +1180,7 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
             "deepstack_delta_norm_mean": self.deepstack_delta_norm_mean.detach(),
             "deepstack_delta_to_org_ratio": self.deepstack_delta_to_org_ratio.detach(),
             "deepstack_residual_layers": self.deepstack_residual_layers.detach(),
+            **self._router_probe_metrics,
             **residual_debug,
         }
         for idx in range(self.visual_residual_adapter_count):

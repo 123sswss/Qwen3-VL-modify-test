@@ -18,10 +18,6 @@ BASE_VISUAL_ROUTER_MODEL = {
     "adapter_diversity_worst_pair_weight": 1.0,
     "prototype_anchor_loss_weight": 0.0,
     "prototype_anchor_temperature": 0.20,
-    "prototype_anchor_momentum": 0.95,
-    "prototype_anchor_min_confidence": 0.40,
-    "prototype_anchor_assignment_power": 2.0,
-    "prototype_anchor_init_noise": 0.10,
     "enable_deepstack_mmrl_residual": False,
     "deepstack_mmrl_residual_scale": 0.0,
     "adapter_sample_entropy_target": 0.55,
@@ -117,9 +113,40 @@ EXPERIMENTS = {
     
         "enable_deepstack_mmrl_residual": False,
         "deepstack_mmrl_residual_scale": 0.0,
-    }
+    },
+    "visual_router_orth_anchor_v1": {
+        **BASE_VISUAL_ROUTER_MODEL,
+        "adapter_usage_balance_loss_weight": 0.00275,
+        "adapter_sample_entropy_loss_weight": 0.018,
+        "adapter_common_mode_loss_weight": 0.0,
+
+        "adapter_effective_delta_loss_weight": 0.0037,
+        "adapter_effective_delta_loss_weight_s3": 0.0003,
+        "adapter_effective_delta_loss_weight_s4": 0.0037,
+
+        "prototype_anchor_loss_weight": 0.0,
+        "prototype_anchor_loss_weight_s3": 0.0015,
+        "prototype_anchor_loss_weight_s4": 0.0008,
+        "prototype_anchor_temperature": 0.35,
+
+        "adapter_diversity_loss_weight": 0.0,
+        "adapter_diversity_loss_weight_s3": 0.0,
+        "adapter_diversity_loss_weight_s4": 0.0027,
+        "adapter_diversity_target_low": 0.0,
+        "adapter_diversity_target_high": 0.55,
+        "adapter_diversity_upper_weight": 2.0,
+        "adapter_diversity_worst_pair_weight": 1.0,
+
+        "adapter_sample_entropy_target": 0.68,
+        "adapter_common_mode_target": 0.94,
+        "adapter_effective_delta_target_low": 0.52,
+        "adapter_effective_delta_target_high": 0.98,
+
+        "enable_deepstack_mmrl_residual": False,
+        "deepstack_mmrl_residual_scale": 0.0,
+    },
 }
-SELECTED_EXPERIMENT = os.getenv("MMRL_EXPERIMENT", "visual_router_layer_fixed_v8_div_band")
+SELECTED_EXPERIMENT = os.getenv("MMRL_EXPERIMENT", "visual_router_orth_anchor_v1")
 if SELECTED_EXPERIMENT not in EXPERIMENTS:
     raise ValueError(f"Unknown MMRL_EXPERIMENT={SELECTED_EXPERIMENT!r}, choices={sorted(EXPERIMENTS)}")
 EXP_CFG = EXPERIMENTS[SELECTED_EXPERIMENT]
@@ -234,22 +261,6 @@ CFG = {
         "prototype_anchor_temperature": float(os.getenv(
             "MMRL_PROTOTYPE_ANCHOR_TEMPERATURE",
             str(EXP_CFG.get("prototype_anchor_temperature", 0.20)),
-        )),
-        "prototype_anchor_momentum": float(os.getenv(
-            "MMRL_PROTOTYPE_ANCHOR_MOMENTUM",
-            str(EXP_CFG.get("prototype_anchor_momentum", 0.95)),
-        )),
-        "prototype_anchor_min_confidence": float(os.getenv(
-            "MMRL_PROTOTYPE_ANCHOR_MIN_CONFIDENCE",
-            str(EXP_CFG.get("prototype_anchor_min_confidence", 0.40)),
-        )),
-        "prototype_anchor_assignment_power": float(os.getenv(
-            "MMRL_PROTOTYPE_ANCHOR_ASSIGNMENT_POWER",
-            str(EXP_CFG.get("prototype_anchor_assignment_power", 2.0)),
-        )),
-        "prototype_anchor_init_noise": float(os.getenv(
-            "MMRL_PROTOTYPE_ANCHOR_INIT_NOISE",
-            str(EXP_CFG.get("prototype_anchor_init_noise", 0.10)),
         )),
         "enable_deepstack_mmrl_residual": os.getenv(
             "MMRL_ENABLE_DEEPSTACK_MMRL_RESIDUAL",

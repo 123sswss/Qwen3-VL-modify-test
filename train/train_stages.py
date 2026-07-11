@@ -119,22 +119,6 @@ def _build_experiment_context(train_cfg, output_dir, stage_id):
                 "prototype_anchor_temperature",
                 experiment_cfg.get("prototype_anchor_temperature"),
             ),
-            "prototype_anchor_momentum": train_cfg.get(
-                "prototype_anchor_momentum",
-                experiment_cfg.get("prototype_anchor_momentum"),
-            ),
-            "prototype_anchor_min_confidence": train_cfg.get(
-                "prototype_anchor_min_confidence",
-                experiment_cfg.get("prototype_anchor_min_confidence"),
-            ),
-            "prototype_anchor_assignment_power": train_cfg.get(
-                "prototype_anchor_assignment_power",
-                experiment_cfg.get("prototype_anchor_assignment_power"),
-            ),
-            "prototype_anchor_init_noise": train_cfg.get(
-                "prototype_anchor_init_noise",
-                experiment_cfg.get("prototype_anchor_init_noise"),
-            ),
             "enable_deepstack_mmrl_residual": train_cfg.get(
                 "enable_deepstack_mmrl_residual",
                 experiment_cfg.get("enable_deepstack_mmrl_residual"),
@@ -973,22 +957,6 @@ def build_model_and_processor(model_path, experiment_cfg=None):
         "prototype_anchor_temperature",
         os.getenv("MMRL_PROTOTYPE_ANCHOR_TEMPERATURE", "0.20"),
     ))
-    config.PROTOTYPE_ANCHOR_MOMENTUM = float(experiment_cfg.get(
-        "prototype_anchor_momentum",
-        os.getenv("MMRL_PROTOTYPE_ANCHOR_MOMENTUM", "0.95"),
-    ))
-    config.PROTOTYPE_ANCHOR_MIN_CONFIDENCE = float(experiment_cfg.get(
-        "prototype_anchor_min_confidence",
-        os.getenv("MMRL_PROTOTYPE_ANCHOR_MIN_CONFIDENCE", "0.40"),
-    ))
-    config.PROTOTYPE_ANCHOR_ASSIGNMENT_POWER = float(experiment_cfg.get(
-        "prototype_anchor_assignment_power",
-        os.getenv("MMRL_PROTOTYPE_ANCHOR_ASSIGNMENT_POWER", "2.0"),
-    ))
-    config.PROTOTYPE_ANCHOR_INIT_NOISE = float(experiment_cfg.get(
-        "prototype_anchor_init_noise",
-        os.getenv("MMRL_PROTOTYPE_ANCHOR_INIT_NOISE", "0.10"),
-    ))
     config.ENABLE_DEEPSTACK_MMRL_RESIDUAL = os.getenv(
         "MMRL_ENABLE_DEEPSTACK_MMRL_RESIDUAL",
         "1" if experiment_cfg.get("enable_deepstack_mmrl_residual", False) else "0",
@@ -1057,10 +1025,6 @@ def build_model_and_processor(model_path, experiment_cfg=None):
         f"adapter_diversity_worst_pair_weight={config.ADAPTER_DIVERSITY_WORST_PAIR_WEIGHT} "
         f"prototype_anchor_loss_weight={config.PROTOTYPE_ANCHOR_LOSS_WEIGHT} "
         f"prototype_anchor_temperature={config.PROTOTYPE_ANCHOR_TEMPERATURE} "
-        f"prototype_anchor_momentum={config.PROTOTYPE_ANCHOR_MOMENTUM} "
-        f"prototype_anchor_min_confidence={config.PROTOTYPE_ANCHOR_MIN_CONFIDENCE} "
-        f"prototype_anchor_assignment_power={config.PROTOTYPE_ANCHOR_ASSIGNMENT_POWER} "
-        f"prototype_anchor_init_noise={config.PROTOTYPE_ANCHOR_INIT_NOISE} "
         f"enable_deepstack_mmrl_residual={config.ENABLE_DEEPSTACK_MMRL_RESIDUAL} "
         f"deepstack_mmrl_residual_scale={config.DEEPSTACK_MMRL_RESIDUAL_SCALE}"
     )

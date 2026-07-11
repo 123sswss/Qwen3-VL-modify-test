@@ -124,9 +124,7 @@ class ResidualRouter(nn.Module):
         self.text_proj = nn.Linear(text_dim, hidden_dim)
         self.fusion = nn.Linear(hidden_dim * 2 + 1, hidden_dim)
         self.output_head = nn.Linear(hidden_dim, self.adapter_count)
-        # Sparse routing needs a tiny sample-dependent asymmetry; exact zero logits
-        # make top-k select the same experts for every sample on the first step.
-        nn.init.normal_(self.output_head.weight, mean=0.0, std=1e-3)
+        nn.init.zeros_(self.output_head.weight)
         nn.init.zeros_(self.output_head.bias)
         self.relu = nn.ReLU()
 
@@ -211,14 +209,16 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
         self.adapter_effective_delta_target_low = float(getattr(self.cfg, "ADAPTER_EFFECTIVE_DELTA_TARGET_LOW", 0.78))
         self.adapter_effective_delta_target_high = float(getattr(self.cfg, "ADAPTER_EFFECTIVE_DELTA_TARGET_HIGH", 1.10))
         self.prototype_anchor_temperature = float(getattr(self.cfg, "PROTOTYPE_ANCHOR_TEMPERATURE", 0.20))
+        self.prototype_anchor_momentum = float(getattr(self.cfg, "PROTOTYPE_ANCHOR_MOMENTUM", 0.95))
+        self.prototype_anchor_min_confidence = float(getattr(self.cfg, "PROTOTYPE_ANCHOR_MIN_CONFIDENCE", 0.40))
+        self.prototype_anchor_assignment_power = float(getattr(self.cfg, "PROTOTYPE_ANCHOR_ASSIGNMENT_POWER", 2.0))
+        self.prototype_anchor_init_noise = float(getattr(self.cfg, "PROTOTYPE_ANCHOR_INIT_NOISE", 0.10))
         self.adapter_diversity_target_low = float(getattr(self.cfg, "ADAPTER_DIVERSITY_TARGET_LOW", 0.30))
         self.adapter_diversity_target_high = float(getattr(self.cfg, "ADAPTER_DIVERSITY_TARGET_HIGH", 0.58))
         self.adapter_diversity_upper_weight = float(getattr(self.cfg, "ADAPTER_DIVERSITY_UPPER_WEIGHT", 2.0))
         self.adapter_diversity_worst_pair_weight = float(
             getattr(self.cfg, "ADAPTER_DIVERSITY_WORST_PAIR_WEIGHT", 1.0)
         )
-        self.adapter_router_topk_s3 = int(getattr(self.cfg, "ADAPTER_ROUTER_TOPK_S3", 2))
-        self.adapter_router_topk_s4 = int(getattr(self.cfg, "ADAPTER_ROUTER_TOPK_S4", 1))
         self.enable_deepstack_mmrl_residual = bool(getattr(self.cfg, "ENABLE_DEEPSTACK_MMRL_RESIDUAL", False))
         self.deepstack_mmrl_residual_scale = float(getattr(self.cfg, "DEEPSTACK_MMRL_RESIDUAL_SCALE", 0.0))
         self.adapter_effective_delta_ratio_mean = torch.tensor(float("nan"))
@@ -239,17 +239,30 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
         self.deepstack_residual_layers = torch.tensor(0.0)
         for idx in range(self.visual_residual_adapter_count):
             setattr(self, f"prototype_usage_{idx}", torch.tensor(float("nan")))
-        anchor_vectors = torch.empty(self.visual_residual_adapter_count, self.cfg.vision_token_dim)
-        nn.init.orthogonal_(anchor_vectors)
         self.register_buffer(
             "prototype_vectors",
-            F.normalize(anchor_vectors, dim=-1),
+            torch.zeros(self.visual_residual_adapter_count, self.cfg.vision_token_dim),
             persistent=True,
+        )
+        self.register_buffer(
+            "prototype_initialized",
+            torch.zeros(self.visual_residual_adapter_count, dtype=torch.bool),
+            persistent=True,
+        )
+        slot_offsets = torch.zeros(self.visual_residual_adapter_count, self.cfg.vision_token_dim)
+        for idx in range(self.visual_residual_adapter_count):
+            slot_offsets[idx, idx::self.visual_residual_adapter_count] = 1.0
+            if idx % 2 == 1:
+                slot_offsets[idx, (idx + 1)::self.visual_residual_adapter_count] = -1.0
+        slot_offsets = F.normalize(slot_offsets, dim=-1)
+        self.register_buffer(
+            "prototype_slot_offsets",
+            slot_offsets,
+            persistent=False,
         )
         self.alpha_list = []
         self.G_list = []
         self.route_probs = None
-        self.route_weights = None
         self.k_results = None
         self.k_mask_results = None
         self.tax_loss = None
@@ -260,29 +273,6 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
         nn.init.normal_(self.null_image_token, std=0.02)
         self.ablate_visual_gate = bool(getattr(self.cfg, "ABLATE_VISUAL_GATE", False))
         self.debug_context = {}
-
-    def _compute_sparse_route_weights(self, route_probs: torch.Tensor) -> torch.Tensor:
-        stage_id = int(getattr(self, "current_stage_id", 0) or 0)
-        if stage_id == 3:
-            topk = self.adapter_router_topk_s3
-        elif stage_id == 4:
-            topk = self.adapter_router_topk_s4
-        else:
-            return route_probs
-
-        adapter_count = route_probs.shape[-1]
-        topk = max(1, min(int(topk), adapter_count))
-        if topk >= adapter_count:
-            return route_probs
-
-        topk_probs, topk_indices = route_probs.topk(topk, dim=-1)
-        sparse_weights = torch.zeros_like(route_probs)
-        sparse_weights.scatter_(-1, topk_indices, topk_probs)
-        sparse_weights = sparse_weights / sparse_weights.sum(dim=-1, keepdim=True).clamp_min(1e-8)
-
-        # Sparse values drive the forward/adapter gradients; dense probabilities
-        # provide a smooth straight-through gradient to the router.
-        return sparse_weights.detach() + route_probs - route_probs.detach()
 
     @staticmethod
     def _validate_layer_indexes(name, indexes, depth):
@@ -475,6 +465,68 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
             return None
         return torch.stack(pooled, dim=0)
 
+    @torch.no_grad()
+    def _initialize_prototypes_from_batch(self, features: torch.Tensor):
+        if features is None or features.numel() == 0:
+            return
+        features = F.normalize(features.detach().float(), dim=-1)
+        n = features.shape[0]
+        if n <= 0:
+            return
+
+        offsets = self.prototype_slot_offsets.to(device=features.device, dtype=features.dtype)
+        init_noise = max(float(self.prototype_anchor_init_noise), 0.0)
+        proto = []
+        for idx in range(self.visual_residual_adapter_count):
+            base = features[idx % n]
+            proto.append(F.normalize(base + offsets[idx] * init_noise, dim=-1))
+        proto = torch.stack(proto, dim=0)
+        self.prototype_vectors.copy_(proto.to(device=self.prototype_vectors.device, dtype=self.prototype_vectors.dtype))
+        self.prototype_initialized.fill_(True)
+
+    @torch.no_grad()
+    def _update_prototypes(self, pooled_vision_states: torch.Tensor, route_probs: torch.Tensor):
+        if pooled_vision_states is None or route_probs is None:
+            return
+        if pooled_vision_states.numel() == 0 or route_probs.numel() == 0:
+            return
+
+        features = F.normalize(pooled_vision_states.detach().float(), dim=-1)
+        routes = route_probs.detach().float()
+        n = min(features.shape[0], routes.shape[0])
+        if n <= 0:
+            return
+        features = features[:n]
+        routes = routes[:n]
+
+        if not bool(self.prototype_initialized.all().item()):
+            self._initialize_prototypes_from_batch(features)
+
+        confidence, winners = routes.max(dim=-1)
+        active_sample = confidence >= float(self.prototype_anchor_min_confidence)
+        if not active_sample.any():
+            return
+
+        assignment_power = max(float(self.prototype_anchor_assignment_power), 1.0)
+        weights = routes.clamp_min(1e-8).pow(assignment_power)
+
+        proto = self.prototype_vectors.to(device=features.device, dtype=features.dtype).clone()
+        initialized = self.prototype_initialized.to(device=features.device)
+        momentum = float(self.prototype_anchor_momentum)
+        for idx in range(self.visual_residual_adapter_count):
+            mask = active_sample & (winners == idx)
+            if not mask.any():
+                continue
+            slot_weights = weights[mask, idx]
+            batch_proto = (features[mask] * slot_weights.unsqueeze(-1)).sum(dim=0)
+            batch_proto = batch_proto / slot_weights.sum().clamp_min(1e-8)
+            batch_proto = F.normalize(batch_proto, dim=-1)
+            proto[idx].mul_(momentum).add_(batch_proto, alpha=1.0 - momentum)
+            proto[idx] = F.normalize(proto[idx], dim=-1)
+            initialized[idx] = True
+        self.prototype_vectors.copy_(proto.to(device=self.prototype_vectors.device, dtype=self.prototype_vectors.dtype))
+        self.prototype_initialized.copy_(initialized.to(device=self.prototype_initialized.device))
+
     def _compute_prototype_anchor_loss(self, pooled_vision_states, route_probs, dtype, device):
         zero = torch.tensor(0.0, device=device, dtype=dtype)
         nan = torch.tensor(float("nan"), device=device, dtype=dtype)
@@ -487,6 +539,11 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
             return zero
         if pooled_vision_states.numel() == 0 or route_probs.numel() == 0:
             return zero
+        initialized_before = bool(self.prototype_initialized.any().item())
+        if not initialized_before:
+            self._update_prototypes(pooled_vision_states, route_probs)
+        if not bool(self.prototype_initialized.any().item()):
+            return zero
 
         features = pooled_vision_states.detach().float()
         routes = route_probs.float()
@@ -496,8 +553,11 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
         features = F.normalize(features[:n], dim=-1)
         prototypes = self.prototype_vectors.detach().to(device=features.device, dtype=features.dtype)
         prototypes = F.normalize(prototypes, dim=-1)
+        valid = self.prototype_initialized.to(device=features.device)
         logits = features @ prototypes.transpose(0, 1)
         logits = logits / max(float(self.prototype_anchor_temperature), 1e-4)
+        if (~valid).any():
+            logits[:, ~valid] = -1e4
         proto_probs = torch.softmax(logits, dim=-1)
         proto_probs = proto_probs.detach()
         routes = routes[:n].clamp_min(1e-8)
@@ -513,6 +573,9 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
             self.prototype_usage_min = usage.min().to(device=device, dtype=dtype)
             for idx, value in enumerate(usage.tolist()):
                 setattr(self, f"prototype_usage_{idx}", torch.tensor(float(value), device=device, dtype=dtype))
+
+        if self.training and initialized_before:
+            self._update_prototypes(pooled_vision_states, route_probs)
 
         return loss.to(device=device, dtype=dtype)
 
@@ -602,14 +665,10 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
         route_probs = route_probs.float()
         adapter_count = route_probs.shape[-1]
 
-        balance_routes = self.route_weights
-        if not torch.is_tensor(balance_routes) or balance_routes.numel() == 0:
-            balance_routes = route_probs
-        balance_routes = balance_routes.float()
-        usage = balance_routes.mean(dim=0)
+        usage = route_probs.mean(dim=0)
         usage = usage / usage.sum().clamp_min(1e-8)
         uniform = torch.full_like(usage, 1.0 / max(adapter_count, 1))
-        usage_balance_loss = adapter_count * (usage - uniform).pow(2).mean()
+        usage_balance_loss = (usage * (usage.clamp_min(1e-8).log() - uniform.log())).sum()
 
         if adapter_count > 1:
             sample_entropy = -(route_probs * route_probs.clamp_min(1e-8).log()).sum(dim=-1)
@@ -691,7 +750,6 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
         self.alpha_list = None 
         self.G_list = []
         self.route_probs = None
-        self.route_weights = None
         pooled_vision_states = None
 
 
@@ -786,7 +844,6 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
                             expanded_text_embedding,
                             self.alpha_list,
                         ).to(dtype=hidden_states.dtype)
-                        self.route_weights = self._compute_sparse_route_weights(self.route_probs)
                         # G_list: [Total_Images, 1]
                         if self.training:
                             # 训练时保留 soft gate，保证梯度可过
@@ -905,8 +962,8 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
             delta = hidden_states_with_rep - org_hidden_states
             G_mask = torch.repeat_interleave(self.G_list, seqlens, dim=0)
             gated_delta = delta * G_mask
-            if torch.is_tensor(self.route_weights) and self.route_weights.numel() > 0:
-                token_route_probs = torch.repeat_interleave(self.route_weights, seqlens, dim=0)
+            if torch.is_tensor(self.route_probs) and self.route_probs.numel() > 0:
+                token_route_probs = torch.repeat_interleave(self.route_probs, seqlens, dim=0)
             else:
                 token_route_probs = gated_delta.new_ones(
                     (gated_delta.shape[0], self.visual_residual_adapter_count),
@@ -965,13 +1022,7 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
             gated_delta,
             org_hidden_states,
             cu_seqlens,
-            route_probs=self.route_weights if torch.is_tensor(self.route_weights) else self.route_probs,
-        )
-        stage_id = int(getattr(self, "current_stage_id", 0) or 0)
-        active_topk = (
-            self.adapter_router_topk_s3 if stage_id == 3
-            else self.adapter_router_topk_s4 if stage_id == 4
-            else self.visual_residual_adapter_count
+            route_probs=self.route_probs,
         )
         self.debug_context = {
             "alpha_prob_mean": alpha_mean,
@@ -982,7 +1033,6 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
             "org_hidden_norm_mean": org_hidden_norm,
             "delta_to_org_ratio": delta_to_org_ratio,
             "visual_adapter_count": hidden_states.new_tensor(float(self.visual_residual_adapter_count)),
-            "adapter_router_topk": hidden_states.new_tensor(float(active_topk)),
             "adapter_weight_norm": self._adapter_weight_norm(hidden_states.device),
             "adapter_usage_balance_loss": self.adapter_usage_balance_loss.detach(),
             "adapter_sample_entropy_loss": self.adapter_sample_entropy_loss.detach(),

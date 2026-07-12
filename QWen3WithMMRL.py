@@ -56,6 +56,12 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
             "ADAPTER_DIVERSITY_WORST_PAIR_WEIGHT": _cfg_attr(
                 config, "ADAPTER_DIVERSITY_WORST_PAIR_WEIGHT", 1.0
             ),
+            "ROUTER_BOOTSTRAP_STEPS": _cfg_attr(config, "ROUTER_BOOTSTRAP_STEPS", 0),
+            "ROUTER_CALIBRATION_STEPS": _cfg_attr(config, "ROUTER_CALIBRATION_STEPS", 0),
+            "ROUTER_HANDOFF_STEPS": _cfg_attr(config, "ROUTER_HANDOFF_STEPS", 0),
+            "ROUTER_EXPLORE_DOMINANT_WEIGHT": _cfg_attr(
+                config, "ROUTER_EXPLORE_DOMINANT_WEIGHT", 0.55
+            ),
             "PROTOTYPE_ANCHOR_LOSS_WEIGHT": _cfg_attr(config, "PROTOTYPE_ANCHOR_LOSS_WEIGHT", 0.0),
             "PROTOTYPE_ANCHOR_TEMPERATURE": _cfg_attr(config, "PROTOTYPE_ANCHOR_TEMPERATURE", 0.20),
             "PROTOTYPE_ANCHOR_MOMENTUM": _cfg_attr(config, "PROTOTYPE_ANCHOR_MOMENTUM", 0.95),

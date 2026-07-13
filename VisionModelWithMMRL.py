@@ -273,6 +273,8 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
         nn.init.normal_(self.null_image_token, std=0.02)
         self.ablate_visual_gate = bool(getattr(self.cfg, "ABLATE_VISUAL_GATE", False))
         self.debug_context = {}
+        self._raw_common_direction_ema = None
+        self._last_raw_delta_grad_metrics = {}
 
     @staticmethod
     def _validate_layer_indexes(name, indexes, depth):
@@ -320,6 +322,7 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
         self,
         final_delta: torch.Tensor,
         raw_mmrl_delta: torch.Tensor,
+        first_raw_mmrl_delta: Optional[torch.Tensor],
         gated_delta: torch.Tensor,
         org_hidden_states: torch.Tensor,
         cu_seqlens: torch.Tensor,
@@ -358,6 +361,13 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
             "mmrl_raw_common_mode_ratio": nan,
             "mmrl_raw_specificity_ratio": nan,
             "mmrl_raw_pairwise_cos_mean": nan,
+            "mmrl_raw_token_specificity_ratio": nan,
+            "mmrl_raw_common_direction_cos_ema": nan,
+            "mmrl_first_common_mode_ratio": nan,
+            "mmrl_first_specificity_ratio": nan,
+            "mmrl_common_mode_change_first_to_last": nan,
+            "mmrl_specificity_change_first_to_last": nan,
+            "mmrl_common_direction_cos_first_last": nan,
         }
 
         with torch.no_grad():
@@ -410,6 +420,7 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
 
             pooled_delta = self._pool_tokens_by_image_mean(final_delta, cu_seqlens)
             pooled_raw_mmrl_delta = self._pool_tokens_by_image_mean(raw_mmrl_delta, cu_seqlens)
+            pooled_first_raw_delta = self._pool_tokens_by_image_mean(first_raw_mmrl_delta, cu_seqlens)
             pooled_org = self._pool_tokens_by_image_mean(org_hidden_states, cu_seqlens)
             if pooled_raw_mmrl_delta is not None:
                 pooled_raw_norm = pooled_raw_mmrl_delta.norm(dim=-1)
@@ -423,6 +434,38 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
                     pooled_raw_specific.norm(dim=-1).mean() / pooled_raw_mean_norm
                 )
 
+                token_specific_parts = []
+                for start, end in zip(cu_seqlens[:-1].tolist(), cu_seqlens[1:].tolist()):
+                    start, end = int(start), int(end)
+                    if end > start:
+                        image_tokens = raw_mmrl_delta[start:end]
+                        token_specific_parts.append(image_tokens - image_tokens.mean(dim=0, keepdim=True))
+                if token_specific_parts:
+                    token_specific = torch.cat(token_specific_parts, dim=0)
+                    metrics["mmrl_raw_token_specificity_ratio"] = (
+                        token_specific.norm(dim=-1).mean()
+                        / raw_mmrl_token_norm.mean().clamp_min(1e-8)
+                    )
+
+                current_direction = F.normalize(pooled_raw_common, dim=0)
+                if self._raw_common_direction_ema is not None:
+                    previous_direction = self._raw_common_direction_ema.to(
+                        device=current_direction.device,
+                        dtype=current_direction.dtype,
+                    )
+                    metrics["mmrl_raw_common_direction_cos_ema"] = F.cosine_similarity(
+                        current_direction.unsqueeze(0),
+                        previous_direction.unsqueeze(0),
+                        dim=-1,
+                    ).squeeze(0)
+                    updated_direction = F.normalize(
+                        0.95 * previous_direction + 0.05 * current_direction,
+                        dim=0,
+                    )
+                else:
+                    updated_direction = current_direction
+                self._raw_common_direction_ema = updated_direction.detach()
+
                 if pooled_raw_mmrl_delta.shape[0] >= 2:
                     raw_unit = pooled_raw_mmrl_delta / pooled_raw_norm.unsqueeze(-1).clamp_min(1e-8)
                     raw_pairwise = raw_unit @ raw_unit.transpose(0, 1)
@@ -435,6 +478,27 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
                     raw_pairwise_vals = raw_pairwise[raw_tri[0], raw_tri[1]]
                     if raw_pairwise_vals.numel() > 0:
                         metrics["mmrl_raw_pairwise_cos_mean"] = raw_pairwise_vals.mean()
+
+                if pooled_first_raw_delta is not None:
+                    first_norm_mean = pooled_first_raw_delta.norm(dim=-1).mean().clamp_min(1e-8)
+                    first_common = pooled_first_raw_delta.mean(dim=0)
+                    first_specific = pooled_first_raw_delta - first_common
+                    first_common_ratio = first_common.norm() / first_norm_mean
+                    first_specificity_ratio = first_specific.norm(dim=-1).mean() / first_norm_mean
+                    metrics["mmrl_first_common_mode_ratio"] = first_common_ratio
+                    metrics["mmrl_first_specificity_ratio"] = first_specificity_ratio
+                    metrics["mmrl_common_mode_change_first_to_last"] = (
+                        metrics["mmrl_raw_common_mode_ratio"] - first_common_ratio
+                    )
+                    metrics["mmrl_specificity_change_first_to_last"] = (
+                        metrics["mmrl_raw_specificity_ratio"] - first_specificity_ratio
+                    )
+                    if first_common.norm() > 1e-8 and pooled_raw_common.norm() > 1e-8:
+                        metrics["mmrl_common_direction_cos_first_last"] = F.cosine_similarity(
+                            first_common.unsqueeze(0),
+                            pooled_raw_common.unsqueeze(0),
+                            dim=-1,
+                        ).squeeze(0)
 
             if pooled_delta is not None:
                 pooled_delta_norm = pooled_delta.norm(dim=-1)
@@ -478,6 +542,50 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
                 metrics["delta_token_top10_mass"] = probs.topk(topk).values.sum()
 
         return metrics
+
+    def _register_raw_delta_grad_diagnostics(self, raw_mmrl_delta, cu_seqlens):
+        self._last_raw_delta_grad_metrics = {}
+        if not self.training or not raw_mmrl_delta.requires_grad:
+            return
+
+        raw_detached = raw_mmrl_delta.detach().float()
+        cu_detached = cu_seqlens.detach().cpu()
+
+        def _capture_raw_delta_grad(incoming_grad):
+            grad = incoming_grad.detach().float()
+            pooled_raw = self._pool_tokens_by_image_mean(raw_detached, cu_detached)
+            pooled_grad = self._pool_tokens_by_image_mean(grad, cu_detached)
+            if pooled_raw is None or pooled_grad is None:
+                return incoming_grad
+
+            raw_common = pooled_raw.mean(dim=0)
+            raw_specific = pooled_raw - raw_common
+            grad_common = pooled_grad.mean(dim=0)
+            grad_specific = pooled_grad - grad_common
+            grad_norm_mean = pooled_grad.norm(dim=-1).mean().clamp_min(1e-8)
+            common_alignment = F.cosine_similarity(
+                raw_common.unsqueeze(0), grad_common.unsqueeze(0), dim=-1
+            ).squeeze(0)
+            valid_specific = (
+                (raw_specific.norm(dim=-1) > 1e-8)
+                & (grad_specific.norm(dim=-1) > 1e-8)
+            )
+            specific_alignment = grad.new_tensor(float("nan"))
+            if valid_specific.any():
+                specific_alignment = F.cosine_similarity(
+                    raw_specific[valid_specific], grad_specific[valid_specific], dim=-1
+                ).mean()
+            self._last_raw_delta_grad_metrics = {
+                "mmrl_grad_common_energy_ratio": grad_common.norm() / grad_norm_mean,
+                "mmrl_grad_specific_energy_ratio": (
+                    grad_specific.norm(dim=-1).mean() / grad_norm_mean
+                ),
+                "mmrl_common_objective_alignment": common_alignment,
+                "mmrl_specific_objective_alignment": specific_alignment,
+            }
+            return incoming_grad
+
+        raw_mmrl_delta.register_hook(_capture_raw_delta_grad)
 
     def _adapter_weight_norm(self, device):
         vals = []
@@ -821,6 +929,7 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
         deepstack_residual_layer_count = 0
         cu_seqlens_with_rep, position_embeddings_with_rep = None, None
         hidden_states_with_rep, org_hidden_states= None, None
+        first_raw_mmrl_delta = None
         total_pic_num = cu_seqlens.size(0) - 1
         run_mmrl_branch = True
         forward_hit_layers = []
@@ -940,6 +1049,13 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
                             **kwargs
                         )
                     first_insert = False
+                    if idx == 0:
+                        first_rep_states = _strip_r_token(
+                            hidden_states_with_rep,
+                            original_seq_lens_list,
+                            current_num_r_token,
+                        )
+                        first_raw_mmrl_delta = first_rep_states - org_hidden_states
                 else:
                     pass
                 # 规定这里输出的都是没移除rep的
@@ -1013,12 +1129,14 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
             )
             final_delta = (adapter_outputs * token_route_probs.unsqueeze(-1)).sum(dim=1)
             hidden_states = org_hidden_states + final_delta
+            self._register_raw_delta_grad_diagnostics(delta, cu_seqlens)
         else:
             hidden_states = org_hidden_states
             delta = torch.zeros_like(hidden_states)
             gated_delta = torch.zeros_like(hidden_states)
             final_delta = torch.zeros_like(hidden_states)
             adapter_outputs = None
+            first_raw_mmrl_delta = None
 
         (
             self.adapter_usage_balance_loss,
@@ -1059,6 +1177,7 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
         residual_debug = self._compute_residual_debug_metrics(
             final_delta,
             delta,
+            first_raw_mmrl_delta,
             gated_delta,
             org_hidden_states,
             cu_seqlens,

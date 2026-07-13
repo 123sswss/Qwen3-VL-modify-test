@@ -515,6 +515,13 @@ class SharedRepGradMonitorCallback(TrainerCallback):
                 ),
             })
 
+            visual = getattr(getattr(model, "model", None), "visual", None)
+            raw_grad_metrics = getattr(visual, "_last_raw_delta_grad_metrics", {}) or {}
+            metrics.update(raw_grad_metrics)
+            collect_pressure = getattr(model, "_collect_grad_pressure_metrics", None)
+            if callable(collect_pressure):
+                metrics.update(collect_pressure(device))
+
             if grad_spike > 0.0:
                 self.spike_count += 1
                 self.last_spike_step = step
@@ -592,7 +599,10 @@ class Qwen3VLMMRLForStages(Qwen3VLForConditionalGeneration):
         self._last_shared_rep_grad = {}
         self._shared_rep_grad_hook_handle = None
         self._shared_rep_grad_hook_param_id = None
+        self._grad_pressure_hook_handles = []
+        self._grad_pressure_accumulators = {}
         self._ensure_shared_rep_grad_hook()
+        self._ensure_grad_pressure_hooks()
 
     def _get_mmrl_module(self):
         return getattr(self.model, "MMRL", None)
@@ -668,6 +678,48 @@ class Qwen3VLMMRLForStages(Qwen3VLForConditionalGeneration):
                 result[key] = torch.tensor(float(value), device=device)
         return result
 
+    def _ensure_grad_pressure_hooks(self):
+        if self._grad_pressure_hook_handles:
+            return
+
+        groups = {
+            "mmrl": self._get_mmrl_module(),
+            "adapter_router": getattr(self.model.visual, "adapter_router", None),
+            "visual_adapter": getattr(self.model.visual, "residual_adapters", None),
+        }
+        for group_name, module in groups.items():
+            if module is None:
+                continue
+            for param in module.parameters():
+                if not param.requires_grad:
+                    continue
+                def _capture(grad, name=group_name, tracked_param=param):
+                    acc = self._grad_pressure_accumulators.setdefault(
+                        name, {"grad_sq": [], "param_sq": [], "numel": 0}
+                    )
+                    grad_f = grad.detach().float()
+                    param_f = tracked_param.detach().float()
+                    acc["grad_sq"].append(grad_f.square().sum())
+                    acc["param_sq"].append(param_f.square().sum())
+                    acc["numel"] += grad_f.numel()
+                    return grad
+                self._grad_pressure_hook_handles.append(param.register_hook(_capture))
+
+    def _reset_grad_pressure_accumulators(self):
+        self._grad_pressure_accumulators = {}
+
+    def _collect_grad_pressure_metrics(self, device):
+        result = {}
+        for name, acc in self._grad_pressure_accumulators.items():
+            count = max(int(acc["numel"]), 1)
+            grad_rms = (torch.stack(acc["grad_sq"]).sum() / count).clamp_min(0.0).sqrt()
+            param_rms = (torch.stack(acc["param_sq"]).sum() / count).clamp_min(0.0).sqrt()
+            result[f"{name}_grad_rms"] = grad_rms.to(device=device)
+            result[f"{name}_grad_pressure"] = (
+                grad_rms / param_rms.clamp_min(1e-12)
+            ).to(device=device)
+        return result
+
     def _shared_rep_grad_hook(self, grad):
         grad_f = grad.detach().float()
         self._last_shared_rep_grad = {
@@ -716,6 +768,7 @@ class Qwen3VLMMRLForStages(Qwen3VLForConditionalGeneration):
 
     def forward(self, input_ids=None, alpha_labels=None, images_per_sample=None, task_type_ids=None, **kwargs):
         self._last_shared_rep_grad = {}
+        self._reset_grad_pressure_accumulators()
         self._ensure_shared_rep_grad_hook()
         if hasattr(self, "temperature_override") and self.temperature_override is not None:
             self.model.temperature_override = self.temperature_override

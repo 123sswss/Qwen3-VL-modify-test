@@ -22,10 +22,6 @@ BASE_VISUAL_ROUTER_MODEL = {
     "prototype_anchor_min_confidence": 0.40,
     "prototype_anchor_assignment_power": 2.0,
     "prototype_anchor_init_noise": 0.10,
-    "router_bootstrap_steps": 0,
-    "router_calibration_steps": 0,
-    "router_handoff_steps": 0,
-    "router_explore_dominant_weight": 0.55,
     "enable_deepstack_mmrl_residual": False,
     "deepstack_mmrl_residual_scale": 0.0,
     "adapter_sample_entropy_target": 0.55,
@@ -40,39 +36,6 @@ BASE_VISUAL_ROUTER_MODEL = {
 
 
 EXPERIMENTS = {
-    "visual_router_balanced_bootstrap_v1": {
-        **BASE_VISUAL_ROUTER_MODEL,
-        "adapter_usage_balance_loss_weight": 0.00275,
-        "adapter_sample_entropy_loss_weight": 0.020,
-        "adapter_common_mode_loss_weight": 0.0,
-
-        "adapter_effective_delta_loss_weight": 0.0037,
-        "adapter_effective_delta_loss_weight_s3": 0.0003,
-        "adapter_effective_delta_loss_weight_s4": 0.0037,
-
-        "prototype_anchor_loss_weight": 0.0,
-        "prototype_anchor_loss_weight_s3": 0.0,
-        "prototype_anchor_loss_weight_s4": 0.0,
-
-        "adapter_diversity_loss_weight": 0.0,
-        "adapter_diversity_loss_weight_s3": 0.0,
-        "adapter_diversity_loss_weight_s4": 0.0027,
-        "adapter_diversity_target_low": 0.30,
-        "adapter_diversity_target_high": 0.58,
-
-        "adapter_sample_entropy_target": 0.72,
-        "adapter_common_mode_target": 0.94,
-        "adapter_effective_delta_target_low": 0.52,
-        "adapter_effective_delta_target_high": 0.98,
-
-        "router_bootstrap_steps": 150,
-        "router_calibration_steps": 100,
-        "router_handoff_steps": 0,
-        "router_explore_dominant_weight": 0.55,
-
-        "enable_deepstack_mmrl_residual": False,
-        "deepstack_mmrl_residual_scale": 0.0,
-    },
     "visual_router_layer_fixed_v4_diversity_recover": { # 64.99
         **BASE_VISUAL_ROUTER_MODEL,
         "adapter_usage_balance_loss_weight": 0.0026,
@@ -156,13 +119,7 @@ EXPERIMENTS = {
         "deepstack_mmrl_residual_scale": 0.0,
     }
 }
-EXPERIMENTS["visual_router_balanced_bootstrap_v2"] = {
-    **EXPERIMENTS["visual_router_balanced_bootstrap_v1"],
-    "router_handoff_steps": 200,
-    "router_explore_dominant_weight": 0.70,
-}
-
-SELECTED_EXPERIMENT = os.getenv("MMRL_EXPERIMENT", "visual_router_balanced_bootstrap_v2")
+SELECTED_EXPERIMENT = os.getenv("MMRL_EXPERIMENT", "visual_router_layer_fixed_v8_div_band")
 if SELECTED_EXPERIMENT not in EXPERIMENTS:
     raise ValueError(f"Unknown MMRL_EXPERIMENT={SELECTED_EXPERIMENT!r}, choices={sorted(EXPERIMENTS)}")
 EXP_CFG = EXPERIMENTS[SELECTED_EXPERIMENT]
@@ -353,9 +310,14 @@ CFG = {
         )),
         "mmrl_diagnostics_keep_keys": [
             "ce_loss",
+            "mmrl_raw_delta_to_org_ratio",
+            "mmrl_raw_common_mode_ratio",
+            "mmrl_raw_specificity_ratio",
+            "mmrl_raw_pairwise_cos_mean",
             "delta_to_org_ratio",
             "delta_pool_common_mode_ratio",
             "delta_pool_specificity_ratio",
+            "delta_transform_cos_mean",
             "adapter_route_entropy_norm",
             "adapter_route_confidence",
             "adapter_usage_max",
@@ -371,8 +333,6 @@ CFG = {
             "adapter_diversity_loss_scaled",
             "adapter_pairwise_cos_mean",
             "adapter_pairwise_cos_max",
-            "router_curriculum_phase",
-            "curriculum_transition_scale",
             "stage_progress",
         ],
 

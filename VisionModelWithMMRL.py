@@ -263,17 +263,6 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
         self.alpha_list = []
         self.G_list = []
         self.route_probs = None
-        self.route_weights = None
-        self.router_bootstrap_steps = int(getattr(self.cfg, "ROUTER_BOOTSTRAP_STEPS", 0))
-        self.router_calibration_steps = int(getattr(self.cfg, "ROUTER_CALIBRATION_STEPS", 0))
-        self.router_handoff_steps = int(getattr(self.cfg, "ROUTER_HANDOFF_STEPS", 0))
-        self.router_explore_dominant_weight = float(
-            getattr(self.cfg, "ROUTER_EXPLORE_DOMINANT_WEIGHT", 0.55)
-        )
-        self._balanced_route_offset = 0
-        self.router_curriculum_phase = 0
-        self.router_curriculum_mix = 1.0
-        self._last_printed_router_curriculum_phase = None
         self.k_results = None
         self.k_mask_results = None
         self.tax_loss = None
@@ -284,38 +273,6 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
         nn.init.normal_(self.null_image_token, std=0.02)
         self.ablate_visual_gate = bool(getattr(self.cfg, "ABLATE_VISUAL_GATE", False))
         self.debug_context = {}
-
-    def _router_curriculum_state(self):
-        stage_id = int(getattr(self, "current_stage_id", 0) or 0)
-        if not self.training or stage_id != 3:
-            return 0, 1.0
-        step = int(getattr(self, "current_stage_step", 0) or 0)
-        bootstrap_end = self.router_bootstrap_steps
-        calibration_end = bootstrap_end + self.router_calibration_steps
-        handoff_end = calibration_end + self.router_handoff_steps
-        if step <= bootstrap_end:
-            return 1, 0.0
-        if step <= calibration_end:
-            mix = (step - bootstrap_end) / float(max(self.router_calibration_steps, 1))
-            return 2, max(0.0, min(mix, 1.0))
-        if step <= handoff_end:
-            mix = (step - calibration_end) / float(max(self.router_handoff_steps, 1))
-            return 3, max(0.0, min(mix, 1.0))
-        return 0, 1.0
-
-    def _balanced_explore_weights(self, sample_count, device, dtype):
-        adapter_count = self.visual_residual_adapter_count
-        if adapter_count <= 1:
-            return torch.ones((sample_count, 1), device=device, dtype=dtype)
-        dominant = min(max(self.router_explore_dominant_weight, 1.0 / adapter_count), 1.0)
-        other = (1.0 - dominant) / float(adapter_count - 1)
-        weights = torch.full((sample_count, adapter_count), other, device=device, dtype=dtype)
-        preferred = (
-            torch.arange(sample_count, device=device) + int(self._balanced_route_offset)
-        ) % adapter_count
-        weights.scatter_(1, preferred.unsqueeze(1), dominant)
-        self._balanced_route_offset = int((self._balanced_route_offset + sample_count) % adapter_count)
-        return weights
 
     @staticmethod
     def _validate_layer_indexes(name, indexes, depth):
@@ -362,6 +319,7 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
     def _compute_residual_debug_metrics(
         self,
         final_delta: torch.Tensor,
+        raw_mmrl_delta: torch.Tensor,
         gated_delta: torch.Tensor,
         org_hidden_states: torch.Tensor,
         cu_seqlens: torch.Tensor,
@@ -396,10 +354,15 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
             "adapter_route_confidence": nan,
             "adapter_usage_max": nan,
             "adapter_usage_min": nan,
+            "mmrl_raw_delta_to_org_ratio": nan,
+            "mmrl_raw_common_mode_ratio": nan,
+            "mmrl_raw_specificity_ratio": nan,
+            "mmrl_raw_pairwise_cos_mean": nan,
         }
 
         with torch.no_grad():
             final_delta = final_delta.detach().float()
+            raw_mmrl_delta = raw_mmrl_delta.detach().float()
             gated_delta = gated_delta.detach().float()
             org_hidden_states = org_hidden_states.detach().float()
 
@@ -422,7 +385,13 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
                     metrics[f"adapter_usage_{idx}"] = torch.tensor(float(value), device=device)
 
             final_token_norm = final_delta.norm(dim=-1)
+            raw_mmrl_token_norm = raw_mmrl_delta.norm(dim=-1)
             gated_token_norm = gated_delta.norm(dim=-1)
+            org_token_norm = org_hidden_states.norm(dim=-1)
+
+            metrics["mmrl_raw_delta_to_org_ratio"] = (
+                raw_mmrl_token_norm.mean() / org_token_norm.mean().clamp_min(1e-8)
+            )
 
             metrics["gated_delta_norm_mean"] = gated_token_norm.mean()
             metrics["gated_delta_norm_std"] = gated_token_norm.std(unbiased=False)
@@ -440,7 +409,33 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
                 metrics["delta_transform_cos_std"] = transform_cos.std(unbiased=False)
 
             pooled_delta = self._pool_tokens_by_image_mean(final_delta, cu_seqlens)
+            pooled_raw_mmrl_delta = self._pool_tokens_by_image_mean(raw_mmrl_delta, cu_seqlens)
             pooled_org = self._pool_tokens_by_image_mean(org_hidden_states, cu_seqlens)
+            if pooled_raw_mmrl_delta is not None:
+                pooled_raw_norm = pooled_raw_mmrl_delta.norm(dim=-1)
+                pooled_raw_mean_norm = pooled_raw_norm.mean().clamp_min(1e-8)
+                pooled_raw_common = pooled_raw_mmrl_delta.mean(dim=0)
+                pooled_raw_specific = pooled_raw_mmrl_delta - pooled_raw_common
+                metrics["mmrl_raw_common_mode_ratio"] = (
+                    pooled_raw_common.norm() / pooled_raw_mean_norm
+                )
+                metrics["mmrl_raw_specificity_ratio"] = (
+                    pooled_raw_specific.norm(dim=-1).mean() / pooled_raw_mean_norm
+                )
+
+                if pooled_raw_mmrl_delta.shape[0] >= 2:
+                    raw_unit = pooled_raw_mmrl_delta / pooled_raw_norm.unsqueeze(-1).clamp_min(1e-8)
+                    raw_pairwise = raw_unit @ raw_unit.transpose(0, 1)
+                    raw_tri = torch.triu_indices(
+                        raw_pairwise.shape[0],
+                        raw_pairwise.shape[1],
+                        offset=1,
+                        device=raw_pairwise.device,
+                    )
+                    raw_pairwise_vals = raw_pairwise[raw_tri[0], raw_tri[1]]
+                    if raw_pairwise_vals.numel() > 0:
+                        metrics["mmrl_raw_pairwise_cos_mean"] = raw_pairwise_vals.mean()
+
             if pooled_delta is not None:
                 pooled_delta_norm = pooled_delta.norm(dim=-1)
                 metrics["delta_pool_norm_mean"] = pooled_delta_norm.mean()
@@ -793,9 +788,6 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
         self.alpha_list = None 
         self.G_list = []
         self.route_probs = None
-        self.route_weights = None
-        self.router_curriculum_phase = 0
-        self.router_curriculum_mix = 1.0
         pooled_vision_states = None
 
 
@@ -885,46 +877,11 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
                         run_mmrl_branch = True
                     else:
                         self.alpha_list = self.Task_classifier(pooled_vision_states, expanded_text_embedding)
-                        raw_route_probs = self.adapter_router(
+                        self.route_probs = self.adapter_router(
                             pooled_vision_states,
                             expanded_text_embedding,
                             self.alpha_list,
                         ).to(dtype=hidden_states.dtype)
-                        phase, curriculum_mix = self._router_curriculum_state()
-                        self.router_curriculum_phase = phase
-                        self.router_curriculum_mix = curriculum_mix
-                        if (
-                            self.router_bootstrap_steps + self.router_calibration_steps + self.router_handoff_steps > 0
-                            and phase != self._last_printed_router_curriculum_phase
-                        ):
-                            phase_name = {
-                                0: "joint",
-                                1: "balanced_bootstrap",
-                                2: "router_calibration",
-                                3: "joint_handoff",
-                            }[phase]
-                            print(
-                                f"[ROUTER_CURRICULUM] step={getattr(self, 'current_stage_step', 0)} "
-                                f"phase={phase_name} transition_scale={curriculum_mix:.4f}"
-                            )
-                            self._last_printed_router_curriculum_phase = phase
-                        if phase == 1:
-                            self.route_probs = raw_route_probs.detach()
-                            self.route_weights = self._balanced_explore_weights(
-                                raw_route_probs.shape[0], raw_route_probs.device, raw_route_probs.dtype
-                            )
-                        elif phase == 2:
-                            explore_weights = self._balanced_explore_weights(
-                                raw_route_probs.shape[0], raw_route_probs.device, raw_route_probs.dtype
-                            )
-                            self.route_probs = raw_route_probs
-                            self.route_weights = (
-                                explore_weights * (1.0 - curriculum_mix)
-                                + raw_route_probs * curriculum_mix
-                            )
-                        else:
-                            self.route_probs = raw_route_probs
-                            self.route_weights = raw_route_probs
                         # G_list: [Total_Images, 1]
                         if self.training:
                             # 训练时保留 soft gate，保证梯度可过
@@ -1043,34 +1000,22 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
             delta = hidden_states_with_rep - org_hidden_states
             G_mask = torch.repeat_interleave(self.G_list, seqlens, dim=0)
             gated_delta = delta * G_mask
-            if torch.is_tensor(self.route_weights) and self.route_weights.numel() > 0:
-                token_route_probs = torch.repeat_interleave(self.route_weights, seqlens, dim=0)
+            if torch.is_tensor(self.route_probs) and self.route_probs.numel() > 0:
+                token_route_probs = torch.repeat_interleave(self.route_probs, seqlens, dim=0)
             else:
                 token_route_probs = gated_delta.new_ones(
                     (gated_delta.shape[0], self.visual_residual_adapter_count),
                     dtype=gated_delta.dtype,
                 ) / float(self.visual_residual_adapter_count)
-            if self.router_curriculum_phase == 2:
-                with torch.no_grad():
-                    adapter_outputs = torch.stack(
-                        [adapter(gated_delta) for adapter in self.residual_adapters],
-                        dim=1,
-                    )
-            else:
-                adapter_outputs = torch.stack(
-                    [adapter(gated_delta) for adapter in self.residual_adapters],
-                    dim=1,
-                )
-                if self.router_curriculum_phase == 3:
-                    scale = float(self.router_curriculum_mix)
-                    adapter_outputs = (
-                        adapter_outputs.detach()
-                        + (adapter_outputs - adapter_outputs.detach()) * scale
-                    )
+            adapter_outputs = torch.stack(
+                [adapter(gated_delta) for adapter in self.residual_adapters],
+                dim=1,
+            )
             final_delta = (adapter_outputs * token_route_probs.unsqueeze(-1)).sum(dim=1)
             hidden_states = org_hidden_states + final_delta
         else:
             hidden_states = org_hidden_states
+            delta = torch.zeros_like(hidden_states)
             gated_delta = torch.zeros_like(hidden_states)
             final_delta = torch.zeros_like(hidden_states)
             adapter_outputs = None
@@ -1113,10 +1058,11 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
         g_std = self.G_list.detach().float().std(unbiased=False) if isinstance(self.G_list, torch.Tensor) and self.G_list.numel() > 1 else hidden_states.new_tensor(0.0)
         residual_debug = self._compute_residual_debug_metrics(
             final_delta,
+            delta,
             gated_delta,
             org_hidden_states,
             cu_seqlens,
-            route_probs=self.route_weights if torch.is_tensor(self.route_weights) else self.route_probs,
+            route_probs=self.route_probs,
         )
         self.debug_context = {
             "alpha_prob_mean": alpha_mean,
@@ -1151,8 +1097,6 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
             "deepstack_delta_norm_mean": self.deepstack_delta_norm_mean.detach(),
             "deepstack_delta_to_org_ratio": self.deepstack_delta_to_org_ratio.detach(),
             "deepstack_residual_layers": self.deepstack_residual_layers.detach(),
-            "router_curriculum_phase": hidden_states.new_tensor(float(self.router_curriculum_phase)),
-            "curriculum_transition_scale": hidden_states.new_tensor(float(self.router_curriculum_mix)),
             **residual_debug,
         }
         for idx in range(self.visual_residual_adapter_count):

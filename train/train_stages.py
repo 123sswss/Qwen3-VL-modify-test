@@ -50,10 +50,6 @@ def _build_experiment_context(train_cfg, output_dir, stage_id):
             "enable_alpha_guide_loss_s4": train_cfg.get("enable_alpha_guide_loss_s4"),
             "alpha_loss_weight_s4": train_cfg.get("alpha_loss_weight_s4"),
             "visual_residual_adapter_count": train_cfg.get("visual_residual_adapter_count"),
-            "router_bootstrap_steps": experiment_cfg.get("router_bootstrap_steps", 0),
-            "router_calibration_steps": experiment_cfg.get("router_calibration_steps", 0),
-            "router_handoff_steps": experiment_cfg.get("router_handoff_steps", 0),
-            "router_explore_dominant_weight": experiment_cfg.get("router_explore_dominant_weight", 0.55),
             "adapter_usage_balance_loss_weight": train_cfg.get("adapter_usage_balance_loss_weight"),
             "adapter_sample_entropy_loss_weight": train_cfg.get("adapter_sample_entropy_loss_weight"),
             "adapter_common_mode_loss_weight": train_cfg.get("adapter_common_mode_loss_weight"),
@@ -721,9 +717,6 @@ class Qwen3VLMMRLForStages(Qwen3VLForConditionalGeneration):
     def forward(self, input_ids=None, alpha_labels=None, images_per_sample=None, task_type_ids=None, **kwargs):
         self._last_shared_rep_grad = {}
         self._ensure_shared_rep_grad_hook()
-        self.model.visual.current_stage_id = int(self.current_stage_id)
-        self.model.visual.current_stage_step = int(self.current_stage_step)
-        self.model.visual.current_stage_progress = float(self.current_stage_progress)
         if hasattr(self, "temperature_override") and self.temperature_override is not None:
             self.model.temperature_override = self.temperature_override
             kwargs["gating_temperature_override"] = self.temperature_override
@@ -972,12 +965,6 @@ def build_model_and_processor(model_path, experiment_cfg=None):
         "adapter_diversity_worst_pair_weight",
         os.getenv("MMRL_ADAPTER_DIVERSITY_WORST_PAIR_WEIGHT", "1.0"),
     ))
-    config.ROUTER_BOOTSTRAP_STEPS = int(experiment_cfg.get("router_bootstrap_steps", 0))
-    config.ROUTER_CALIBRATION_STEPS = int(experiment_cfg.get("router_calibration_steps", 0))
-    config.ROUTER_HANDOFF_STEPS = int(experiment_cfg.get("router_handoff_steps", 0))
-    config.ROUTER_EXPLORE_DOMINANT_WEIGHT = float(experiment_cfg.get(
-        "router_explore_dominant_weight", 0.55
-    ))
     config.PROTOTYPE_ANCHOR_LOSS_WEIGHT = float(experiment_cfg.get(
         "prototype_anchor_loss_weight",
         os.getenv("MMRL_PROTOTYPE_ANCHOR_LOSS_WEIGHT", "0.0"),
@@ -1068,10 +1055,6 @@ def build_model_and_processor(model_path, experiment_cfg=None):
         f"adapter_diversity_target_high={config.ADAPTER_DIVERSITY_TARGET_HIGH} "
         f"adapter_diversity_upper_weight={config.ADAPTER_DIVERSITY_UPPER_WEIGHT} "
         f"adapter_diversity_worst_pair_weight={config.ADAPTER_DIVERSITY_WORST_PAIR_WEIGHT} "
-        f"router_bootstrap_steps={config.ROUTER_BOOTSTRAP_STEPS} "
-        f"router_calibration_steps={config.ROUTER_CALIBRATION_STEPS} "
-        f"router_handoff_steps={config.ROUTER_HANDOFF_STEPS} "
-        f"router_explore_dominant_weight={config.ROUTER_EXPLORE_DOMINANT_WEIGHT} "
         f"prototype_anchor_loss_weight={config.PROTOTYPE_ANCHOR_LOSS_WEIGHT} "
         f"prototype_anchor_temperature={config.PROTOTYPE_ANCHOR_TEMPERATURE} "
         f"prototype_anchor_momentum={config.PROTOTYPE_ANCHOR_MOMENTUM} "

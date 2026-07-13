@@ -93,14 +93,12 @@ run_one() {
     python test.py 2>&1 | tee "$eval_dir/test.log"
   )
 
-  # 只保留达到历史最高分的模型；评分异常时安全地保留当前模型。
-  echo "[INFO] 测试完成，按历史最高分策略处理 final 模型目录..."
-  (
-    cd "$ROOT_DIR"
-    python get_score.py \
-      --manage-best "$output_dir" \
-      --checkpoint-root "$CHECKPOINT_ROOT"
-  )
+  # 测试完成后删除最终模型，保留 stage1~stage4 的日志与图表
+  echo "[INFO] 测试完成，删除 final 模型目录以节省硬盘空间..."
+  if [ -d "$final_dir" ]; then
+    rm -rf "$final_dir"
+    echo "[INFO] 已删除 final 模型目录: $final_dir"
+  fi
 }
 
 # 重复跑 N 次同一实验；目录命名由 find_available_tag 自动处理，不会覆写
@@ -116,9 +114,8 @@ run_N() {
 }
 
 # 当前可用实验名见 train/train.py: EXPERIMENTS
-run_N "visual_router_balanced_bootstrap_v2" "visual_router_balanced_bootstrap_v2" 1
-# run_N "visual_router_layer_fixed_v6_recover_usage_guard" "visual_router_layer_fixed_v6_recover_usage_guard" 1
-# run_N "visual_router_layer_fixed_v7_usage_guard_soft_div" "visual_router_layer_fixed_v7_usage_guard_soft_div" 1
+run_N "visual_router_layer_fixed_v6_recover_usage_guard" "visual_router_layer_fixed_v6_recover_usage_guard" 1
+run_N "visual_router_layer_fixed_v7_usage_guard_soft_div" "visual_router_layer_fixed_v7_usage_guard_soft_div" 1
 
 
 

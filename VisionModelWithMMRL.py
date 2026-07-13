@@ -299,7 +299,8 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
             mix = (step - bootstrap_end) / float(max(self.router_calibration_steps, 1))
             return 2, max(0.0, min(mix, 1.0))
         if step <= handoff_end:
-            return 3, 1.0
+            mix = (step - calibration_end) / float(max(self.router_handoff_steps, 1))
+            return 3, max(0.0, min(mix, 1.0))
         return 0, 1.0
 
     def _balanced_explore_weights(self, sample_count, device, dtype):
@@ -904,7 +905,7 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
                             }[phase]
                             print(
                                 f"[ROUTER_CURRICULUM] step={getattr(self, 'current_stage_step', 0)} "
-                                f"phase={phase_name} router_mix={curriculum_mix:.4f}"
+                                f"phase={phase_name} transition_scale={curriculum_mix:.4f}"
                             )
                             self._last_printed_router_curriculum_phase = phase
                         if phase == 1:
@@ -1060,6 +1061,12 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
                     [adapter(gated_delta) for adapter in self.residual_adapters],
                     dim=1,
                 )
+                if self.router_curriculum_phase == 3:
+                    scale = float(self.router_curriculum_mix)
+                    adapter_outputs = (
+                        adapter_outputs.detach()
+                        + (adapter_outputs - adapter_outputs.detach()) * scale
+                    )
             final_delta = (adapter_outputs * token_route_probs.unsqueeze(-1)).sum(dim=1)
             hidden_states = org_hidden_states + final_delta
         else:
@@ -1145,7 +1152,7 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
             "deepstack_delta_to_org_ratio": self.deepstack_delta_to_org_ratio.detach(),
             "deepstack_residual_layers": self.deepstack_residual_layers.detach(),
             "router_curriculum_phase": hidden_states.new_tensor(float(self.router_curriculum_phase)),
-            "router_curriculum_mix": hidden_states.new_tensor(float(self.router_curriculum_mix)),
+            "curriculum_transition_scale": hidden_states.new_tensor(float(self.router_curriculum_mix)),
             **residual_debug,
         }
         for idx in range(self.visual_residual_adapter_count):

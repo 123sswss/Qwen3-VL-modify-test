@@ -67,7 +67,7 @@ EXPERIMENTS = {
 
         "router_bootstrap_steps": 150,
         "router_calibration_steps": 100,
-        "router_handoff_steps": 200,
+        "router_handoff_steps": 0,
         "router_explore_dominant_weight": 0.55,
 
         "enable_deepstack_mmrl_residual": False,
@@ -156,7 +156,13 @@ EXPERIMENTS = {
         "deepstack_mmrl_residual_scale": 0.0,
     }
 }
-SELECTED_EXPERIMENT = os.getenv("MMRL_EXPERIMENT", "visual_router_balanced_bootstrap_v1")
+EXPERIMENTS["visual_router_balanced_bootstrap_v2"] = {
+    **EXPERIMENTS["visual_router_balanced_bootstrap_v1"],
+    "router_handoff_steps": 200,
+    "router_explore_dominant_weight": 0.70,
+}
+
+SELECTED_EXPERIMENT = os.getenv("MMRL_EXPERIMENT", "visual_router_balanced_bootstrap_v2")
 if SELECTED_EXPERIMENT not in EXPERIMENTS:
     raise ValueError(f"Unknown MMRL_EXPERIMENT={SELECTED_EXPERIMENT!r}, choices={sorted(EXPERIMENTS)}")
 EXP_CFG = EXPERIMENTS[SELECTED_EXPERIMENT]
@@ -366,7 +372,7 @@ CFG = {
             "adapter_pairwise_cos_mean",
             "adapter_pairwise_cos_max",
             "router_curriculum_phase",
-            "router_curriculum_mix",
+            "curriculum_transition_scale",
             "stage_progress",
         ],
 

@@ -116,7 +116,7 @@ run_N() {
 }
 
 # 当前可用实验名见 train/train.py: EXPERIMENTS
-run_N "visual_router_balanced_bootstrap_v1" "visual_router_balanced_bootstrap_v1" 1
+run_N "visual_router_balanced_bootstrap_v2" "visual_router_balanced_bootstrap_v2" 1
 # run_N "visual_router_layer_fixed_v6_recover_usage_guard" "visual_router_layer_fixed_v6_recover_usage_guard" 1
 # run_N "visual_router_layer_fixed_v7_usage_guard_soft_div" "visual_router_layer_fixed_v7_usage_guard_soft_div" 1
 

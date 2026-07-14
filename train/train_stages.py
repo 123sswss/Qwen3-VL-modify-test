@@ -610,7 +610,8 @@ def _build_text_pool_mask(attention_mask):
 @torch.no_grad()
 def _extract_mm_pooled_vision(v, pixel_values, image_grid_thw):
     # 只跑视觉patch + pooling，不跑全主干
-    hs = v.patch_embed(pixel_values.type(v.dtype))
+    patch_dtype = next(v.patch_embed.parameters()).dtype
+    hs = v.patch_embed(pixel_values.to(dtype=patch_dtype))
     pos = v.fast_pos_embed_interpolate(image_grid_thw)
     hs = hs + pos
     seq_len, _ = hs.size()
@@ -694,13 +695,13 @@ def run_stage12_light(stage_id, model, processor, data_cfg, train_cfg, output_di
         for i, batch in enumerate(dl):
             input_ids = batch["input_ids"].cuda(non_blocking=True)
             attention_mask = batch["attention_mask"].cuda(non_blocking=True)
-            alpha_labels = batch["alpha_labels"].cuda(non_blocking=True).view(-1, 1).to(dtype=v.dtype)
+            alpha_labels = batch["alpha_labels"].cuda(non_blocking=True).view(-1, 1)
             is_mm = batch["is_mm"].cuda(non_blocking=True)
             pixel_values = batch["pixel_values"]
             image_grid_thw = batch["image_grid_thw"]
 
             # text embedding + pooling
-            text_emb = model.model.get_input_embeddings()(input_ids).to(dtype=v.dtype)
+            text_emb = model.model.get_input_embeddings()(input_ids)
             text_pool_mask = _build_text_pool_mask(attention_mask)
             text_pooled = v.embedding_pooling(text_emb, mask=text_pool_mask)
 
@@ -718,6 +719,7 @@ def run_stage12_light(stage_id, model, processor, data_cfg, train_cfg, output_di
                 vision_pooled[mm_idx] = mm_vision_pooled
 
             alpha_logits = v.Task_classifier(vision_pooled, text_pooled)
+            alpha_labels = alpha_labels.to(dtype=alpha_logits.dtype)
 
             if use_focal:
                 cls_loss = focal_bce_with_logits(alpha_logits, alpha_labels)

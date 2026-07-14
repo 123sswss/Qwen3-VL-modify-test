@@ -1,4 +1,3 @@
-from multiprocessing import pool
 from typing import Optional
 
 import torch
@@ -10,8 +9,6 @@ from transformers.models.qwen3_vl import modeling_qwen3_vl as qwen3_vl
 
 import MMRLGating
 import utils
-
-from itertools import accumulate
 
 class MMRLVitBlock(qwen3_vl.Qwen3VLVisionBlock):
     def __init__(self, config):
@@ -198,83 +195,23 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
             zeroInit(self.cfg.vision_token_dim)
             for _ in range(self.visual_residual_adapter_count)
         ])
+        self.adapter_input_norm = nn.LayerNorm(self.cfg.vision_token_dim)
         self.adapter_usage_balance_loss = torch.tensor(0.0)
         self.adapter_sample_entropy_loss = torch.tensor(0.0)
-        self.adapter_common_mode_loss = torch.tensor(0.0)
-        self.adapter_effective_delta_loss = torch.tensor(0.0)
-        self.prototype_anchor_loss = torch.tensor(0.0)
-        self.adapter_diversity_loss = torch.tensor(0.0)
-        self.adapter_sample_entropy_target = float(getattr(self.cfg, "ADAPTER_SAMPLE_ENTROPY_TARGET", 0.40))
-        self.adapter_common_mode_target = float(getattr(self.cfg, "ADAPTER_COMMON_MODE_TARGET", 0.85))
-        self.adapter_effective_delta_target_low = float(getattr(self.cfg, "ADAPTER_EFFECTIVE_DELTA_TARGET_LOW", 0.78))
-        self.adapter_effective_delta_target_high = float(getattr(self.cfg, "ADAPTER_EFFECTIVE_DELTA_TARGET_HIGH", 1.10))
-        self.prototype_anchor_temperature = float(getattr(self.cfg, "PROTOTYPE_ANCHOR_TEMPERATURE", 0.20))
-        self.prototype_anchor_momentum = float(getattr(self.cfg, "PROTOTYPE_ANCHOR_MOMENTUM", 0.95))
-        self.prototype_anchor_min_confidence = float(getattr(self.cfg, "PROTOTYPE_ANCHOR_MIN_CONFIDENCE", 0.40))
-        self.prototype_anchor_assignment_power = float(getattr(self.cfg, "PROTOTYPE_ANCHOR_ASSIGNMENT_POWER", 2.0))
-        self.prototype_anchor_init_noise = float(getattr(self.cfg, "PROTOTYPE_ANCHOR_INIT_NOISE", 0.10))
-        self.adapter_diversity_target_low = float(getattr(self.cfg, "ADAPTER_DIVERSITY_TARGET_LOW", 0.30))
-        self.adapter_diversity_target_high = float(getattr(self.cfg, "ADAPTER_DIVERSITY_TARGET_HIGH", 0.58))
-        self.adapter_diversity_upper_weight = float(getattr(self.cfg, "ADAPTER_DIVERSITY_UPPER_WEIGHT", 2.0))
-        self.adapter_diversity_worst_pair_weight = float(
-            getattr(self.cfg, "ADAPTER_DIVERSITY_WORST_PAIR_WEIGHT", 1.0)
-        )
-        self.enable_deepstack_mmrl_residual = bool(getattr(self.cfg, "ENABLE_DEEPSTACK_MMRL_RESIDUAL", False))
-        self.deepstack_mmrl_residual_scale = float(getattr(self.cfg, "DEEPSTACK_MMRL_RESIDUAL_SCALE", 0.0))
-        self.adapter_effective_delta_ratio_mean = torch.tensor(float("nan"))
-        self.adapter_effective_delta_ratio_min = torch.tensor(float("nan"))
-        self.adapter_effective_delta_ratio_max = torch.tensor(float("nan"))
-        self.route_proto_kl = torch.tensor(float("nan"))
-        self.route_proto_agreement = torch.tensor(float("nan"))
-        self.prototype_usage_max = torch.tensor(float("nan"))
-        self.prototype_usage_min = torch.tensor(float("nan"))
-        self.adapter_pairwise_cos_mean = torch.tensor(float("nan"))
-        self.adapter_pairwise_cos_max = torch.tensor(float("nan"))
-        self.adapter_pairwise_cos_below_band = torch.tensor(float("nan"))
-        self.adapter_pairwise_cos_above_band = torch.tensor(float("nan"))
-        self.adapter_diversity_mean_component = torch.tensor(float("nan"))
-        self.adapter_diversity_worst_component = torch.tensor(float("nan"))
-        self.deepstack_delta_norm_mean = torch.tensor(float("nan"))
-        self.deepstack_delta_to_org_ratio = torch.tensor(float("nan"))
-        self.deepstack_residual_layers = torch.tensor(0.0)
-        for idx in range(self.visual_residual_adapter_count):
-            setattr(self, f"prototype_usage_{idx}", torch.tensor(float("nan")))
-        self.register_buffer(
-            "prototype_vectors",
-            torch.zeros(self.visual_residual_adapter_count, self.cfg.vision_token_dim),
-            persistent=True,
-        )
-        self.register_buffer(
-            "prototype_initialized",
-            torch.zeros(self.visual_residual_adapter_count, dtype=torch.bool),
-            persistent=True,
-        )
-        slot_offsets = torch.zeros(self.visual_residual_adapter_count, self.cfg.vision_token_dim)
-        for idx in range(self.visual_residual_adapter_count):
-            slot_offsets[idx, idx::self.visual_residual_adapter_count] = 1.0
-            if idx % 2 == 1:
-                slot_offsets[idx, (idx + 1)::self.visual_residual_adapter_count] = -1.0
-        slot_offsets = F.normalize(slot_offsets, dim=-1)
-        self.register_buffer(
-            "prototype_slot_offsets",
-            slot_offsets,
-            persistent=False,
-        )
+        self.expert_residual_guard_loss = torch.tensor(0.0)
+        self.adapter_sample_entropy_target = float(getattr(self.cfg, "ADAPTER_SAMPLE_ENTROPY_TARGET", 0.55))
+        self.expert_residual_ratio_upper = float(getattr(self.cfg, "EXPERT_RESIDUAL_RATIO_UPPER", 0.35))
         self.alpha_list = []
         self.G_list = []
         self.route_probs = None
-        self.k_results = None
-        self.k_mask_results = None
-        self.tax_loss = None
-        self.capacity_prior_loss = None
-
-
-        self.null_image_token = nn.Parameter(torch.zeros(1, self.cfg.vision_token_dim))
-        nn.init.normal_(self.null_image_token, std=0.02)
         self.ablate_visual_gate = bool(getattr(self.cfg, "ABLATE_VISUAL_GATE", False))
+        # Defaults preserve the complete trained path when a saved model is loaded for inference.
+        self.current_stage_id = 4
+        self.current_stage_progress = 1.0
+        self.mmrl_warmup_fraction = 1.0 / 3.0
+        self.experts_enabled = True
         self.debug_context = {}
-        self._raw_common_direction_ema = None
-        self._last_raw_delta_grad_metrics = {}
+        self._printed_stage_path_audits = set()
 
     @staticmethod
     def _validate_layer_indexes(name, indexes, depth):
@@ -318,567 +255,174 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
             return None
         return torch.stack(pooled, dim=0)
 
-    def _compute_residual_debug_metrics(
+    def _shared_strength(self):
+        if int(self.current_stage_id) == 3:
+            warmup = max(float(self.mmrl_warmup_fraction), 1e-8)
+            return max(0.0, min(float(self.current_stage_progress) / warmup, 1.0))
+        if int(self.current_stage_id) >= 4:
+            return 1.0
+        return 0.0
+
+    def _deterministic_gate(self, logits, temperature_override):
+        temperature = (
+            temperature_override
+            if temperature_override is not None
+            else self.visionGating.temperature
+        )
+        temperature = max(float(temperature), 1e-6)
+        gate = torch.sigmoid(logits / temperature)
+        gate = gate * (
+            self.visionGating.upper_bound - self.visionGating.lower_bound
+        ) + self.visionGating.lower_bound
+        return gate.clamp(0.0, 1.0)
+
+    def _compute_router_aux_losses(self, expert_residual, shared_state):
+        zero = shared_state.new_tensor(0.0)
+        self.adapter_usage_balance_loss = zero
+        self.adapter_sample_entropy_loss = zero
+        self.expert_residual_guard_loss = zero
+        route_probs = self.route_probs
+        if not self.experts_enabled or not torch.is_tensor(route_probs) or route_probs.numel() == 0:
+            return
+
+        routes = route_probs.float()
+        usage = routes.mean(dim=0)
+        usage = usage / usage.sum().clamp_min(1e-8)
+        uniform = torch.full_like(usage, 1.0 / routes.shape[-1])
+        self.adapter_usage_balance_loss = (
+            usage * (usage.clamp_min(1e-8).log() - uniform.log())
+        ).sum().to(dtype=shared_state.dtype)
+
+        if routes.shape[-1] > 1:
+            entropy = -(routes * routes.clamp_min(1e-8).log()).sum(dim=-1)
+            entropy = entropy / torch.log(routes.new_tensor(float(routes.shape[-1])))
+            self.adapter_sample_entropy_loss = torch.relu(
+                routes.new_tensor(self.adapter_sample_entropy_target) - entropy
+            ).pow(2).mean().to(dtype=shared_state.dtype)
+
+        ratio = (
+            expert_residual.float().norm(dim=-1)
+            / shared_state.detach().float().norm(dim=-1).clamp_min(1e-8)
+        )
+        self.expert_residual_guard_loss = torch.relu(
+            ratio - ratio.new_tensor(self.expert_residual_ratio_upper)
+        ).pow(2).mean().to(dtype=shared_state.dtype)
+
+    def _compute_debug_metrics(
         self,
-        final_delta: torch.Tensor,
-        raw_mmrl_delta: torch.Tensor,
-        first_raw_mmrl_delta: Optional[torch.Tensor],
-        gated_delta: torch.Tensor,
-        org_hidden_states: torch.Tensor,
-        cu_seqlens: torch.Tensor,
-        route_probs: Optional[torch.Tensor] = None,
+        raw_mmrl_delta,
+        shared_delta,
+        shared_state,
+        expert_residual,
+        final_state,
+        org_hidden_states,
+        adapter_outputs,
+        cu_seqlens,
+        g_mask,
     ):
-        device = final_delta.device
+        device = final_state.device
         nan = torch.tensor(float("nan"), device=device)
         metrics = {
-            "gated_delta_norm_mean": nan,
-            "gated_delta_norm_std": nan,
-            "gated_delta_norm_p95": nan,
-            "gated_delta_norm_max": nan,
-            "final_delta_norm_std": nan,
-            "final_delta_norm_p95": nan,
-            "final_delta_norm_max": nan,
-            "final_to_gated_ratio": nan,
-            "delta_transform_cos_mean": nan,
-            "delta_transform_cos_std": nan,
-            "delta_pool_norm_mean": nan,
-            "delta_pool_norm_std": nan,
-            "delta_pool_pairwise_cos_mean": nan,
-            "delta_pool_pairwise_cos_std": nan,
-            "delta_pool_common_mode_ratio": nan,
-            "delta_pool_specificity_ratio": nan,
-            "delta_org_pool_cos_mean": nan,
-            "delta_org_pool_cos_std": nan,
-            "delta_token_norm_entropy": nan,
-            "delta_token_norm_entropy_norm": nan,
-            "delta_token_top10_mass": nan,
-            "adapter_route_entropy": nan,
+            "mmrl_shared_strength": torch.tensor(self._shared_strength(), device=device),
+            "G_mean": nan,
+            "mmrl_raw_delta_to_org_ratio": nan,
+            "mmrl_shared_delta_to_org_ratio": nan,
+            "mmrl_shared_common_mode_ratio": nan,
+            "mmrl_shared_specificity_ratio": nan,
+            "mmrl_shared_token_specificity_ratio": nan,
+            "expert_residual_to_shared_ratio": nan,
+            "expert_residual_ratio_p95": nan,
+            "expert_residual_shared_cos": nan,
+            "final_delta_to_org_ratio": nan,
+            "adapter_pairwise_cos_mean": nan,
             "adapter_route_entropy_norm": nan,
-            "adapter_route_confidence": nan,
             "adapter_usage_max": nan,
             "adapter_usage_min": nan,
-            "mmrl_raw_delta_to_org_ratio": nan,
-            "mmrl_raw_common_mode_ratio": nan,
-            "mmrl_raw_specificity_ratio": nan,
-            "mmrl_raw_pairwise_cos_mean": nan,
-            "mmrl_raw_token_specificity_ratio": nan,
-            "mmrl_raw_common_direction_cos_ema": nan,
-            "mmrl_first_common_mode_ratio": nan,
-            "mmrl_first_specificity_ratio": nan,
-            "mmrl_common_mode_change_first_to_last": nan,
-            "mmrl_specificity_change_first_to_last": nan,
-            "mmrl_common_direction_cos_first_last": nan,
         }
 
         with torch.no_grad():
-            final_delta = final_delta.detach().float()
-            raw_mmrl_delta = raw_mmrl_delta.detach().float()
-            gated_delta = gated_delta.detach().float()
-            org_hidden_states = org_hidden_states.detach().float()
+            raw = raw_mmrl_delta.detach().float()
+            shared_delta_f = shared_delta.detach().float()
+            shared = shared_state.detach().float()
+            expert = expert_residual.detach().float()
+            final = final_state.detach().float()
+            org = org_hidden_states.detach().float()
+            metrics["G_mean"] = g_mask.detach().float().mean()
 
-            if torch.is_tensor(route_probs) and route_probs.numel() > 0:
-                route_probs = route_probs.detach().float()
-                route_usage = route_probs.mean(dim=0)
-                route_usage = route_usage / route_usage.sum().clamp_min(1e-8)
-                route_entropy = -(route_usage * route_usage.clamp_min(1e-8).log()).sum()
-                metrics["adapter_route_entropy"] = route_entropy.to(device)
-                if route_usage.numel() > 1:
-                    metrics["adapter_route_entropy_norm"] = (
-                        route_entropy / torch.log(route_usage.new_tensor(float(route_usage.numel())))
-                    ).to(device)
-                else:
-                    metrics["adapter_route_entropy_norm"] = route_usage.new_tensor(0.0).to(device)
-                metrics["adapter_route_confidence"] = route_probs.max(dim=-1).values.mean().to(device)
-                metrics["adapter_usage_max"] = route_usage.max().to(device)
-                metrics["adapter_usage_min"] = route_usage.min().to(device)
-                for idx, value in enumerate(route_usage.tolist()):
-                    metrics[f"adapter_usage_{idx}"] = torch.tensor(float(value), device=device)
+            org_norm = org.norm(dim=-1).mean().clamp_min(1e-8)
+            metrics["mmrl_raw_delta_to_org_ratio"] = raw.norm(dim=-1).mean() / org_norm
+            metrics["mmrl_shared_delta_to_org_ratio"] = shared_delta_f.norm(dim=-1).mean() / org_norm
+            metrics["final_delta_to_org_ratio"] = (final - org).norm(dim=-1).mean() / org_norm
 
-            final_token_norm = final_delta.norm(dim=-1)
-            raw_mmrl_token_norm = raw_mmrl_delta.norm(dim=-1)
-            gated_token_norm = gated_delta.norm(dim=-1)
-            org_token_norm = org_hidden_states.norm(dim=-1)
+            shared_norm = shared.norm(dim=-1).clamp_min(1e-8)
+            expert_ratio = expert.norm(dim=-1) / shared_norm
+            metrics["expert_residual_to_shared_ratio"] = expert_ratio.mean()
+            if expert_ratio.numel() > 0:
+                metrics["expert_residual_ratio_p95"] = torch.quantile(expert_ratio, 0.95)
+            valid_expert = expert.norm(dim=-1) > 1e-8
+            if valid_expert.any():
+                metrics["expert_residual_shared_cos"] = F.cosine_similarity(
+                    expert[valid_expert], shared[valid_expert], dim=-1
+                ).mean()
 
-            metrics["mmrl_raw_delta_to_org_ratio"] = (
-                raw_mmrl_token_norm.mean() / org_token_norm.mean().clamp_min(1e-8)
-            )
+            pooled_shared_delta = self._pool_tokens_by_image_mean(shared_delta_f, cu_seqlens)
+            if pooled_shared_delta is not None:
+                pooled_norm = pooled_shared_delta.norm(dim=-1)
+                norm_mean = pooled_norm.mean().clamp_min(1e-8)
+                common = pooled_shared_delta.mean(dim=0)
+                specific = pooled_shared_delta - common
+                metrics["mmrl_shared_common_mode_ratio"] = common.norm() / norm_mean
+                metrics["mmrl_shared_specificity_ratio"] = specific.norm(dim=-1).mean() / norm_mean
 
-            metrics["gated_delta_norm_mean"] = gated_token_norm.mean()
-            metrics["gated_delta_norm_std"] = gated_token_norm.std(unbiased=False)
-            metrics["gated_delta_norm_p95"] = torch.quantile(gated_token_norm, 0.95) if gated_token_norm.numel() > 0 else nan
-            metrics["gated_delta_norm_max"] = gated_token_norm.max() if gated_token_norm.numel() > 0 else nan
-            metrics["final_delta_norm_std"] = final_token_norm.std(unbiased=False)
-            metrics["final_delta_norm_p95"] = torch.quantile(final_token_norm, 0.95) if final_token_norm.numel() > 0 else nan
-            metrics["final_delta_norm_max"] = final_token_norm.max() if final_token_norm.numel() > 0 else nan
-            metrics["final_to_gated_ratio"] = final_token_norm.mean() / gated_token_norm.mean().clamp_min(1e-8)
-
-            valid_transform = (final_token_norm > 1e-8) & (gated_token_norm > 1e-8)
-            if valid_transform.any():
-                transform_cos = F.cosine_similarity(final_delta[valid_transform], gated_delta[valid_transform], dim=-1)
-                metrics["delta_transform_cos_mean"] = transform_cos.mean()
-                metrics["delta_transform_cos_std"] = transform_cos.std(unbiased=False)
-
-            pooled_delta = self._pool_tokens_by_image_mean(final_delta, cu_seqlens)
-            pooled_raw_mmrl_delta = self._pool_tokens_by_image_mean(raw_mmrl_delta, cu_seqlens)
-            pooled_first_raw_delta = self._pool_tokens_by_image_mean(first_raw_mmrl_delta, cu_seqlens)
-            pooled_org = self._pool_tokens_by_image_mean(org_hidden_states, cu_seqlens)
-            if pooled_raw_mmrl_delta is not None:
-                pooled_raw_norm = pooled_raw_mmrl_delta.norm(dim=-1)
-                pooled_raw_mean_norm = pooled_raw_norm.mean().clamp_min(1e-8)
-                pooled_raw_common = pooled_raw_mmrl_delta.mean(dim=0)
-                pooled_raw_specific = pooled_raw_mmrl_delta - pooled_raw_common
-                metrics["mmrl_raw_common_mode_ratio"] = (
-                    pooled_raw_common.norm() / pooled_raw_mean_norm
-                )
-                metrics["mmrl_raw_specificity_ratio"] = (
-                    pooled_raw_specific.norm(dim=-1).mean() / pooled_raw_mean_norm
-                )
-
-                token_specific_parts = []
+                token_specific = []
                 for start, end in zip(cu_seqlens[:-1].tolist(), cu_seqlens[1:].tolist()):
                     start, end = int(start), int(end)
                     if end > start:
-                        image_tokens = raw_mmrl_delta[start:end]
-                        token_specific_parts.append(image_tokens - image_tokens.mean(dim=0, keepdim=True))
-                if token_specific_parts:
-                    token_specific = torch.cat(token_specific_parts, dim=0)
-                    metrics["mmrl_raw_token_specificity_ratio"] = (
+                        image_tokens = shared_delta_f[start:end]
+                        token_specific.append(image_tokens - image_tokens.mean(dim=0, keepdim=True))
+                if token_specific:
+                    token_specific = torch.cat(token_specific, dim=0)
+                    metrics["mmrl_shared_token_specificity_ratio"] = (
                         token_specific.norm(dim=-1).mean()
-                        / raw_mmrl_token_norm.mean().clamp_min(1e-8)
+                        / shared_delta_f.norm(dim=-1).mean().clamp_min(1e-8)
                     )
 
-                current_direction = F.normalize(pooled_raw_common, dim=0)
-                if self._raw_common_direction_ema is not None:
-                    previous_direction = self._raw_common_direction_ema.to(
-                        device=current_direction.device,
-                        dtype=current_direction.dtype,
-                    )
-                    metrics["mmrl_raw_common_direction_cos_ema"] = F.cosine_similarity(
-                        current_direction.unsqueeze(0),
-                        previous_direction.unsqueeze(0),
-                        dim=-1,
-                    ).squeeze(0)
-                    updated_direction = F.normalize(
-                        0.95 * previous_direction + 0.05 * current_direction,
-                        dim=0,
-                    )
-                else:
-                    updated_direction = current_direction
-                self._raw_common_direction_ema = updated_direction.detach()
+            if adapter_outputs is not None and adapter_outputs.numel() > 0:
+                pooled_adapter = []
+                for start, end in zip(cu_seqlens[:-1].tolist(), cu_seqlens[1:].tolist()):
+                    start, end = int(start), int(end)
+                    if end > start:
+                        pooled_adapter.append(adapter_outputs[start:end].float().mean(dim=0))
+                if pooled_adapter:
+                    pooled_adapter = torch.stack(pooled_adapter, dim=0)
+                    pairwise_values = []
+                    for left in range(self.visual_residual_adapter_count):
+                        for right in range(left + 1, self.visual_residual_adapter_count):
+                            valid = (
+                                (pooled_adapter[:, left].norm(dim=-1) > 1e-8)
+                                & (pooled_adapter[:, right].norm(dim=-1) > 1e-8)
+                            )
+                            if valid.any():
+                                pairwise_values.append(F.cosine_similarity(
+                                    pooled_adapter[valid, left], pooled_adapter[valid, right], dim=-1
+                                ))
+                    if pairwise_values:
+                        metrics["adapter_pairwise_cos_mean"] = torch.cat(pairwise_values).mean()
 
-                if pooled_raw_mmrl_delta.shape[0] >= 2:
-                    raw_unit = pooled_raw_mmrl_delta / pooled_raw_norm.unsqueeze(-1).clamp_min(1e-8)
-                    raw_pairwise = raw_unit @ raw_unit.transpose(0, 1)
-                    raw_tri = torch.triu_indices(
-                        raw_pairwise.shape[0],
-                        raw_pairwise.shape[1],
-                        offset=1,
-                        device=raw_pairwise.device,
-                    )
-                    raw_pairwise_vals = raw_pairwise[raw_tri[0], raw_tri[1]]
-                    if raw_pairwise_vals.numel() > 0:
-                        metrics["mmrl_raw_pairwise_cos_mean"] = raw_pairwise_vals.mean()
-
-                if pooled_first_raw_delta is not None:
-                    first_norm_mean = pooled_first_raw_delta.norm(dim=-1).mean().clamp_min(1e-8)
-                    first_common = pooled_first_raw_delta.mean(dim=0)
-                    first_specific = pooled_first_raw_delta - first_common
-                    first_common_ratio = first_common.norm() / first_norm_mean
-                    first_specificity_ratio = first_specific.norm(dim=-1).mean() / first_norm_mean
-                    metrics["mmrl_first_common_mode_ratio"] = first_common_ratio
-                    metrics["mmrl_first_specificity_ratio"] = first_specificity_ratio
-                    metrics["mmrl_common_mode_change_first_to_last"] = (
-                        metrics["mmrl_raw_common_mode_ratio"] - first_common_ratio
-                    )
-                    metrics["mmrl_specificity_change_first_to_last"] = (
-                        metrics["mmrl_raw_specificity_ratio"] - first_specificity_ratio
-                    )
-                    if first_common.norm() > 1e-8 and pooled_raw_common.norm() > 1e-8:
-                        metrics["mmrl_common_direction_cos_first_last"] = F.cosine_similarity(
-                            first_common.unsqueeze(0),
-                            pooled_raw_common.unsqueeze(0),
-                            dim=-1,
-                        ).squeeze(0)
-
-            if pooled_delta is not None:
-                pooled_delta_norm = pooled_delta.norm(dim=-1)
-                metrics["delta_pool_norm_mean"] = pooled_delta_norm.mean()
-                metrics["delta_pool_norm_std"] = pooled_delta_norm.std(unbiased=False)
-                pooled_delta_mean_norm = pooled_delta_norm.mean().clamp_min(1e-8)
-                pooled_delta_common = pooled_delta.mean(dim=0)
-                pooled_delta_specific = pooled_delta - pooled_delta_common
-                metrics["delta_pool_common_mode_ratio"] = pooled_delta_common.norm() / pooled_delta_mean_norm
-                metrics["delta_pool_specificity_ratio"] = (
-                    pooled_delta_specific.norm(dim=-1).mean() / pooled_delta_mean_norm
-                )
-
-                if pooled_delta.shape[0] >= 2:
-                    delta_unit = pooled_delta / pooled_delta.norm(dim=-1, keepdim=True).clamp_min(1e-8)
-                    pairwise = delta_unit @ delta_unit.transpose(0, 1)
-                    tri = torch.triu_indices(pairwise.shape[0], pairwise.shape[1], offset=1, device=pairwise.device)
-                    pairwise_vals = pairwise[tri[0], tri[1]]
-                    if pairwise_vals.numel() > 0:
-                        metrics["delta_pool_pairwise_cos_mean"] = pairwise_vals.mean()
-                        metrics["delta_pool_pairwise_cos_std"] = pairwise_vals.std(unbiased=False)
-
-            if pooled_delta is not None and pooled_org is not None:
-                valid_pool = (pooled_delta.norm(dim=-1) > 1e-8) & (pooled_org.norm(dim=-1) > 1e-8)
-                if valid_pool.any():
-                    pool_cos = F.cosine_similarity(pooled_delta[valid_pool], pooled_org[valid_pool], dim=-1)
-                    metrics["delta_org_pool_cos_mean"] = pool_cos.mean()
-                    metrics["delta_org_pool_cos_std"] = pool_cos.std(unbiased=False)
-
-            token_mass = final_token_norm.clamp_min(0.0)
-            total_mass = token_mass.sum()
-            if total_mass > 1e-8:
-                probs = token_mass / total_mass
-                entropy = -(probs * probs.clamp_min(1e-8).log()).sum()
-                metrics["delta_token_norm_entropy"] = entropy
-                if probs.numel() > 1:
-                    metrics["delta_token_norm_entropy_norm"] = entropy / torch.log(
-                        probs.new_tensor(float(probs.numel()))
-                    )
-                topk = min(10, probs.numel())
-                metrics["delta_token_top10_mass"] = probs.topk(topk).values.sum()
+            routes = self.route_probs
+            if torch.is_tensor(routes) and routes.numel() > 0:
+                routes = routes.detach().float()
+                usage = routes.mean(dim=0)
+                usage = usage / usage.sum().clamp_min(1e-8)
+                entropy = -(routes * routes.clamp_min(1e-8).log()).sum(dim=-1)
+                if routes.shape[-1] > 1:
+                    entropy = entropy / torch.log(routes.new_tensor(float(routes.shape[-1])))
+                metrics["adapter_route_entropy_norm"] = entropy.mean()
+                metrics["adapter_usage_max"] = usage.max()
+                metrics["adapter_usage_min"] = usage.min()
 
         return metrics
 
-    def _register_raw_delta_grad_diagnostics(self, raw_mmrl_delta, cu_seqlens):
-        self._last_raw_delta_grad_metrics = {}
-        if not self.training or not raw_mmrl_delta.requires_grad:
-            return
-
-        raw_detached = raw_mmrl_delta.detach().float()
-        cu_detached = cu_seqlens.detach().cpu()
-
-        def _capture_raw_delta_grad(incoming_grad):
-            grad = incoming_grad.detach().float()
-            pooled_raw = self._pool_tokens_by_image_mean(raw_detached, cu_detached)
-            pooled_grad = self._pool_tokens_by_image_mean(grad, cu_detached)
-            if pooled_raw is None or pooled_grad is None:
-                return incoming_grad
-
-            raw_common = pooled_raw.mean(dim=0)
-            raw_specific = pooled_raw - raw_common
-            grad_common = pooled_grad.mean(dim=0)
-            grad_specific = pooled_grad - grad_common
-            grad_norm_mean = pooled_grad.norm(dim=-1).mean().clamp_min(1e-8)
-            common_alignment = F.cosine_similarity(
-                raw_common.unsqueeze(0), grad_common.unsqueeze(0), dim=-1
-            ).squeeze(0)
-            valid_specific = (
-                (raw_specific.norm(dim=-1) > 1e-8)
-                & (grad_specific.norm(dim=-1) > 1e-8)
-            )
-            specific_alignment = grad.new_tensor(float("nan"))
-            if valid_specific.any():
-                specific_alignment = F.cosine_similarity(
-                    raw_specific[valid_specific], grad_specific[valid_specific], dim=-1
-                ).mean()
-            self._last_raw_delta_grad_metrics = {
-                "mmrl_grad_common_energy_ratio": grad_common.norm() / grad_norm_mean,
-                "mmrl_grad_specific_energy_ratio": (
-                    grad_specific.norm(dim=-1).mean() / grad_norm_mean
-                ),
-                "mmrl_common_objective_alignment": common_alignment,
-                "mmrl_specific_objective_alignment": specific_alignment,
-            }
-            return incoming_grad
-
-        raw_mmrl_delta.register_hook(_capture_raw_delta_grad)
-
-    def _adapter_weight_norm(self, device):
-        vals = []
-        for adapter in self.residual_adapters:
-            for p in adapter.parameters():
-                vals.append(p.detach().float().norm())
-        if not vals:
-            return torch.tensor(float("nan"), device=device)
-        return torch.stack(vals).norm().to(device)
-
-    def _pool_adapter_outputs_by_image_mean(self, adapter_outputs: torch.Tensor, cu_seqlens: torch.Tensor):
-        if adapter_outputs is None or cu_seqlens is None or cu_seqlens.numel() <= 1 or adapter_outputs.numel() == 0:
-            return None
-        pooled = []
-        starts = cu_seqlens[:-1].tolist()
-        ends = cu_seqlens[1:].tolist()
-        for s, e in zip(starts, ends):
-            s, e = int(s), int(e)
-            if e <= s:
-                continue
-            pooled.append(adapter_outputs[s:e].mean(dim=0))
-        if not pooled:
-            return None
-        return torch.stack(pooled, dim=0)
-
-    @torch.no_grad()
-    def _initialize_prototypes_from_batch(self, features: torch.Tensor):
-        if features is None or features.numel() == 0:
-            return
-        features = F.normalize(features.detach().float(), dim=-1)
-        n = features.shape[0]
-        if n <= 0:
-            return
-
-        offsets = self.prototype_slot_offsets.to(device=features.device, dtype=features.dtype)
-        init_noise = max(float(self.prototype_anchor_init_noise), 0.0)
-        proto = []
-        for idx in range(self.visual_residual_adapter_count):
-            base = features[idx % n]
-            proto.append(F.normalize(base + offsets[idx] * init_noise, dim=-1))
-        proto = torch.stack(proto, dim=0)
-        self.prototype_vectors.copy_(proto.to(device=self.prototype_vectors.device, dtype=self.prototype_vectors.dtype))
-        self.prototype_initialized.fill_(True)
-
-    @torch.no_grad()
-    def _update_prototypes(self, pooled_vision_states: torch.Tensor, route_probs: torch.Tensor):
-        if pooled_vision_states is None or route_probs is None:
-            return
-        if pooled_vision_states.numel() == 0 or route_probs.numel() == 0:
-            return
-
-        features = F.normalize(pooled_vision_states.detach().float(), dim=-1)
-        routes = route_probs.detach().float()
-        n = min(features.shape[0], routes.shape[0])
-        if n <= 0:
-            return
-        features = features[:n]
-        routes = routes[:n]
-
-        if not bool(self.prototype_initialized.all().item()):
-            self._initialize_prototypes_from_batch(features)
-
-        confidence, winners = routes.max(dim=-1)
-        active_sample = confidence >= float(self.prototype_anchor_min_confidence)
-        if not active_sample.any():
-            return
-
-        assignment_power = max(float(self.prototype_anchor_assignment_power), 1.0)
-        weights = routes.clamp_min(1e-8).pow(assignment_power)
-
-        proto = self.prototype_vectors.to(device=features.device, dtype=features.dtype).clone()
-        initialized = self.prototype_initialized.to(device=features.device)
-        momentum = float(self.prototype_anchor_momentum)
-        for idx in range(self.visual_residual_adapter_count):
-            mask = active_sample & (winners == idx)
-            if not mask.any():
-                continue
-            slot_weights = weights[mask, idx]
-            batch_proto = (features[mask] * slot_weights.unsqueeze(-1)).sum(dim=0)
-            batch_proto = batch_proto / slot_weights.sum().clamp_min(1e-8)
-            batch_proto = F.normalize(batch_proto, dim=-1)
-            proto[idx].mul_(momentum).add_(batch_proto, alpha=1.0 - momentum)
-            proto[idx] = F.normalize(proto[idx], dim=-1)
-            initialized[idx] = True
-        self.prototype_vectors.copy_(proto.to(device=self.prototype_vectors.device, dtype=self.prototype_vectors.dtype))
-        self.prototype_initialized.copy_(initialized.to(device=self.prototype_initialized.device))
-
-    def _compute_prototype_anchor_loss(self, pooled_vision_states, route_probs, dtype, device):
-        zero = torch.tensor(0.0, device=device, dtype=dtype)
-        nan = torch.tensor(float("nan"), device=device, dtype=dtype)
-        self.route_proto_kl = nan
-        self.route_proto_agreement = nan
-        self.prototype_usage_max = nan
-        self.prototype_usage_min = nan
-
-        if pooled_vision_states is None or route_probs is None:
-            return zero
-        if pooled_vision_states.numel() == 0 or route_probs.numel() == 0:
-            return zero
-        initialized_before = bool(self.prototype_initialized.any().item())
-        if not initialized_before:
-            self._update_prototypes(pooled_vision_states, route_probs)
-        if not bool(self.prototype_initialized.any().item()):
-            return zero
-
-        features = pooled_vision_states.detach().float()
-        routes = route_probs.float()
-        n = min(features.shape[0], routes.shape[0])
-        if n <= 0:
-            return zero
-        features = F.normalize(features[:n], dim=-1)
-        prototypes = self.prototype_vectors.detach().to(device=features.device, dtype=features.dtype)
-        prototypes = F.normalize(prototypes, dim=-1)
-        valid = self.prototype_initialized.to(device=features.device)
-        logits = features @ prototypes.transpose(0, 1)
-        logits = logits / max(float(self.prototype_anchor_temperature), 1e-4)
-        if (~valid).any():
-            logits[:, ~valid] = -1e4
-        proto_probs = torch.softmax(logits, dim=-1)
-        proto_probs = proto_probs.detach()
-        routes = routes[:n].clamp_min(1e-8)
-        loss = (proto_probs * (proto_probs.clamp_min(1e-8).log() - routes.log())).sum(dim=-1).mean()
-
-        with torch.no_grad():
-            usage = proto_probs.mean(dim=0)
-            self.route_proto_kl = loss.detach().to(device=device, dtype=dtype)
-            self.route_proto_agreement = (
-                routes.detach().argmax(dim=-1) == proto_probs.argmax(dim=-1)
-            ).float().mean().to(device=device, dtype=dtype)
-            self.prototype_usage_max = usage.max().to(device=device, dtype=dtype)
-            self.prototype_usage_min = usage.min().to(device=device, dtype=dtype)
-            for idx, value in enumerate(usage.tolist()):
-                setattr(self, f"prototype_usage_{idx}", torch.tensor(float(value), device=device, dtype=dtype))
-
-        if self.training and initialized_before:
-            self._update_prototypes(pooled_vision_states, route_probs)
-
-        return loss.to(device=device, dtype=dtype)
-
-    def _compute_adapter_diversity_loss(self, adapter_outputs, cu_seqlens, dtype, device):
-        zero = torch.tensor(0.0, device=device, dtype=dtype)
-        nan = torch.tensor(float("nan"), device=device, dtype=dtype)
-        self.adapter_pairwise_cos_mean = nan
-        self.adapter_pairwise_cos_max = nan
-        self.adapter_pairwise_cos_below_band = nan
-        self.adapter_pairwise_cos_above_band = nan
-        self.adapter_diversity_mean_component = nan
-        self.adapter_diversity_worst_component = nan
-
-        pooled = self._pool_adapter_outputs_by_image_mean(adapter_outputs, cu_seqlens)
-        if pooled is None or pooled.numel() == 0 or pooled.shape[1] <= 1:
-            return zero
-
-        pooled = pooled.float()
-        unit = F.normalize(pooled, dim=-1)
-        pairwise = torch.matmul(unit, unit.transpose(1, 2))
-        tri = torch.triu_indices(pairwise.shape[1], pairwise.shape[2], offset=1, device=pairwise.device)
-        vals = pairwise[:, tri[0], tri[1]].reshape(-1)
-        if vals.numel() == 0:
-            return zero
-
-        low = float(self.adapter_diversity_target_low)
-        high = float(self.adapter_diversity_target_high)
-        if high < low:
-            low, high = high, low
-        lower_violation = torch.relu(vals.new_tensor(low) - vals).pow(2)
-        upper_violation = torch.relu(vals - vals.new_tensor(high)).pow(2)
-        weighted_violation = (
-            lower_violation
-            + float(self.adapter_diversity_upper_weight) * upper_violation
-        )
-        mean_component = weighted_violation.mean()
-        worst_component = weighted_violation.max()
-        loss = (
-            mean_component
-            + float(self.adapter_diversity_worst_pair_weight) * worst_component
-        )
-        with torch.no_grad():
-            self.adapter_pairwise_cos_mean = vals.detach().mean().to(device=device, dtype=dtype)
-            self.adapter_pairwise_cos_max = vals.detach().max().to(device=device, dtype=dtype)
-            self.adapter_pairwise_cos_below_band = (
-                (vals.detach() < low).float().mean().to(device=device, dtype=dtype)
-            )
-            self.adapter_pairwise_cos_above_band = (
-                (vals.detach() > high).float().mean().to(device=device, dtype=dtype)
-            )
-            self.adapter_diversity_mean_component = mean_component.detach().to(device=device, dtype=dtype)
-            self.adapter_diversity_worst_component = worst_component.detach().to(device=device, dtype=dtype)
-        return loss.to(device=device, dtype=dtype)
-
-    def _compute_router_aux_losses(
-        self,
-        final_delta,
-        cu_seqlens,
-        org_hidden_states=None,
-        pooled_vision_states=None,
-        adapter_outputs=None,
-    ):
-        device = final_delta.device
-        zero = final_delta.new_tensor(0.0)
-        nan = final_delta.new_tensor(float("nan"))
-        self.adapter_effective_delta_ratio_mean = nan
-        self.adapter_effective_delta_ratio_min = nan
-        self.adapter_effective_delta_ratio_max = nan
-        self.prototype_anchor_loss = zero
-        self.adapter_diversity_loss = zero
-        self.route_proto_kl = nan
-        self.route_proto_agreement = nan
-        self.prototype_usage_max = nan
-        self.prototype_usage_min = nan
-        self.adapter_pairwise_cos_mean = nan
-        self.adapter_pairwise_cos_max = nan
-        self.adapter_pairwise_cos_below_band = nan
-        self.adapter_pairwise_cos_above_band = nan
-        self.adapter_diversity_mean_component = nan
-        self.adapter_diversity_worst_component = nan
-        for idx in range(self.visual_residual_adapter_count):
-            setattr(self, f"prototype_usage_{idx}", nan)
-        route_probs = self.route_probs
-        if not torch.is_tensor(route_probs) or route_probs.numel() == 0:
-            return zero, zero, zero, zero, zero, zero
-
-        route_probs = route_probs.float()
-        adapter_count = route_probs.shape[-1]
-
-        usage = route_probs.mean(dim=0)
-        usage = usage / usage.sum().clamp_min(1e-8)
-        uniform = torch.full_like(usage, 1.0 / max(adapter_count, 1))
-        usage_balance_loss = (usage * (usage.clamp_min(1e-8).log() - uniform.log())).sum()
-
-        if adapter_count > 1:
-            sample_entropy = -(route_probs * route_probs.clamp_min(1e-8).log()).sum(dim=-1)
-            sample_entropy_norm = sample_entropy / torch.log(route_probs.new_tensor(float(adapter_count)))
-            sample_entropy_loss = torch.relu(
-                route_probs.new_tensor(float(self.adapter_sample_entropy_target)) - sample_entropy_norm
-            ).pow(2).mean()
-        else:
-            sample_entropy_loss = zero
-
-        pooled_delta = self._pool_tokens_by_image_mean(final_delta.float(), cu_seqlens)
-        if pooled_delta is None or pooled_delta.numel() == 0:
-            common_mode_loss = zero
-        else:
-            pooled_delta_norm = pooled_delta.norm(dim=-1)
-            pooled_delta_mean_norm = pooled_delta_norm.mean().clamp_min(1e-8)
-            common_ratio = pooled_delta.mean(dim=0).norm() / pooled_delta_mean_norm
-            common_mode_loss = torch.relu(
-                common_ratio - float(self.adapter_common_mode_target)
-            ).pow(2)
-
-        effective_delta_loss = zero
-        if org_hidden_states is not None:
-            pooled_org = self._pool_tokens_by_image_mean(org_hidden_states.detach().float(), cu_seqlens)
-            if pooled_delta is not None and pooled_org is not None and pooled_delta.numel() > 0:
-                n = min(pooled_delta.shape[0], pooled_org.shape[0], route_probs.shape[0])
-                if n > 0:
-                    delta_ratio = (
-                        pooled_delta[:n].norm(dim=-1)
-                        / pooled_org[:n].norm(dim=-1).clamp_min(1e-8)
-                    )
-                    confidence = route_probs[:n].max(dim=-1).values.detach().to(delta_ratio.device)
-                    floor_loss = confidence * torch.relu(
-                        delta_ratio.new_tensor(float(self.adapter_effective_delta_target_low)) - delta_ratio
-                    ).pow(2)
-                    ceiling_loss = torch.relu(
-                        delta_ratio - delta_ratio.new_tensor(float(self.adapter_effective_delta_target_high))
-                    ).pow(2)
-                    effective_delta_loss = floor_loss.mean() + ceiling_loss.mean()
-                    self.adapter_effective_delta_ratio_mean = delta_ratio.detach().mean().to(device=device, dtype=final_delta.dtype)
-                    self.adapter_effective_delta_ratio_min = delta_ratio.detach().min().to(device=device, dtype=final_delta.dtype)
-                    self.adapter_effective_delta_ratio_max = delta_ratio.detach().max().to(device=device, dtype=final_delta.dtype)
-
-        prototype_anchor_loss = self._compute_prototype_anchor_loss(
-            pooled_vision_states,
-            route_probs,
-            final_delta.dtype,
-            device,
-        )
-        adapter_diversity_loss = self._compute_adapter_diversity_loss(
-            adapter_outputs,
-            cu_seqlens,
-            final_delta.dtype,
-            device,
-        )
-
-        return (
-            usage_balance_loss.to(device=device, dtype=final_delta.dtype),
-            sample_entropy_loss.to(device=device, dtype=final_delta.dtype),
-            common_mode_loss.to(device=device, dtype=final_delta.dtype),
-            effective_delta_loss.to(device=device, dtype=final_delta.dtype),
-            prototype_anchor_loss.to(device=device, dtype=final_delta.dtype),
-            adapter_diversity_loss.to(device=device, dtype=final_delta.dtype),
-        )
 
     def forward(self,
                 hidden_states: torch.Tensor,
@@ -890,9 +434,6 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
                 images_per_sample: Optional[list[int]] = None,
                 **kwargs):
         assert len(images_per_sample) == embedding.shape[0]
-        batch_size = embedding.shape[0]
-        pic_seqlens = [0] + list(accumulate(images_per_sample))
-
         self.alpha_list = None 
         self.G_list = []
         self.route_probs = None
@@ -924,12 +465,8 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
         current_num_r_token = self.cfg.RP_SPACE_LENGTH
 
         deepstack_feature_lists = []
-        deepstack_delta_norm_values = []
-        deepstack_delta_ratio_values = []
-        deepstack_residual_layer_count = 0
         cu_seqlens_with_rep, position_embeddings_with_rep = None, None
         hidden_states_with_rep, org_hidden_states= None, None
-        first_raw_mmrl_delta = None
         total_pic_num = cu_seqlens.size(0) - 1
         run_mmrl_branch = True
         forward_hit_layers = []
@@ -986,17 +523,16 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
                         run_mmrl_branch = True
                     else:
                         self.alpha_list = self.Task_classifier(pooled_vision_states, expanded_text_embedding)
-                        self.route_probs = self.adapter_router(
-                            pooled_vision_states,
-                            expanded_text_embedding,
-                            self.alpha_list,
-                        ).to(dtype=hidden_states.dtype)
                         # G_list: [Total_Images, 1]
-                        if self.training:
-                            # 训练时保留 soft gate，保证梯度可过
+                        if self.training and int(self.current_stage_id) < 3:
                             self.G_list = self.visionGating(
                                 self.alpha_list,
                                 gating_temperature_override
+                            ).to(dtype=hidden_states.dtype)
+                        elif self.training:
+                            self.G_list = self._deterministic_gate(
+                                self.alpha_list,
+                                gating_temperature_override,
                             ).to(dtype=hidden_states.dtype)
                         else:
                             raw_g = self.visionGating(
@@ -1006,6 +542,12 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
                             self.G_list = (raw_g > 0.5).to(dtype=hidden_states.dtype)
                             if self.G_list.sum() == 0:
                                 run_mmrl_branch = False
+                    if self.experts_enabled:
+                        self.route_probs = self.adapter_router(
+                            pooled_vision_states,
+                            expanded_text_embedding,
+                            self.alpha_list,
+                        ).to(dtype=hidden_states.dtype)
 
                 ############ N图切分+门控 ############
                 idx = self.insert_layers.index(layer_num)
@@ -1049,13 +591,6 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
                             **kwargs
                         )
                     first_insert = False
-                    if idx == 0:
-                        first_rep_states = _strip_r_token(
-                            hidden_states_with_rep,
-                            original_seq_lens_list,
-                            current_num_r_token,
-                        )
-                        first_raw_mmrl_delta = first_rep_states - org_hidden_states
                 else:
                     pass
                 # 规定这里输出的都是没移除rep的
@@ -1067,32 +602,6 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
                     feature_to_save = hidden_states
                 else:
                     feature_to_save = org_hidden_states
-                    if (
-                        self.enable_deepstack_mmrl_residual
-                        and self.deepstack_mmrl_residual_scale != 0.0
-                        and (self.training or run_mmrl_branch)
-                        and hidden_states_with_rep is not None
-                        and isinstance(self.G_list, torch.Tensor)
-                    ):
-                        deepstack_rep_states = _strip_r_token(
-                            hidden_states_with_rep,
-                            original_seq_lens_list,
-                            current_num_r_token,
-                        )
-                        local_delta = deepstack_rep_states - org_hidden_states
-                        seqlens = cu_seqlens[1:] - cu_seqlens[:-1]
-                        g_mask = torch.repeat_interleave(self.G_list, seqlens, dim=0).to(
-                            device=local_delta.device,
-                            dtype=local_delta.dtype,
-                        )
-                        local_delta = local_delta * g_mask
-                        feature_to_save = org_hidden_states + local_delta * float(self.deepstack_mmrl_residual_scale)
-                        with torch.no_grad():
-                            local_delta_norm = local_delta.detach().float().norm(dim=-1).mean()
-                            local_org_norm = org_hidden_states.detach().float().norm(dim=-1).mean().clamp_min(1e-8)
-                            deepstack_delta_norm_values.append(local_delta_norm)
-                            deepstack_delta_ratio_values.append(local_delta_norm / local_org_norm)
-                            deepstack_residual_layer_count += 1
                 deepstack_feature = self.deepstack_merger_list[
                     self.deepstack_visual_indexes.index(layer_num)
                 ](feature_to_save)
@@ -1110,126 +619,67 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
             hidden_states_with_rep = _strip_r_token(hidden_states_with_rep,
                                                     original_seq_lens_list,
                                                     current_num_r_token)
-            # for i in range(cu_seqlens.size(0) - 1):
-            #     hidden_states_with_rep = hidden_states_with_rep[cu_seqlens[i]:cu_seqlens[i+1]] * self.G_list[i]
             seqlens = cu_seqlens[1:] - cu_seqlens[:-1]
-            delta = hidden_states_with_rep - org_hidden_states
-            G_mask = torch.repeat_interleave(self.G_list, seqlens, dim=0)
-            gated_delta = delta * G_mask
-            if torch.is_tensor(self.route_probs) and self.route_probs.numel() > 0:
-                token_route_probs = torch.repeat_interleave(self.route_probs, seqlens, dim=0)
-            else:
-                token_route_probs = gated_delta.new_ones(
-                    (gated_delta.shape[0], self.visual_residual_adapter_count),
-                    dtype=gated_delta.dtype,
-                ) / float(self.visual_residual_adapter_count)
-            adapter_outputs = torch.stack(
-                [adapter(gated_delta) for adapter in self.residual_adapters],
-                dim=1,
+            raw_mmrl_delta = hidden_states_with_rep - org_hidden_states
+            g_mask = torch.repeat_interleave(self.G_list, seqlens, dim=0).to(
+                device=raw_mmrl_delta.device,
+                dtype=raw_mmrl_delta.dtype,
             )
-            final_delta = (adapter_outputs * token_route_probs.unsqueeze(-1)).sum(dim=1)
-            hidden_states = org_hidden_states + final_delta
-            self._register_raw_delta_grad_diagnostics(delta, cu_seqlens)
+            shared_delta = raw_mmrl_delta * g_mask * float(self._shared_strength())
+            shared_state = org_hidden_states + shared_delta
+
+            if self.experts_enabled:
+                token_route_probs = torch.repeat_interleave(self.route_probs, seqlens, dim=0)
+                adapter_input = self.adapter_input_norm(shared_state)
+                adapter_outputs = torch.stack(
+                    [adapter(adapter_input) for adapter in self.residual_adapters],
+                    dim=1,
+                )
+                expert_residual = (
+                    adapter_outputs * token_route_probs.unsqueeze(-1)
+                ).sum(dim=1) * g_mask
+            else:
+                adapter_outputs = None
+                expert_residual = torch.zeros_like(shared_state)
+            hidden_states = shared_state + expert_residual
         else:
             hidden_states = org_hidden_states
-            delta = torch.zeros_like(hidden_states)
-            gated_delta = torch.zeros_like(hidden_states)
-            final_delta = torch.zeros_like(hidden_states)
+            raw_mmrl_delta = torch.zeros_like(hidden_states)
+            shared_delta = torch.zeros_like(hidden_states)
+            shared_state = hidden_states
+            expert_residual = torch.zeros_like(hidden_states)
             adapter_outputs = None
-            first_raw_mmrl_delta = None
+            g_mask = torch.zeros((hidden_states.shape[0], 1), device=hidden_states.device, dtype=hidden_states.dtype)
 
-        (
-            self.adapter_usage_balance_loss,
-            self.adapter_sample_entropy_loss,
-            self.adapter_common_mode_loss,
-            self.adapter_effective_delta_loss,
-            self.prototype_anchor_loss,
-            self.adapter_diversity_loss,
-        ) = self._compute_router_aux_losses(
-            final_delta,
-            cu_seqlens,
-            org_hidden_states=org_hidden_states,
-            pooled_vision_states=pooled_vision_states,
-            adapter_outputs=adapter_outputs,
-        )
-
-        if deepstack_delta_norm_values:
-            self.deepstack_delta_norm_mean = torch.stack(deepstack_delta_norm_values).mean().to(
-                device=hidden_states.device,
-                dtype=hidden_states.dtype,
+        self._compute_router_aux_losses(expert_residual, shared_state)
+        stage_audit_key = (int(self.current_stage_id), bool(self.experts_enabled))
+        if stage_audit_key not in self._printed_stage_path_audits:
+            print(
+                "[MMRL_STAGE_PATH_AUDIT] "
+                f"stage={self.current_stage_id} "
+                f"shared_strength={self._shared_strength():.6f} "
+                f"experts_enabled={self.experts_enabled} "
+                f"router_active={torch.is_tensor(self.route_probs)}"
             )
-            self.deepstack_delta_to_org_ratio = torch.stack(deepstack_delta_ratio_values).mean().to(
-                device=hidden_states.device,
-                dtype=hidden_states.dtype,
-            )
-        else:
-            self.deepstack_delta_norm_mean = hidden_states.new_tensor(float("nan"))
-            self.deepstack_delta_to_org_ratio = hidden_states.new_tensor(float("nan"))
-        self.deepstack_residual_layers = hidden_states.new_tensor(float(deepstack_residual_layer_count))
+            self._printed_stage_path_audits.add(stage_audit_key)
 
-        org_hidden_norm = org_hidden_states.detach().float().norm(dim=-1).mean()
-        final_delta_norm = final_delta.detach().float().norm(dim=-1).mean()
-        delta_to_org_ratio = final_delta_norm / org_hidden_norm.clamp_min(1e-8)
-        alpha_mean = torch.sigmoid(self.alpha_list.detach().float()).mean() if self.alpha_list is not None else hidden_states.new_tensor(0.0)
-        alpha_std = torch.sigmoid(self.alpha_list.detach().float()).std(unbiased=False) if self.alpha_list is not None and self.alpha_list.numel() > 1 else hidden_states.new_tensor(0.0)
-        g_mean = self.G_list.detach().float().mean() if isinstance(self.G_list, torch.Tensor) else hidden_states.new_tensor(0.0)
-        g_std = self.G_list.detach().float().std(unbiased=False) if isinstance(self.G_list, torch.Tensor) and self.G_list.numel() > 1 else hidden_states.new_tensor(0.0)
-        residual_debug = self._compute_residual_debug_metrics(
-            final_delta,
-            delta,
-            first_raw_mmrl_delta,
-            gated_delta,
+        residual_debug = self._compute_debug_metrics(
+            raw_mmrl_delta,
+            shared_delta,
+            shared_state,
+            expert_residual,
+            hidden_states,
             org_hidden_states,
+            adapter_outputs,
             cu_seqlens,
-            route_probs=self.route_probs,
+            g_mask,
         )
         self.debug_context = {
-            "alpha_prob_mean": alpha_mean,
-            "alpha_prob_std": alpha_std,
-            "G_mean": g_mean,
-            "G_std": g_std,
-            "final_delta_norm_mean": final_delta_norm,
-            "org_hidden_norm_mean": org_hidden_norm,
-            "delta_to_org_ratio": delta_to_org_ratio,
-            "visual_adapter_count": hidden_states.new_tensor(float(self.visual_residual_adapter_count)),
-            "adapter_weight_norm": self._adapter_weight_norm(hidden_states.device),
             "adapter_usage_balance_loss": self.adapter_usage_balance_loss.detach(),
             "adapter_sample_entropy_loss": self.adapter_sample_entropy_loss.detach(),
-            "adapter_common_mode_loss": self.adapter_common_mode_loss.detach(),
-            "adapter_effective_delta_loss": self.adapter_effective_delta_loss.detach(),
-            "prototype_anchor_loss": self.prototype_anchor_loss.detach(),
-            "adapter_diversity_loss": self.adapter_diversity_loss.detach(),
-            "adapter_effective_delta_ratio_mean": self.adapter_effective_delta_ratio_mean.detach(),
-            "adapter_effective_delta_ratio_min": self.adapter_effective_delta_ratio_min.detach(),
-            "adapter_effective_delta_ratio_max": self.adapter_effective_delta_ratio_max.detach(),
-            "route_proto_kl": self.route_proto_kl.detach(),
-            "route_proto_agreement": self.route_proto_agreement.detach(),
-            "prototype_usage_max": self.prototype_usage_max.detach(),
-            "prototype_usage_min": self.prototype_usage_min.detach(),
-            "adapter_pairwise_cos_mean": self.adapter_pairwise_cos_mean.detach(),
-            "adapter_pairwise_cos_max": self.adapter_pairwise_cos_max.detach(),
-            "adapter_pairwise_cos_below_band": self.adapter_pairwise_cos_below_band.detach(),
-            "adapter_pairwise_cos_above_band": self.adapter_pairwise_cos_above_band.detach(),
-            "adapter_diversity_mean_component": self.adapter_diversity_mean_component.detach(),
-            "adapter_diversity_worst_component": self.adapter_diversity_worst_component.detach(),
-            "deepstack_mmrl_residual_scale": hidden_states.new_tensor(float(self.deepstack_mmrl_residual_scale)),
-            "deepstack_delta_norm_mean": self.deepstack_delta_norm_mean.detach(),
-            "deepstack_delta_to_org_ratio": self.deepstack_delta_to_org_ratio.detach(),
-            "deepstack_residual_layers": self.deepstack_residual_layers.detach(),
+            "expert_residual_guard_loss": self.expert_residual_guard_loss.detach(),
             **residual_debug,
         }
-        for idx in range(self.visual_residual_adapter_count):
-            value = getattr(
-                self,
-                f"prototype_usage_{idx}",
-                hidden_states.new_tensor(float("nan")),
-            )
-            self.debug_context[f"prototype_usage_{idx}"] = value.detach() if torch.is_tensor(value) else hidden_states.new_tensor(float(value))
 
         hidden_states = self.merger(hidden_states)
-        k_results = None
-        self.k_results = None
-        self.k_mask_results = None
-        self.tax_loss = hidden_states.new_tensor(0.0)
-        self.capacity_prior_loss = self.tax_loss
-        return hidden_states, deepstack_feature_lists, k_results
+        return hidden_states, deepstack_feature_lists

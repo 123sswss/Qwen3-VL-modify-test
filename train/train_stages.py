@@ -39,6 +39,8 @@ def _build_experiment_context(train_cfg, output_dir, stage_id):
         "adapter_sample_entropy_target",
         "expert_residual_guard_loss_weight",
         "expert_residual_ratio_upper",
+        "mmrl_residual_guard_loss_weight",
+        "mmrl_residual_ratio_upper",
         "mmrl_warmup_fraction",
         "stage4_mmrl_lr_scale",
     )
@@ -288,6 +290,7 @@ class Qwen3VLMMRLForStages(Qwen3VLForConditionalGeneration):
         self.adapter_usage_balance_loss_weight = 0.0
         self.adapter_sample_entropy_loss_weight = 0.0
         self.expert_residual_guard_loss_weight = 0.0
+        self.mmrl_residual_guard_loss_weight = 0.0
         self.temperature_override = None
 
         self.debug_mode = True
@@ -383,16 +386,21 @@ class Qwen3VLMMRLForStages(Qwen3VLForConditionalGeneration):
         usage_loss = _loss_tensor("adapter_usage_balance_loss")
         entropy_loss = _loss_tensor("adapter_sample_entropy_loss")
         residual_guard_loss = _loss_tensor("expert_residual_guard_loss")
+        mmrl_guard_loss = _loss_tensor("mmrl_residual_guard_loss")
         scaled_usage_loss = usage_loss * float(self.adapter_usage_balance_loss_weight)
         scaled_entropy_loss = entropy_loss * float(self.adapter_sample_entropy_loss_weight)
         scaled_residual_guard_loss = (
             residual_guard_loss * float(self.expert_residual_guard_loss_weight)
+        )
+        scaled_mmrl_guard_loss = (
+            mmrl_guard_loss * float(self.mmrl_residual_guard_loss_weight)
         )
         outputs.loss = (
             self.ce_loss_weight * ce_loss
             + scaled_usage_loss
             + scaled_entropy_loss
             + scaled_residual_guard_loss
+            + scaled_mmrl_guard_loss
         )
 
         with torch.no_grad():
@@ -402,6 +410,7 @@ class Qwen3VLMMRLForStages(Qwen3VLForConditionalGeneration):
                 "adapter_usage_balance_loss_scaled": scaled_usage_loss.detach(),
                 "adapter_sample_entropy_loss_scaled": scaled_entropy_loss.detach(),
                 "expert_residual_guard_loss_scaled": scaled_residual_guard_loss.detach(),
+                "mmrl_residual_guard_loss_scaled": scaled_mmrl_guard_loss.detach(),
                 "stage_progress": torch.tensor(
                     float(self.current_stage_progress), device=ce_loss.device
                 ),
@@ -441,6 +450,9 @@ def build_model_and_processor(model_path, experiment_cfg=None):
     ))
     config.EXPERT_RESIDUAL_RATIO_UPPER = float(experiment_cfg.get(
         "expert_residual_ratio_upper", 0.35
+    ))
+    config.MMRL_RESIDUAL_RATIO_UPPER = float(experiment_cfg.get(
+        "mmrl_residual_ratio_upper", 0.20
     ))
     tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
     image_processor = AutoImageProcessor.from_pretrained(model_path, trust_remote_code=True)
@@ -487,7 +499,8 @@ def build_model_and_processor(model_path, experiment_cfg=None):
         f"ablate_direct_learnable_rep={config.ABLATE_DIRECT_LEARNABLE_REP} "
         f"visual_residual_adapter_count={config.VISUAL_RESIDUAL_ADAPTER_COUNT} "
         f"adapter_sample_entropy_target={config.ADAPTER_SAMPLE_ENTROPY_TARGET} "
-        f"expert_residual_ratio_upper={config.EXPERT_RESIDUAL_RATIO_UPPER}"
+        f"expert_residual_ratio_upper={config.EXPERT_RESIDUAL_RATIO_UPPER} "
+        f"mmrl_residual_ratio_upper={config.MMRL_RESIDUAL_RATIO_UPPER}"
     )
     print("Processor built.")
     return model, processor
@@ -776,6 +789,9 @@ def run_stage34_full(stage_id, model, processor, data_cfg, train_cfg, output_dir
     )
     model.expert_residual_guard_loss_weight = float(
         train_cfg.get("expert_residual_guard_loss_weight", 0.0)
+    )
+    model.mmrl_residual_guard_loss_weight = float(
+        train_cfg.get("mmrl_residual_guard_loss_weight", 0.0)
     )
 
     stage34_views = ("expert-mm",)

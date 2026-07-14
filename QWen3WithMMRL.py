@@ -43,6 +43,7 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
             "VISUAL_RESIDUAL_ADAPTER_COUNT": _cfg_attr(config, "VISUAL_RESIDUAL_ADAPTER_COUNT", 4),
             "ADAPTER_SAMPLE_ENTROPY_TARGET": _cfg_attr(config, "ADAPTER_SAMPLE_ENTROPY_TARGET", 0.55),
             "EXPERT_RESIDUAL_RATIO_UPPER": _cfg_attr(config, "EXPERT_RESIDUAL_RATIO_UPPER", 0.35),
+            "MMRL_RESIDUAL_RATIO_UPPER": _cfg_attr(config, "MMRL_RESIDUAL_RATIO_UPPER", 0.20),
             "vision_token_dim": vision_dim,
             "text_token_dim": text_dim
         }

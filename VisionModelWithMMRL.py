@@ -199,8 +199,10 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
         self.adapter_usage_balance_loss = torch.tensor(0.0)
         self.adapter_sample_entropy_loss = torch.tensor(0.0)
         self.expert_residual_guard_loss = torch.tensor(0.0)
+        self.mmrl_residual_guard_loss = torch.tensor(0.0)
         self.adapter_sample_entropy_target = float(getattr(self.cfg, "ADAPTER_SAMPLE_ENTROPY_TARGET", 0.55))
         self.expert_residual_ratio_upper = float(getattr(self.cfg, "EXPERT_RESIDUAL_RATIO_UPPER", 0.35))
+        self.mmrl_residual_ratio_upper = float(getattr(self.cfg, "MMRL_RESIDUAL_RATIO_UPPER", 0.20))
         self.alpha_list = []
         self.G_list = []
         self.route_probs = None
@@ -276,6 +278,42 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
         ) + self.visionGating.lower_bound
         return gate.clamp(0.0, 1.0)
 
+    def _bound_mmrl_delta(self, raw_delta, org_hidden_states, g_mask, cu_seqlens):
+        gated_delta = raw_delta * g_mask
+        bounded_chunks = []
+        pre_cap_ratios = []
+        cap_scales = []
+        upper = max(float(self.mmrl_residual_ratio_upper), 1e-6)
+
+        for start, end in zip(cu_seqlens[:-1].tolist(), cu_seqlens[1:].tolist()):
+            start, end = int(start), int(end)
+            if end <= start:
+                continue
+            delta_chunk = gated_delta[start:end]
+            org_chunk = org_hidden_states[start:end].detach()
+            delta_rms = delta_chunk.float().square().mean().sqrt()
+            org_rms = org_chunk.float().square().mean().sqrt().clamp_min(1e-8)
+            ratio = delta_rms / org_rms
+            scale = torch.clamp(
+                ratio.new_tensor(upper) / ratio.clamp_min(1e-8),
+                max=1.0,
+            )
+            bounded_chunks.append(delta_chunk * scale.to(dtype=delta_chunk.dtype))
+            pre_cap_ratios.append(ratio)
+            cap_scales.append(scale)
+
+        if not bounded_chunks:
+            zero = raw_delta.new_tensor(0.0)
+            self.mmrl_residual_guard_loss = zero
+            return gated_delta, raw_delta.new_empty(0), raw_delta.new_empty(0)
+
+        ratios = torch.stack(pre_cap_ratios)
+        scales = torch.stack(cap_scales)
+        self.mmrl_residual_guard_loss = torch.relu(
+            ratios - ratios.new_tensor(upper)
+        ).pow(2).mean().to(dtype=raw_delta.dtype)
+        return torch.cat(bounded_chunks, dim=0), ratios, scales
+
     def _compute_router_aux_losses(self, expert_residual, shared_state):
         zero = shared_state.new_tensor(0.0)
         self.adapter_usage_balance_loss = zero
@@ -319,6 +357,8 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
         adapter_outputs,
         cu_seqlens,
         g_mask,
+        pre_cap_ratios,
+        cap_scales,
     ):
         device = final_state.device
         nan = torch.tensor(float("nan"), device=device)
@@ -326,6 +366,9 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
             "mmrl_shared_strength": torch.tensor(self._shared_strength(), device=device),
             "G_mean": nan,
             "mmrl_raw_delta_to_org_ratio": nan,
+            "mmrl_pre_cap_delta_to_org_ratio": nan,
+            "mmrl_cap_scale_mean": nan,
+            "mmrl_cap_active_fraction": nan,
             "mmrl_shared_delta_to_org_ratio": nan,
             "mmrl_shared_common_mode_ratio": nan,
             "mmrl_shared_specificity_ratio": nan,
@@ -348,10 +391,18 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
             final = final_state.detach().float()
             org = org_hidden_states.detach().float()
             metrics["G_mean"] = g_mask.detach().float().mean()
+            if pre_cap_ratios.numel() > 0:
+                ratios = pre_cap_ratios.detach().float()
+                scales = cap_scales.detach().float()
+                metrics["mmrl_pre_cap_delta_to_org_ratio"] = ratios.mean()
+                metrics["mmrl_cap_scale_mean"] = scales.mean()
+                metrics["mmrl_cap_active_fraction"] = (scales < 1.0).float().mean()
+                metrics["mmrl_shared_delta_to_org_ratio"] = (
+                    ratios * scales * float(self._shared_strength())
+                ).mean()
 
             org_norm = org.norm(dim=-1).mean().clamp_min(1e-8)
             metrics["mmrl_raw_delta_to_org_ratio"] = raw.norm(dim=-1).mean() / org_norm
-            metrics["mmrl_shared_delta_to_org_ratio"] = shared_delta_f.norm(dim=-1).mean() / org_norm
             metrics["final_delta_to_org_ratio"] = (final - org).norm(dim=-1).mean() / org_norm
 
             shared_norm = shared.norm(dim=-1).clamp_min(1e-8)
@@ -625,7 +676,13 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
                 device=raw_mmrl_delta.device,
                 dtype=raw_mmrl_delta.dtype,
             )
-            shared_delta = raw_mmrl_delta * g_mask * float(self._shared_strength())
+            bounded_delta, pre_cap_ratios, cap_scales = self._bound_mmrl_delta(
+                raw_mmrl_delta,
+                org_hidden_states,
+                g_mask,
+                cu_seqlens,
+            )
+            shared_delta = bounded_delta * float(self._shared_strength())
             shared_state = org_hidden_states + shared_delta
 
             if self.experts_enabled:
@@ -650,6 +707,9 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
             expert_residual = torch.zeros_like(hidden_states)
             adapter_outputs = None
             g_mask = torch.zeros((hidden_states.shape[0], 1), device=hidden_states.device, dtype=hidden_states.dtype)
+            pre_cap_ratios = hidden_states.new_empty(0)
+            cap_scales = hidden_states.new_empty(0)
+            self.mmrl_residual_guard_loss = hidden_states.new_tensor(0.0)
 
         self._compute_router_aux_losses(expert_residual, shared_state)
         stage_audit_key = (int(self.current_stage_id), bool(self.experts_enabled))
@@ -673,8 +733,11 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
             adapter_outputs,
             cu_seqlens,
             g_mask,
+            pre_cap_ratios,
+            cap_scales,
         )
         self.debug_context = {
+            "mmrl_residual_guard_loss": self.mmrl_residual_guard_loss.detach(),
             "adapter_usage_balance_loss": self.adapter_usage_balance_loss.detach(),
             "adapter_sample_entropy_loss": self.adapter_sample_entropy_loss.detach(),
             "expert_residual_guard_loss": self.expert_residual_guard_loss.detach(),

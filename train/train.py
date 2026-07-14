@@ -6,13 +6,15 @@ from train_stages import build_model_and_processor, run_stage
 BASE_VISUAL_ROUTER_MODEL = {
     "rp_space_length": 40,
     "visual_residual_adapter_count": 4,
-    "adapter_usage_balance_loss_weight": 0.001,
-    "adapter_sample_entropy_loss_weight": 0.005,
-    "adapter_sample_entropy_target": 0.55,
+    "adapter_usage_balance_loss_weight": 0.0025,
+    "adapter_sample_entropy_loss_weight": 0.012,
+    "adapter_sample_entropy_target": 0.65,
     "expert_residual_guard_loss_weight": 0.010,
     "expert_residual_ratio_upper": 0.35,
+    "mmrl_residual_guard_loss_weight": 0.020,
+    "mmrl_residual_ratio_upper": 0.20,
     "mmrl_warmup_fraction": 1.0 / 3.0,
-    "stage4_mmrl_lr_scale": 0.05,
+    "stage4_mmrl_lr_scale": 0.02,
     "ablate_visual_gate": False,
     "ablate_direct_learnable_rep": False,
     "diag_every_steps": 250,
@@ -20,14 +22,14 @@ BASE_VISUAL_ROUTER_MODEL = {
 
 
 EXPERIMENTS = {
-    "visual_router_shared_residual_v1": {
+    "visual_router_shared_trust_region_v2": {
         **BASE_VISUAL_ROUTER_MODEL,
     },
 }
 
 SELECTED_EXPERIMENT = os.getenv(
     "MMRL_EXPERIMENT",
-    "visual_router_shared_residual_v1",
+    "visual_router_shared_trust_region_v2",
 )
 if SELECTED_EXPERIMENT not in EXPERIMENTS:
     raise ValueError(
@@ -92,6 +94,10 @@ CFG = {
             "expert_residual_guard_loss_weight"
         ],
         "expert_residual_ratio_upper": EXP_CFG["expert_residual_ratio_upper"],
+        "mmrl_residual_guard_loss_weight": EXP_CFG[
+            "mmrl_residual_guard_loss_weight"
+        ],
+        "mmrl_residual_ratio_upper": EXP_CFG["mmrl_residual_ratio_upper"],
         "mmrl_warmup_fraction": EXP_CFG["mmrl_warmup_fraction"],
         "stage4_mmrl_lr_scale": EXP_CFG["stage4_mmrl_lr_scale"],
         "per_device_train_batch_size": 2,
@@ -112,6 +118,9 @@ CFG = {
             "mmrl_shared_strength",
             "G_mean",
             "mmrl_raw_delta_to_org_ratio",
+            "mmrl_pre_cap_delta_to_org_ratio",
+            "mmrl_cap_scale_mean",
+            "mmrl_cap_active_fraction",
             "mmrl_shared_delta_to_org_ratio",
             "mmrl_shared_common_mode_ratio",
             "mmrl_shared_specificity_ratio",
@@ -127,6 +136,7 @@ CFG = {
             "adapter_usage_balance_loss_scaled",
             "adapter_sample_entropy_loss_scaled",
             "expert_residual_guard_loss_scaled",
+            "mmrl_residual_guard_loss_scaled",
             "mmrl_grad_pressure",
             "adapter_router_grad_pressure",
             "visual_adapter_grad_pressure",

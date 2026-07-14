@@ -114,7 +114,7 @@ run_N() {
 }
 
 # 当前可用实验名见 train/train.py: EXPERIMENTS
-run_N "visual_router_shared_residual_v1" "visual_router_shared_residual_v1" 1
+run_N "visual_router_shared_residual_v2" "visual_router_shared_residual_v2" 2
 
 
 

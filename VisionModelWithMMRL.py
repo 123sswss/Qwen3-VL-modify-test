@@ -1,3 +1,4 @@
+import math
 from typing import Optional
 
 import torch
@@ -203,6 +204,11 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
         self.adapter_sample_entropy_target = float(getattr(self.cfg, "ADAPTER_SAMPLE_ENTROPY_TARGET", 0.55))
         self.expert_residual_ratio_upper = float(getattr(self.cfg, "EXPERT_RESIDUAL_RATIO_UPPER", 0.35))
         self.mmrl_residual_ratio_upper = float(getattr(self.cfg, "MMRL_RESIDUAL_RATIO_UPPER", 0.20))
+        beta_init = float(getattr(self.cfg, "MMRL_BETA_INIT", 0.05))
+        if not 0.0 < beta_init < 1.0:
+            raise ValueError(f"MMRL_BETA_INIT must be in (0, 1), got {beta_init}")
+        beta_logit = math.log(beta_init / (1.0 - beta_init))
+        self.mmrl_beta_logit = nn.Parameter(torch.tensor(beta_logit, dtype=torch.float32))
         self.alpha_list = []
         self.G_list = []
         self.route_probs = None
@@ -210,8 +216,8 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
         # Defaults preserve the complete trained path when a saved model is loaded for inference.
         self.current_stage_id = 4
         self.current_stage_progress = 1.0
-        self.mmrl_warmup_fraction = 1.0 / 3.0
         self.experts_enabled = True
+        self.expert_route_mode = "dynamic"
         self.debug_context = {}
         self._printed_stage_path_audits = set()
 
@@ -257,13 +263,8 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
             return None
         return torch.stack(pooled, dim=0)
 
-    def _shared_strength(self):
-        if int(self.current_stage_id) == 3:
-            warmup = max(float(self.mmrl_warmup_fraction), 1e-8)
-            return max(0.0, min(float(self.current_stage_progress) / warmup, 1.0))
-        if int(self.current_stage_id) >= 4:
-            return 1.0
-        return 0.0
+    def _mmrl_beta(self):
+        return torch.sigmoid(self.mmrl_beta_logit.float())
 
     def _deterministic_gate(self, logits, temperature_override):
         temperature = (
@@ -363,7 +364,7 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
         device = final_state.device
         nan = torch.tensor(float("nan"), device=device)
         metrics = {
-            "mmrl_shared_strength": torch.tensor(self._shared_strength(), device=device),
+            "mmrl_beta": self._mmrl_beta().detach().to(device=device),
             "G_mean": nan,
             "mmrl_raw_delta_to_org_ratio": nan,
             "mmrl_pre_cap_delta_to_org_ratio": nan,
@@ -398,7 +399,7 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
                 metrics["mmrl_cap_scale_mean"] = scales.mean()
                 metrics["mmrl_cap_active_fraction"] = (scales < 1.0).float().mean()
                 metrics["mmrl_shared_delta_to_org_ratio"] = (
-                    ratios * scales * float(self._shared_strength())
+                    ratios * scales * self._mmrl_beta().detach()
                 ).mean()
 
             org_norm = org.norm(dim=-1).mean().clamp_min(1e-8)
@@ -594,11 +595,23 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
                             if self.G_list.sum() == 0:
                                 run_mmrl_branch = False
                     if self.experts_enabled:
-                        self.route_probs = self.adapter_router(
-                            pooled_vision_states,
-                            expanded_text_embedding,
-                            self.alpha_list,
-                        ).to(dtype=hidden_states.dtype)
+                        if self.expert_route_mode == "uniform":
+                            self.route_probs = torch.full(
+                                (total_pic_num, self.visual_residual_adapter_count),
+                                1.0 / self.visual_residual_adapter_count,
+                                device=hidden_states.device,
+                                dtype=hidden_states.dtype,
+                            )
+                        elif self.expert_route_mode == "dynamic":
+                            self.route_probs = self.adapter_router(
+                                pooled_vision_states,
+                                expanded_text_embedding,
+                                self.alpha_list,
+                            ).to(dtype=hidden_states.dtype)
+                        else:
+                            raise ValueError(
+                                f"unknown expert_route_mode={self.expert_route_mode!r}"
+                            )
 
                 ############ N图切分+门控 ############
                 idx = self.insert_layers.index(layer_num)
@@ -682,7 +695,10 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
                 g_mask,
                 cu_seqlens,
             )
-            shared_delta = bounded_delta * float(self._shared_strength())
+            shared_delta = bounded_delta * self._mmrl_beta().to(
+                device=bounded_delta.device,
+                dtype=bounded_delta.dtype,
+            )
             shared_state = org_hidden_states + shared_delta
 
             if self.experts_enabled:
@@ -712,13 +728,18 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
             self.mmrl_residual_guard_loss = hidden_states.new_tensor(0.0)
 
         self._compute_router_aux_losses(expert_residual, shared_state)
-        stage_audit_key = (int(self.current_stage_id), bool(self.experts_enabled))
+        stage_audit_key = (
+            int(self.current_stage_id),
+            bool(self.experts_enabled),
+            self.expert_route_mode,
+        )
         if stage_audit_key not in self._printed_stage_path_audits:
             print(
                 "[MMRL_STAGE_PATH_AUDIT] "
                 f"stage={self.current_stage_id} "
-                f"shared_strength={self._shared_strength():.6f} "
+                f"mmrl_beta={self._mmrl_beta().detach().float().item():.6f} "
                 f"experts_enabled={self.experts_enabled} "
+                f"expert_route_mode={self.expert_route_mode} "
                 f"router_active={torch.is_tensor(self.route_probs)}"
             )
             self._printed_stage_path_audits.add(stage_audit_key)

@@ -34,6 +34,21 @@ EXPERIMENTS = {
     "visual_router_expert_delta_stage3_v1": {
         **BASE_VISUAL_ROUTER_MODEL,
     },
+    "visual_router_expert_delta_stage3_v1_repeat": {
+        **BASE_VISUAL_ROUTER_MODEL,
+        "stage4_mmrl_lr_scale": 1.0,
+        "stage4_router_lr_scale": 1.0,
+    },
+    "visual_router_expert_delta_stage3_v2_slow_mmrl": {
+        **BASE_VISUAL_ROUTER_MODEL,
+        "stage4_mmrl_lr_scale": 0.25,
+        "stage4_router_lr_scale": 1.0,
+    },
+    "visual_router_expert_delta_stage3_v2_freeze_mmrl": {
+        **BASE_VISUAL_ROUTER_MODEL,
+        "stage4_mmrl_lr_scale": 0.0,
+        "stage4_router_lr_scale": 1.0,
+    },
 }
 
 SELECTED_EXPERIMENT = os.getenv(

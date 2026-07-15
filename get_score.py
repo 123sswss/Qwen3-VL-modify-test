@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import re
 from pathlib import Path
 
@@ -10,6 +11,7 @@ TARGET_NAME = "test.log"
 STEP_MARKER = "[330/972]"
 ACC_PATTERN = re.compile(r"Acc=\d+\.\d%")
 SCORE_KEYWORD = "百分制分数"
+SCORE_PATTERN = re.compile(r"百分制分数\s*[:：]\s*(-?\d+(?:\.\d+)?)")
 DIAGNOSTICS_FILENAME = "mmrl_diagnostics.jsonl"
 DIAGNOSTIC_STAGES = (3, 4)
 
@@ -45,7 +47,7 @@ def read_stage_metrics(experiment_dir: Path, stage_id: int) -> tuple[str, str]:
     return str(diagnostics_path), diagnostics_content
 
 
-def extract_info(log_path: Path) -> dict[str, str]:
+def extract_info(log_path: Path) -> dict[str, object]:
     experiment_dir = log_path.parents[1] if len(log_path.parents) >= 2 else None
     experiment_name = experiment_dir.name if experiment_dir is not None else "路径层级不足"
     diagnostics_by_stage = {}
@@ -59,6 +61,7 @@ def extract_info(log_path: Path) -> dict[str, str]:
     step_line = "未找到"
     acc_value = "未找到"
     score_line = "未找到"
+    score_value = None
 
     with log_path.open("r", encoding="utf-8", errors="ignore") as f:
         for raw_line in f:
@@ -72,23 +75,78 @@ def extract_info(log_path: Path) -> dict[str, str]:
 
             if SCORE_KEYWORD in line:
                 score_line = line.strip()
+                score_match = SCORE_PATTERN.search(line)
+                if score_match:
+                    score_value = float(score_match.group(1))
 
     return {
         "folder_name": experiment_name,
         "acc": acc_value,
         "score_line": score_line,
+        "score_value": score_value,
         "step_line": step_line,
         "log_path": str(log_path),
         "diagnostics_by_stage": diagnostics_by_stage,
     }
 
 
-def main() -> None:
-    log_files = sorted(
+def find_log_files() -> list[Path]:
+    return sorted(
         log_path
         for log_path in OUTPUT_DIR.glob(f"*/eval/{TARGET_NAME}")
         if not should_skip(log_path)
     )
+
+
+def read_score_value(log_path: Path) -> float | None:
+    score_value = None
+    with log_path.open("r", encoding="utf-8", errors="ignore") as f:
+        for line in f:
+            if SCORE_KEYWORD not in line:
+                continue
+            score_match = SCORE_PATTERN.search(line)
+            if score_match:
+                score_value = float(score_match.group(1))
+    return score_value
+
+
+def checkpoint_extrema_names(log_files: list[Path]) -> list[str]:
+    scored_checkpoints = []
+    for log_path in log_files:
+        experiment_dir = log_path.parents[1]
+        if not (experiment_dir / "final").is_dir():
+            continue
+        score_value = read_score_value(log_path)
+        if score_value is not None:
+            scored_checkpoints.append((experiment_dir.name, score_value))
+
+    if not scored_checkpoints:
+        return []
+
+    scores = [score for _, score in scored_checkpoints]
+    min_score = min(scores)
+    max_score = max(scores)
+    return sorted(
+        name
+        for name, score in scored_checkpoints
+        if score == min_score or score == max_score
+    )
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--checkpoint-extrema-names",
+        action="store_true",
+        help="仅输出当前仍有 final 目录的最高/最低分实验名",
+    )
+    args = parser.parse_args()
+    log_files = find_log_files()
+
+    if args.checkpoint_extrema_names:
+        for name in checkpoint_extrema_names(log_files):
+            print(name)
+        return
 
     if not log_files:
         print(f"在 {OUTPUT_DIR} 下没有找到任何匹配 */eval/{TARGET_NAME} 的日志")

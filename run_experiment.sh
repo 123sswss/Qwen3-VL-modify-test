@@ -55,6 +55,44 @@ find_available_tag() {
   echo "$candidate"
 }
 
+# 只保留当前仍有模型的并列最高分和并列最低分 checkpoint。
+# 已经被删除 final 的历史日志不参与比较，避免无法恢复的旧极值占位。
+prune_middle_final_dirs() {
+  local extrema_output
+  if ! extrema_output="$(cd "$ROOT_DIR" && python get_score.py --checkpoint-extrema-names)"; then
+    echo "[WARN] 获取 checkpoint 极值失败，本轮不删除任何 final 目录。"
+    return 0
+  fi
+  if [ -z "$extrema_output" ]; then
+    echo "[WARN] 没有找到可比较的有效分数，本轮不删除任何 final 目录。"
+    return 0
+  fi
+
+  declare -A keep_tags=()
+  local keep_tag
+  while IFS= read -r keep_tag; do
+    if [ -n "$keep_tag" ]; then
+      keep_tags["$keep_tag"]=1
+    fi
+  done <<< "$extrema_output"
+
+  local experiment_dir tag final_dir
+  for experiment_dir in "$CHECKPOINT_ROOT"/*; do
+    [ -d "$experiment_dir" ] || continue
+    tag="$(basename "$experiment_dir")"
+    [ "$tag" = "trash" ] && continue
+    final_dir="$experiment_dir/final"
+    [ -d "$final_dir" ] || continue
+
+    if [[ -n "${keep_tags[$tag]+x}" ]]; then
+      echo "[KEEP] 保留极值 checkpoint: $tag"
+    else
+      echo "[PRUNE] 删除中间分 checkpoint: $tag"
+      rm -rf -- "$final_dir"
+    fi
+  done
+}
+
 run_one() {
   local experiment_name="$1"
   local raw_tag="$2"
@@ -93,12 +131,8 @@ run_one() {
     python test.py 2>&1 | tee "$eval_dir/test.log"
   )
 
-  # 测试完成后删除最终模型，保留 stage1~stage4 的日志与图表
-  echo "[INFO] 测试完成，删除 final 模型目录以节省硬盘空间..."
-  if [ -d "$final_dir" ]; then
-    rm -rf "$final_dir"
-    echo "[INFO] 已删除 final 模型目录: $final_dir"
-  fi
+  # 测试日志生成分数后，保留全局并列最高/最低，清理其他 final。
+  prune_middle_final_dirs
 }
 
 # 重复跑 N 次同一实验；目录命名由 find_available_tag 自动处理，不会覆写
@@ -113,8 +147,9 @@ run_N() {
   done
 }
 
-# 当前可用实验名见 train/train.py: EXPERIMENTS
-run_N "visual_router_expert_delta_stage3_v1" "visual_router_expert_delta_stage3_v1" 2
+# 已有一次 v1 结果；今晚补成 baseline n=2、slow_mmrl n=2。
+run_N "visual_router_expert_delta_stage3_v1_repeat" "visual_router_expert_delta_stage3_v1_repeat" 1
+run_N "visual_router_expert_delta_stage3_v2_slow_mmrl" "visual_router_expert_delta_stage3_v2_slow_mmrl" 2
 
 
 

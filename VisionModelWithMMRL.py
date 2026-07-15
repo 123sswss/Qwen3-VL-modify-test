@@ -203,9 +203,30 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
         self.adapter_sample_entropy_target = float(getattr(self.cfg, "ADAPTER_SAMPLE_ENTROPY_TARGET", 0.55))
         self.expert_residual_ratio_upper = float(getattr(self.cfg, "EXPERT_RESIDUAL_RATIO_UPPER", 0.35))
         self.mmrl_residual_ratio_upper = float(getattr(self.cfg, "MMRL_RESIDUAL_RATIO_UPPER", 0.20))
+        self.router_prior_temperature = float(getattr(self.cfg, "ROUTER_PRIOR_TEMPERATURE", 0.25))
+        self.router_residual_start_fraction = float(getattr(self.cfg, "ROUTER_RESIDUAL_START_FRACTION", 0.30))
+        self.router_residual_max_scale = float(getattr(self.cfg, "ROUTER_RESIDUAL_MAX_SCALE", 0.50))
+        self.router_residual_logit_bound = float(getattr(self.cfg, "ROUTER_RESIDUAL_LOGIT_BOUND", 1.0))
+        self.register_buffer(
+            "router_prior_centroids",
+            torch.zeros(self.visual_residual_adapter_count, self.cfg.vision_token_dim),
+        )
+        self.register_buffer(
+            "router_prior_bias",
+            torch.zeros(self.visual_residual_adapter_count),
+        )
+        self.register_buffer(
+            "router_prior_temperature_value",
+            torch.tensor(self.router_prior_temperature, dtype=torch.float32),
+        )
+        self.register_buffer("router_prior_ready", torch.tensor(False, dtype=torch.bool))
         self.alpha_list = []
         self.G_list = []
         self.route_probs = None
+        self.router_prior_probs = None
+        self.router_prior_logits = None
+        self.router_residual_logits = None
+        self.router_residual_scale_current = 0.0
         self.ablate_visual_gate = bool(getattr(self.cfg, "ABLATE_VISUAL_GATE", False))
         # Defaults preserve the complete trained path when a saved model is loaded for inference.
         self.current_stage_id = 4
@@ -256,6 +277,127 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
         if not pooled:
             return None
         return torch.stack(pooled, dim=0)
+
+    def _router_features_from_final_tokens(
+        self,
+        token_states: torch.Tensor,
+        cu_seqlens: torch.Tensor,
+    ) -> torch.Tensor:
+        # The route prior must only see the untouched final vision branch.
+        normalized_tokens = F.layer_norm(
+            token_states.detach().float(),
+            (token_states.shape[-1],),
+        )
+        pooled = self._pool_tokens_by_image_mean(normalized_tokens, cu_seqlens)
+        if pooled is None:
+            return token_states.new_empty((0, token_states.shape[-1]))
+        pooled = F.normalize(pooled, dim=-1, eps=1e-8)
+        return pooled.to(device=token_states.device, dtype=token_states.dtype)
+
+    @torch.no_grad()
+    def extract_router_calibration_features(
+        self,
+        hidden_states: torch.Tensor,
+        grid_thw: torch.Tensor,
+    ) -> torch.Tensor:
+        """Run only the untouched vision branch and return final per-image features."""
+        hidden_states = self.patch_embed(hidden_states.type(self.dtype))
+        hidden_states = hidden_states + self.fast_pos_embed_interpolate(grid_thw)
+
+        rotary_pos_emb = self.rot_pos_emb(grid_thw)
+        seq_len, _ = hidden_states.size()
+        hidden_states = hidden_states.reshape(seq_len, -1)
+        rotary_pos_emb = rotary_pos_emb.reshape(seq_len, -1)
+        emb = torch.cat((rotary_pos_emb, rotary_pos_emb), dim=-1)
+        position_embeddings = (emb.cos(), emb.sin())
+        cu_seqlens = torch.repeat_interleave(
+            grid_thw[:, 1] * grid_thw[:, 2],
+            grid_thw[:, 0],
+        ).cumsum(
+            dim=0,
+            dtype=grid_thw.dtype if torch.jit.is_tracing() else torch.int32,
+        )
+        cu_seqlens = F.pad(cu_seqlens, (1, 0), value=0)
+
+        for block in self.blocks:
+            hidden_states = block(
+                hidden_states,
+                cu_seqlens=cu_seqlens,
+                position_embeddings=position_embeddings,
+                rotary_pos_emb=rotary_pos_emb,
+            )
+        return self._router_features_from_final_tokens(hidden_states, cu_seqlens)
+
+    @torch.no_grad()
+    def set_router_prior(
+        self,
+        centroids: torch.Tensor,
+        bias: torch.Tensor,
+        temperature: float,
+    ):
+        expected = (self.visual_residual_adapter_count, self.cfg.vision_token_dim)
+        if tuple(centroids.shape) != expected:
+            raise ValueError(
+                f"router centroids must have shape {expected}, got {tuple(centroids.shape)}"
+            )
+        if tuple(bias.shape) != (self.visual_residual_adapter_count,):
+            raise ValueError(
+                "router prior bias must have shape "
+                f"({self.visual_residual_adapter_count},), got {tuple(bias.shape)}"
+            )
+        self.router_prior_centroids.copy_(
+            F.normalize(centroids.float(), dim=-1).to(self.router_prior_centroids)
+        )
+        self.router_prior_bias.copy_(bias.float().to(self.router_prior_bias))
+        self.router_prior_temperature_value.fill_(max(float(temperature), 1e-6))
+        self.router_prior_ready.fill_(True)
+
+    def _router_residual_scale(self) -> float:
+        if int(self.current_stage_id) < 4:
+            return 0.0
+        start = min(max(self.router_residual_start_fraction, 0.0), 0.99)
+        progress = min(max(float(self.current_stage_progress), 0.0), 1.0)
+        ramp = max(progress - start, 0.0) / max(1.0 - start, 1e-8)
+        return float(self.router_residual_max_scale) * ramp
+
+    def _compute_semantic_route_probs(
+        self,
+        router_vision_states: torch.Tensor,
+        expanded_text_embedding: torch.Tensor,
+        alpha_logits: Optional[torch.Tensor],
+    ) -> torch.Tensor:
+        if not bool(self.router_prior_ready.item()):
+            raise RuntimeError(
+                "router prior is not calibrated; Stage2 must run before Stage4"
+            )
+        if router_vision_states.shape[0] != expanded_text_embedding.shape[0]:
+            raise ValueError(
+                "router vision/text batch mismatch: "
+                f"{router_vision_states.shape[0]} != {expanded_text_embedding.shape[0]}"
+            )
+
+        vision_f = router_vision_states.float()
+        centroids = F.normalize(self.router_prior_centroids.float(), dim=-1)
+        temperature = max(float(self.router_prior_temperature_value.item()), 1e-6)
+        prior_logits = vision_f @ centroids.transpose(0, 1)
+        prior_logits = prior_logits / temperature + self.router_prior_bias.float()
+
+        raw_residual = self.adapter_router.compute_logits(
+            router_vision_states,
+            expanded_text_embedding,
+            alpha_logits,
+        ).float()
+        raw_residual = raw_residual - raw_residual.mean(dim=-1, keepdim=True)
+        bound = max(self.router_residual_logit_bound, 1e-6)
+        bounded_residual = bound * torch.tanh(raw_residual / bound)
+        residual_scale = self._router_residual_scale()
+        final_logits = prior_logits + residual_scale * bounded_residual
+
+        self.router_prior_logits = prior_logits.detach()
+        self.router_prior_probs = torch.softmax(prior_logits, dim=-1).detach()
+        self.router_residual_logits = bounded_residual.detach()
+        self.router_residual_scale_current = residual_scale
+        return torch.softmax(final_logits, dim=-1).to(dtype=router_vision_states.dtype)
 
     def _shared_strength(self):
         if int(self.current_stage_id) == 3:
@@ -381,6 +523,15 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
             "adapter_route_entropy_norm": nan,
             "adapter_usage_max": nan,
             "adapter_usage_min": nan,
+            "router_prior_entropy_norm": nan,
+            "router_prior_usage_max": nan,
+            "router_prior_usage_min": nan,
+            "router_prior_margin": nan,
+            "router_residual_scale": torch.tensor(
+                float(self.router_residual_scale_current), device=device
+            ),
+            "router_residual_to_prior_ratio": nan,
+            "route_prior_kl": nan,
         }
 
         with torch.no_grad():
@@ -472,6 +623,53 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
                 metrics["adapter_usage_max"] = usage.max()
                 metrics["adapter_usage_min"] = usage.min()
 
+                prior = self.router_prior_probs
+                if torch.is_tensor(prior) and prior.shape == routes.shape:
+                    prior = prior.detach().float()
+                    prior_usage = prior.mean(dim=0)
+                    prior_usage = prior_usage / prior_usage.sum().clamp_min(1e-8)
+                    prior_entropy = -(
+                        prior * prior.clamp_min(1e-8).log()
+                    ).sum(dim=-1)
+                    if prior.shape[-1] > 1:
+                        prior_entropy = prior_entropy / torch.log(
+                            prior.new_tensor(float(prior.shape[-1]))
+                        )
+                    metrics["router_prior_entropy_norm"] = prior_entropy.mean()
+                    metrics["router_prior_usage_max"] = prior_usage.max()
+                    metrics["router_prior_usage_min"] = prior_usage.min()
+                    top2 = prior.topk(k=min(2, prior.shape[-1]), dim=-1).values
+                    if top2.shape[-1] == 2:
+                        metrics["router_prior_margin"] = (
+                            top2[:, 0] - top2[:, 1]
+                        ).mean()
+                    metrics["route_prior_kl"] = (
+                        prior
+                        * (
+                            prior.clamp_min(1e-8).log()
+                            - routes.clamp_min(1e-8).log()
+                        )
+                    ).sum(dim=-1).mean()
+
+                prior_logits = self.router_prior_logits
+                residual_logits = self.router_residual_logits
+                if (
+                    torch.is_tensor(prior_logits)
+                    and torch.is_tensor(residual_logits)
+                    and prior_logits.shape == residual_logits.shape
+                ):
+                    prior_centered = prior_logits.float() - prior_logits.float().mean(
+                        dim=-1, keepdim=True
+                    )
+                    residual_effective = (
+                        residual_logits.float()
+                        * float(self.router_residual_scale_current)
+                    )
+                    metrics["router_residual_to_prior_ratio"] = (
+                        residual_effective.norm(dim=-1)
+                        / prior_centered.norm(dim=-1).clamp_min(1e-8)
+                    ).mean()
+
         return metrics
 
 
@@ -488,7 +686,12 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
         self.alpha_list = None 
         self.G_list = []
         self.route_probs = None
+        self.router_prior_probs = None
+        self.router_prior_logits = None
+        self.router_residual_logits = None
+        self.router_residual_scale_current = 0.0
         pooled_vision_states = None
+        expanded_text_embedding = None
 
 
         rotary_pos_emb_with_rep = None
@@ -593,13 +796,6 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
                             self.G_list = (raw_g > 0.5).to(dtype=hidden_states.dtype)
                             if self.G_list.sum() == 0:
                                 run_mmrl_branch = False
-                    if self.experts_enabled:
-                        self.route_probs = self.adapter_router(
-                            pooled_vision_states,
-                            expanded_text_embedding,
-                            self.alpha_list,
-                        ).to(dtype=hidden_states.dtype)
-
                 ############ N图切分+门控 ############
                 idx = self.insert_layers.index(layer_num)
                 forward_hit_layers.append(layer_num)
@@ -666,6 +862,19 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
             print(f"  expected_insert_layers_natural={[idx + 1 for idx in self.insert_layers] if v_r_token_list is not None else []}")
             self._printed_forward_layer_hit_audit = True
 
+        if self.experts_enabled:
+            if expanded_text_embedding is None:
+                raise RuntimeError("router text features were not built at the first insert layer")
+            router_vision_states = self._router_features_from_final_tokens(
+                org_hidden_states,
+                cu_seqlens,
+            )
+            self.route_probs = self._compute_semantic_route_probs(
+                router_vision_states,
+                expanded_text_embedding,
+                self.alpha_list,
+            ).to(dtype=hidden_states.dtype)
+
         if run_mmrl_branch and hidden_states_with_rep is not None:
             hidden_states_with_rep = _strip_r_token(hidden_states_with_rep,
                                                     original_seq_lens_list,
@@ -719,7 +928,9 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
                 f"stage={self.current_stage_id} "
                 f"shared_strength={self._shared_strength():.6f} "
                 f"experts_enabled={self.experts_enabled} "
-                f"router_active={torch.is_tensor(self.route_probs)}"
+                f"router_active={torch.is_tensor(self.route_probs)} "
+                f"router_prior_ready={bool(self.router_prior_ready.item())} "
+                f"router_residual_scale={self.router_residual_scale_current:.6f}"
             )
             self._printed_stage_path_audits.add(stage_audit_key)
 

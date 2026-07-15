@@ -44,6 +44,10 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
             "ADAPTER_SAMPLE_ENTROPY_TARGET": _cfg_attr(config, "ADAPTER_SAMPLE_ENTROPY_TARGET", 0.55),
             "EXPERT_RESIDUAL_RATIO_UPPER": _cfg_attr(config, "EXPERT_RESIDUAL_RATIO_UPPER", 0.35),
             "MMRL_RESIDUAL_RATIO_UPPER": _cfg_attr(config, "MMRL_RESIDUAL_RATIO_UPPER", 0.20),
+            "ROUTER_PRIOR_TEMPERATURE": _cfg_attr(config, "ROUTER_PRIOR_TEMPERATURE", 0.25),
+            "ROUTER_RESIDUAL_START_FRACTION": _cfg_attr(config, "ROUTER_RESIDUAL_START_FRACTION", 0.30),
+            "ROUTER_RESIDUAL_MAX_SCALE": _cfg_attr(config, "ROUTER_RESIDUAL_MAX_SCALE", 0.50),
+            "ROUTER_RESIDUAL_LOGIT_BOUND": _cfg_attr(config, "ROUTER_RESIDUAL_LOGIT_BOUND", 1.0),
             "vision_token_dim": vision_dim,
             "text_token_dim": text_dim
         }

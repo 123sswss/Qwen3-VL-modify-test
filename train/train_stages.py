@@ -3,6 +3,7 @@ import os
 import csv
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from torch.utils.data import DataLoader
 from transformers import (
     Qwen3VLForConditionalGeneration, AutoConfig, AutoTokenizer, AutoImageProcessor,
@@ -43,6 +44,13 @@ def _build_experiment_context(train_cfg, output_dir, stage_id):
         "mmrl_residual_ratio_upper",
         "mmrl_warmup_fraction",
         "stage4_mmrl_lr_scale",
+        "stage4_router_lr_scale",
+        "router_calibration_samples",
+        "router_prior_temperature",
+        "router_prior_entropy_target",
+        "router_residual_start_fraction",
+        "router_residual_max_scale",
+        "router_residual_logit_bound",
     )
     return {
         "experiment_name": experiment_name,
@@ -454,6 +462,18 @@ def build_model_and_processor(model_path, experiment_cfg=None):
     config.MMRL_RESIDUAL_RATIO_UPPER = float(experiment_cfg.get(
         "mmrl_residual_ratio_upper", 0.20
     ))
+    config.ROUTER_PRIOR_TEMPERATURE = float(experiment_cfg.get(
+        "router_prior_temperature", 0.25
+    ))
+    config.ROUTER_RESIDUAL_START_FRACTION = float(experiment_cfg.get(
+        "router_residual_start_fraction", 0.30
+    ))
+    config.ROUTER_RESIDUAL_MAX_SCALE = float(experiment_cfg.get(
+        "router_residual_max_scale", 0.50
+    ))
+    config.ROUTER_RESIDUAL_LOGIT_BOUND = float(experiment_cfg.get(
+        "router_residual_logit_bound", 1.0
+    ))
     tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
     image_processor = AutoImageProcessor.from_pretrained(model_path, trust_remote_code=True)
     base = Qwen3VLForConditionalGeneration.from_pretrained(
@@ -584,6 +604,188 @@ def _extract_mm_pooled_vision(v, pixel_values, image_grid_thw):
     )
     pooled = v.hidden_state_pooling.forward_vectorized(hs, batch_indices, image_grid_thw.shape[0])
     return pooled
+
+
+@torch.no_grad()
+def _fit_balanced_spherical_kmeans(
+    features,
+    cluster_count,
+    seed,
+    iterations=20,
+    sinkhorn_temperature=0.10,
+    sinkhorn_iterations=5,
+):
+    features = F.normalize(features.float(), dim=-1)
+    sample_count = features.shape[0]
+    if sample_count < cluster_count:
+        raise ValueError(
+            f"router calibration needs at least {cluster_count} samples, got {sample_count}"
+        )
+
+    generator = torch.Generator(device=features.device)
+    generator.manual_seed(int(seed))
+    first = int(torch.randint(sample_count, (1,), generator=generator).item())
+    centroid_list = [features[first]]
+    for _ in range(1, cluster_count):
+        existing = torch.stack(centroid_list, dim=0)
+        nearest_similarity = (features @ existing.t()).max(dim=1).values
+        centroid_list.append(features[nearest_similarity.argmin()])
+    centroids = F.normalize(torch.stack(centroid_list, dim=0), dim=-1)
+
+    temperature = max(float(sinkhorn_temperature), 1e-6)
+    for _ in range(max(int(iterations), 1)):
+        logits = (features @ centroids.t()) / temperature
+        logits = logits - logits.max()
+        assignments = logits.exp().t().clamp_min(1e-12)
+        assignments = assignments / assignments.sum().clamp_min(1e-12)
+        for _ in range(max(int(sinkhorn_iterations), 1)):
+            assignments = assignments / assignments.sum(dim=1, keepdim=True).clamp_min(1e-12)
+            assignments = assignments / cluster_count
+            assignments = assignments / assignments.sum(dim=0, keepdim=True).clamp_min(1e-12)
+            assignments = assignments / sample_count
+        assignments = (assignments * sample_count).t()
+        centroids = F.normalize(assignments.t() @ features, dim=-1)
+    return centroids
+
+
+@torch.no_grad()
+def _calibrate_prior_temperature_and_bias(
+    similarities,
+    cluster_count,
+    entropy_target=0.75,
+):
+    target_usage = torch.full((cluster_count,), 1.0 / cluster_count)
+    entropy_target = min(max(float(entropy_target), 0.05), 0.99)
+
+    def _evaluate(temperature):
+        logits = similarities / max(float(temperature), 1e-6)
+        bias = torch.zeros(cluster_count, dtype=logits.dtype)
+        for _ in range(100):
+            usage = torch.softmax(logits + bias, dim=-1).mean(dim=0)
+            correction = (
+                target_usage.clamp_min(1e-8).log()
+                - usage.clamp_min(1e-8).log()
+            )
+            bias = bias + 0.5 * correction
+            bias = bias - bias.mean()
+        probs = torch.softmax(logits + bias, dim=-1)
+        entropy = -(probs * probs.clamp_min(1e-8).log()).sum(dim=-1)
+        entropy = entropy / torch.log(probs.new_tensor(float(cluster_count)))
+        return entropy.mean().item(), bias, probs
+
+    low, high = 0.005, 2.0
+    for _ in range(24):
+        middle = (low * high) ** 0.5
+        entropy, _, _ = _evaluate(middle)
+        if entropy < entropy_target:
+            low = middle
+        else:
+            high = middle
+    temperature = (low * high) ** 0.5
+    entropy, bias, probs = _evaluate(temperature)
+    return temperature, bias, probs, entropy
+
+
+@torch.no_grad()
+def _calibrate_router_prior(model, processor, data_cfg, train_cfg, output_dir):
+    visual = model.model.visual
+    cluster_count = int(visual.visual_residual_adapter_count)
+    sample_limit = min(
+        int(train_cfg.get("router_calibration_samples", 4096)),
+        int(data_cfg["total_limit"]),
+    )
+    if sample_limit < cluster_count:
+        raise ValueError(
+            f"router_calibration_samples must be >= {cluster_count}, got {sample_limit}"
+        )
+
+    dataset = FourViewMMRLDataset(
+        processor=processor,
+        expert_json=data_cfg["expert_json"],
+        expert_img_dir=data_cfg["expert_img_dir"],
+        general_json=data_cfg["general_json"],
+        general_img_dir=data_cfg["general_img_dir"],
+        total_limit=sample_limit,
+        enable_views=("expert-mm",),
+        mode="stage2_router_prior_calibration",
+        ce_enabled=False,
+        seed=train_cfg["seed"],
+        deterministic_sampling=True,
+    )
+    loader = DataLoader(
+        dataset,
+        batch_size=train_cfg["per_device_train_batch_size"],
+        shuffle=False,
+        num_workers=train_cfg.get("dataloader_num_workers", 4),
+        pin_memory=False,
+        collate_fn=MMRLDataCollator(processor),
+        drop_last=False,
+    )
+
+    was_training = visual.training
+    visual.eval()
+    feature_batches = []
+    for batch in loader:
+        pixel_values = batch["pixel_values"]
+        image_grid_thw = batch["image_grid_thw"]
+        if pixel_values is None or image_grid_thw is None:
+            continue
+        pixel_values = pixel_values.cuda(non_blocking=True)
+        image_grid_thw = image_grid_thw.cuda(non_blocking=True)
+        if image_grid_thw.dim() == 3:
+            image_grid_thw = image_grid_thw.squeeze(1)
+        batch_features = visual.extract_router_calibration_features(
+            pixel_values,
+            image_grid_thw,
+        )
+        feature_batches.append(batch_features.float().cpu())
+    visual.train(was_training)
+
+    if not feature_batches:
+        raise RuntimeError("router calibration collected no vision features")
+    features = F.normalize(torch.cat(feature_batches, dim=0), dim=-1)
+    centroids = _fit_balanced_spherical_kmeans(
+        features,
+        cluster_count=cluster_count,
+        seed=train_cfg["seed"],
+        iterations=train_cfg.get("router_kmeans_iterations", 20),
+        sinkhorn_temperature=train_cfg.get("router_kmeans_temperature", 0.10),
+        sinkhorn_iterations=train_cfg.get("router_sinkhorn_iterations", 5),
+    )
+
+    similarities = features @ centroids.t()
+    temperature, bias, prior_probs, prior_entropy = (
+        _calibrate_prior_temperature_and_bias(
+            similarities,
+            cluster_count=cluster_count,
+            entropy_target=train_cfg.get("router_prior_entropy_target", 0.75),
+        )
+    )
+    usage = prior_probs.mean(dim=0)
+    visual.set_router_prior(centroids, bias, temperature)
+
+    stage2_dir = os.path.join(output_dir, "stage2")
+    os.makedirs(stage2_dir, exist_ok=True)
+    prior_path = os.path.join(stage2_dir, "router_prior.pt")
+    torch.save(
+        {
+            "centroids": centroids,
+            "bias": bias,
+            "usage": usage,
+            "temperature": float(temperature),
+            "normalized_entropy": float(prior_entropy),
+            "sample_count": int(features.shape[0]),
+        },
+        prior_path,
+    )
+    print(
+        "[ROUTER_PRIOR_CALIBRATION] "
+        f"samples={features.shape[0]} clusters={cluster_count} "
+        f"temperature={temperature:.6f} entropy={prior_entropy:.6f} "
+        f"usage={[round(x, 6) for x in usage.tolist()]} "
+        f"saved={prior_path}"
+    )
+    torch.cuda.empty_cache()
 
 
 def run_stage12_light(stage_id, model, processor, data_cfg, train_cfg, output_dir):
@@ -725,6 +927,15 @@ def run_stage12_light(stage_id, model, processor, data_cfg, train_cfg, output_di
                     print_stage_step_summary(f"stage{stage_id}", global_step, row)
     metric_logger.finalize()
 
+    if stage_id == 2:
+        _calibrate_router_prior(
+            model=model,
+            processor=processor,
+            data_cfg=data_cfg,
+            train_cfg=train_cfg,
+            output_dir=output_dir,
+        )
+
     # save_path = f"{output_dir}/stage{stage_id}"
     # model.save_pretrained(save_path)
     # print(f"[Stage{stage_id}] saved to {save_path}")
@@ -740,14 +951,23 @@ def _build_stage34_optimizer(model, stage_id, train_cfg):
         group_specs = [("mmrl", mmrl_params, base_lr)]
     else:
         mmrl_ids = {id(p) for p in mmrl_params}
-        expert_params = [
+        router_params = [
+            p for p in model.model.visual.adapter_router.parameters()
+            if p.requires_grad
+        ]
+        router_ids = {id(p) for p in router_params}
+        adapter_params = [
             p for p in model.parameters()
-            if p.requires_grad and id(p) not in mmrl_ids
+            if p.requires_grad
+            and id(p) not in mmrl_ids
+            and id(p) not in router_ids
         ]
         mmrl_lr = base_lr * float(train_cfg.get("stage4_mmrl_lr_scale", 0.05))
+        router_lr = base_lr * float(train_cfg.get("stage4_router_lr_scale", 0.25))
         group_specs = [
             ("mmrl", mmrl_params, mmrl_lr),
-            ("router_adapter", expert_params, base_lr),
+            ("adapter", adapter_params, base_lr),
+            ("router", router_params, router_lr),
         ]
 
     optimizer_groups = []

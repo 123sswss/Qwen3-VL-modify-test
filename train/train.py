@@ -6,8 +6,8 @@ from train_stages import build_model_and_processor, run_stage
 BASE_VISUAL_ROUTER_MODEL = {
     "rp_space_length": 40,
     "visual_residual_adapter_count": 4,
-    "adapter_usage_balance_loss_weight": 0.0025,
-    "adapter_sample_entropy_loss_weight": 0.012,
+    "adapter_usage_balance_loss_weight": 0.0005,
+    "adapter_sample_entropy_loss_weight": 0.0,
     "adapter_sample_entropy_target": 0.65,
     "expert_residual_guard_loss_weight": 0.010,
     "expert_residual_ratio_upper": 0.35,
@@ -15,6 +15,16 @@ BASE_VISUAL_ROUTER_MODEL = {
     "mmrl_residual_ratio_upper": 0.20,
     "mmrl_warmup_fraction": 1.0 / 3.0,
     "stage4_mmrl_lr_scale": 0.02,
+    "stage4_router_lr_scale": 0.25,
+    "router_calibration_samples": 4096,
+    "router_kmeans_iterations": 20,
+    "router_kmeans_temperature": 0.10,
+    "router_sinkhorn_iterations": 5,
+    "router_prior_temperature": 0.25,
+    "router_prior_entropy_target": 0.75,
+    "router_residual_start_fraction": 0.30,
+    "router_residual_max_scale": 0.50,
+    "router_residual_logit_bound": 1.0,
     "ablate_visual_gate": False,
     "ablate_direct_learnable_rep": False,
     "diag_every_steps": 250,
@@ -22,14 +32,14 @@ BASE_VISUAL_ROUTER_MODEL = {
 
 
 EXPERIMENTS = {
-    "visual_router_shared_trust_region_v2": {
+    "visual_router_semantic_prior_v1": {
         **BASE_VISUAL_ROUTER_MODEL,
     },
 }
 
 SELECTED_EXPERIMENT = os.getenv(
     "MMRL_EXPERIMENT",
-    "visual_router_shared_trust_region_v2",
+    "visual_router_semantic_prior_v1",
 )
 if SELECTED_EXPERIMENT not in EXPERIMENTS:
     raise ValueError(
@@ -100,6 +110,18 @@ CFG = {
         "mmrl_residual_ratio_upper": EXP_CFG["mmrl_residual_ratio_upper"],
         "mmrl_warmup_fraction": EXP_CFG["mmrl_warmup_fraction"],
         "stage4_mmrl_lr_scale": EXP_CFG["stage4_mmrl_lr_scale"],
+        "stage4_router_lr_scale": EXP_CFG["stage4_router_lr_scale"],
+        "router_calibration_samples": EXP_CFG["router_calibration_samples"],
+        "router_kmeans_iterations": EXP_CFG["router_kmeans_iterations"],
+        "router_kmeans_temperature": EXP_CFG["router_kmeans_temperature"],
+        "router_sinkhorn_iterations": EXP_CFG["router_sinkhorn_iterations"],
+        "router_prior_temperature": EXP_CFG["router_prior_temperature"],
+        "router_prior_entropy_target": EXP_CFG["router_prior_entropy_target"],
+        "router_residual_start_fraction": EXP_CFG[
+            "router_residual_start_fraction"
+        ],
+        "router_residual_max_scale": EXP_CFG["router_residual_max_scale"],
+        "router_residual_logit_bound": EXP_CFG["router_residual_logit_bound"],
         "per_device_train_batch_size": 2,
         "gradient_accumulation_steps": 16,
         "final_temp": 0.1,
@@ -116,25 +138,23 @@ CFG = {
             "ce_loss",
             "stage_progress",
             "mmrl_shared_strength",
-            "G_mean",
-            "mmrl_raw_delta_to_org_ratio",
-            "mmrl_pre_cap_delta_to_org_ratio",
-            "mmrl_cap_scale_mean",
             "mmrl_cap_active_fraction",
             "mmrl_shared_delta_to_org_ratio",
-            "mmrl_shared_common_mode_ratio",
-            "mmrl_shared_specificity_ratio",
             "mmrl_shared_token_specificity_ratio",
             "expert_residual_to_shared_ratio",
-            "expert_residual_ratio_p95",
-            "expert_residual_shared_cos",
             "final_delta_to_org_ratio",
             "adapter_pairwise_cos_mean",
+            "router_prior_entropy_norm",
+            "router_prior_usage_max",
+            "router_prior_usage_min",
+            "router_prior_margin",
             "adapter_route_entropy_norm",
             "adapter_usage_max",
             "adapter_usage_min",
+            "router_residual_scale",
+            "router_residual_to_prior_ratio",
+            "route_prior_kl",
             "adapter_usage_balance_loss_scaled",
-            "adapter_sample_entropy_loss_scaled",
             "expert_residual_guard_loss_scaled",
             "mmrl_residual_guard_loss_scaled",
             "mmrl_grad_pressure",

@@ -41,9 +41,7 @@ def _build_experiment_context(train_cfg, output_dir, stage_id):
         "expert_residual_ratio_upper",
         "mmrl_residual_guard_loss_weight",
         "mmrl_residual_ratio_upper",
-        "mmrl_beta_init",
-        "mmrl_beta_lr_scale",
-        "meta_fraction",
+        "mmrl_warmup_fraction",
         "stage4_mmrl_lr_scale",
     )
     return {
@@ -159,10 +157,8 @@ class MMRLDiagnosticsCallback(TrainerCallback):
         self.buffer = []
         self.jsonl_path = os.path.join(save_dir, "mmrl_diagnostics.jsonl")
         self.csv_path = os.path.join(save_dir, "mmrl_diagnostics.csv")
+        self.csv_header_written = False
         os.makedirs(save_dir, exist_ok=True)
-        self.csv_header_written = (
-            os.path.exists(self.csv_path) and os.path.getsize(self.csv_path) > 0
-        )
 
     def _to_python(self, value):
         if torch.is_tensor(value):
@@ -290,9 +286,7 @@ class Qwen3VLMMRLForStages(Qwen3VLForConditionalGeneration):
         self.ce_loss_weight = 1.0
         self.current_stage_id = 4
         self.current_stage_progress = 1.0
-        self.experts_enabled = True
-        self.expert_route_mode = "dynamic"
-        self.optimization_phase_id = 0
+        self.mmrl_warmup_fraction = 1.0 / 3.0
         self.adapter_usage_balance_loss_weight = 0.0
         self.adapter_sample_entropy_loss_weight = 0.0
         self.expert_residual_guard_loss_weight = 0.0
@@ -356,8 +350,8 @@ class Qwen3VLMMRLForStages(Qwen3VLForConditionalGeneration):
         visual = self.model.visual
         visual.current_stage_id = int(self.current_stage_id)
         visual.current_stage_progress = float(self.current_stage_progress)
-        visual.experts_enabled = bool(self.experts_enabled)
-        visual.expert_route_mode = self.expert_route_mode
+        visual.mmrl_warmup_fraction = float(self.mmrl_warmup_fraction)
+        visual.experts_enabled = int(self.current_stage_id) >= 4
 
         if self.temperature_override is not None:
             self.model.temperature_override = self.temperature_override
@@ -420,9 +414,6 @@ class Qwen3VLMMRLForStages(Qwen3VLForConditionalGeneration):
                 "stage_progress": torch.tensor(
                     float(self.current_stage_progress), device=ce_loss.device
                 ),
-                "optimization_phase_id": torch.tensor(
-                    int(self.optimization_phase_id), device=ce_loss.device
-                ),
             }
             self._last_metrics.update(visual.debug_context or {})
 
@@ -463,7 +454,6 @@ def build_model_and_processor(model_path, experiment_cfg=None):
     config.MMRL_RESIDUAL_RATIO_UPPER = float(experiment_cfg.get(
         "mmrl_residual_ratio_upper", 0.20
     ))
-    config.MMRL_BETA_INIT = float(experiment_cfg.get("mmrl_beta_init", 0.05))
     tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
     image_processor = AutoImageProcessor.from_pretrained(model_path, trust_remote_code=True)
     base = Qwen3VLForConditionalGeneration.from_pretrained(
@@ -474,9 +464,6 @@ def build_model_and_processor(model_path, experiment_cfg=None):
     model = Qwen3VLMMRLForStages(config, tokenizer).to("cuda").to(torch.bfloat16)
     model.model.load_state_dict(base.model.state_dict(), strict=False)
     model.lm_head.load_state_dict(base.lm_head.state_dict(), strict=False)
-    model.model.visual.mmrl_beta_logit.data = (
-        model.model.visual.mmrl_beta_logit.data.float()
-    )
     del base
     torch.cuda.empty_cache()
     print("MMRL model built and loaded with base weights.")
@@ -513,9 +500,7 @@ def build_model_and_processor(model_path, experiment_cfg=None):
         f"visual_residual_adapter_count={config.VISUAL_RESIDUAL_ADAPTER_COUNT} "
         f"adapter_sample_entropy_target={config.ADAPTER_SAMPLE_ENTROPY_TARGET} "
         f"expert_residual_ratio_upper={config.EXPERT_RESIDUAL_RATIO_UPPER} "
-        f"mmrl_residual_ratio_upper={config.MMRL_RESIDUAL_RATIO_UPPER} "
-        f"mmrl_beta_init={config.MMRL_BETA_INIT} "
-        f"mmrl_beta_dtype={model.model.visual.mmrl_beta_logit.dtype}"
+        f"mmrl_residual_ratio_upper={config.MMRL_RESIDUAL_RATIO_UPPER}"
     )
     print("Processor built.")
     return model, processor
@@ -524,7 +509,7 @@ def build_model_and_processor(model_path, experiment_cfg=None):
 # =========================
 #  Freeze policy
 # =========================
-def set_trainable_stage(model, stage, train_cfg=None, phase=None):
+def set_trainable_stage(model, stage, train_cfg=None):
     for p in model.parameters():
         p.requires_grad = False
 
@@ -543,36 +528,14 @@ def set_trainable_stage(model, stage, train_cfg=None, phase=None):
             "vision_gate": v.visionGating,
         }
     elif stage == 3:
-        if phase not in {None, "bootstrap"}:
-            raise ValueError(f"unsupported stage3 phase={phase!r}")
+        modules = {"mmrl": model.model.MMRL}
+    elif stage == 4:
         modules = {
             "mmrl": model.model.MMRL,
-            "mmrl_beta": v.mmrl_beta_logit,
+            "adapter_router": v.adapter_router,
             "residual_adapters": v.residual_adapters,
             "adapter_input_norm": v.adapter_input_norm,
         }
-    elif stage == 4:
-        if phase in {None, "all"}:
-            modules = {
-                "mmrl": model.model.MMRL,
-                "mmrl_beta": v.mmrl_beta_logit,
-                "adapter_router": v.adapter_router,
-                "residual_adapters": v.residual_adapters,
-                "adapter_input_norm": v.adapter_input_norm,
-            }
-        elif phase == "expert":
-            modules = {
-                "mmrl": model.model.MMRL,
-                "residual_adapters": v.residual_adapters,
-                "adapter_input_norm": v.adapter_input_norm,
-            }
-        elif phase == "meta":
-            modules = {
-                "mmrl_beta": v.mmrl_beta_logit,
-                "adapter_router": v.adapter_router,
-            }
-        else:
-            raise ValueError(f"unsupported stage4 phase={phase!r}")
     else:
         raise ValueError("stage must be 1/2/3/4")
 
@@ -587,10 +550,7 @@ def set_trainable_stage(model, stage, train_cfg=None, phase=None):
             count = sum(p.numel() for p in module.parameters())
         audit.append(f"{name}:{count}")
     total = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    print(
-        f"[STAGE_TRAINABLE_AUDIT] stage={stage} phase={phase or 'default'} "
-        f"total={total} groups={audit}"
-    )
+    print(f"[STAGE_TRAINABLE_AUDIT] stage={stage} total={total} groups={audit}")
 
 
 def print_stage4_trainable_params_before_stage1(model):
@@ -610,8 +570,7 @@ def _build_text_pool_mask(attention_mask):
 @torch.no_grad()
 def _extract_mm_pooled_vision(v, pixel_values, image_grid_thw):
     # 只跑视觉patch + pooling，不跑全主干
-    patch_dtype = next(v.patch_embed.parameters()).dtype
-    hs = v.patch_embed(pixel_values.to(dtype=patch_dtype))
+    hs = v.patch_embed(pixel_values.type(v.dtype))
     pos = v.fast_pos_embed_interpolate(image_grid_thw)
     hs = hs + pos
     seq_len, _ = hs.size()
@@ -695,13 +654,13 @@ def run_stage12_light(stage_id, model, processor, data_cfg, train_cfg, output_di
         for i, batch in enumerate(dl):
             input_ids = batch["input_ids"].cuda(non_blocking=True)
             attention_mask = batch["attention_mask"].cuda(non_blocking=True)
-            alpha_labels = batch["alpha_labels"].cuda(non_blocking=True).view(-1, 1)
+            alpha_labels = batch["alpha_labels"].cuda(non_blocking=True).view(-1, 1).to(dtype=v.dtype)
             is_mm = batch["is_mm"].cuda(non_blocking=True)
             pixel_values = batch["pixel_values"]
             image_grid_thw = batch["image_grid_thw"]
 
             # text embedding + pooling
-            text_emb = model.model.get_input_embeddings()(input_ids)
+            text_emb = model.model.get_input_embeddings()(input_ids).to(dtype=v.dtype)
             text_pool_mask = _build_text_pool_mask(attention_mask)
             text_pooled = v.embedding_pooling(text_emb, mask=text_pool_mask)
 
@@ -719,7 +678,6 @@ def run_stage12_light(stage_id, model, processor, data_cfg, train_cfg, output_di
                 vision_pooled[mm_idx] = mm_vision_pooled
 
             alpha_logits = v.Task_classifier(vision_pooled, text_pooled)
-            alpha_labels = alpha_labels.to(dtype=alpha_logits.dtype)
 
             if use_focal:
                 cls_loss = focal_bce_with_logits(alpha_logits, alpha_labels)
@@ -775,64 +733,35 @@ def run_stage12_light(stage_id, model, processor, data_cfg, train_cfg, output_di
 # =========================
 #  Stage3/4 (完整Trainer)
 # =========================
-def _build_stage34_optimizer(model, stage_id, train_cfg, phase):
+def _build_stage34_optimizer(model, stage_id, train_cfg):
     base_lr = float(train_cfg["learning_rate"][stage_id])
     mmrl_params = [p for p in model.model.MMRL.parameters() if p.requires_grad]
-    beta_param = model.model.visual.mmrl_beta_logit
-    beta_params = [beta_param] if beta_param.requires_grad else []
-    beta_lr = base_lr * float(train_cfg.get("mmrl_beta_lr_scale", 10.0))
-
     if stage_id == 3:
-        excluded_ids = {id(p) for p in mmrl_params + beta_params}
-        adapter_params = [
-            p for p in model.parameters()
-            if p.requires_grad and id(p) not in excluded_ids
-        ]
-        group_specs = [
-            ("mmrl", mmrl_params, base_lr, 0.01),
-            ("adapter", adapter_params, base_lr, 0.01),
-            ("mmrl_beta", beta_params, beta_lr, 0.0),
-        ]
-    elif phase == "expert":
+        group_specs = [("mmrl", mmrl_params, base_lr)]
+    else:
         mmrl_ids = {id(p) for p in mmrl_params}
-        adapter_params = [
+        expert_params = [
             p for p in model.parameters()
             if p.requires_grad and id(p) not in mmrl_ids
         ]
         mmrl_lr = base_lr * float(train_cfg.get("stage4_mmrl_lr_scale", 0.05))
         group_specs = [
-            ("mmrl", mmrl_params, mmrl_lr, 0.01),
-            ("adapter", adapter_params, base_lr, 0.01),
+            ("mmrl", mmrl_params, mmrl_lr),
+            ("router_adapter", expert_params, base_lr),
         ]
-    elif phase == "meta":
-        router_params = [
-            p for p in model.model.visual.adapter_router.parameters()
-            if p.requires_grad
-        ]
-        group_specs = [
-            ("router", router_params, base_lr, 0.01),
-            ("mmrl_beta", beta_params, beta_lr, 0.0),
-        ]
-    else:
-        raise ValueError(f"unsupported optimizer phase stage={stage_id} phase={phase!r}")
 
     optimizer_groups = []
     grouped_ids = set()
-    for name, params, lr, weight_decay in group_specs:
+    for name, params, lr in group_specs:
         if not params:
             continue
         grouped_ids.update(id(p) for p in params)
         count = sum(p.numel() for p in params)
         print(
             f"[MMRL_OPTIMIZER_GROUP] stage={stage_id} name={name} "
-            f"phase={phase} lr={lr:.8g} weight_decay={weight_decay:.4g} "
-            f"tensors={len(params)} params={count}"
+            f"lr={lr:.8g} tensors={len(params)} params={count}"
         )
-        optimizer_groups.append({
-            "params": params,
-            "lr": lr,
-            "weight_decay": weight_decay,
-        })
+        optimizer_groups.append({"params": params, "lr": lr})
     if not optimizer_groups:
         raise RuntimeError(f"Stage {stage_id} has no trainable parameters")
     trainable_ids = {id(p) for p in model.parameters() if p.requires_grad}
@@ -841,134 +770,17 @@ def _build_stage34_optimizer(model, stage_id, train_cfg, phase):
             f"Stage {stage_id} optimizer coverage mismatch: "
             f"grouped={len(grouped_ids)} trainable={len(trainable_ids)}"
         )
-    return torch.optim.AdamW(optimizer_groups)
-
-
-def _build_stage34_dataset(
-    stage_id,
-    split_role,
-    model_phase,
-    processor,
-    data_cfg,
-    train_cfg,
-):
-    stage34_views = ("expert-mm",)
-    return FourViewMMRLDataset(
-        processor=processor,
-        expert_json=data_cfg["expert_json"],
-        expert_img_dir=data_cfg["expert_img_dir"],
-        general_json=None,
-        general_img_dir=None,
-        total_limit=data_cfg["total_limit"],
-        enable_views=stage34_views,
-        mode=f"stage{stage_id}_{model_phase}",
-        ce_enabled=True,
-        seed=train_cfg["seed"],
-        deterministic_sampling=train_cfg.get("deterministic_sampling", False),
-        split_role=split_role,
-        meta_fraction=train_cfg["meta_fraction"],
-    )
-
-
-def _run_stage34_phase(
-    stage_id,
-    phase,
-    phase_name,
-    model,
-    processor,
-    dataset,
-    train_cfg,
-    output_dir,
-):
-    set_trainable_stage(model, stage_id, train_cfg=train_cfg, phase=phase)
-    model.current_stage_id = int(stage_id)
-    model.current_stage_progress = 0.0
-    model.experts_enabled = True
-    model.expert_route_mode = "uniform" if phase == "bootstrap" else "dynamic"
-    model.optimization_phase_id = {
-        "bootstrap": 0,
-        "expert": 1,
-        "meta": 2,
-    }[phase]
-
-    if len(dataset) == 0:
-        raise RuntimeError(f"empty dataset for stage={stage_id} phase={phase_name}")
-
-    print(
-        f"[STAGE_PHASE_AUDIT] stage={stage_id} phase={phase_name} "
-        f"route_mode={model.expert_route_mode} samples={len(dataset)} "
-        f"mmrl_beta={model.model.visual._mmrl_beta().detach().float().item():.6f}"
-    )
-
-    schedule_cb = StageScheduleCallback(
-        dataset=dataset,
-        total_epochs=1,
-        init_temp=train_cfg.get("final_temp", 0.1),
-        final_temp=train_cfg.get("final_temp", 0.1),
-    )
-    args = TrainingArguments(
-        output_dir=f"{output_dir}/stage{stage_id}/trainer_{phase_name}",
-        num_train_epochs=1,
-        per_device_train_batch_size=train_cfg["per_device_train_batch_size"],
-        gradient_accumulation_steps=train_cfg["gradient_accumulation_steps"],
-        learning_rate=train_cfg["learning_rate"][stage_id],
-        lr_scheduler_type="cosine",
-        warmup_ratio=0.05,
-        logging_steps=10,
-        save_strategy="no",
-        remove_unused_columns=False,
-        bf16=True,
-        dataloader_pin_memory=False,
-        dataloader_num_workers=train_cfg.get("dataloader_num_workers", 4),
-    )
-    experiment_context = _build_experiment_context(train_cfg, output_dir, stage_id)
-    experiment_context["optimization_phase"] = phase_name
-    metric_logger = StageMetricLogger(
-        save_dir=f"{output_dir}/stage{stage_id}/metrics",
-        stage_name=phase_name,
-        experiment_name=experiment_context["experiment_name"],
-        experiment_config=experiment_context,
-        smooth_window=train_cfg.get("metric_smooth_window", 30),
-        ema_alpha=train_cfg.get("metric_ema_alpha", 0.15),
-        scatter_stride=train_cfg.get("metric_scatter_stride", 3),
-        save_debug_figure=train_cfg.get("save_debug_figure", False),
-    )
-    optimizer = _build_stage34_optimizer(model, stage_id, train_cfg, phase)
-    trainer = Trainer(
-        model=model,
-        args=args,
-        train_dataset=dataset,
-        data_collator=MMRLDataCollator(processor),
-        callbacks=[
-            schedule_cb,
-            GradientPressureCallback(),
-            TrainerMetricsCallback(
-                metric_logger=metric_logger,
-                print_every=train_cfg.get("console_log_every", 50),
-                stage_name=phase_name,
-            ),
-            MMRLDiagnosticsCallback(
-                save_dir=f"{output_dir}/stage{stage_id}/metrics",
-                every_steps=train_cfg.get("diag_every_steps", 1000),
-                stage_name=phase_name,
-                keep_keys=train_cfg.get("mmrl_diagnostics_keep_keys"),
-            ),
-        ],
-        optimizers=(optimizer, None),
-    )
-    trainer.train()
-    print(
-        f"[STAGE_PHASE_DONE] stage={stage_id} phase={phase_name} "
-        f"mmrl_beta={model.model.visual._mmrl_beta().detach().float().item():.6f}"
-    )
-    del trainer, optimizer
-    torch.cuda.empty_cache()
+    return torch.optim.AdamW(optimizer_groups, weight_decay=0.01)
 
 
 def run_stage34_full(stage_id, model, processor, data_cfg, train_cfg, output_dir):
     assert stage_id in [3, 4]
+    set_trainable_stage(model, stage_id, train_cfg=train_cfg)
 
     model.ce_loss_weight = 1.0
+    model.current_stage_id = int(stage_id)
+    model.current_stage_progress = 0.0
+    model.mmrl_warmup_fraction = float(train_cfg.get("mmrl_warmup_fraction", 1.0 / 3.0))
     model.adapter_usage_balance_loss_weight = float(
         train_cfg.get("adapter_usage_balance_loss_weight", 0.0)
     )
@@ -982,79 +794,81 @@ def run_stage34_full(stage_id, model, processor, data_cfg, train_cfg, output_dir
         train_cfg.get("mmrl_residual_guard_loss_weight", 0.0)
     )
 
-    print(
-        f"[Stage{stage_id}] enable_views=('expert-mm',) "
-        f"meta_fraction={train_cfg['meta_fraction']:.4f}"
+    stage34_views = ("expert-mm",)
+    print(f"[Stage{stage_id}] enable_views={stage34_views}")
+
+    ds = FourViewMMRLDataset(
+        processor=processor,
+        expert_json=data_cfg["expert_json"],
+        expert_img_dir=data_cfg["expert_img_dir"],
+        general_json=data_cfg["general_json"],
+        general_img_dir=data_cfg["general_img_dir"],
+        total_limit=data_cfg["total_limit"],
+        enable_views=stage34_views,
+        mode=f"stage{stage_id}",
+        ce_enabled=True,
+        seed=train_cfg["seed"],
+        deterministic_sampling=train_cfg.get("deterministic_sampling", False),
     )
-    inner_dataset = _build_stage34_dataset(
-        stage_id,
-        "inner",
-        "bootstrap" if stage_id == 3 else "expert",
-        processor,
-        data_cfg,
-        train_cfg,
+    collator = MMRLDataCollator(processor)
+    schedule_cb = StageScheduleCallback(
+        dataset=ds,
+        total_epochs=train_cfg["epochs"][stage_id],
+        init_temp=train_cfg.get("final_temp", 0.1),
+        final_temp=train_cfg.get("final_temp", 0.1),
     )
-
-    if stage_id == 3:
-        for epoch_idx in range(int(train_cfg["epochs"][stage_id])):
-            _run_stage34_phase(
-                stage_id,
-                "bootstrap",
-                f"stage3_bootstrap_{epoch_idx + 1}",
-                model,
-                processor,
-                inner_dataset,
-                train_cfg,
-                output_dir,
-            )
-        return
-
-    meta_dataset = _build_stage34_dataset(
-        stage_id,
-        "meta",
-        "meta",
-        processor,
-        data_cfg,
-        train_cfg,
+    args = TrainingArguments(
+        output_dir=f"{output_dir}/stage{stage_id}",
+        num_train_epochs=train_cfg["epochs"][stage_id],
+        per_device_train_batch_size=train_cfg["per_device_train_batch_size"],
+        gradient_accumulation_steps=train_cfg["gradient_accumulation_steps"],
+        learning_rate=train_cfg["learning_rate"][stage_id],
+        lr_scheduler_type="cosine",
+        warmup_ratio=0.05,
+        logging_steps=10,
+        save_strategy="no",
+        remove_unused_columns=False,
+        bf16=True,
+        dataloader_pin_memory=False,
+        dataloader_num_workers=train_cfg.get("dataloader_num_workers", 4),
     )
-    _run_stage34_phase(
-        stage_id,
-        "meta",
-        "stage4_meta_0",
-        model,
-        processor,
-        meta_dataset,
-        train_cfg,
-        output_dir,
+    experiment_context = _build_experiment_context(train_cfg, output_dir, stage_id)
+    metric_logger = StageMetricLogger(
+        save_dir=f"{output_dir}/stage{stage_id}/metrics",
+        stage_name=f"stage{stage_id}",
+        experiment_name=experiment_context["experiment_name"],
+        experiment_config=experiment_context,
+        smooth_window=train_cfg.get("metric_smooth_window", 30),
+        ema_alpha=train_cfg.get("metric_ema_alpha", 0.15),
+        scatter_stride=train_cfg.get("metric_scatter_stride", 3),
+        save_debug_figure=train_cfg.get("save_debug_figure", False),
     )
-    for cycle_idx in range(int(train_cfg["epochs"][stage_id])):
-        cycle = cycle_idx + 1
-        _run_stage34_phase(
-            stage_id,
-            "expert",
-            f"stage4_expert_{cycle}",
-            model,
-            processor,
-            inner_dataset,
-            train_cfg,
-            output_dir,
-        )
-        _run_stage34_phase(
-            stage_id,
-            "meta",
-            f"stage4_meta_{cycle}",
-            model,
-            processor,
-            meta_dataset,
-            train_cfg,
-            output_dir,
-        )
-
-    model.experts_enabled = True
-    model.expert_route_mode = "dynamic"
-    model.optimization_phase_id = 0
-
-
+    metrics_cb = TrainerMetricsCallback(
+        metric_logger=metric_logger,
+        print_every=train_cfg.get("console_log_every", 50),
+        stage_name=f"stage{stage_id}",
+    )
+    diag_cb = MMRLDiagnosticsCallback(
+        save_dir=f"{output_dir}/stage{stage_id}/metrics",
+        every_steps=train_cfg.get("diag_every_steps", 1000),
+        stage_name=f"stage{stage_id}",
+        keep_keys=train_cfg.get("mmrl_diagnostics_keep_keys"),
+    )
+    optimizer = _build_stage34_optimizer(model, stage_id, train_cfg)
+    trainer = Trainer(
+        model=model,
+        args=args,
+        train_dataset=ds,
+        data_collator=collator,
+        callbacks=[
+            schedule_cb,
+            GradientPressureCallback(),
+            metrics_cb,
+            diag_cb,
+        ],
+        optimizers=(optimizer, None),
+    )
+    trainer.train()
 def run_stage(stage_id, model, processor, data_cfg, train_cfg, output_dir):
     if stage_id == 1:
         _write_experiment_manifest(output_dir, train_cfg)

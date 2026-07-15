@@ -36,8 +36,6 @@ class attention_pooling(nn.Module):
 
     def forward(self, input_embeds, mask: Optional[torch.Tensor] = None):
         # input_embeds: [B, S, D] 或 [S, D]
-        compute_dtype = self.projector_q.weight.dtype
-        input_embeds = input_embeds.to(dtype=compute_dtype)
         squeeze_output = False
         if input_embeds.dim() == 2:
             input_embeds = input_embeds.unsqueeze(0)
@@ -47,7 +45,7 @@ class attention_pooling(nn.Module):
 
         B, S, D = input_embeds.shape
 
-        qq_raw = self.projector_q(self.query.to(dtype=compute_dtype))
+        qq_raw = self.projector_q(self.query.to(dtype=input_embeds.dtype))
         qq = qq_raw.expand(B, 1, -1)
 
         kk = self.projector_e(input_embeds)
@@ -72,9 +70,7 @@ class attention_pooling(nn.Module):
     ):
         # x: [Total_Tokens, D]
         # batch_indices: [Total_Tokens]
-        compute_dtype = self.projector_q.weight.dtype
-        x = x.to(dtype=compute_dtype)
-        qq = self.projector_q(self.query.to(dtype=compute_dtype))    # [1, P]
+        qq = self.projector_q(self.query.to(dtype=x.dtype))          # [1, P]
         kk = self.projector_e(x)                                     # [Total_Tokens, P]
         logits = (kk * qq).sum(dim=-1) / math.sqrt(self.proj_dim)    # [Total_Tokens]
         logits = logits.to(dtype=x.dtype)

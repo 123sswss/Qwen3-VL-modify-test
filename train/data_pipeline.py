@@ -3,8 +3,6 @@ import os
 import re
 import json
 import random
-import hashlib
-from collections import defaultdict
 from typing import List, Dict, Any, Optional
 from PIL import Image
 
@@ -128,8 +126,6 @@ class FourViewMMRLDataset(Dataset):
         ce_enabled=False,
         seed=42,
         deterministic_sampling=False,
-        split_role=None,
-        meta_fraction=0.0,
     ):
         self.processor = processor
         self.total_limit = total_limit
@@ -137,14 +133,6 @@ class FourViewMMRLDataset(Dataset):
         self.mode = mode
         self.seed = seed
         self.deterministic_sampling = deterministic_sampling
-        if split_role not in {None, "inner", "meta"}:
-            raise ValueError(f"split_role must be None/'inner'/'meta', got {split_role!r}")
-        if not 0.0 <= float(meta_fraction) < 1.0:
-            raise ValueError(f"meta_fraction must be in [0, 1), got {meta_fraction}")
-        if split_role is not None and float(meta_fraction) <= 0.0:
-            raise ValueError("meta_fraction must be positive when split_role is set")
-        self.split_role = split_role
-        self.meta_fraction = float(meta_fraction)
         self.resample_round = 0
 
         self.expert_raw = load_jsons(expert_json) if expert_json else []
@@ -172,47 +160,6 @@ class FourViewMMRLDataset(Dataset):
     def _valid_item(self, item, is_expert: bool) -> bool:
         p = self._resolve_img(item, is_expert)
         return (p is not None) and os.path.exists(p) and (item.get("conversations") is not None)
-
-    @staticmethod
-    def _stable_item_key(item):
-        payload = {
-            "source": item.get("__source_json_path", ""),
-            "image": item.get("image", ""),
-            "conversations": item.get("conversations", []),
-        }
-        encoded = json.dumps(
-            payload,
-            ensure_ascii=False,
-            sort_keys=True,
-            separators=(",", ":"),
-        ).encode("utf-8")
-        return hashlib.sha1(encoded).hexdigest()
-
-    def _select_split(self, pool):
-        if self.split_role is None:
-            return pool
-
-        grouped = defaultdict(lambda: defaultdict(list))
-        for item in pool:
-            source = item.get("__source_json_path", "unknown")
-            grouped[source][self._stable_item_key(item)].append(item)
-
-        selected = []
-        for source in sorted(grouped):
-            keyed_items = grouped[source]
-            keys = sorted(keyed_items)
-            if len(keys) <= 1:
-                meta_keys = set()
-            else:
-                meta_count = max(1, int(round(len(keys) * self.meta_fraction)))
-                meta_count = min(meta_count, len(keys) - 1)
-                meta_keys = set(keys[:meta_count])
-
-            for key in keys:
-                is_meta = key in meta_keys
-                if (self.split_role == "meta") == is_meta:
-                    selected.extend(keyed_items[key])
-        return selected
 
     def _build_views_from_item(self, item, task_type: str):
         is_expert = task_type == "expert"
@@ -269,8 +216,6 @@ class FourViewMMRLDataset(Dataset):
             rng = random
         expert_pool = [x for x in self.expert_raw if self._valid_item(x, True)]
         general_pool = [x for x in self.general_raw if self._valid_item(x, False)]
-        expert_pool = self._select_split(expert_pool)
-        general_pool = self._select_split(general_pool)
 
         use_expert = any(v.startswith("expert-") for v in self.enable_views)
         use_general = any(v.startswith("general-") for v in self.enable_views)
@@ -278,15 +223,8 @@ class FourViewMMRLDataset(Dataset):
         if not use_expert and not use_general:
             raise ValueError("enable_views must contain at least one expert-* or general-* view")
 
-        if self.split_role == "meta":
-            quota_fraction = self.meta_fraction
-        elif self.split_role == "inner":
-            quota_fraction = 1.0 - self.meta_fraction
-        else:
-            quota_fraction = 1.0
-        split_quota = max(1, int(round(self.total_limit * quota_fraction)))
-        expert_quota = split_quota if use_expert else 0
-        general_quota = split_quota if use_general else 0
+        expert_quota = self.total_limit if use_expert else 0
+        general_quota = self.total_limit if use_general else 0
 
         e_samples = rng.sample(expert_pool, min(expert_quota, len(expert_pool))) if expert_quota > 0 else []
         g_samples = rng.sample(general_pool, min(general_quota, len(general_pool))) if general_quota > 0 else []
@@ -299,9 +237,7 @@ class FourViewMMRLDataset(Dataset):
         rng.shuffle(self.data)
         print(
             "[FourViewMMRLDataset] "
-            f"mode={self.mode} split_role={self.split_role or 'full'} "
-            f"expert_pool={len(expert_pool)} general_pool={len(general_pool)} "
-            f"expert_selected={len(e_samples)} general_selected={len(g_samples)} "
+            f"mode={self.mode} expert_selected={len(e_samples)} general_selected={len(g_samples)} "
             f"total view samples={len(self.data)}"
         )
 

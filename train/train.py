@@ -6,16 +6,14 @@ from train_stages import build_model_and_processor, run_stage
 BASE_VISUAL_ROUTER_MODEL = {
     "rp_space_length": 40,
     "visual_residual_adapter_count": 4,
-    "adapter_usage_balance_loss_weight": 0.00275,
-    "adapter_sample_entropy_loss_weight": 0.020,
-    "adapter_sample_entropy_target": 0.72,
+    "adapter_usage_balance_loss_weight": 0.0025,
+    "adapter_sample_entropy_loss_weight": 0.012,
+    "adapter_sample_entropy_target": 0.65,
     "expert_residual_guard_loss_weight": 0.010,
     "expert_residual_ratio_upper": 0.35,
-    "mmrl_residual_guard_loss_weight": 0.005,
-    "mmrl_residual_ratio_upper": 0.65,
-    "mmrl_beta_init": 0.05,
-    "mmrl_beta_lr_scale": 10.0,
-    "meta_fraction": 0.10,
+    "mmrl_residual_guard_loss_weight": 0.020,
+    "mmrl_residual_ratio_upper": 0.20,
+    "mmrl_warmup_fraction": 1.0 / 3.0,
     "stage4_mmrl_lr_scale": 0.02,
     "ablate_visual_gate": False,
     "ablate_direct_learnable_rep": False,
@@ -24,14 +22,14 @@ BASE_VISUAL_ROUTER_MODEL = {
 
 
 EXPERIMENTS = {
-    "visual_router_meta_alternating_v1": {
+    "visual_router_shared_trust_region_v2": {
         **BASE_VISUAL_ROUTER_MODEL,
     },
 }
 
 SELECTED_EXPERIMENT = os.getenv(
     "MMRL_EXPERIMENT",
-    "visual_router_meta_alternating_v1",
+    "visual_router_shared_trust_region_v2",
 )
 if SELECTED_EXPERIMENT not in EXPERIMENTS:
     raise ValueError(
@@ -100,9 +98,7 @@ CFG = {
             "mmrl_residual_guard_loss_weight"
         ],
         "mmrl_residual_ratio_upper": EXP_CFG["mmrl_residual_ratio_upper"],
-        "mmrl_beta_init": EXP_CFG["mmrl_beta_init"],
-        "mmrl_beta_lr_scale": EXP_CFG["mmrl_beta_lr_scale"],
-        "meta_fraction": EXP_CFG["meta_fraction"],
+        "mmrl_warmup_fraction": EXP_CFG["mmrl_warmup_fraction"],
         "stage4_mmrl_lr_scale": EXP_CFG["stage4_mmrl_lr_scale"],
         "per_device_train_batch_size": 2,
         "gradient_accumulation_steps": 16,
@@ -118,14 +114,17 @@ CFG = {
         )),
         "mmrl_diagnostics_keep_keys": [
             "ce_loss",
-            "optimization_phase_id",
-            "mmrl_beta",
+            "stage_progress",
+            "mmrl_shared_strength",
+            "G_mean",
             "mmrl_raw_delta_to_org_ratio",
             "mmrl_pre_cap_delta_to_org_ratio",
+            "mmrl_cap_scale_mean",
             "mmrl_cap_active_fraction",
             "mmrl_shared_delta_to_org_ratio",
             "mmrl_shared_common_mode_ratio",
             "mmrl_shared_specificity_ratio",
+            "mmrl_shared_token_specificity_ratio",
             "expert_residual_to_shared_ratio",
             "expert_residual_ratio_p95",
             "expert_residual_shared_cos",
@@ -138,6 +137,9 @@ CFG = {
             "adapter_sample_entropy_loss_scaled",
             "expert_residual_guard_loss_scaled",
             "mmrl_residual_guard_loss_scaled",
+            "mmrl_grad_pressure",
+            "adapter_router_grad_pressure",
+            "visual_adapter_grad_pressure",
         ],
         "learning_rate": {
             1: 1e-4,

@@ -408,7 +408,9 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
 
     def _shared_strength(self):
         if int(self.current_stage_id) == 3:
-            warmup = max(float(self.mmrl_warmup_fraction), 1e-8)
+            warmup = float(self.mmrl_warmup_fraction)
+            if warmup <= 0.0:
+                return 1.0
             return max(0.0, min(float(self.current_stage_progress) / warmup, 1.0))
         if int(self.current_stage_id) >= 4:
             return 1.0
@@ -418,7 +420,10 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
         bounded_chunks = []
         pre_cap_ratios = []
         cap_scales = []
-        upper = max(float(self.mmrl_residual_ratio_upper), 1e-6)
+        upper = float(self.mmrl_residual_ratio_upper)
+        if upper <= 0.0:
+            self.mmrl_residual_guard_loss = expert_delta.new_tensor(0.0)
+            return expert_delta, expert_delta.new_empty(0), expert_delta.new_empty(0)
 
         for start, end in zip(cu_seqlens[:-1].tolist(), cu_seqlens[1:].tolist()):
             start, end = int(start), int(end)
@@ -526,12 +531,12 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
                 metrics["expert_delta_pre_cap_to_org_ratio"] = ratios.mean()
                 metrics["expert_delta_cap_scale_mean"] = scales.mean()
                 metrics["expert_delta_cap_active_fraction"] = (scales < 1.0).float().mean()
-                metrics["expert_delta_to_org_ratio"] = (
-                    ratios * scales * float(self._shared_strength())
-                ).mean()
 
             org_norm = org.norm(dim=-1).mean().clamp_min(1e-8)
             metrics["expert_delta_raw_to_org_ratio"] = raw.norm(dim=-1).mean() / org_norm
+            metrics["expert_delta_to_org_ratio"] = (
+                gated_expert_delta_f.norm(dim=-1).mean() / org_norm
+            )
             metrics["final_delta_to_org_ratio"] = final_delta_f.norm(dim=-1).mean() / org_norm
 
             pooled_expert_delta = self._pool_tokens_by_image_mean(gated_expert_delta_f, cu_seqlens)

@@ -9,13 +9,12 @@ BASE_VISUAL_ROUTER_MODEL = {
     "adapter_usage_balance_loss_weight": 0.0005,
     "adapter_sample_entropy_loss_weight": 0.0,
     "adapter_sample_entropy_target": 0.65,
-    "expert_residual_guard_loss_weight": 0.010,
-    "expert_residual_ratio_upper": 0.35,
     "mmrl_residual_guard_loss_weight": 0.020,
     "mmrl_residual_ratio_upper": 0.20,
     "mmrl_warmup_fraction": 1.0 / 3.0,
-    "stage4_mmrl_lr_scale": 0.02,
-    "stage4_router_lr_scale": 0.25,
+    "stage4_mmrl_lr_scale": 1.0,
+    "stage4_router_lr_scale": 1.0,
+    "enable_router_kmeans_prior": False,
     "router_calibration_samples": 4096,
     "router_kmeans_iterations": 20,
     "router_kmeans_temperature": 0.10,
@@ -32,14 +31,14 @@ BASE_VISUAL_ROUTER_MODEL = {
 
 
 EXPERIMENTS = {
-    "visual_router_semantic_prior_v1": {
+    "visual_router_expert_delta_stage3_v1": {
         **BASE_VISUAL_ROUTER_MODEL,
     },
 }
 
 SELECTED_EXPERIMENT = os.getenv(
     "MMRL_EXPERIMENT",
-    "visual_router_semantic_prior_v1",
+    "visual_router_expert_delta_stage3_v1",
 )
 if SELECTED_EXPERIMENT not in EXPERIMENTS:
     raise ValueError(
@@ -100,10 +99,6 @@ CFG = {
             "adapter_sample_entropy_loss_weight"
         ],
         "adapter_sample_entropy_target": EXP_CFG["adapter_sample_entropy_target"],
-        "expert_residual_guard_loss_weight": EXP_CFG[
-            "expert_residual_guard_loss_weight"
-        ],
-        "expert_residual_ratio_upper": EXP_CFG["expert_residual_ratio_upper"],
         "mmrl_residual_guard_loss_weight": EXP_CFG[
             "mmrl_residual_guard_loss_weight"
         ],
@@ -111,6 +106,7 @@ CFG = {
         "mmrl_warmup_fraction": EXP_CFG["mmrl_warmup_fraction"],
         "stage4_mmrl_lr_scale": EXP_CFG["stage4_mmrl_lr_scale"],
         "stage4_router_lr_scale": EXP_CFG["stage4_router_lr_scale"],
+        "enable_router_kmeans_prior": EXP_CFG["enable_router_kmeans_prior"],
         "router_calibration_samples": EXP_CFG["router_calibration_samples"],
         "router_kmeans_iterations": EXP_CFG["router_kmeans_iterations"],
         "router_kmeans_temperature": EXP_CFG["router_kmeans_temperature"],
@@ -137,25 +133,16 @@ CFG = {
         "mmrl_diagnostics_keep_keys": [
             "ce_loss",
             "stage_progress",
-            "mmrl_shared_strength",
-            "mmrl_cap_active_fraction",
-            "mmrl_shared_delta_to_org_ratio",
-            "mmrl_shared_token_specificity_ratio",
-            "expert_residual_to_shared_ratio",
+            "expert_branch_strength",
+            "expert_delta_cap_active_fraction",
+            "expert_delta_to_org_ratio",
+            "expert_delta_token_specificity_ratio",
             "final_delta_to_org_ratio",
             "adapter_pairwise_cos_mean",
-            "router_prior_entropy_norm",
-            "router_prior_usage_max",
-            "router_prior_usage_min",
-            "router_prior_margin",
             "adapter_route_entropy_norm",
             "adapter_usage_max",
             "adapter_usage_min",
-            "router_residual_scale",
-            "router_residual_to_prior_ratio",
-            "route_prior_kl",
             "adapter_usage_balance_loss_scaled",
-            "expert_residual_guard_loss_scaled",
             "mmrl_residual_guard_loss_scaled",
             "mmrl_grad_pressure",
             "adapter_router_grad_pressure",

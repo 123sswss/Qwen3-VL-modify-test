@@ -38,13 +38,12 @@ def _build_experiment_context(train_cfg, output_dir, stage_id):
         "adapter_usage_balance_loss_weight",
         "adapter_sample_entropy_loss_weight",
         "adapter_sample_entropy_target",
-        "expert_residual_guard_loss_weight",
-        "expert_residual_ratio_upper",
         "mmrl_residual_guard_loss_weight",
         "mmrl_residual_ratio_upper",
         "mmrl_warmup_fraction",
         "stage4_mmrl_lr_scale",
         "stage4_router_lr_scale",
+        "enable_router_kmeans_prior",
         "router_calibration_samples",
         "router_prior_temperature",
         "router_prior_entropy_target",
@@ -151,9 +150,8 @@ class StageScheduleCallback(TrainerCallback):
 class MMRLDiagnosticsCallback(TrainerCallback):
     DEFAULT_KEEP_KEYS = {
         "ce_loss",
-        "mmrl_shared_delta_to_org_ratio",
-        "mmrl_shared_common_mode_ratio",
-        "expert_residual_to_shared_ratio",
+        "expert_delta_to_org_ratio",
+        "expert_delta_common_mode_ratio",
         "adapter_route_entropy_norm",
     }
 
@@ -297,7 +295,6 @@ class Qwen3VLMMRLForStages(Qwen3VLForConditionalGeneration):
         self.mmrl_warmup_fraction = 1.0 / 3.0
         self.adapter_usage_balance_loss_weight = 0.0
         self.adapter_sample_entropy_loss_weight = 0.0
-        self.expert_residual_guard_loss_weight = 0.0
         self.mmrl_residual_guard_loss_weight = 0.0
         self.temperature_override = None
 
@@ -393,13 +390,9 @@ class Qwen3VLMMRLForStages(Qwen3VLForConditionalGeneration):
 
         usage_loss = _loss_tensor("adapter_usage_balance_loss")
         entropy_loss = _loss_tensor("adapter_sample_entropy_loss")
-        residual_guard_loss = _loss_tensor("expert_residual_guard_loss")
         mmrl_guard_loss = _loss_tensor("mmrl_residual_guard_loss")
         scaled_usage_loss = usage_loss * float(self.adapter_usage_balance_loss_weight)
         scaled_entropy_loss = entropy_loss * float(self.adapter_sample_entropy_loss_weight)
-        scaled_residual_guard_loss = (
-            residual_guard_loss * float(self.expert_residual_guard_loss_weight)
-        )
         scaled_mmrl_guard_loss = (
             mmrl_guard_loss * float(self.mmrl_residual_guard_loss_weight)
         )
@@ -407,7 +400,6 @@ class Qwen3VLMMRLForStages(Qwen3VLForConditionalGeneration):
             self.ce_loss_weight * ce_loss
             + scaled_usage_loss
             + scaled_entropy_loss
-            + scaled_residual_guard_loss
             + scaled_mmrl_guard_loss
         )
 
@@ -417,7 +409,6 @@ class Qwen3VLMMRLForStages(Qwen3VLForConditionalGeneration):
                 "ce_loss": ce_loss.detach(),
                 "adapter_usage_balance_loss_scaled": scaled_usage_loss.detach(),
                 "adapter_sample_entropy_loss_scaled": scaled_entropy_loss.detach(),
-                "expert_residual_guard_loss_scaled": scaled_residual_guard_loss.detach(),
                 "mmrl_residual_guard_loss_scaled": scaled_mmrl_guard_loss.detach(),
                 "stage_progress": torch.tensor(
                     float(self.current_stage_progress), device=ce_loss.device
@@ -456,11 +447,11 @@ def build_model_and_processor(model_path, experiment_cfg=None):
     config.ADAPTER_SAMPLE_ENTROPY_TARGET = float(experiment_cfg.get(
         "adapter_sample_entropy_target", 0.55
     ))
-    config.EXPERT_RESIDUAL_RATIO_UPPER = float(experiment_cfg.get(
-        "expert_residual_ratio_upper", 0.35
-    ))
     config.MMRL_RESIDUAL_RATIO_UPPER = float(experiment_cfg.get(
         "mmrl_residual_ratio_upper", 0.20
+    ))
+    config.ENABLE_ROUTER_KMEANS_PRIOR = bool(experiment_cfg.get(
+        "enable_router_kmeans_prior", False
     ))
     config.ROUTER_PRIOR_TEMPERATURE = float(experiment_cfg.get(
         "router_prior_temperature", 0.25
@@ -519,8 +510,8 @@ def build_model_and_processor(model_path, experiment_cfg=None):
         f"ablate_direct_learnable_rep={config.ABLATE_DIRECT_LEARNABLE_REP} "
         f"visual_residual_adapter_count={config.VISUAL_RESIDUAL_ADAPTER_COUNT} "
         f"adapter_sample_entropy_target={config.ADAPTER_SAMPLE_ENTROPY_TARGET} "
-        f"expert_residual_ratio_upper={config.EXPERT_RESIDUAL_RATIO_UPPER} "
-        f"mmrl_residual_ratio_upper={config.MMRL_RESIDUAL_RATIO_UPPER}"
+        f"mmrl_residual_ratio_upper={config.MMRL_RESIDUAL_RATIO_UPPER} "
+        f"enable_router_kmeans_prior={config.ENABLE_ROUTER_KMEANS_PRIOR}"
     )
     print("Processor built.")
     return model, processor
@@ -554,7 +545,6 @@ def set_trainable_stage(model, stage, train_cfg=None):
             "mmrl": model.model.MMRL,
             "adapter_router": v.adapter_router,
             "residual_adapters": v.residual_adapters,
-            "adapter_input_norm": v.adapter_input_norm,
         }
     else:
         raise ValueError("stage must be 1/2/3/4")
@@ -927,7 +917,7 @@ def run_stage12_light(stage_id, model, processor, data_cfg, train_cfg, output_di
                     print_stage_step_summary(f"stage{stage_id}", global_step, row)
     metric_logger.finalize()
 
-    if stage_id == 2:
+    if stage_id == 2 and train_cfg.get("enable_router_kmeans_prior", False):
         _calibrate_router_prior(
             model=model,
             processor=processor,
@@ -962,8 +952,8 @@ def _build_stage34_optimizer(model, stage_id, train_cfg):
             and id(p) not in mmrl_ids
             and id(p) not in router_ids
         ]
-        mmrl_lr = base_lr * float(train_cfg.get("stage4_mmrl_lr_scale", 0.05))
-        router_lr = base_lr * float(train_cfg.get("stage4_router_lr_scale", 0.25))
+        mmrl_lr = base_lr * float(train_cfg.get("stage4_mmrl_lr_scale", 1.0))
+        router_lr = base_lr * float(train_cfg.get("stage4_router_lr_scale", 1.0))
         group_specs = [
             ("mmrl", mmrl_params, mmrl_lr),
             ("adapter", adapter_params, base_lr),
@@ -1006,9 +996,6 @@ def run_stage34_full(stage_id, model, processor, data_cfg, train_cfg, output_dir
     )
     model.adapter_sample_entropy_loss_weight = float(
         train_cfg.get("adapter_sample_entropy_loss_weight", 0.0)
-    )
-    model.expert_residual_guard_loss_weight = float(
-        train_cfg.get("expert_residual_guard_loss_weight", 0.0)
     )
     model.mmrl_residual_guard_loss_weight = float(
         train_cfg.get("mmrl_residual_guard_loss_weight", 0.0)

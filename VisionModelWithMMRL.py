@@ -473,10 +473,13 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
             dim=-1,
             eps=1e-6,
         ).clamp(min=-1.0, max=1.0)
-        semantic_anchor_loss = (1.0 - token_cos).mean()
+        token_drift = 1.0 - token_cos
+        semantic_anchor_loss = torch.sqrt(
+            token_drift.square().mean() + 1e-8
+        )
         self.mmrl_semantic_anchor_loss = (
             semantic_anchor_loss
-            if int(self.current_stage_id) == 3
+            if int(self.current_stage_id) in (3, 4)
             else semantic_anchor_loss.detach()
         )
         with torch.no_grad():

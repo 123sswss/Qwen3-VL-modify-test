@@ -62,11 +62,17 @@ EXPERIMENTS = {
         "stage4_mmrl_lr_scale": 0.25,
         "stage4_router_lr_scale": 1.0,
     },
+    "visual_router_expert_delta_stage3_v5_robust_anchor": {
+        **BASE_VISUAL_ROUTER_MODEL,
+        "mmrl_semantic_anchor_loss_weight": 0.025,
+        "stage4_mmrl_lr_scale": 0.25,
+        "stage4_router_lr_scale": 1.0,
+    },
 }
 
 SELECTED_EXPERIMENT = os.getenv(
     "MMRL_EXPERIMENT",
-    "visual_router_expert_delta_stage3_v4_semantic_anchor_light",
+    "visual_router_expert_delta_stage3_v5_robust_anchor",
 )
 if SELECTED_EXPERIMENT not in EXPERIMENTS:
     raise ValueError(

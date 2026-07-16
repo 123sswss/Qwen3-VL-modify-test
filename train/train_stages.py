@@ -399,11 +399,15 @@ class Qwen3VLMMRLForStages(Qwen3VLForConditionalGeneration):
         scaled_mmrl_guard_loss = (
             mmrl_guard_loss * float(self.mmrl_residual_guard_loss_weight)
         )
-        semantic_anchor_weight = (
-            float(self.mmrl_semantic_anchor_loss_weight)
-            if int(self.current_stage_id) == 3
-            else 0.0
-        )
+        stage_id = int(self.current_stage_id)
+        if stage_id == 3:
+            semantic_anchor_weight = float(self.mmrl_semantic_anchor_loss_weight)
+        elif stage_id == 4:
+            semantic_anchor_weight = 0.25 * float(
+                self.mmrl_semantic_anchor_loss_weight
+            )
+        else:
+            semantic_anchor_weight = 0.0
         scaled_mmrl_semantic_anchor_loss = (
             mmrl_semantic_anchor_loss * semantic_anchor_weight
         )

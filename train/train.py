@@ -10,6 +10,7 @@ BASE_VISUAL_ROUTER_MODEL = {
     "adapter_sample_entropy_loss_weight": 0.0,
     "adapter_sample_entropy_target": 0.65,
     "mmrl_residual_guard_loss_weight": 0.0,
+    "mmrl_semantic_anchor_loss_weight": 0.0,
     "mmrl_residual_ratio_upper": 0.0,
     "mmrl_warmup_fraction": 0.0,
     "stage4_mmrl_lr_scale": 1.0,
@@ -49,11 +50,17 @@ EXPERIMENTS = {
         "stage4_mmrl_lr_scale": 0.0,
         "stage4_router_lr_scale": 1.0,
     },
+    "visual_router_expert_delta_stage3_v3_semantic_anchor": {
+        **BASE_VISUAL_ROUTER_MODEL,
+        "mmrl_semantic_anchor_loss_weight": 0.05,
+        "stage4_mmrl_lr_scale": 0.25,
+        "stage4_router_lr_scale": 1.0,
+    },
 }
 
 SELECTED_EXPERIMENT = os.getenv(
     "MMRL_EXPERIMENT",
-    "visual_router_expert_delta_stage3_v1",
+    "visual_router_expert_delta_stage3_v3_semantic_anchor",
 )
 if SELECTED_EXPERIMENT not in EXPERIMENTS:
     raise ValueError(
@@ -117,6 +124,9 @@ CFG = {
         "mmrl_residual_guard_loss_weight": EXP_CFG[
             "mmrl_residual_guard_loss_weight"
         ],
+        "mmrl_semantic_anchor_loss_weight": EXP_CFG[
+            "mmrl_semantic_anchor_loss_weight"
+        ],
         "mmrl_residual_ratio_upper": EXP_CFG["mmrl_residual_ratio_upper"],
         "mmrl_warmup_fraction": EXP_CFG["mmrl_warmup_fraction"],
         "stage4_mmrl_lr_scale": EXP_CFG["stage4_mmrl_lr_scale"],
@@ -151,6 +161,9 @@ CFG = {
             "expert_branch_strength",
             "expert_delta_to_org_ratio",
             "expert_delta_token_specificity_ratio",
+            "mmrl_semantic_cos_mean",
+            "mmrl_semantic_cos_p05",
+            "mmrl_semantic_anchor_loss_scaled",
             "final_delta_to_org_ratio",
             "adapter_pairwise_cos_mean",
             "adapter_route_entropy_norm",

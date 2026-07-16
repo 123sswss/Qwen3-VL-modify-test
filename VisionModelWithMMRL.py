@@ -198,6 +198,9 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
         self.adapter_usage_balance_loss = torch.tensor(0.0)
         self.adapter_sample_entropy_loss = torch.tensor(0.0)
         self.mmrl_residual_guard_loss = torch.tensor(0.0)
+        self.mmrl_semantic_anchor_loss = torch.tensor(0.0)
+        self.mmrl_semantic_cos_mean = torch.tensor(float("nan"))
+        self.mmrl_semantic_cos_p05 = torch.tensor(float("nan"))
         self.adapter_sample_entropy_target = float(getattr(self.cfg, "ADAPTER_SAMPLE_ENTROPY_TARGET", 0.55))
         self.mmrl_residual_ratio_upper = float(getattr(self.cfg, "MMRL_RESIDUAL_RATIO_UPPER", 0.20))
         self.enable_router_kmeans_prior = bool(
@@ -454,6 +457,32 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
             ratios - ratios.new_tensor(upper)
         ).pow(2).mean().to(dtype=expert_delta.dtype)
         return torch.cat(bounded_chunks, dim=0), ratios, scales
+
+    def _compute_mmrl_semantic_anchor(self, prompted_states, original_states):
+        prompted_norm = F.layer_norm(
+            prompted_states.float(),
+            (prompted_states.shape[-1],),
+        )
+        original_norm = F.layer_norm(
+            original_states.detach().float(),
+            (original_states.shape[-1],),
+        )
+        token_cos = F.cosine_similarity(
+            prompted_norm,
+            original_norm,
+            dim=-1,
+            eps=1e-6,
+        ).clamp(min=-1.0, max=1.0)
+        semantic_anchor_loss = (1.0 - token_cos).mean()
+        self.mmrl_semantic_anchor_loss = (
+            semantic_anchor_loss
+            if int(self.current_stage_id) == 3
+            else semantic_anchor_loss.detach()
+        )
+        with torch.no_grad():
+            detached_cos = token_cos.detach()
+            self.mmrl_semantic_cos_mean = detached_cos.mean()
+            self.mmrl_semantic_cos_p05 = torch.quantile(detached_cos, 0.05)
 
     def _compute_router_aux_losses(self, reference_tensor):
         zero = reference_tensor.new_tensor(0.0)
@@ -846,6 +875,10 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
             hidden_states_with_rep = _strip_r_token(hidden_states_with_rep,
                                                     original_seq_lens_list,
                                                     current_num_r_token)
+            self._compute_mmrl_semantic_anchor(
+                hidden_states_with_rep,
+                org_hidden_states,
+            )
             seqlens = cu_seqlens[1:] - cu_seqlens[:-1]
             expert_delta = hidden_states_with_rep - org_hidden_states
             g_mask = torch.repeat_interleave(self.G_list, seqlens, dim=0).to(
@@ -887,6 +920,9 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
             pre_cap_ratios = hidden_states.new_empty(0)
             cap_scales = hidden_states.new_empty(0)
             self.mmrl_residual_guard_loss = hidden_states.new_tensor(0.0)
+            self.mmrl_semantic_anchor_loss = hidden_states.new_tensor(0.0)
+            self.mmrl_semantic_cos_mean = hidden_states.new_tensor(float("nan"))
+            self.mmrl_semantic_cos_p05 = hidden_states.new_tensor(float("nan"))
 
         self._compute_router_aux_losses(hidden_states)
         stage_audit_key = (int(self.current_stage_id), bool(self.experts_enabled))
@@ -915,6 +951,9 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
         )
         self.debug_context = {
             "mmrl_residual_guard_loss": self.mmrl_residual_guard_loss.detach(),
+            "mmrl_semantic_anchor_loss": self.mmrl_semantic_anchor_loss.detach(),
+            "mmrl_semantic_cos_mean": self.mmrl_semantic_cos_mean.detach(),
+            "mmrl_semantic_cos_p05": self.mmrl_semantic_cos_p05.detach(),
             "adapter_usage_balance_loss": self.adapter_usage_balance_loss.detach(),
             "adapter_sample_entropy_loss": self.adapter_sample_entropy_loss.detach(),
             **residual_debug,

@@ -147,9 +147,8 @@ run_N() {
   done
 }
 
-# 已有一次 v1 结果；今晚补成 baseline n=2、slow_mmrl n=2。
-run_N "visual_router_expert_delta_stage3_v1_repeat" "visual_router_expert_delta_stage3_v1_repeat" 1
-run_N "visual_router_expert_delta_stage3_v2_slow_mmrl" "visual_router_expert_delta_stage3_v2_slow_mmrl" 2
+# Stage3 semantic anchor 首轮重复两次，直接观察坏轮下限是否提高。
+run_N "visual_router_expert_delta_stage3_v3_semantic_anchor" "visual_router_expert_delta_stage3_v3_semantic_anchor" 2
 
 
 

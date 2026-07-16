@@ -39,6 +39,7 @@ def _build_experiment_context(train_cfg, output_dir, stage_id):
         "adapter_sample_entropy_loss_weight",
         "adapter_sample_entropy_target",
         "mmrl_residual_guard_loss_weight",
+        "mmrl_semantic_anchor_loss_weight",
         "mmrl_residual_ratio_upper",
         "mmrl_warmup_fraction",
         "stage4_mmrl_lr_scale",
@@ -296,6 +297,7 @@ class Qwen3VLMMRLForStages(Qwen3VLForConditionalGeneration):
         self.adapter_usage_balance_loss_weight = 0.0
         self.adapter_sample_entropy_loss_weight = 0.0
         self.mmrl_residual_guard_loss_weight = 0.0
+        self.mmrl_semantic_anchor_loss_weight = 0.0
         self.temperature_override = None
 
         self.debug_mode = True
@@ -391,16 +393,26 @@ class Qwen3VLMMRLForStages(Qwen3VLForConditionalGeneration):
         usage_loss = _loss_tensor("adapter_usage_balance_loss")
         entropy_loss = _loss_tensor("adapter_sample_entropy_loss")
         mmrl_guard_loss = _loss_tensor("mmrl_residual_guard_loss")
+        mmrl_semantic_anchor_loss = _loss_tensor("mmrl_semantic_anchor_loss")
         scaled_usage_loss = usage_loss * float(self.adapter_usage_balance_loss_weight)
         scaled_entropy_loss = entropy_loss * float(self.adapter_sample_entropy_loss_weight)
         scaled_mmrl_guard_loss = (
             mmrl_guard_loss * float(self.mmrl_residual_guard_loss_weight)
+        )
+        semantic_anchor_weight = (
+            float(self.mmrl_semantic_anchor_loss_weight)
+            if int(self.current_stage_id) == 3
+            else 0.0
+        )
+        scaled_mmrl_semantic_anchor_loss = (
+            mmrl_semantic_anchor_loss * semantic_anchor_weight
         )
         outputs.loss = (
             self.ce_loss_weight * ce_loss
             + scaled_usage_loss
             + scaled_entropy_loss
             + scaled_mmrl_guard_loss
+            + scaled_mmrl_semantic_anchor_loss
         )
 
         with torch.no_grad():
@@ -410,6 +422,9 @@ class Qwen3VLMMRLForStages(Qwen3VLForConditionalGeneration):
                 "adapter_usage_balance_loss_scaled": scaled_usage_loss.detach(),
                 "adapter_sample_entropy_loss_scaled": scaled_entropy_loss.detach(),
                 "mmrl_residual_guard_loss_scaled": scaled_mmrl_guard_loss.detach(),
+                "mmrl_semantic_anchor_loss_scaled": (
+                    scaled_mmrl_semantic_anchor_loss.detach()
+                ),
                 "stage_progress": torch.tensor(
                     float(self.current_stage_progress), device=ce_loss.device
                 ),
@@ -999,6 +1014,9 @@ def run_stage34_full(stage_id, model, processor, data_cfg, train_cfg, output_dir
     )
     model.mmrl_residual_guard_loss_weight = float(
         train_cfg.get("mmrl_residual_guard_loss_weight", 0.0)
+    )
+    model.mmrl_semantic_anchor_loss_weight = float(
+        train_cfg.get("mmrl_semantic_anchor_loss_weight", 0.0)
     )
 
     stage34_views = ("expert-mm",)

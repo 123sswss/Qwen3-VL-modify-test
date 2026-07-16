@@ -147,8 +147,8 @@ run_N() {
   done
 }
 
-# Stage3 semantic anchor 首轮重复两次，直接观察坏轮下限是否提高。
-run_N "visual_router_expert_delta_stage3_v3_semantic_anchor" "visual_router_expert_delta_stage3_v3_semantic_anchor" 2
+# 轻量 Stage3 semantic anchor 重复两次，检验下限并追回有效适配空间。
+run_N "visual_router_expert_delta_stage3_v4_semantic_anchor_light" "visual_router_expert_delta_stage3_v4_semantic_anchor_light" 2
 
 
 

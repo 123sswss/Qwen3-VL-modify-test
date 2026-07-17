@@ -37,6 +37,7 @@ def _build_experiment_context(train_cfg, output_dir, stage_id):
         "metrics_dir": f"{output_dir}/stage{stage_id}/metrics",
         "train_cfg": {
             "seed": train_cfg.get("seed"),
+            "data_sampling_seed": train_cfg.get("data_sampling_seed"),
             "deterministic_sampling": train_cfg.get("deterministic_sampling", False),
             "per_device_train_batch_size": train_cfg.get("per_device_train_batch_size"),
             "gradient_accumulation_steps": train_cfg.get("gradient_accumulation_steps"),
@@ -1166,10 +1167,12 @@ def run_stage12_light(stage_id, model, processor, data_cfg, train_cfg, output_di
         enable_views=("expert-mm", "expert-text", "general-mm", "general-text"),
         mode=f"stage{stage_id}",
         ce_enabled=False,
-        seed=train_cfg["seed"],
+        seed=train_cfg.get("data_sampling_seed", 42),
         deterministic_sampling=train_cfg.get("deterministic_sampling", False),
     )
     collator = MMRLDataCollator(processor)
+    data_generator = torch.Generator()
+    data_generator.manual_seed(int(train_cfg["seed"]) + int(stage_id))
 
     dl = DataLoader(
         ds,
@@ -1179,6 +1182,7 @@ def run_stage12_light(stage_id, model, processor, data_cfg, train_cfg, output_di
         pin_memory=False,
         collate_fn=collator,
         drop_last=True,
+        generator=data_generator,
     )
 
     # 仅优化可训练参数
@@ -1373,7 +1377,7 @@ def run_stage34_full(stage_id, model, processor, data_cfg, train_cfg, output_dir
         enable_views=stage34_views,
         mode=f"stage{stage_id}",
         ce_enabled=True,
-        seed=train_cfg["seed"],
+        seed=train_cfg.get("data_sampling_seed", 42),
         deterministic_sampling=train_cfg.get("deterministic_sampling", False),
     )
     collator = MMRLDataCollator(processor)
@@ -1397,6 +1401,8 @@ def run_stage34_full(stage_id, model, processor, data_cfg, train_cfg, output_dir
         bf16=True,
         dataloader_pin_memory=False,
         dataloader_num_workers=train_cfg.get("dataloader_num_workers", 4),
+        seed=train_cfg["seed"],
+        data_seed=train_cfg["seed"] + stage_id,
     )
     experiment_context = _build_experiment_context(train_cfg, output_dir, stage_id)
     metric_logger = StageMetricLogger(

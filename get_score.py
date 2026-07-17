@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import re
 from pathlib import Path
 
@@ -14,6 +15,7 @@ SCORE_KEYWORD = "百分制分数"
 SCORE_PATTERN = re.compile(r"百分制分数\s*[:：]\s*(-?\d+(?:\.\d+)?)")
 DIAGNOSTICS_FILENAME = "mmrl_diagnostics.jsonl"
 DIAGNOSTIC_STAGES = (3, 4)
+SEED_LOG_PATTERN = re.compile(r"seed=(\d+)")
 
 
 def should_skip(log_path: Path) -> bool:
@@ -45,6 +47,30 @@ def read_stage_metrics(experiment_dir: Path, stage_id: int) -> tuple[str, str]:
         return str(diagnostics_path), f"{relative_path.as_posix()} 文件为空"
 
     return str(diagnostics_path), diagnostics_content
+
+
+def read_experiment_seed(experiment_dir: Path) -> int | None:
+    for manifest_path in sorted(experiment_dir.glob("*_manifest.json")):
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            seed = manifest.get("train_cfg", {}).get("seed")
+            if seed is not None:
+                return int(seed)
+        except (OSError, ValueError, TypeError, json.JSONDecodeError):
+            continue
+
+    train_log = experiment_dir / "train.log"
+    if train_log.is_file():
+        try:
+            for line in train_log.read_text(encoding="utf-8", errors="ignore").splitlines():
+                if "[Reproducibility]" not in line:
+                    continue
+                match = SEED_LOG_PATTERN.search(line)
+                if match:
+                    return int(match.group(1))
+        except OSError:
+            pass
+    return None
 
 
 def extract_info(log_path: Path) -> dict[str, object]:
@@ -81,6 +107,7 @@ def extract_info(log_path: Path) -> dict[str, object]:
 
     return {
         "folder_name": experiment_name,
+        "seed": read_experiment_seed(experiment_dir) if experiment_dir is not None else None,
         "acc": acc_value,
         "score_line": score_line,
         "score_value": score_value,
@@ -190,6 +217,7 @@ def main() -> None:
     for index, log_path in enumerate(log_files, start=1):
         info = extract_info(log_path)
         print(f"===== 结果 {index} =====")
+        print(f"seed: {info['seed'] if info['seed'] is not None else '未找到'}")
         print(f"上2级文件夹名: {info['folder_name']}")
         print(f"{STEP_MARKER} 对应Acc: {info['acc']}")
         print(f"{SCORE_KEYWORD}行: {info['score_line']}")

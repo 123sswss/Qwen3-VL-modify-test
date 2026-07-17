@@ -1,7 +1,23 @@
 # new_train.py
 import os
+os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":4096:8")
+
+import random
+
+import numpy as np
+import torch
 
 from train_stages import build_model_and_processor, run_stage
+
+
+def seed_before_model_init(seed):
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+    torch.backends.cudnn.benchmark = False
+    torch.backends.cudnn.deterministic = True
+    print(f"[Reproducibility] seeded model init and training RNGs with seed={seed}")
 
 
 BASE_VISUAL_ROUTER_MODEL = {
@@ -164,8 +180,9 @@ CFG = {
     "train": {
         "experiment_name": SELECTED_EXPERIMENT,
         "experiment_cfg": EXP_CFG,
-        "seed": 42,
-        "deterministic_sampling": os.getenv("MMRL_DETERMINISTIC_SAMPLING", "0") == "1",
+        "seed": int(os.getenv("MMRL_SEED", "42")),
+        "data_sampling_seed": int(os.getenv("MMRL_DATA_SAMPLING_SEED", "42")),
+        "deterministic_sampling": os.getenv("MMRL_DETERMINISTIC_SAMPLING", "1") == "1",
         "visual_residual_adapter_count": int(os.getenv(
             "MMRL_VISUAL_RESIDUAL_ADAPTER_COUNT",
             str(EXP_CFG.get("visual_residual_adapter_count", 4)),
@@ -374,6 +391,7 @@ CFG = {
 
 
 def main():
+    seed_before_model_init(CFG["train"]["seed"])
     model, processor = build_model_and_processor(CFG["model_path"], experiment_cfg=CFG["experiment"])
 
     for sid in CFG["ablation_order"]:

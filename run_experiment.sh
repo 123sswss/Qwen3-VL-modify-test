@@ -29,10 +29,31 @@ TRAIN_DIR="$ROOT_DIR/train"
 TEST_DIR="$ROOT_DIR/test"
 OUTPUT_ROOT="$ROOT_DIR/experiment_outputs"
 CHECKPOINT_ROOT="$OUTPUT_ROOT/output"
+SEED_STATE_FILE="${MMRL_SEED_STATE_FILE:-$OUTPUT_ROOT/next_seed.txt}"
+INITIAL_SEED="${MMRL_INITIAL_SEED:-42}"
 
 mkdir -p "$OUTPUT_ROOT" "$CHECKPOINT_ROOT"
 
 RUN_SUFFIX="${MMRL_RUN_SUFFIX:-}"
+
+# 持久分配实验 seed；脚本重启后继续递增，不重复使用已分配 seed。
+allocate_seed() {
+  local seed
+  if [ -f "$SEED_STATE_FILE" ]; then
+    read -r seed < "$SEED_STATE_FILE"
+  else
+    seed="$INITIAL_SEED"
+  fi
+
+  if ! [[ "$seed" =~ ^[0-9]+$ ]]; then
+    echo "[ERR] 非法 seed 状态: $SEED_STATE_FILE 内容为 '$seed'" >&2
+    return 1
+  fi
+
+  printf '%s\n' "$((seed + 1))" > "${SEED_STATE_FILE}.tmp"
+  mv "${SEED_STATE_FILE}.tmp" "$SEED_STATE_FILE"
+  printf '%s\n' "$seed"
+}
 
 with_run_suffix() {
   local base_tag="$1"
@@ -100,10 +121,14 @@ run_one() {
   local output_dir="$CHECKPOINT_ROOT/$tag"
   local final_dir="$output_dir/final"
   local eval_dir="$output_dir/eval"
+  local experiment_seed
+  experiment_seed="$(allocate_seed)"
 
   echo "============================================================"
   echo "[EXP] 开始实验: $tag"
   echo "[EXP] MMRL_EXPERIMENT=$experiment_name"
+  echo "[EXP] seed=$experiment_seed"
+  echo "[EXP] data_sampling_seed=42"
   echo "[EXP] checkpoint目录: $output_dir"
   echo "============================================================"
 
@@ -113,6 +138,8 @@ run_one() {
     cd "$TRAIN_DIR"
     MMRL_OUTPUT_DIR="$output_dir" \
     MMRL_EXPERIMENT="$experiment_name" \
+    MMRL_SEED="$experiment_seed" \
+    MMRL_DATA_SAMPLING_SEED="42" \
     MMRL_DETERMINISTIC_SAMPLING="1" \
     python train.py 2>&1 | tee "$output_dir/train.log"
   )

@@ -141,6 +141,7 @@ run_one() {
     MMRL_SEED="$experiment_seed" \
     MMRL_DATA_SAMPLING_SEED="42" \
     MMRL_DETERMINISTIC_SAMPLING="1" \
+    MMRL_EVAL_EACH_EPOCH="1" \
     python train.py 2>&1 | tee "$output_dir/train.log"
   )
 

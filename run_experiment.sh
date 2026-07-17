@@ -56,41 +56,38 @@ find_available_tag() {
 }
 
 # 只保留当前仍有模型的并列最高分和并列最低分 checkpoint。
-# 已经被删除 final 的历史日志不参与比较，避免无法恢复的旧极值占位。
+# 第一次运行时唯一 checkpoint 同时是最高和最低，因此必定保留。
+# 无有效分数的 final 不会出现在计划中，也不会被误删。
 prune_middle_final_dirs() {
-  local extrema_output
-  if ! extrema_output="$(cd "$ROOT_DIR" && python get_score.py --checkpoint-extrema-names)"; then
-    echo "[WARN] 获取 checkpoint 极值失败，本轮不删除任何 final 目录。"
+  local retention_plan
+  if ! retention_plan="$(cd "$ROOT_DIR" && python get_score.py --checkpoint-retention-plan)"; then
+    echo "[WARN] 获取 checkpoint 保留计划失败，本轮不删除任何 final 目录。"
     return 0
   fi
-  if [ -z "$extrema_output" ]; then
+  if [ -z "$retention_plan" ]; then
     echo "[WARN] 没有找到可比较的有效分数，本轮不删除任何 final 目录。"
     return 0
   fi
 
-  declare -A keep_tags=()
-  local keep_tag
-  while IFS= read -r keep_tag; do
-    if [ -n "$keep_tag" ]; then
-      keep_tags["$keep_tag"]=1
-    fi
-  done <<< "$extrema_output"
-
-  local experiment_dir tag final_dir
-  for experiment_dir in "$CHECKPOINT_ROOT"/*; do
-    [ -d "$experiment_dir" ] || continue
-    tag="$(basename "$experiment_dir")"
-    [ "$tag" = "trash" ] && continue
-    final_dir="$experiment_dir/final"
-    [ -d "$final_dir" ] || continue
-
-    if [[ -n "${keep_tags[$tag]+x}" ]]; then
-      echo "[KEEP] 保留极值 checkpoint: $tag"
-    else
-      echo "[PRUNE] 删除中间分 checkpoint: $tag"
-      rm -rf -- "$final_dir"
-    fi
-  done
+  local action tag score final_dir
+  while IFS=$'\t' read -r action tag score; do
+    [ -n "$action" ] || continue
+    final_dir="$CHECKPOINT_ROOT/$tag/final"
+    case "$action" in
+      KEEP)
+        echo "[KEEP] 保留极值 checkpoint: $tag score=$score"
+        ;;
+      PRUNE)
+        if [ -d "$final_dir" ]; then
+          echo "[PRUNE] 删除中间分 checkpoint: $tag score=$score"
+          rm -rf -- "$final_dir"
+        fi
+        ;;
+      *)
+        echo "[WARN] 未知保留动作: $action tag=$tag，本条跳过。"
+        ;;
+    esac
+  done <<< "$retention_plan"
 }
 
 run_one() {
@@ -147,8 +144,8 @@ run_N() {
   done
 }
 
-# 单边尾部保护只跑一轮，先验证能否修复低质量 Stage3 轨迹。
-run_one "visual_router_expert_delta_stage3_v6_tail_guard" "visual_router_expert_delta_stage3_v6_tail_guard"
+# 完整复跑历史 64.99 配置，优先恢复一个可供解剖的 60+ checkpoint。
+run_one "visual_router_layer_fixed_v4_diversity_recover" "visual_router_layer_fixed_v4_diversity_recover"
 
 
 

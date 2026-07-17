@@ -3,7 +3,6 @@ import os
 import csv
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 from torch.utils.data import DataLoader
 from transformers import (
     Qwen3VLForConditionalGeneration, AutoConfig, AutoTokenizer, AutoImageProcessor,
@@ -29,31 +28,6 @@ import numbers
 def _build_experiment_context(train_cfg, output_dir, stage_id):
     experiment_name = train_cfg.get("experiment_name", "experiment")
     experiment_cfg = dict(train_cfg.get("experiment_cfg", {}))
-    recorded_keys = (
-        "seed",
-        "deterministic_sampling",
-        "per_device_train_batch_size",
-        "gradient_accumulation_steps",
-        "visual_residual_adapter_count",
-        "adapter_usage_balance_loss_weight",
-        "adapter_sample_entropy_loss_weight",
-        "adapter_sample_entropy_target",
-        "mmrl_residual_guard_loss_weight",
-        "mmrl_semantic_anchor_loss_weight",
-        "mmrl_semantic_anchor_mode",
-        "mmrl_semantic_anchor_cos_floor",
-        "mmrl_residual_ratio_upper",
-        "mmrl_warmup_fraction",
-        "stage4_mmrl_lr_scale",
-        "stage4_router_lr_scale",
-        "enable_router_kmeans_prior",
-        "router_calibration_samples",
-        "router_prior_temperature",
-        "router_prior_entropy_target",
-        "router_residual_start_fraction",
-        "router_residual_max_scale",
-        "router_residual_logit_bound",
-    )
     return {
         "experiment_name": experiment_name,
         "stage_name": f"stage{stage_id}",
@@ -62,9 +36,129 @@ def _build_experiment_context(train_cfg, output_dir, stage_id):
         "stage_output_dir": f"{output_dir}/stage{stage_id}",
         "metrics_dir": f"{output_dir}/stage{stage_id}/metrics",
         "train_cfg": {
-            **{key: train_cfg.get(key) for key in recorded_keys},
+            "seed": train_cfg.get("seed"),
+            "deterministic_sampling": train_cfg.get("deterministic_sampling", False),
+            "per_device_train_batch_size": train_cfg.get("per_device_train_batch_size"),
+            "gradient_accumulation_steps": train_cfg.get("gradient_accumulation_steps"),
             "learning_rate": train_cfg.get("learning_rate", {}).get(stage_id),
             "epochs": train_cfg.get("epochs", {}).get(stage_id),
+            "console_log_every": train_cfg.get("console_log_every"),
+            "metric_smooth_window": train_cfg.get("metric_smooth_window"),
+            "metric_ema_alpha": train_cfg.get("metric_ema_alpha"),
+            "metric_scatter_stride": train_cfg.get("metric_scatter_stride"),
+            "enable_gate_loss_stage2": train_cfg.get("enable_gate_loss_stage2"),
+            "enable_alpha_guide_loss_s4": train_cfg.get("enable_alpha_guide_loss_s4"),
+            "alpha_loss_weight_s4": train_cfg.get("alpha_loss_weight_s4"),
+            "visual_residual_adapter_count": train_cfg.get("visual_residual_adapter_count"),
+            "adapter_usage_balance_loss_weight": train_cfg.get("adapter_usage_balance_loss_weight"),
+            "adapter_sample_entropy_loss_weight": train_cfg.get("adapter_sample_entropy_loss_weight"),
+            "adapter_common_mode_loss_weight": train_cfg.get("adapter_common_mode_loss_weight"),
+            "adapter_effective_delta_loss_weight": train_cfg.get(
+                "adapter_effective_delta_loss_weight",
+                experiment_cfg.get("adapter_effective_delta_loss_weight"),
+            ),
+            "adapter_sample_entropy_target": train_cfg.get("adapter_sample_entropy_target"),
+            "adapter_common_mode_target": train_cfg.get("adapter_common_mode_target"),
+            "adapter_effective_delta_target_low": train_cfg.get(
+                "adapter_effective_delta_target_low",
+                experiment_cfg.get("adapter_effective_delta_target_low"),
+            ),
+            "adapter_effective_delta_target_high": train_cfg.get(
+                "adapter_effective_delta_target_high",
+                experiment_cfg.get("adapter_effective_delta_target_high"),
+            ),
+            "adapter_effective_delta_loss_weight_s3": train_cfg.get(
+                "adapter_effective_delta_loss_weight_s3",
+                experiment_cfg.get("adapter_effective_delta_loss_weight_s3"),
+            ),
+            "adapter_effective_delta_loss_weight_s4": train_cfg.get(
+                "adapter_effective_delta_loss_weight_s4",
+                experiment_cfg.get("adapter_effective_delta_loss_weight_s4"),
+            ),
+            "adapter_diversity_loss_weight": train_cfg.get(
+                "adapter_diversity_loss_weight",
+                experiment_cfg.get("adapter_diversity_loss_weight"),
+            ),
+            "adapter_diversity_loss_weight_s3": train_cfg.get(
+                "adapter_diversity_loss_weight_s3",
+                experiment_cfg.get("adapter_diversity_loss_weight_s3"),
+            ),
+            "adapter_diversity_loss_weight_s4": train_cfg.get(
+                "adapter_diversity_loss_weight_s4",
+                experiment_cfg.get("adapter_diversity_loss_weight_s4"),
+            ),
+            "adapter_diversity_target_low": train_cfg.get(
+                "adapter_diversity_target_low",
+                experiment_cfg.get("adapter_diversity_target_low"),
+            ),
+            "adapter_diversity_target_high": train_cfg.get(
+                "adapter_diversity_target_high",
+                experiment_cfg.get("adapter_diversity_target_high"),
+            ),
+            "adapter_diversity_upper_weight": train_cfg.get(
+                "adapter_diversity_upper_weight",
+                experiment_cfg.get("adapter_diversity_upper_weight"),
+            ),
+            "adapter_diversity_worst_pair_weight": train_cfg.get(
+                "adapter_diversity_worst_pair_weight",
+                experiment_cfg.get("adapter_diversity_worst_pair_weight"),
+            ),
+            "prototype_anchor_loss_weight": train_cfg.get(
+                "prototype_anchor_loss_weight",
+                experiment_cfg.get("prototype_anchor_loss_weight"),
+            ),
+            "prototype_anchor_loss_weight_s3": train_cfg.get(
+                "prototype_anchor_loss_weight_s3",
+                experiment_cfg.get("prototype_anchor_loss_weight_s3"),
+            ),
+            "prototype_anchor_loss_weight_s4": train_cfg.get(
+                "prototype_anchor_loss_weight_s4",
+                experiment_cfg.get("prototype_anchor_loss_weight_s4"),
+            ),
+            "prototype_anchor_temperature": train_cfg.get(
+                "prototype_anchor_temperature",
+                experiment_cfg.get("prototype_anchor_temperature"),
+            ),
+            "prototype_anchor_momentum": train_cfg.get(
+                "prototype_anchor_momentum",
+                experiment_cfg.get("prototype_anchor_momentum"),
+            ),
+            "prototype_anchor_min_confidence": train_cfg.get(
+                "prototype_anchor_min_confidence",
+                experiment_cfg.get("prototype_anchor_min_confidence"),
+            ),
+            "prototype_anchor_assignment_power": train_cfg.get(
+                "prototype_anchor_assignment_power",
+                experiment_cfg.get("prototype_anchor_assignment_power"),
+            ),
+            "prototype_anchor_init_noise": train_cfg.get(
+                "prototype_anchor_init_noise",
+                experiment_cfg.get("prototype_anchor_init_noise"),
+            ),
+            "enable_deepstack_mmrl_residual": train_cfg.get(
+                "enable_deepstack_mmrl_residual",
+                experiment_cfg.get("enable_deepstack_mmrl_residual"),
+            ),
+            "deepstack_mmrl_residual_scale": train_cfg.get(
+                "deepstack_mmrl_residual_scale",
+                experiment_cfg.get("deepstack_mmrl_residual_scale"),
+            ),
+            "diag_every_steps": train_cfg.get("diag_every_steps"),
+            "enable_expert_floor_loss_s4": train_cfg.get("enable_expert_floor_loss_s4"),
+            "expert_floor_loss_weight": train_cfg.get("expert_floor_loss_weight"),
+            "expert_min_active_tokens": train_cfg.get("expert_min_active_tokens"),
+            "enable_collapse_loss_s4": train_cfg.get("enable_collapse_loss_s4"),
+            "anti_collapse_weight": train_cfg.get("anti_collapse_weight"),
+            "collapse_max_ratio": train_cfg.get("collapse_max_ratio"),
+            "collapse_min_ratio": train_cfg.get("collapse_min_ratio"),
+            "collapse_entropy_target": train_cfg.get("collapse_entropy_target"),
+            "group_usage_dead_threshold": train_cfg.get("group_usage_dead_threshold"),
+            "group_usage_ema_alpha": train_cfg.get("group_usage_ema_alpha"),
+            "grad_spike_ema_alpha": train_cfg.get("grad_spike_ema_alpha"),
+            "grad_spike_ratio_threshold": train_cfg.get("grad_spike_ratio_threshold"),
+            "grad_spike_abs_threshold": train_cfg.get("grad_spike_abs_threshold"),
+            "grad_spike_cooldown_steps": train_cfg.get("grad_spike_cooldown_steps"),
+            "disable_general_mm_stage34": train_cfg.get("disable_general_mm_stage34"),
         },
         "experiment_cfg": experiment_cfg,
     }
@@ -112,9 +206,22 @@ def print_stage_step_summary(stage_name, step, row):
         print(f"  ├─ Gate Loss:             {_fmt(row.get('gate_loss')):>10}")
     if "ce_loss" in row:
         print(f"  ├─ CE Loss:               {_fmt(row.get('ce_loss')):>10}")
+    if "alpha_guide_loss" in row:
+        print(f"  ├─ Alpha Guide Loss:      {_fmt(row.get('alpha_guide_loss')):>10}")
     if "alpha_mae" in row:
         print(f"[Alpha Statistics]")
         print(f"  └─ Alpha MAE:             {_fmt(row.get('alpha_mae')):>10}")
+
+    if "active_token_count_mean" in row:
+        print(f"[Routing Statistics]")
+        if "active_token_count_mean" in row:
+            print(f"  ├─ Active Tokens:         {_fmt(row.get('active_token_count_mean'), 3):>10}")
+        if "k_budget_mean" in row:
+            print(f"  ├─ K Budget:              {_fmt(row.get('k_budget_mean'), 3):>10}")
+        if "raw_budget_mean" in row:
+            print(f"  ├─ Raw Budget:            {_fmt(row.get('raw_budget_mean'), 3):>10}")
+        if "batch_alpha_mean" in row:
+            print(f"  └─ Batch Alpha:           {_fmt(row.get('batch_alpha_mean'), 4):>10}")
 
     print(f"[Schedule]")
     if "temperature" in row:
@@ -122,6 +229,23 @@ def print_stage_step_summary(stage_name, step, row):
     if "learning_rate" in row:
         print(f"  └─ Learning Rate:         {_fmt(row.get('learning_rate'), 8):>10}")
     print("=" * 72 + "\n")
+
+def _dbg_tensor_stats(name, x):
+    if x is None:
+        return f"{name}=None"
+    if not torch.is_tensor(x):
+        return f"{name}=<{type(x).__name__}>"
+    with torch.no_grad():
+        shape = tuple(x.shape)
+        dtype = x.dtype
+        device = x.device
+        if x.numel() == 0:
+            return f"{name}: shape={shape} dtype={dtype} device={device} numel=0"
+        xf = x.detach().float()
+        return (
+            f"{name}: shape={shape} dtype={dtype} device={device} "
+            f"min={xf.min().item():.4f} max={xf.max().item():.4f} mean={xf.mean().item():.4f}"
+        )
 
 class StageScheduleCallback(TrainerCallback):
     def __init__(
@@ -148,26 +272,42 @@ class StageScheduleCallback(TrainerCallback):
         prog = min(float(ep) / total_epochs, 1.0)
         model.temperature_override = self.init_temp - (self.init_temp - self.final_temp) * prog
         model.current_stage_progress = float(prog)
+        model.current_stage_step = int(state.global_step) + 1
 
 
 class MMRLDiagnosticsCallback(TrainerCallback):
     DEFAULT_KEEP_KEYS = {
         "ce_loss",
-        "expert_delta_to_org_ratio",
-        "expert_delta_common_mode_ratio",
+        "active_token_count_mean",
+        "delta_pool_common_mode_ratio",
+        "delta_pool_specificity_ratio",
         "adapter_route_entropy_norm",
+    }
+    KEEP_KEY_ALIASES = {
+        "group_entropy_norm": ("group_entropy_norm", "group_usage_entropy_norm"),
+        "group_usage_entropy_norm": ("group_entropy_norm", "group_usage_entropy_norm"),
     }
 
     def __init__(self, save_dir, every_steps=1000, stage_name="stage", keep_keys=None):
         self.save_dir = save_dir
         self.every_steps = int(max(1, every_steps))
         self.stage_name = stage_name
-        self.keep_keys = set(keep_keys or self.DEFAULT_KEEP_KEYS)
+        self.keep_keys = self._expand_keep_keys(keep_keys or self.DEFAULT_KEEP_KEYS)
         self.buffer = []
         self.jsonl_path = os.path.join(save_dir, "mmrl_diagnostics.jsonl")
         self.csv_path = os.path.join(save_dir, "mmrl_diagnostics.csv")
         self.csv_header_written = False
         os.makedirs(save_dir, exist_ok=True)
+
+    def _expand_keep_keys(self, keep_keys):
+        expanded = set()
+        for key in keep_keys:
+            aliases = self.KEEP_KEY_ALIASES.get(key)
+            if aliases is None:
+                expanded.add(key)
+            else:
+                expanded.update(aliases)
+        return expanded
 
     def _to_python(self, value):
         if torch.is_tensor(value):
@@ -264,18 +404,139 @@ class MMRLDiagnosticsCallback(TrainerCallback):
         self._flush()
 
 
-class GradientPressureCallback(TrainerCallback):
-    def on_step_end(self, args, state, control, **kwargs):
-        model = kwargs.get("model")
-        metrics = getattr(model, "_last_metrics", None)
-        collect_pressure = getattr(model, "_collect_grad_pressure_metrics", None)
-        if not isinstance(metrics, dict) or not callable(collect_pressure):
-            return
+class SharedRepGradMonitorCallback(TrainerCallback):
+    def __init__(
+        self,
+        save_dir,
+        stage_name="stage",
+        ema_alpha=0.10,
+        ratio_threshold=3.0,
+        abs_threshold=0.5,
+        cooldown_steps=20,
+    ):
+        self.save_dir = save_dir
+        self.stage_name = stage_name
+        self.ema_alpha = float(ema_alpha)
+        self.ratio_threshold = float(ratio_threshold)
+        self.abs_threshold = float(abs_threshold)
+        self.cooldown_steps = int(max(0, cooldown_steps))
+        self.grad_ema = None
+        self.spike_count = 0
+        self.last_spike_step = -10**9
+        self.jsonl_path = os.path.join(save_dir, "shared_rep_grad_events.jsonl")
+        self.csv_path = os.path.join(save_dir, "shared_rep_grad_events.csv")
+        self.csv_header_written = False
+        os.makedirs(save_dir, exist_ok=True)
+
+    def _to_python(self, value):
+        if torch.is_tensor(value):
+            value = value.detach().float().cpu()
+            if value.numel() == 1:
+                return float(value.item())
+            return value.tolist()
+        if isinstance(value, np.generic):
+            return float(value)
+        if isinstance(value, (float, int, str, bool)) or value is None:
+            return value
         try:
-            device = next(model.parameters()).device
-        except StopIteration:
-            device = torch.device("cpu")
-        metrics.update(collect_pressure(device))
+            return float(value)
+        except Exception:
+            return str(value)
+
+    def _append_csv(self, payload):
+        flat_payload = {k: v for k, v in payload.items() if not isinstance(v, list)}
+        with open(self.csv_path, "a", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(f, fieldnames=list(flat_payload.keys()))
+            if not self.csv_header_written:
+                writer.writeheader()
+                self.csv_header_written = True
+            writer.writerow(flat_payload)
+
+    def _write_event(self, payload):
+        payload = {k: self._to_python(v) for k, v in payload.items()}
+        payload = {
+            k: v for k, v in payload.items()
+            if not (isinstance(v, float) and not np.isfinite(v))
+        }
+        with open(self.jsonl_path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(payload, ensure_ascii=False) + "\n")
+        self._append_csv(payload)
+
+    def on_step_end(self, args, state, control, **kwargs):
+        step = int(state.global_step)
+        if step <= 0:
+            return
+
+        model = kwargs.get("model", None)
+        if model is None:
+            return
+
+        grad_payload = getattr(model, "_last_shared_rep_grad", {}) or {}
+        grad_norm = float(grad_payload.get("shared_rep_grad_norm", float("nan")))
+        grad_mean_abs = float(grad_payload.get("shared_rep_grad_mean_abs", float("nan")))
+        grad_max_abs = float(grad_payload.get("shared_rep_grad_max_abs", float("nan")))
+
+        prev_ema = self.grad_ema
+        if not np.isfinite(grad_norm):
+            grad_ratio = float("nan")
+            grad_spike = 0.0
+            grad_ema = prev_ema if prev_ema is not None else float("nan")
+        else:
+            if prev_ema is None or (not np.isfinite(prev_ema)) or prev_ema <= 1e-8:
+                prev_ema = grad_norm
+            grad_ratio = grad_norm / max(prev_ema, 1e-8)
+            grad_spike = float(
+                grad_norm >= self.abs_threshold
+                and grad_ratio >= self.ratio_threshold
+                and (step - self.last_spike_step) > self.cooldown_steps
+            )
+            grad_ema = (1.0 - self.ema_alpha) * prev_ema + self.ema_alpha * grad_norm
+            self.grad_ema = grad_ema
+
+        metrics = getattr(model, "_last_metrics", None)
+        if isinstance(metrics, dict):
+            device = None
+            try:
+                device = next(model.parameters()).device
+            except Exception:
+                device = torch.device("cpu")
+
+            metrics.update({
+                "shared_rep_grad_norm": torch.tensor(grad_norm, device=device),
+                "shared_rep_grad_mean_abs": torch.tensor(grad_mean_abs, device=device),
+                "shared_rep_grad_max_abs": torch.tensor(grad_max_abs, device=device),
+                "shared_rep_grad_ema": torch.tensor(float(grad_ema), device=device),
+                "shared_rep_grad_ratio": torch.tensor(float(grad_ratio), device=device),
+                "shared_rep_grad_spike_flag": torch.tensor(float(grad_spike), device=device),
+                "shared_rep_grad_spike_count": torch.tensor(float(self.spike_count + int(grad_spike > 0.0)), device=device),
+                "shared_rep_grad_steps_since_spike": torch.tensor(
+                    float(step - self.last_spike_step) if self.last_spike_step > 0 else -1.0,
+                    device=device,
+                ),
+            })
+
+            if grad_spike > 0.0:
+                self.spike_count += 1
+                self.last_spike_step = step
+                metrics["shared_rep_grad_spike_count"] = torch.tensor(float(self.spike_count), device=device)
+                metrics["shared_rep_grad_steps_since_spike"] = torch.tensor(0.0, device=device)
+                event_payload = {
+                    "stage_name": self.stage_name,
+                    "step": step,
+                    "shared_rep_grad_norm": grad_norm,
+                    "shared_rep_grad_mean_abs": grad_mean_abs,
+                    "shared_rep_grad_max_abs": grad_max_abs,
+                    "shared_rep_grad_ema": grad_ema,
+                    "shared_rep_grad_ratio": grad_ratio,
+                    "total_loss": metrics.get("total_loss"),
+                    "ce_loss": metrics.get("ce_loss"),
+                    "alpha_guide_loss": metrics.get("alpha_guide_loss"),
+                    "active_token_count_mean": metrics.get("active_token_count_mean"),
+                    "batch_alpha_mean": metrics.get("batch_alpha_mean"),
+                    "delta_to_org_ratio": metrics.get("delta_to_org_ratio"),
+                }
+                self._write_event(event_payload)
+
 # =========================
 #  Full model (Stage3/4用)
 # =========================
@@ -293,161 +554,348 @@ class Qwen3VLMMRLForStages(Qwen3VLForConditionalGeneration):
         self.generation_config = GenerationConfig.from_model_config(config)
 
         self.ce_loss_weight = 1.0
-        self.current_stage_id = 4
-        self.current_stage_progress = 1.0
-        self.mmrl_warmup_fraction = 1.0 / 3.0
+        self.alpha_loss_weight = 0.0
+        self.current_stage_id = 0
+        self.current_stage_step = 0
+        self.current_stage_progress = 0.0
+        self.enable_alpha_guide_loss = False
+        self.enable_gate_loss_stage2 = True
         self.adapter_usage_balance_loss_weight = 0.0
         self.adapter_sample_entropy_loss_weight = 0.0
-        self.mmrl_residual_guard_loss_weight = 0.0
-        self.mmrl_semantic_anchor_loss_weight = 0.0
+        self.adapter_common_mode_loss_weight = 0.0
+        self.adapter_effective_delta_loss_weight = 0.0
+        self.adapter_effective_delta_loss_weight_s3 = None
+        self.adapter_effective_delta_loss_weight_s4 = None
+        self.prototype_anchor_loss_weight = 0.0
+        self.prototype_anchor_loss_weight_s3 = None
+        self.prototype_anchor_loss_weight_s4 = None
+        self.adapter_diversity_loss_weight = 0.0
+        self.adapter_diversity_loss_weight_s3 = None
+        self.adapter_diversity_loss_weight_s4 = None
+        self.enable_expert_floor_loss = False
+        self.expert_floor_loss_weight = 0.0
+        self.expert_min_active_tokens = 4.0
+        self.enable_collapse_loss = False
+        self.anti_collapse_weight = 0.0
+        self.collapse_max_ratio = 0.45
+        self.collapse_min_ratio = 0.05
+        self.collapse_entropy_target = 0.75
+        self.group_usage_dead_threshold = 0.03
+        self.group_usage_ema_alpha = 0.10
+        self.group_usage_ema = None
+        
         self.temperature_override = None
 
         self.debug_mode = True
         self.debug_loss_threshold = 20.0
         self._last_metrics = {}
-        self._grad_pressure_hook_handles = []
-        self._grad_pressure_accumulators = {}
-        self._ensure_grad_pressure_hooks()
+        self._last_shared_rep_grad = {}
+        self._shared_rep_grad_hook_handle = None
+        self._shared_rep_grad_hook_param_id = None
+        self._ensure_shared_rep_grad_hook()
 
     def _get_mmrl_module(self):
         return getattr(self.model, "MMRL", None)
 
-    def _ensure_grad_pressure_hooks(self):
-        if self._grad_pressure_hook_handles:
-            return
+    def _scheduled_weight(self, base_weight, stage3_weight=None, stage4_weight=None, ramp_stage4=False):
+        stage_id = int(getattr(self, "current_stage_id", 0) or 0)
+        if stage_id == 3 and stage3_weight is not None:
+            return float(stage3_weight)
+        if stage_id == 4 and stage4_weight is not None:
+            weight = float(stage4_weight)
+            if ramp_stage4:
+                progress = max(0.0, min(float(getattr(self, "current_stage_progress", 0.0)), 1.0))
+                weight *= progress
+            return weight
+        return float(base_weight)
 
-        groups = {
-            "mmrl": self._get_mmrl_module(),
-            "adapter_router": getattr(self.model.visual, "adapter_router", None),
-            "visual_adapter": getattr(self.model.visual, "residual_adapters", None),
-        }
-        for group_name, module in groups.items():
-            if module is None:
-                continue
-            for param in module.parameters():
-                if not param.requires_grad:
-                    continue
-                def _capture(grad, name=group_name, tracked_param=param):
-                    acc = self._grad_pressure_accumulators.setdefault(
-                        name, {"grad_sq": [], "param_sq": [], "numel": 0}
-                    )
-                    grad_f = grad.detach().float()
-                    param_f = tracked_param.detach().float()
-                    acc["grad_sq"].append(grad_f.square().sum())
-                    acc["param_sq"].append(param_f.square().sum())
-                    acc["numel"] += grad_f.numel()
-                    return grad
-                self._grad_pressure_hook_handles.append(param.register_hook(_capture))
-
-    def _reset_grad_pressure_accumulators(self):
-        self._grad_pressure_accumulators = {}
-
-    def _collect_grad_pressure_metrics(self, device):
+    def _collect_rep_grad_metrics(self, device):
         result = {}
-        for name, acc in self._grad_pressure_accumulators.items():
-            count = max(int(acc["numel"]), 1)
-            grad_rms = (torch.stack(acc["grad_sq"]).sum() / count).clamp_min(0.0).sqrt()
-            param_rms = (torch.stack(acc["param_sq"]).sum() / count).clamp_min(0.0).sqrt()
-            result[f"{name}_grad_rms"] = grad_rms.to(device=device)
-            result[f"{name}_grad_pressure"] = (
-                grad_rms / param_rms.clamp_min(1e-12)
-            ).to(device=device)
+        mmrl = self._get_mmrl_module()
+        if mmrl is None:
+            return result
+
+        shared = getattr(mmrl, "shared_represent_space", None)
+        if shared is not None:
+            result["shared_rep_norm_mean"] = shared.detach().float().norm(dim=-1).mean()
+            if shared.grad is not None:
+                result["shared_rep_grad_norm"] = shared.grad.detach().float().norm()
+
+        def _grad_stats(modules, prefix):
+            if modules is None:
+                modules = []
+            elif isinstance(modules, nn.Module):
+                modules = [modules]
+
+            grads = []
+            for m in modules:
+                for p in m.parameters():
+                    if p.grad is not None:
+                        grads.append(p.grad.detach().float().norm())
+            if grads:
+                stacked = torch.stack(grads)
+                result[f"{prefix}_grad_norm_mean"] = stacked.mean()
+                result[f"{prefix}_grad_norm_max"] = stacked.max()
+
+
+        _grad_stats(getattr(mmrl, "v_r_token_projector", []), "v_projector")
+
+        visual = getattr(self.model, "visual", None)
+        if visual is not None:
+            def _module_grad_stats(module, prefix):
+                grads = []
+                for p in module.parameters():
+                    if p.grad is not None:
+                        grads.append(p.grad.detach().float().norm())
+                if grads:
+                    stacked = torch.stack(grads)
+                    result[f"{prefix}_grad_norm_mean"] = stacked.mean()
+                    result[f"{prefix}_grad_norm_max"] = stacked.max()
+                else:
+                    result[f"{prefix}_grad_norm_mean"] = torch.tensor(0.0, device=device)
+                    result[f"{prefix}_grad_norm_max"] = torch.tensor(0.0, device=device)
+
+            _module_grad_stats(getattr(visual, "adapter_router", nn.Module()), "adapter_router")
+            _module_grad_stats(getattr(visual, "residual_adapters", nn.Module()), "visual_adapter")
+            _module_grad_stats(getattr(visual, "visionGating", nn.Module()), "vision_gate")
+            blocks_with_rep = getattr(visual, "blocks_with_rep", [])
+            trainable_count = 0
+            for block in blocks_with_rep:
+                trainable_count += sum(p.numel() for p in block.parameters() if p.requires_grad)
+            result["blocks_with_rep_trainable_param_count"] = torch.tensor(float(trainable_count), device=device)
+        if self._last_shared_rep_grad:
+            for key, value in self._last_shared_rep_grad.items():
+                result[key] = torch.tensor(float(value), device=device)
         return result
 
-    def forward(self, input_ids=None, alpha_labels=None, images_per_sample=None, task_type_ids=None, **kwargs):
-        self._reset_grad_pressure_accumulators()
-        visual = self.model.visual
-        visual.current_stage_id = int(self.current_stage_id)
-        visual.current_stage_progress = float(self.current_stage_progress)
-        visual.mmrl_warmup_fraction = float(self.mmrl_warmup_fraction)
-        visual.experts_enabled = int(self.current_stage_id) >= 3
+    def _shared_rep_grad_hook(self, grad):
+        grad_f = grad.detach().float()
+        self._last_shared_rep_grad = {
+            "shared_rep_grad_norm": float(grad_f.norm().item()),
+            "shared_rep_grad_mean_abs": float(grad_f.abs().mean().item()),
+            "shared_rep_grad_max_abs": float(grad_f.abs().max().item()),
+        }
+        return grad
 
-        if self.temperature_override is not None:
+    def _ensure_shared_rep_grad_hook(self):
+        mmrl = self._get_mmrl_module()
+        shared = getattr(mmrl, "shared_represent_space", None) if mmrl is not None else None
+        if shared is None:
+            return
+
+        current_param_id = id(shared)
+        if (
+            self._shared_rep_grad_hook_handle is not None
+            and self._shared_rep_grad_hook_param_id == current_param_id
+        ):
+            return
+
+        if self._shared_rep_grad_hook_handle is not None:
+            try:
+                self._shared_rep_grad_hook_handle.remove()
+            except Exception:
+                pass
+
+        self._shared_rep_grad_hook_handle = shared.register_hook(self._shared_rep_grad_hook)
+        self._shared_rep_grad_hook_param_id = current_param_id
+
+    def _expand_alpha_labels(self, alpha_labels, images_per_sample):
+        if alpha_labels is None:
+            return None
+        if images_per_sample is None:
+            return alpha_labels.view(-1, 1)
+
+        tmp = []
+        for i, c in enumerate(images_per_sample):
+            c = int(c)
+            if c > 0:
+                tmp.append(alpha_labels[i].repeat(c))
+        if len(tmp) == 0:
+            return None
+        return torch.cat(tmp).view(-1, 1)
+
+    def forward(self, input_ids=None, alpha_labels=None, images_per_sample=None, task_type_ids=None, **kwargs):
+        self._last_shared_rep_grad = {}
+        self._ensure_shared_rep_grad_hook()
+        if hasattr(self, "temperature_override") and self.temperature_override is not None:
             self.model.temperature_override = self.temperature_override
             kwargs["gating_temperature_override"] = self.temperature_override
-
-        labels = kwargs.get("labels")
+        labels = kwargs.get("labels", None)
         if labels is not None and "attention_mask" in kwargs:
-            prompt_mask = labels == -100
-            attention_mask = kwargs["attention_mask"]
-            if attention_mask.dim() == 2 and prompt_mask.dim() == 2:
-                prompt_mask = prompt_mask & (attention_mask == 1)
-            kwargs["mmrl_gating_mask"] = prompt_mask.to(dtype=self.model.dtype)
-
-        outputs = super().forward(
-            input_ids=input_ids,
-            images_per_sample=images_per_sample,
-            **kwargs,
-        )
+            is_prompt = (labels == -100)
+            att_mask = kwargs["attention_mask"]
+            if att_mask.dim() == 2 and is_prompt.dim() == 2:
+                is_prompt = is_prompt & (att_mask == 1)
+            kwargs["mmrl_gating_mask"] = is_prompt.to(dtype=self.model.dtype)
+        
+        outputs = super().forward(input_ids=input_ids, images_per_sample=images_per_sample, **kwargs)
+        logits = outputs.logits
+        labels = kwargs.get("labels", None)
         if labels is None:
-            return outputs
-
-        ce_loss = outputs.loss
-        if ce_loss is None:
-            ce_loss = torch.tensor(0.0, device=outputs.logits.device)
-
-        def _loss_tensor(name):
-            value = getattr(visual, name, 0.0)
-            if torch.is_tensor(value):
-                return value.to(device=ce_loss.device, dtype=ce_loss.dtype)
-            return torch.tensor(float(value), device=ce_loss.device, dtype=ce_loss.dtype)
-
-        usage_loss = _loss_tensor("adapter_usage_balance_loss")
-        entropy_loss = _loss_tensor("adapter_sample_entropy_loss")
-        mmrl_guard_loss = _loss_tensor("mmrl_residual_guard_loss")
-        mmrl_semantic_anchor_loss = _loss_tensor("mmrl_semantic_anchor_loss")
-        scaled_usage_loss = usage_loss * float(self.adapter_usage_balance_loss_weight)
-        scaled_entropy_loss = entropy_loss * float(self.adapter_sample_entropy_loss_weight)
-        scaled_mmrl_guard_loss = (
-            mmrl_guard_loss * float(self.mmrl_residual_guard_loss_weight)
-        )
-        stage_id = int(self.current_stage_id)
-        if stage_id == 3:
-            semantic_anchor_weight = float(self.mmrl_semantic_anchor_loss_weight)
-        elif stage_id == 4:
-            semantic_anchor_weight = 0.25 * float(
-                self.mmrl_semantic_anchor_loss_weight
-            )
+            ce_loss = torch.tensor(0.0, device=logits.device)
         else:
-            semantic_anchor_weight = 0.0
-        scaled_mmrl_semantic_anchor_loss = (
-            mmrl_semantic_anchor_loss * semantic_anchor_weight
+            ce_loss = outputs.loss if outputs.loss is not None else torch.tensor(0.0, device=input_ids.device)
+        # 1) alpha guide
+        alpha_guide_loss = torch.tensor(0.0, device=input_ids.device)
+        alpha_logits = self.model.visual.alpha_list
+        expanded_labels = None
+
+        if isinstance(alpha_logits, list):
+            if len(alpha_logits) > 0:
+                alpha_logits = torch.stack(alpha_logits)
+            else:
+                alpha_logits = None
+
+        expanded_labels = self._expand_alpha_labels(alpha_labels, images_per_sample)
+
+        if self.enable_alpha_guide_loss and alpha_logits is not None and alpha_labels is not None:
+            if expanded_labels is not None and expanded_labels.numel() > 0:
+                if alpha_logits.dim() == 1:
+                    alpha_logits = alpha_logits.unsqueeze(-1)
+
+                n = min(alpha_logits.shape[0], expanded_labels.shape[0])
+                if n > 0:
+                    alpha_guide_loss = torch.nn.functional.binary_cross_entropy_with_logits(
+                        alpha_logits[:n], expanded_labels[:n].to(alpha_logits.dtype)
+                    ) * self.alpha_loss_weight
+
+        adapter_usage_balance_loss = getattr(self.model.visual, "adapter_usage_balance_loss", torch.tensor(0.0, device=input_ids.device))
+        adapter_sample_entropy_loss = getattr(self.model.visual, "adapter_sample_entropy_loss", torch.tensor(0.0, device=input_ids.device))
+        adapter_common_mode_loss = getattr(self.model.visual, "adapter_common_mode_loss", torch.tensor(0.0, device=input_ids.device))
+        adapter_effective_delta_loss = getattr(self.model.visual, "adapter_effective_delta_loss", torch.tensor(0.0, device=input_ids.device))
+        prototype_anchor_loss = getattr(self.model.visual, "prototype_anchor_loss", torch.tensor(0.0, device=input_ids.device))
+        adapter_diversity_loss = getattr(self.model.visual, "adapter_diversity_loss", torch.tensor(0.0, device=input_ids.device))
+        if not torch.is_tensor(adapter_usage_balance_loss):
+            adapter_usage_balance_loss = torch.tensor(adapter_usage_balance_loss, device=input_ids.device, dtype=ce_loss.dtype)
+        else:
+            adapter_usage_balance_loss = adapter_usage_balance_loss.to(device=input_ids.device, dtype=ce_loss.dtype)
+        if not torch.is_tensor(adapter_sample_entropy_loss):
+            adapter_sample_entropy_loss = torch.tensor(adapter_sample_entropy_loss, device=input_ids.device, dtype=ce_loss.dtype)
+        else:
+            adapter_sample_entropy_loss = adapter_sample_entropy_loss.to(device=input_ids.device, dtype=ce_loss.dtype)
+        if not torch.is_tensor(adapter_common_mode_loss):
+            adapter_common_mode_loss = torch.tensor(adapter_common_mode_loss, device=input_ids.device, dtype=ce_loss.dtype)
+        else:
+            adapter_common_mode_loss = adapter_common_mode_loss.to(device=input_ids.device, dtype=ce_loss.dtype)
+        if not torch.is_tensor(adapter_effective_delta_loss):
+            adapter_effective_delta_loss = torch.tensor(adapter_effective_delta_loss, device=input_ids.device, dtype=ce_loss.dtype)
+        else:
+            adapter_effective_delta_loss = adapter_effective_delta_loss.to(device=input_ids.device, dtype=ce_loss.dtype)
+        if not torch.is_tensor(prototype_anchor_loss):
+            prototype_anchor_loss = torch.tensor(prototype_anchor_loss, device=input_ids.device, dtype=ce_loss.dtype)
+        else:
+            prototype_anchor_loss = prototype_anchor_loss.to(device=input_ids.device, dtype=ce_loss.dtype)
+        if not torch.is_tensor(adapter_diversity_loss):
+            adapter_diversity_loss = torch.tensor(adapter_diversity_loss, device=input_ids.device, dtype=ce_loss.dtype)
+        else:
+            adapter_diversity_loss = adapter_diversity_loss.to(device=input_ids.device, dtype=ce_loss.dtype)
+        effective_delta_weight = self._scheduled_weight(
+            self.adapter_effective_delta_loss_weight,
+            self.adapter_effective_delta_loss_weight_s3,
+            self.adapter_effective_delta_loss_weight_s4,
         )
+        prototype_anchor_weight = self._scheduled_weight(
+            self.prototype_anchor_loss_weight,
+            self.prototype_anchor_loss_weight_s3,
+            self.prototype_anchor_loss_weight_s4,
+        )
+        adapter_diversity_weight = self._scheduled_weight(
+            self.adapter_diversity_loss_weight,
+            self.adapter_diversity_loss_weight_s3,
+            self.adapter_diversity_loss_weight_s4,
+            ramp_stage4=True,
+        )
+        scaled_adapter_usage_balance_loss = adapter_usage_balance_loss * float(self.adapter_usage_balance_loss_weight)
+        scaled_adapter_sample_entropy_loss = adapter_sample_entropy_loss * float(self.adapter_sample_entropy_loss_weight)
+        scaled_adapter_common_mode_loss = adapter_common_mode_loss * float(self.adapter_common_mode_loss_weight)
+        scaled_adapter_effective_delta_loss = adapter_effective_delta_loss * float(effective_delta_weight)
+        scaled_prototype_anchor_loss = prototype_anchor_loss * float(prototype_anchor_weight)
+        scaled_adapter_diversity_loss = adapter_diversity_loss * float(adapter_diversity_weight)
+
         outputs.loss = (
             self.ce_loss_weight * ce_loss
-            + scaled_usage_loss
-            + scaled_entropy_loss
-            + scaled_mmrl_guard_loss
-            + scaled_mmrl_semantic_anchor_loss
+            + alpha_guide_loss
+            + scaled_adapter_usage_balance_loss
+            + scaled_adapter_sample_entropy_loss
+            + scaled_adapter_common_mode_loss
+            + scaled_adapter_effective_delta_loss
+            + scaled_prototype_anchor_loss
+            + scaled_adapter_diversity_loss
         )
 
+        # ---- cache metrics for external logger ----
         with torch.no_grad():
+            alpha_mae = torch.tensor(float("nan"), device=input_ids.device)
+
+            if alpha_logits is not None and torch.is_tensor(alpha_logits) and alpha_logits.numel() > 0:
+                a = torch.sigmoid(alpha_logits.detach().float().view(-1))
+                if expanded_labels is not None and torch.is_tensor(expanded_labels) and expanded_labels.numel() > 0:
+                    l = expanded_labels.detach().float().view(-1)[:a.numel()].to(a.device)
+                    n = min(a.numel(), l.numel())
+                    if n > 0:
+                        alpha_mae = (a[:n] - l[:n]).abs().mean()
+
             self._last_metrics = {
                 "total_loss": outputs.loss.detach(),
                 "ce_loss": ce_loss.detach(),
-                "adapter_usage_balance_loss_scaled": scaled_usage_loss.detach(),
-                "adapter_sample_entropy_loss_scaled": scaled_entropy_loss.detach(),
-                "mmrl_residual_guard_loss_scaled": scaled_mmrl_guard_loss.detach(),
-                "mmrl_semantic_anchor_loss_scaled": (
-                    scaled_mmrl_semantic_anchor_loss.detach()
-                ),
-                "stage_progress": torch.tensor(
-                    float(self.current_stage_progress), device=ce_loss.device
-                ),
+                "alpha_guide_loss": alpha_guide_loss.detach(),
+                "adapter_usage_balance_loss": adapter_usage_balance_loss.detach(),
+                "adapter_sample_entropy_loss": adapter_sample_entropy_loss.detach(),
+                "adapter_common_mode_loss": adapter_common_mode_loss.detach(),
+                "adapter_effective_delta_loss": adapter_effective_delta_loss.detach(),
+                "prototype_anchor_loss": prototype_anchor_loss.detach(),
+                "adapter_diversity_loss": adapter_diversity_loss.detach(),
+                "adapter_usage_balance_loss_scaled": scaled_adapter_usage_balance_loss.detach(),
+                "adapter_sample_entropy_loss_scaled": scaled_adapter_sample_entropy_loss.detach(),
+                "adapter_common_mode_loss_scaled": scaled_adapter_common_mode_loss.detach(),
+                "adapter_effective_delta_loss_scaled": scaled_adapter_effective_delta_loss.detach(),
+                "prototype_anchor_loss_scaled": scaled_prototype_anchor_loss.detach(),
+                "adapter_diversity_loss_scaled": scaled_adapter_diversity_loss.detach(),
+                "alpha_mae": alpha_mae.detach(),
+                "temperature": torch.tensor(float(self.temperature_override) if self.temperature_override is not None else float("nan"), device=input_ids.device),
+                "adapter_usage_balance_weight": torch.tensor(float(self.adapter_usage_balance_loss_weight), device=input_ids.device),
+                "adapter_sample_entropy_weight": torch.tensor(float(self.adapter_sample_entropy_loss_weight), device=input_ids.device),
+                "adapter_common_mode_weight": torch.tensor(float(self.adapter_common_mode_loss_weight), device=input_ids.device),
+                "adapter_effective_delta_weight": torch.tensor(float(effective_delta_weight), device=input_ids.device),
+                "prototype_anchor_weight": torch.tensor(float(prototype_anchor_weight), device=input_ids.device),
+                "adapter_diversity_weight": torch.tensor(float(adapter_diversity_weight), device=input_ids.device),
+                "stage_progress": torch.tensor(float(getattr(self, "current_stage_progress", 0.0)), device=input_ids.device),
             }
-            self._last_metrics.update(visual.debug_context or {})
+            visual_dbg = getattr(self.model.visual, "debug_context", {}) or {}
+            for key, value in visual_dbg.items():
+                self._last_metrics[key] = value
+            model_dbg = getattr(self.model, "debug_context", {}) or {}
+            for key, value in model_dbg.items():
+                self._last_metrics[key] = value
+            for key, value in self._collect_rep_grad_metrics(input_ids.device).items():
+                self._last_metrics[key] = value
 
-        if self.debug_mode and (
-            not torch.isfinite(outputs.loss)
-            or outputs.loss.detach().float().item() > self.debug_loss_threshold
-        ):
-            print(
-                "[HIGH-LOSS-DBG] "
-                f"stage={self.current_stage_id} "
-                f"total={outputs.loss.detach().float().item():.6f} "
-                f"ce={ce_loss.detach().float().item():.6f}"
-            )
+        if self.debug_mode and torch.is_tensor(outputs.loss):
+            loss_val = outputs.loss.detach().float().item()
+            if loss_val > self.debug_loss_threshold or not torch.isfinite(outputs.loss):
+                print("\n!!!! [HIGH-LOSS-DBG] abnormal loss detected !!!!")
+                print(f"!!!! [HIGH-LOSS-DBG] final_loss={loss_val:.6f}")
+                print(f"!!!! [HIGH-LOSS-DBG] manual_ce={ce_loss.detach().float().item():.6f}")
+                print(f"!!!! [HIGH-LOSS-DBG] alpha_loss={alpha_guide_loss.detach().float().item():.6f}")
+
+                if labels is not None:
+                    valid_per_sample = (labels != -100).sum(dim=1)
+                    print(f"!!!! [HIGH-LOSS-DBG] valid_tokens_per_sample={valid_per_sample.tolist()}")
+                    print(f"!!!! [HIGH-LOSS-DBG] total_valid_tokens={(labels != -100).sum().item()}/{labels.numel()}")
+
+                print(f"!!!! [HIGH-LOSS-DBG] images_per_sample={images_per_sample}")
+                print(f"!!!! [HIGH-LOSS-DBG] {_dbg_tensor_stats('alpha_labels', alpha_labels)}")
+                print(f"!!!! [HIGH-LOSS-DBG] {_dbg_tensor_stats('alpha_logits', alpha_logits)}")
+                print(f"!!!! [HIGH-LOSS-DBG] {_dbg_tensor_stats('expanded_labels', expanded_labels)}")
+
+                if input_ids is not None:
+                    print(f"!!!! [HIGH-LOSS-DBG] input_ids_shape={tuple(input_ids.shape)}")
+                    print(f"!!!! [HIGH-LOSS-DBG] first_32_ids_sample0={input_ids[0, :32].detach().cpu().tolist()}")
+
+                print("!!!! [HIGH-LOSS-DBG] abnormal loss end !!!!\n")
+
         return outputs
+
 
 def build_model_and_processor(model_path, experiment_cfg=None):
     experiment_cfg = experiment_cfg or {}
@@ -465,26 +913,89 @@ def build_model_and_processor(model_path, experiment_cfg=None):
         "visual_residual_adapter_count",
         os.getenv("MMRL_VISUAL_RESIDUAL_ADAPTER_COUNT", "4"),
     ))
+    config.ADAPTER_USAGE_BALANCE_LOSS_WEIGHT = float(experiment_cfg.get(
+        "adapter_usage_balance_loss_weight",
+        os.getenv("MMRL_ADAPTER_USAGE_BALANCE_LOSS_WEIGHT", "0.0"),
+    ))
+    config.ADAPTER_SAMPLE_ENTROPY_LOSS_WEIGHT = float(experiment_cfg.get(
+        "adapter_sample_entropy_loss_weight",
+        os.getenv("MMRL_ADAPTER_SAMPLE_ENTROPY_LOSS_WEIGHT", "0.0"),
+    ))
+    config.ADAPTER_COMMON_MODE_LOSS_WEIGHT = float(experiment_cfg.get(
+        "adapter_common_mode_loss_weight",
+        os.getenv("MMRL_ADAPTER_COMMON_MODE_LOSS_WEIGHT", "0.0"),
+    ))
+    config.ADAPTER_EFFECTIVE_DELTA_LOSS_WEIGHT = float(experiment_cfg.get(
+        "adapter_effective_delta_loss_weight",
+        os.getenv("MMRL_ADAPTER_EFFECTIVE_DELTA_LOSS_WEIGHT", "0.0"),
+    ))
     config.ADAPTER_SAMPLE_ENTROPY_TARGET = float(experiment_cfg.get(
-        "adapter_sample_entropy_target", 0.55
+        "adapter_sample_entropy_target",
+        os.getenv("MMRL_ADAPTER_SAMPLE_ENTROPY_TARGET", "0.40"),
     ))
-    config.MMRL_RESIDUAL_RATIO_UPPER = float(experiment_cfg.get(
-        "mmrl_residual_ratio_upper", 0.20
+    config.ADAPTER_COMMON_MODE_TARGET = float(experiment_cfg.get(
+        "adapter_common_mode_target",
+        os.getenv("MMRL_ADAPTER_COMMON_MODE_TARGET", "0.85"),
     ))
-    config.ENABLE_ROUTER_KMEANS_PRIOR = bool(experiment_cfg.get(
-        "enable_router_kmeans_prior", False
+    config.ADAPTER_EFFECTIVE_DELTA_TARGET_LOW = float(experiment_cfg.get(
+        "adapter_effective_delta_target_low",
+        os.getenv("MMRL_ADAPTER_EFFECTIVE_DELTA_TARGET_LOW", "0.78"),
     ))
-    config.ROUTER_PRIOR_TEMPERATURE = float(experiment_cfg.get(
-        "router_prior_temperature", 0.25
+    config.ADAPTER_EFFECTIVE_DELTA_TARGET_HIGH = float(experiment_cfg.get(
+        "adapter_effective_delta_target_high",
+        os.getenv("MMRL_ADAPTER_EFFECTIVE_DELTA_TARGET_HIGH", "1.10"),
     ))
-    config.ROUTER_RESIDUAL_START_FRACTION = float(experiment_cfg.get(
-        "router_residual_start_fraction", 0.30
+    config.ADAPTER_DIVERSITY_LOSS_WEIGHT = float(experiment_cfg.get(
+        "adapter_diversity_loss_weight",
+        os.getenv("MMRL_ADAPTER_DIVERSITY_LOSS_WEIGHT", "0.0"),
     ))
-    config.ROUTER_RESIDUAL_MAX_SCALE = float(experiment_cfg.get(
-        "router_residual_max_scale", 0.50
+    config.ADAPTER_DIVERSITY_TARGET_LOW = float(experiment_cfg.get(
+        "adapter_diversity_target_low",
+        os.getenv("MMRL_ADAPTER_DIVERSITY_TARGET_LOW", "0.30"),
     ))
-    config.ROUTER_RESIDUAL_LOGIT_BOUND = float(experiment_cfg.get(
-        "router_residual_logit_bound", 1.0
+    config.ADAPTER_DIVERSITY_TARGET_HIGH = float(experiment_cfg.get(
+        "adapter_diversity_target_high",
+        os.getenv("MMRL_ADAPTER_DIVERSITY_TARGET_HIGH", "0.58"),
+    ))
+    config.ADAPTER_DIVERSITY_UPPER_WEIGHT = float(experiment_cfg.get(
+        "adapter_diversity_upper_weight",
+        os.getenv("MMRL_ADAPTER_DIVERSITY_UPPER_WEIGHT", "2.0"),
+    ))
+    config.ADAPTER_DIVERSITY_WORST_PAIR_WEIGHT = float(experiment_cfg.get(
+        "adapter_diversity_worst_pair_weight",
+        os.getenv("MMRL_ADAPTER_DIVERSITY_WORST_PAIR_WEIGHT", "1.0"),
+    ))
+    config.PROTOTYPE_ANCHOR_LOSS_WEIGHT = float(experiment_cfg.get(
+        "prototype_anchor_loss_weight",
+        os.getenv("MMRL_PROTOTYPE_ANCHOR_LOSS_WEIGHT", "0.0"),
+    ))
+    config.PROTOTYPE_ANCHOR_TEMPERATURE = float(experiment_cfg.get(
+        "prototype_anchor_temperature",
+        os.getenv("MMRL_PROTOTYPE_ANCHOR_TEMPERATURE", "0.20"),
+    ))
+    config.PROTOTYPE_ANCHOR_MOMENTUM = float(experiment_cfg.get(
+        "prototype_anchor_momentum",
+        os.getenv("MMRL_PROTOTYPE_ANCHOR_MOMENTUM", "0.95"),
+    ))
+    config.PROTOTYPE_ANCHOR_MIN_CONFIDENCE = float(experiment_cfg.get(
+        "prototype_anchor_min_confidence",
+        os.getenv("MMRL_PROTOTYPE_ANCHOR_MIN_CONFIDENCE", "0.40"),
+    ))
+    config.PROTOTYPE_ANCHOR_ASSIGNMENT_POWER = float(experiment_cfg.get(
+        "prototype_anchor_assignment_power",
+        os.getenv("MMRL_PROTOTYPE_ANCHOR_ASSIGNMENT_POWER", "2.0"),
+    ))
+    config.PROTOTYPE_ANCHOR_INIT_NOISE = float(experiment_cfg.get(
+        "prototype_anchor_init_noise",
+        os.getenv("MMRL_PROTOTYPE_ANCHOR_INIT_NOISE", "0.10"),
+    ))
+    config.ENABLE_DEEPSTACK_MMRL_RESIDUAL = os.getenv(
+        "MMRL_ENABLE_DEEPSTACK_MMRL_RESIDUAL",
+        "1" if experiment_cfg.get("enable_deepstack_mmrl_residual", False) else "0",
+    ) == "1"
+    config.DEEPSTACK_MMRL_RESIDUAL_SCALE = float(os.getenv(
+        "MMRL_DEEPSTACK_MMRL_RESIDUAL_SCALE",
+        str(experiment_cfg.get("deepstack_mmrl_residual_scale", 0.0)),
     ))
     tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
     image_processor = AutoImageProcessor.from_pretrained(model_path, trust_remote_code=True)
@@ -494,6 +1005,7 @@ def build_model_and_processor(model_path, experiment_cfg=None):
     print("Base model loaded. ")
     print("Tokenizer loaded. Now building MMRL model...")
     model = Qwen3VLMMRLForStages(config, tokenizer).to("cuda").to(torch.bfloat16)
+    model._ensure_shared_rep_grad_hook()
     model.model.load_state_dict(base.model.state_dict(), strict=False)
     model.lm_head.load_state_dict(base.lm_head.state_dict(), strict=False)
     del base
@@ -530,9 +1042,27 @@ def build_model_and_processor(model_path, experiment_cfg=None):
         f"ablate_visual_gate={config.ABLATE_VISUAL_GATE} "
         f"ablate_direct_learnable_rep={config.ABLATE_DIRECT_LEARNABLE_REP} "
         f"visual_residual_adapter_count={config.VISUAL_RESIDUAL_ADAPTER_COUNT} "
+        f"adapter_usage_balance_loss_weight={config.ADAPTER_USAGE_BALANCE_LOSS_WEIGHT} "
+        f"adapter_sample_entropy_loss_weight={config.ADAPTER_SAMPLE_ENTROPY_LOSS_WEIGHT} "
+        f"adapter_common_mode_loss_weight={config.ADAPTER_COMMON_MODE_LOSS_WEIGHT} "
+        f"adapter_effective_delta_loss_weight={config.ADAPTER_EFFECTIVE_DELTA_LOSS_WEIGHT} "
         f"adapter_sample_entropy_target={config.ADAPTER_SAMPLE_ENTROPY_TARGET} "
-        f"mmrl_residual_ratio_upper={config.MMRL_RESIDUAL_RATIO_UPPER} "
-        f"enable_router_kmeans_prior={config.ENABLE_ROUTER_KMEANS_PRIOR}"
+        f"adapter_common_mode_target={config.ADAPTER_COMMON_MODE_TARGET} "
+        f"adapter_effective_delta_target_low={config.ADAPTER_EFFECTIVE_DELTA_TARGET_LOW} "
+        f"adapter_effective_delta_target_high={config.ADAPTER_EFFECTIVE_DELTA_TARGET_HIGH} "
+        f"adapter_diversity_loss_weight={config.ADAPTER_DIVERSITY_LOSS_WEIGHT} "
+        f"adapter_diversity_target_low={config.ADAPTER_DIVERSITY_TARGET_LOW} "
+        f"adapter_diversity_target_high={config.ADAPTER_DIVERSITY_TARGET_HIGH} "
+        f"adapter_diversity_upper_weight={config.ADAPTER_DIVERSITY_UPPER_WEIGHT} "
+        f"adapter_diversity_worst_pair_weight={config.ADAPTER_DIVERSITY_WORST_PAIR_WEIGHT} "
+        f"prototype_anchor_loss_weight={config.PROTOTYPE_ANCHOR_LOSS_WEIGHT} "
+        f"prototype_anchor_temperature={config.PROTOTYPE_ANCHOR_TEMPERATURE} "
+        f"prototype_anchor_momentum={config.PROTOTYPE_ANCHOR_MOMENTUM} "
+        f"prototype_anchor_min_confidence={config.PROTOTYPE_ANCHOR_MIN_CONFIDENCE} "
+        f"prototype_anchor_assignment_power={config.PROTOTYPE_ANCHOR_ASSIGNMENT_POWER} "
+        f"prototype_anchor_init_noise={config.PROTOTYPE_ANCHOR_INIT_NOISE} "
+        f"enable_deepstack_mmrl_residual={config.ENABLE_DEEPSTACK_MMRL_RESIDUAL} "
+        f"deepstack_mmrl_residual_scale={config.DEEPSTACK_MMRL_RESIDUAL_SCALE}"
     )
     print("Processor built.")
     return model, processor
@@ -547,46 +1077,40 @@ def set_trainable_stage(model, stage, train_cfg=None):
 
     v = model.model.visual
     if stage == 1:
-        modules = {
-            "vision_pool": v.hidden_state_pooling,
-            "text_pool": v.embedding_pooling,
-            "task_classifier": v.Task_classifier,
-        }
+        mods = [v.hidden_state_pooling, v.embedding_pooling, v.Task_classifier, v.adapter_router]
     elif stage == 2:
-        modules = {
-            "vision_pool": v.hidden_state_pooling,
-            "text_pool": v.embedding_pooling,
-            "task_classifier": v.Task_classifier,
-            "vision_gate": v.visionGating,
-        }
-    elif stage in (3, 4):
-        modules = {
-            "mmrl": model.model.MMRL,
-            "adapter_router": v.adapter_router,
-            "residual_adapters": v.residual_adapters,
-        }
+        mods = [v.hidden_state_pooling, v.embedding_pooling, v.Task_classifier, v.adapter_router, v.visionGating]
+    elif stage in [3, 4]:
+        mods = [model.model.MMRL,
+                # v.blocks_with_rep, # ablation: keep rep-token branch forward, but freeze branch blocks
+                v.hidden_state_pooling, 
+                v.embedding_pooling,
+                v.adapter_router,
+                v.residual_adapters,
+                v.visionGating]
     else:
         raise ValueError("stage must be 1/2/3/4")
 
-    audit = []
-    for name, module in modules.items():
-        if isinstance(module, nn.Parameter):
-            module.requires_grad = True
-            count = module.numel()
+    for m in mods:
+        if isinstance(m, nn.Parameter):
+            m.requires_grad = True
         else:
-            for p in module.parameters():
+            for p in m.parameters():
                 p.requires_grad = True
-            count = sum(p.numel() for p in module.parameters())
-        audit.append(f"{name}:{count}")
-    total = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    print(f"[STAGE_TRAINABLE_AUDIT] stage={stage} total={total} groups={audit}")
 
 
 def print_stage4_trainable_params_before_stage1(model):
     set_trainable_stage(model, 4)
     trainable = [(name, p) for name, p in model.named_parameters() if p.requires_grad]
     total = sum(p.numel() for _, p in trainable)
+
+    print("\n" + "!" * 120)
+    # print("!" * 30 + " STAGE4 TRAINABLE PARAMETERS BEFORE STAGE1 " + "!" * 30)
+    # print("!" * 120)
+    # for name, p in trainable:
+    #     print(f"[STAGE4-TRAINABLE] name={name} shape={tuple(p.shape)} numel={p.numel()}")
     print(f"[STAGE4-TRAINABLE][TOTAL] tensors={len(trainable)} total_numel={total}")
+    print("!" * 120 + "\n")
 
 
 # =========================
@@ -613,188 +1137,6 @@ def _extract_mm_pooled_vision(v, pixel_values, image_grid_thw):
     )
     pooled = v.hidden_state_pooling.forward_vectorized(hs, batch_indices, image_grid_thw.shape[0])
     return pooled
-
-
-@torch.no_grad()
-def _fit_balanced_spherical_kmeans(
-    features,
-    cluster_count,
-    seed,
-    iterations=20,
-    sinkhorn_temperature=0.10,
-    sinkhorn_iterations=5,
-):
-    features = F.normalize(features.float(), dim=-1)
-    sample_count = features.shape[0]
-    if sample_count < cluster_count:
-        raise ValueError(
-            f"router calibration needs at least {cluster_count} samples, got {sample_count}"
-        )
-
-    generator = torch.Generator(device=features.device)
-    generator.manual_seed(int(seed))
-    first = int(torch.randint(sample_count, (1,), generator=generator).item())
-    centroid_list = [features[first]]
-    for _ in range(1, cluster_count):
-        existing = torch.stack(centroid_list, dim=0)
-        nearest_similarity = (features @ existing.t()).max(dim=1).values
-        centroid_list.append(features[nearest_similarity.argmin()])
-    centroids = F.normalize(torch.stack(centroid_list, dim=0), dim=-1)
-
-    temperature = max(float(sinkhorn_temperature), 1e-6)
-    for _ in range(max(int(iterations), 1)):
-        logits = (features @ centroids.t()) / temperature
-        logits = logits - logits.max()
-        assignments = logits.exp().t().clamp_min(1e-12)
-        assignments = assignments / assignments.sum().clamp_min(1e-12)
-        for _ in range(max(int(sinkhorn_iterations), 1)):
-            assignments = assignments / assignments.sum(dim=1, keepdim=True).clamp_min(1e-12)
-            assignments = assignments / cluster_count
-            assignments = assignments / assignments.sum(dim=0, keepdim=True).clamp_min(1e-12)
-            assignments = assignments / sample_count
-        assignments = (assignments * sample_count).t()
-        centroids = F.normalize(assignments.t() @ features, dim=-1)
-    return centroids
-
-
-@torch.no_grad()
-def _calibrate_prior_temperature_and_bias(
-    similarities,
-    cluster_count,
-    entropy_target=0.75,
-):
-    target_usage = torch.full((cluster_count,), 1.0 / cluster_count)
-    entropy_target = min(max(float(entropy_target), 0.05), 0.99)
-
-    def _evaluate(temperature):
-        logits = similarities / max(float(temperature), 1e-6)
-        bias = torch.zeros(cluster_count, dtype=logits.dtype)
-        for _ in range(100):
-            usage = torch.softmax(logits + bias, dim=-1).mean(dim=0)
-            correction = (
-                target_usage.clamp_min(1e-8).log()
-                - usage.clamp_min(1e-8).log()
-            )
-            bias = bias + 0.5 * correction
-            bias = bias - bias.mean()
-        probs = torch.softmax(logits + bias, dim=-1)
-        entropy = -(probs * probs.clamp_min(1e-8).log()).sum(dim=-1)
-        entropy = entropy / torch.log(probs.new_tensor(float(cluster_count)))
-        return entropy.mean().item(), bias, probs
-
-    low, high = 0.005, 2.0
-    for _ in range(24):
-        middle = (low * high) ** 0.5
-        entropy, _, _ = _evaluate(middle)
-        if entropy < entropy_target:
-            low = middle
-        else:
-            high = middle
-    temperature = (low * high) ** 0.5
-    entropy, bias, probs = _evaluate(temperature)
-    return temperature, bias, probs, entropy
-
-
-@torch.no_grad()
-def _calibrate_router_prior(model, processor, data_cfg, train_cfg, output_dir):
-    visual = model.model.visual
-    cluster_count = int(visual.visual_residual_adapter_count)
-    sample_limit = min(
-        int(train_cfg.get("router_calibration_samples", 4096)),
-        int(data_cfg["total_limit"]),
-    )
-    if sample_limit < cluster_count:
-        raise ValueError(
-            f"router_calibration_samples must be >= {cluster_count}, got {sample_limit}"
-        )
-
-    dataset = FourViewMMRLDataset(
-        processor=processor,
-        expert_json=data_cfg["expert_json"],
-        expert_img_dir=data_cfg["expert_img_dir"],
-        general_json=data_cfg["general_json"],
-        general_img_dir=data_cfg["general_img_dir"],
-        total_limit=sample_limit,
-        enable_views=("expert-mm",),
-        mode="stage2_router_prior_calibration",
-        ce_enabled=False,
-        seed=train_cfg["seed"],
-        deterministic_sampling=True,
-    )
-    loader = DataLoader(
-        dataset,
-        batch_size=train_cfg["per_device_train_batch_size"],
-        shuffle=False,
-        num_workers=train_cfg.get("dataloader_num_workers", 4),
-        pin_memory=False,
-        collate_fn=MMRLDataCollator(processor),
-        drop_last=False,
-    )
-
-    was_training = visual.training
-    visual.eval()
-    feature_batches = []
-    for batch in loader:
-        pixel_values = batch["pixel_values"]
-        image_grid_thw = batch["image_grid_thw"]
-        if pixel_values is None or image_grid_thw is None:
-            continue
-        pixel_values = pixel_values.cuda(non_blocking=True)
-        image_grid_thw = image_grid_thw.cuda(non_blocking=True)
-        if image_grid_thw.dim() == 3:
-            image_grid_thw = image_grid_thw.squeeze(1)
-        batch_features = visual.extract_router_calibration_features(
-            pixel_values,
-            image_grid_thw,
-        )
-        feature_batches.append(batch_features.float().cpu())
-    visual.train(was_training)
-
-    if not feature_batches:
-        raise RuntimeError("router calibration collected no vision features")
-    features = F.normalize(torch.cat(feature_batches, dim=0), dim=-1)
-    centroids = _fit_balanced_spherical_kmeans(
-        features,
-        cluster_count=cluster_count,
-        seed=train_cfg["seed"],
-        iterations=train_cfg.get("router_kmeans_iterations", 20),
-        sinkhorn_temperature=train_cfg.get("router_kmeans_temperature", 0.10),
-        sinkhorn_iterations=train_cfg.get("router_sinkhorn_iterations", 5),
-    )
-
-    similarities = features @ centroids.t()
-    temperature, bias, prior_probs, prior_entropy = (
-        _calibrate_prior_temperature_and_bias(
-            similarities,
-            cluster_count=cluster_count,
-            entropy_target=train_cfg.get("router_prior_entropy_target", 0.75),
-        )
-    )
-    usage = prior_probs.mean(dim=0)
-    visual.set_router_prior(centroids, bias, temperature)
-
-    stage2_dir = os.path.join(output_dir, "stage2")
-    os.makedirs(stage2_dir, exist_ok=True)
-    prior_path = os.path.join(stage2_dir, "router_prior.pt")
-    torch.save(
-        {
-            "centroids": centroids,
-            "bias": bias,
-            "usage": usage,
-            "temperature": float(temperature),
-            "normalized_entropy": float(prior_entropy),
-            "sample_count": int(features.shape[0]),
-        },
-        prior_path,
-    )
-    print(
-        "[ROUTER_PRIOR_CALIBRATION] "
-        f"samples={features.shape[0]} clusters={cluster_count} "
-        f"temperature={temperature:.6f} entropy={prior_entropy:.6f} "
-        f"usage={[round(x, 6) for x in usage.tolist()]} "
-        f"saved={prior_path}"
-    )
-    torch.cuda.empty_cache()
 
 
 def run_stage12_light(stage_id, model, processor, data_cfg, train_cfg, output_dir):
@@ -866,6 +1208,7 @@ def run_stage12_light(stage_id, model, processor, data_cfg, train_cfg, output_di
             input_ids = batch["input_ids"].cuda(non_blocking=True)
             attention_mask = batch["attention_mask"].cuda(non_blocking=True)
             alpha_labels = batch["alpha_labels"].cuda(non_blocking=True).view(-1, 1).to(dtype=v.dtype)
+            task_type_ids = batch["task_type_ids"].cuda(non_blocking=True)
             is_mm = batch["is_mm"].cuda(non_blocking=True)
             pixel_values = batch["pixel_values"]
             image_grid_thw = batch["image_grid_thw"]
@@ -897,7 +1240,7 @@ def run_stage12_light(stage_id, model, processor, data_cfg, train_cfg, output_di
 
             # stage2：把分类结果传递给gate（轻量约束）
             gate_loss = torch.tensor(0.0, device=cls_loss.device)
-            if stage_id == 2:
+            if stage_id == 2 and getattr(model, "enable_gate_loss_stage2", True):
                 g = v.visionGating(alpha_logits, getattr(model, "temperature_override", None))
                 target = alpha_labels
                 gate_loss = torch.nn.functional.mse_loss(g, target)
@@ -936,15 +1279,6 @@ def run_stage12_light(stage_id, model, processor, data_cfg, train_cfg, output_di
                     print_stage_step_summary(f"stage{stage_id}", global_step, row)
     metric_logger.finalize()
 
-    if stage_id == 2 and train_cfg.get("enable_router_kmeans_prior", False):
-        _calibrate_router_prior(
-            model=model,
-            processor=processor,
-            data_cfg=data_cfg,
-            train_cfg=train_cfg,
-            output_dir=output_dir,
-        )
-
     # save_path = f"{output_dir}/stage{stage_id}"
     # model.save_pretrained(save_path)
     # print(f"[Stage{stage_id}] saved to {save_path}")
@@ -953,100 +1287,78 @@ def run_stage12_light(stage_id, model, processor, data_cfg, train_cfg, output_di
 # =========================
 #  Stage3/4 (完整Trainer)
 # =========================
-def _build_stage34_optimizer(model, stage_id, train_cfg):
-    base_lr = float(train_cfg["learning_rate"][stage_id])
-    mmrl_params = [p for p in model.model.MMRL.parameters() if p.requires_grad]
-    mmrl_ids = {id(p) for p in mmrl_params}
-    router_params = [
-        p for p in model.model.visual.adapter_router.parameters()
-        if p.requires_grad
-    ]
-    router_ids = {id(p) for p in router_params}
-    adapter_params = [
-        p for p in model.parameters()
-        if p.requires_grad
-        and id(p) not in mmrl_ids
-        and id(p) not in router_ids
-    ]
-    if stage_id == 3:
-        mmrl_lr = base_lr
-        router_lr = base_lr
-    else:
-        mmrl_lr = base_lr * float(train_cfg.get("stage4_mmrl_lr_scale", 1.0))
-        router_lr = base_lr * float(train_cfg.get("stage4_router_lr_scale", 1.0))
-    group_specs = [
-        ("mmrl", mmrl_params, mmrl_lr),
-        ("adapter", adapter_params, base_lr),
-        ("router", router_params, router_lr),
-    ]
-
-    optimizer_groups = []
-    grouped_ids = set()
-    for name, params, lr in group_specs:
-        if not params:
-            continue
-        grouped_ids.update(id(p) for p in params)
-        count = sum(p.numel() for p in params)
-        print(
-            f"[MMRL_OPTIMIZER_GROUP] stage={stage_id} name={name} "
-            f"lr={lr:.8g} tensors={len(params)} params={count}"
-        )
-        optimizer_groups.append({"params": params, "lr": lr})
-    if not optimizer_groups:
-        raise RuntimeError(f"Stage {stage_id} has no trainable parameters")
-    trainable_ids = {id(p) for p in model.parameters() if p.requires_grad}
-    if grouped_ids != trainable_ids:
-        raise RuntimeError(
-            f"Stage {stage_id} optimizer coverage mismatch: "
-            f"grouped={len(grouped_ids)} trainable={len(trainable_ids)}"
-        )
-    return torch.optim.AdamW(optimizer_groups, weight_decay=0.01)
-
-
 def run_stage34_full(stage_id, model, processor, data_cfg, train_cfg, output_dir):
     assert stage_id in [3, 4]
     set_trainable_stage(model, stage_id, train_cfg=train_cfg)
 
-    model.ce_loss_weight = 1.0
+    if stage_id == 3:
+        model.ce_loss_weight = 1.0
+        model.alpha_loss_weight = 0.0
+        model.enable_alpha_guide_loss = False
+        model.enable_expert_floor_loss = False
+        model.expert_floor_loss_weight = 0.0
+        model.enable_collapse_loss = False
+        model.anti_collapse_weight = 0.0
+    else:  # stage4
+        model.ce_loss_weight = 1.0
+        model.alpha_loss_weight = 0.0
+        model.enable_alpha_guide_loss = False
+        model.enable_expert_floor_loss = False
+        model.expert_floor_loss_weight = 0.0
+        model.expert_min_active_tokens = float(train_cfg.get("expert_min_active_tokens", 4.0))
+        model.enable_collapse_loss = False
+        model.anti_collapse_weight = 0.0
+        model.collapse_max_ratio = float(train_cfg.get("collapse_max_ratio", 0.45))
+        model.collapse_min_ratio = float(train_cfg.get("collapse_min_ratio", 0.05))
+        model.collapse_entropy_target = float(train_cfg.get("collapse_entropy_target", 0.75))
+        model.group_usage_dead_threshold = float(train_cfg.get("group_usage_dead_threshold", 0.03))
+        model.group_usage_ema_alpha = float(train_cfg.get("group_usage_ema_alpha", 0.10))
+        model.group_usage_ema = None
+
     model.current_stage_id = int(stage_id)
+    model.current_stage_step = 0
     model.current_stage_progress = 0.0
-    model.mmrl_warmup_fraction = float(train_cfg.get("mmrl_warmup_fraction", 1.0 / 3.0))
-    model.adapter_usage_balance_loss_weight = float(
-        train_cfg.get("adapter_usage_balance_loss_weight", 0.0)
+    model.adapter_usage_balance_loss_weight = float(train_cfg.get("adapter_usage_balance_loss_weight", 0.0))
+    model.adapter_sample_entropy_loss_weight = float(train_cfg.get("adapter_sample_entropy_loss_weight", 0.0))
+    model.adapter_common_mode_loss_weight = float(train_cfg.get("adapter_common_mode_loss_weight", 0.0))
+    experiment_cfg = train_cfg.get("experiment_cfg", {}) or {}
+    model.adapter_effective_delta_loss_weight = float(train_cfg.get(
+        "adapter_effective_delta_loss_weight",
+        experiment_cfg.get("adapter_effective_delta_loss_weight", 0.0),
+    ))
+    model.adapter_effective_delta_loss_weight_s3 = train_cfg.get(
+        "adapter_effective_delta_loss_weight_s3",
+        experiment_cfg.get("adapter_effective_delta_loss_weight_s3"),
     )
-    model.adapter_sample_entropy_loss_weight = float(
-        train_cfg.get("adapter_sample_entropy_loss_weight", 0.0)
+    model.adapter_effective_delta_loss_weight_s4 = train_cfg.get(
+        "adapter_effective_delta_loss_weight_s4",
+        experiment_cfg.get("adapter_effective_delta_loss_weight_s4"),
     )
-    model.mmrl_residual_guard_loss_weight = float(
-        train_cfg.get("mmrl_residual_guard_loss_weight", 0.0)
+    model.prototype_anchor_loss_weight = float(train_cfg.get(
+        "prototype_anchor_loss_weight",
+        experiment_cfg.get("prototype_anchor_loss_weight", 0.0),
+    ))
+    model.prototype_anchor_loss_weight_s3 = train_cfg.get(
+        "prototype_anchor_loss_weight_s3",
+        experiment_cfg.get("prototype_anchor_loss_weight_s3"),
     )
-    model.mmrl_semantic_anchor_loss_weight = float(
-        train_cfg.get("mmrl_semantic_anchor_loss_weight", 0.0)
+    model.prototype_anchor_loss_weight_s4 = train_cfg.get(
+        "prototype_anchor_loss_weight_s4",
+        experiment_cfg.get("prototype_anchor_loss_weight_s4"),
     )
-    semantic_anchor_mode = str(
-        train_cfg.get("mmrl_semantic_anchor_mode", "rms")
+    model.adapter_diversity_loss_weight = float(train_cfg.get(
+        "adapter_diversity_loss_weight",
+        experiment_cfg.get("adapter_diversity_loss_weight", 0.0),
+    ))
+    model.adapter_diversity_loss_weight_s3 = train_cfg.get(
+        "adapter_diversity_loss_weight_s3",
+        experiment_cfg.get("adapter_diversity_loss_weight_s3"),
     )
-    semantic_anchor_cos_floor = float(
-        train_cfg.get("mmrl_semantic_anchor_cos_floor", 0.40)
+    model.adapter_diversity_loss_weight_s4 = train_cfg.get(
+        "adapter_diversity_loss_weight_s4",
+        experiment_cfg.get("adapter_diversity_loss_weight_s4"),
     )
-    if semantic_anchor_mode not in {"rms", "tail_hinge"}:
-        raise ValueError(
-            f"Unknown mmrl_semantic_anchor_mode={semantic_anchor_mode!r}"
-        )
-    if not -1.0 <= semantic_anchor_cos_floor <= 1.0:
-        raise ValueError(
-            "mmrl_semantic_anchor_cos_floor must be in [-1, 1], "
-            f"got {semantic_anchor_cos_floor}"
-        )
-    model.model.visual.mmrl_semantic_anchor_mode = semantic_anchor_mode
-    model.model.visual.mmrl_semantic_anchor_cos_floor = semantic_anchor_cos_floor
-    stage_anchor_scale = 1.0 if stage_id == 3 else 0.25
-    print(
-        f"[MMRL_SEMANTIC_ANCHOR] mode={semantic_anchor_mode} "
-        f"cos_floor={semantic_anchor_cos_floor} "
-        f"effective_weight="
-        f"{model.mmrl_semantic_anchor_loss_weight * stage_anchor_scale}"
-    )
+    model.enable_gate_loss_stage2 = train_cfg.get("enable_gate_loss_stage2", True)
 
     stage34_views = ("expert-mm",)
     print(f"[Stage{stage_id}] enable_views={stage34_views}")
@@ -1065,10 +1377,10 @@ def run_stage34_full(stage_id, model, processor, data_cfg, train_cfg, output_dir
         deterministic_sampling=train_cfg.get("deterministic_sampling", False),
     )
     collator = MMRLDataCollator(processor)
-    schedule_cb = StageScheduleCallback(
+    cb = StageScheduleCallback(
         dataset=ds,
         total_epochs=train_cfg["epochs"][stage_id],
-        init_temp=train_cfg.get("final_temp", 0.1),
+        init_temp=train_cfg.get("initial_temp", 1.0),
         final_temp=train_cfg.get("final_temp", 0.1),
     )
     args = TrainingArguments(
@@ -1108,21 +1420,26 @@ def run_stage34_full(stage_id, model, processor, data_cfg, train_cfg, output_dir
         stage_name=f"stage{stage_id}",
         keep_keys=train_cfg.get("mmrl_diagnostics_keep_keys"),
     )
-    optimizer = _build_stage34_optimizer(model, stage_id, train_cfg)
+    grad_monitor_cb = SharedRepGradMonitorCallback(
+        save_dir=f"{output_dir}/stage{stage_id}/metrics",
+        stage_name=f"stage{stage_id}",
+        ema_alpha=train_cfg.get("grad_spike_ema_alpha", 0.10),
+        ratio_threshold=train_cfg.get("grad_spike_ratio_threshold", 3.0),
+        abs_threshold=train_cfg.get("grad_spike_abs_threshold", 0.5),
+        cooldown_steps=train_cfg.get("grad_spike_cooldown_steps", 20),
+    )
+
     trainer = Trainer(
         model=model,
         args=args,
         train_dataset=ds,
         data_collator=collator,
-        callbacks=[
-            schedule_cb,
-            GradientPressureCallback(),
-            metrics_cb,
-            diag_cb,
-        ],
-        optimizers=(optimizer, None),
+        callbacks=[cb, grad_monitor_cb, metrics_cb, diag_cb]
     )
     trainer.train()
+    # trainer.save_model(f"{output_dir}/stage{stage_id}")
+
+
 def run_stage(stage_id, model, processor, data_cfg, train_cfg, output_dir):
     if stage_id == 1:
         _write_experiment_manifest(output_dir, train_cfg)

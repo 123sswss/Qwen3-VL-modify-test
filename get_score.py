@@ -110,15 +110,29 @@ def read_score_value(log_path: Path) -> float | None:
     return score_value
 
 
-def checkpoint_extrema_names(log_files: list[Path]) -> list[str]:
+def find_scored_checkpoints() -> list[tuple[str, float]]:
+    if not OUTPUT_DIR.is_dir():
+        return []
+
     scored_checkpoints = []
-    for log_path in log_files:
-        experiment_dir = log_path.parents[1]
+    for experiment_dir in sorted(OUTPUT_DIR.iterdir()):
+        if not experiment_dir.is_dir() or experiment_dir.name == "trash":
+            continue
         if not (experiment_dir / "final").is_dir():
+            continue
+
+        log_path = experiment_dir / "eval" / TARGET_NAME
+        if not log_path.is_file():
             continue
         score_value = read_score_value(log_path)
         if score_value is not None:
             scored_checkpoints.append((experiment_dir.name, score_value))
+
+    return scored_checkpoints
+
+
+def checkpoint_extrema_names() -> list[str]:
+    scored_checkpoints = find_scored_checkpoints()
 
     if not scored_checkpoints:
         return []
@@ -133,6 +147,15 @@ def checkpoint_extrema_names(log_files: list[Path]) -> list[str]:
     )
 
 
+def checkpoint_retention_plan() -> list[tuple[str, str, float]]:
+    scored_checkpoints = find_scored_checkpoints()
+    keep_names = set(checkpoint_extrema_names())
+    return [
+        ("KEEP" if name in keep_names else "PRUNE", name, score)
+        for name, score in scored_checkpoints
+    ]
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -140,12 +163,22 @@ def main() -> None:
         action="store_true",
         help="仅输出当前仍有 final 目录的最高/最低分实验名",
     )
+    parser.add_argument(
+        "--checkpoint-retention-plan",
+        action="store_true",
+        help="输出 KEEP/PRUNE、实验名和分数，供实验脚本安全清理 final",
+    )
     args = parser.parse_args()
     log_files = find_log_files()
 
     if args.checkpoint_extrema_names:
-        for name in checkpoint_extrema_names(log_files):
+        for name in checkpoint_extrema_names():
             print(name)
+        return
+
+    if args.checkpoint_retention_plan:
+        for action, name, score in checkpoint_retention_plan():
+            print(f"{action}\t{name}\t{score:.12g}")
         return
 
     if not log_files:

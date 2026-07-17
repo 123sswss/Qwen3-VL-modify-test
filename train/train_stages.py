@@ -360,7 +360,7 @@ class Qwen3VLMMRLForStages(Qwen3VLForConditionalGeneration):
         visual.current_stage_id = int(self.current_stage_id)
         visual.current_stage_progress = float(self.current_stage_progress)
         visual.mmrl_warmup_fraction = float(self.mmrl_warmup_fraction)
-        visual.experts_enabled = int(self.current_stage_id) >= 4
+        visual.experts_enabled = int(self.current_stage_id) >= 3
 
         if self.temperature_override is not None:
             self.model.temperature_override = self.temperature_override
@@ -559,9 +559,7 @@ def set_trainable_stage(model, stage, train_cfg=None):
             "task_classifier": v.Task_classifier,
             "vision_gate": v.visionGating,
         }
-    elif stage == 3:
-        modules = {"mmrl": model.model.MMRL}
-    elif stage == 4:
+    elif stage in (3, 4):
         modules = {
             "mmrl": model.model.MMRL,
             "adapter_router": v.adapter_router,
@@ -958,28 +956,29 @@ def run_stage12_light(stage_id, model, processor, data_cfg, train_cfg, output_di
 def _build_stage34_optimizer(model, stage_id, train_cfg):
     base_lr = float(train_cfg["learning_rate"][stage_id])
     mmrl_params = [p for p in model.model.MMRL.parameters() if p.requires_grad]
+    mmrl_ids = {id(p) for p in mmrl_params}
+    router_params = [
+        p for p in model.model.visual.adapter_router.parameters()
+        if p.requires_grad
+    ]
+    router_ids = {id(p) for p in router_params}
+    adapter_params = [
+        p for p in model.parameters()
+        if p.requires_grad
+        and id(p) not in mmrl_ids
+        and id(p) not in router_ids
+    ]
     if stage_id == 3:
-        group_specs = [("mmrl", mmrl_params, base_lr)]
+        mmrl_lr = base_lr
+        router_lr = base_lr
     else:
-        mmrl_ids = {id(p) for p in mmrl_params}
-        router_params = [
-            p for p in model.model.visual.adapter_router.parameters()
-            if p.requires_grad
-        ]
-        router_ids = {id(p) for p in router_params}
-        adapter_params = [
-            p for p in model.parameters()
-            if p.requires_grad
-            and id(p) not in mmrl_ids
-            and id(p) not in router_ids
-        ]
         mmrl_lr = base_lr * float(train_cfg.get("stage4_mmrl_lr_scale", 1.0))
         router_lr = base_lr * float(train_cfg.get("stage4_router_lr_scale", 1.0))
-        group_specs = [
-            ("mmrl", mmrl_params, mmrl_lr),
-            ("adapter", adapter_params, base_lr),
-            ("router", router_params, router_lr),
-        ]
+    group_specs = [
+        ("mmrl", mmrl_params, mmrl_lr),
+        ("adapter", adapter_params, base_lr),
+        ("router", router_params, router_lr),
+    ]
 
     optimizer_groups = []
     grouped_ids = set()

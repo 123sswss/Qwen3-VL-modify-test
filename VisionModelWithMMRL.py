@@ -925,9 +925,10 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
                 adapter_outputs = None
                 adapter_correction = torch.zeros_like(bounded_expert_delta)
 
-            expert_delta_after_adapter = bounded_expert_delta + adapter_correction
             branch_scale = g_mask * float(self._shared_strength())
-            final_delta = expert_delta_after_adapter * branch_scale
+            # The MMRL branch proposes a delta; only the zero-initialized adapters
+            # are allowed to turn it into a correction of the frozen main path.
+            final_delta = adapter_correction * branch_scale
             gated_expert_delta = bounded_expert_delta * branch_scale
             hidden_states = org_hidden_states + final_delta
         else:

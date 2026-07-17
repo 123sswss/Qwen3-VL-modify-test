@@ -78,11 +78,24 @@ EXPERIMENTS = {
         "stage4_mmrl_lr_scale": 0.25,
         "stage4_router_lr_scale": 1.0,
     },
+    "visual_router_adapter_bottleneck_v1": {
+        **BASE_VISUAL_ROUTER_MODEL,
+        "adapter_usage_balance_loss_weight": 0.00275,
+        "adapter_sample_entropy_loss_weight": 0.020,
+        "adapter_sample_entropy_target": 0.72,
+        "mmrl_residual_guard_loss_weight": 0.0,
+        "mmrl_semantic_anchor_loss_weight": 0.0,
+        "mmrl_residual_ratio_upper": 0.0,
+        "mmrl_warmup_fraction": 0.0,
+        "stage4_mmrl_lr_scale": 1.0,
+        "stage4_router_lr_scale": 1.0,
+        "enable_router_kmeans_prior": False,
+    },
 }
 
 SELECTED_EXPERIMENT = os.getenv(
     "MMRL_EXPERIMENT",
-    "visual_router_expert_delta_stage3_v6_tail_guard",
+    "visual_router_adapter_bottleneck_v1",
 )
 if SELECTED_EXPERIMENT not in EXPERIMENTS:
     raise ValueError(

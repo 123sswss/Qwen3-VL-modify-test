@@ -21,6 +21,7 @@ from transformers import TrainerCallback
 import json
 
 from logger import StageMetricLogger, TrainerMetricsCallback
+from live_epoch_eval import run_live_epoch_evaluation
 
 import numbers
 
@@ -274,6 +275,34 @@ class StageScheduleCallback(TrainerCallback):
         model.temperature_override = self.init_temp - (self.init_temp - self.final_temp) * prog
         model.current_stage_progress = float(prog)
         model.current_stage_step = int(state.global_step) + 1
+
+
+class EpochEvaluationCallback(TrainerCallback):
+    def __init__(self, processor, output_dir, stage_id):
+        self.processor = processor
+        self.output_dir = output_dir
+        self.stage_id = int(stage_id)
+        self.completed_epochs = set()
+
+    def on_epoch_end(self, args, state, control, **kwargs):
+        if not state.is_world_process_zero:
+            return
+        epoch_id = max(1, int(round(float(state.epoch or 0.0))))
+        if epoch_id in self.completed_epochs:
+            return
+        self.completed_epochs.add(epoch_id)
+        log_path = os.path.join(
+            self.output_dir,
+            "eval_epochs",
+            f"stage{self.stage_id}_epoch{epoch_id}",
+            "test.log",
+        )
+        print(f"[EPOCH-EVAL] stage={self.stage_id} epoch={epoch_id} begin")
+        summary = run_live_epoch_evaluation(kwargs["model"], self.processor, log_path)
+        print(
+            f"[EPOCH-EVAL] stage={self.stage_id} epoch={epoch_id} "
+            f"score={summary.get('score')} completed"
+        )
 
 
 class MMRLDiagnosticsCallback(TrainerCallback):
@@ -1435,12 +1464,16 @@ def run_stage34_full(stage_id, model, processor, data_cfg, train_cfg, output_dir
         cooldown_steps=train_cfg.get("grad_spike_cooldown_steps", 20),
     )
 
+    callbacks = [cb, grad_monitor_cb, metrics_cb, diag_cb]
+    if train_cfg.get("eval_each_epoch", False):
+        callbacks.append(EpochEvaluationCallback(processor, output_dir, stage_id))
+
     trainer = Trainer(
         model=model,
         args=args,
         train_dataset=ds,
         data_collator=collator,
-        callbacks=[cb, grad_monitor_cb, metrics_cb, diag_cb]
+        callbacks=callbacks,
     )
     trainer.train()
     # trainer.save_model(f"{output_dir}/stage{stage_id}")

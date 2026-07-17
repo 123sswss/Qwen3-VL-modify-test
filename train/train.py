@@ -183,6 +183,7 @@ CFG = {
         "seed": int(os.getenv("MMRL_SEED", "42")),
         "data_sampling_seed": int(os.getenv("MMRL_DATA_SAMPLING_SEED", "42")),
         "deterministic_sampling": os.getenv("MMRL_DETERMINISTIC_SAMPLING", "1") == "1",
+        "eval_each_epoch": os.getenv("MMRL_EVAL_EACH_EPOCH", "0") == "1",
         "visual_residual_adapter_count": int(os.getenv(
             "MMRL_VISUAL_RESIDUAL_ADAPTER_COUNT",
             str(EXP_CFG.get("visual_residual_adapter_count", 4)),

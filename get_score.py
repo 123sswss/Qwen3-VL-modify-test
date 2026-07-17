@@ -73,6 +73,16 @@ def read_experiment_seed(experiment_dir: Path) -> int | None:
     return None
 
 
+def read_epoch_scores(experiment_dir: Path) -> list[tuple[str, float | None]]:
+    results = []
+    eval_root = experiment_dir / "eval_epochs"
+    if not eval_root.is_dir():
+        return results
+    for log_path in sorted(eval_root.glob("stage*_epoch*/test.log")):
+        results.append((log_path.parent.name, read_score_value(log_path)))
+    return results
+
+
 def extract_info(log_path: Path) -> dict[str, object]:
     experiment_dir = log_path.parents[1] if len(log_path.parents) >= 2 else None
     experiment_name = experiment_dir.name if experiment_dir is not None else "路径层级不足"
@@ -108,6 +118,7 @@ def extract_info(log_path: Path) -> dict[str, object]:
     return {
         "folder_name": experiment_name,
         "seed": read_experiment_seed(experiment_dir) if experiment_dir is not None else None,
+        "epoch_scores": read_epoch_scores(experiment_dir) if experiment_dir is not None else [],
         "acc": acc_value,
         "score_line": score_line,
         "score_value": score_value,
@@ -222,6 +233,12 @@ def main() -> None:
         print(f"{STEP_MARKER} 对应Acc: {info['acc']}")
         print(f"{SCORE_KEYWORD}行: {info['score_line']}")
         print(f"日志路径: {info['log_path']}")
+        if info["epoch_scores"]:
+            epoch_curve = ", ".join(
+                f"{name}={score if score is not None else '未找到'}"
+                for name, score in info["epoch_scores"]
+            )
+            print(f"逐epoch分数: {epoch_curve}")
         for stage_id in DIAGNOSTIC_STAGES:
             diagnostics_path, diagnostics_content = info["diagnostics_by_stage"][stage_id]
             print(f"stage{stage_id} 指标路径: {diagnostics_path}")

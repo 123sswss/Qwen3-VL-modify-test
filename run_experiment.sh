@@ -147,8 +147,8 @@ run_N() {
   done
 }
 
-# 尾部敏感 semantic anchor 重复两次，检验最差 token 与最终下限。
-run_N "visual_router_expert_delta_stage3_v5_robust_anchor" "visual_router_expert_delta_stage3_v5_robust_anchor" 2
+# 单边尾部保护只跑一轮，先验证能否修复低质量 Stage3 轨迹。
+run_one "visual_router_expert_delta_stage3_v6_tail_guard" "visual_router_expert_delta_stage3_v6_tail_guard"
 
 
 

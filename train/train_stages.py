@@ -40,6 +40,8 @@ def _build_experiment_context(train_cfg, output_dir, stage_id):
         "adapter_sample_entropy_target",
         "mmrl_residual_guard_loss_weight",
         "mmrl_semantic_anchor_loss_weight",
+        "mmrl_semantic_anchor_mode",
+        "mmrl_semantic_anchor_cos_floor",
         "mmrl_residual_ratio_upper",
         "mmrl_warmup_fraction",
         "stage4_mmrl_lr_scale",
@@ -1021,6 +1023,30 @@ def run_stage34_full(stage_id, model, processor, data_cfg, train_cfg, output_dir
     )
     model.mmrl_semantic_anchor_loss_weight = float(
         train_cfg.get("mmrl_semantic_anchor_loss_weight", 0.0)
+    )
+    semantic_anchor_mode = str(
+        train_cfg.get("mmrl_semantic_anchor_mode", "rms")
+    )
+    semantic_anchor_cos_floor = float(
+        train_cfg.get("mmrl_semantic_anchor_cos_floor", 0.40)
+    )
+    if semantic_anchor_mode not in {"rms", "tail_hinge"}:
+        raise ValueError(
+            f"Unknown mmrl_semantic_anchor_mode={semantic_anchor_mode!r}"
+        )
+    if not -1.0 <= semantic_anchor_cos_floor <= 1.0:
+        raise ValueError(
+            "mmrl_semantic_anchor_cos_floor must be in [-1, 1], "
+            f"got {semantic_anchor_cos_floor}"
+        )
+    model.model.visual.mmrl_semantic_anchor_mode = semantic_anchor_mode
+    model.model.visual.mmrl_semantic_anchor_cos_floor = semantic_anchor_cos_floor
+    stage_anchor_scale = 1.0 if stage_id == 3 else 0.25
+    print(
+        f"[MMRL_SEMANTIC_ANCHOR] mode={semantic_anchor_mode} "
+        f"cos_floor={semantic_anchor_cos_floor} "
+        f"effective_weight="
+        f"{model.mmrl_semantic_anchor_loss_weight * stage_anchor_scale}"
     )
 
     stage34_views = ("expert-mm",)

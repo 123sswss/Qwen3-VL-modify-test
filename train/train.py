@@ -8,6 +8,7 @@ import numpy as np
 import torch
 
 from train_stages import build_model_and_processor, run_stage
+from live_epoch_eval import preflight_live_epoch_evaluation
 
 
 def seed_before_model_init(seed):
@@ -393,6 +394,8 @@ CFG = {
 
 def main():
     seed_before_model_init(CFG["train"]["seed"])
+    if CFG["train"].get("eval_each_epoch", False):
+        preflight_live_epoch_evaluation()
     model, processor = build_model_and_processor(CFG["model_path"], experiment_cfg=CFG["experiment"])
 
     for sid in CFG["ablation_order"]:

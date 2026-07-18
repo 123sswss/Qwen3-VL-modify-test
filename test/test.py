@@ -111,6 +111,46 @@ def resolve_image_path(image_file: str, image_dirs, source_json_path: str = None
     return None
 
 
+def validate_evaluation_data(json_paths, image_dirs=None):
+    json_paths = ensure_list(json_paths)
+    image_dirs = ensure_list(image_dirs)
+    dataset = load_combined_dataset(json_paths)
+    counts = {
+        "total": len(dataset),
+        "valid": 0,
+        "missing_gt": 0,
+        "missing_image": 0,
+    }
+    examples = {}
+
+    for idx, item in enumerate(dataset):
+        conversations = item.get("conversations", [])
+        gt_answer = None
+        for conv in conversations:
+            if conv.get("from") == "gpt":
+                gt_answer = extract_gt_answer(conv.get("value", ""))
+        if gt_answer is None:
+            counts["missing_gt"] += 1
+            examples.setdefault("missing_gt", item.get("id", f"unknown_{idx}"))
+            continue
+
+        image_file = item.get("image", "")
+        source_json = item.get("_source_json")
+        if resolve_image_path(image_file, image_dirs, source_json_path=source_json) is None:
+            counts["missing_image"] += 1
+            examples.setdefault("missing_image", image_file or item.get("id", f"unknown_{idx}"))
+            continue
+        counts["valid"] += 1
+
+    print(
+        "[EVAL-DATA-PREFLIGHT] "
+        f"total={counts['total']} valid={counts['valid']} "
+        f"missing_gt={counts['missing_gt']} missing_image={counts['missing_image']} "
+        f"examples={examples}"
+    )
+    return counts
+
+
 def run_evaluation(json_paths, model, image_dirs=None, max_new_tokens=256, temperature=0.2):
     """
     Args:
@@ -126,6 +166,9 @@ def run_evaluation(json_paths, model, image_dirs=None, max_new_tokens=256, tempe
     correct = 0
     wrong = 0
     regex_fail = 0
+    inference_errors = 0
+    first_inference_error = None
+    skip_reasons = {"missing_gt": 0, "missing_image": 0, "image_read_error": 0}
     logs = []
 
     print(f"={'='*60}")
@@ -152,12 +195,18 @@ def run_evaluation(json_paths, model, image_dirs=None, max_new_tokens=256, tempe
                 gt_answer = extract_gt_answer(conv["value"])
 
         if gt_answer is None:
+            skip_reasons["missing_gt"] += 1
+            if skip_reasons["missing_gt"] <= 3:
+                print(f"[EVAL-SKIP missing_gt] id={item_id}")
             logs.append({"id": item_id, "status": "SKIP", "reason": "无法提取标注答案"})
             continue
 
         # 加载图片
         img_path = resolve_image_path(image_file, image_dirs, source_json_path=source_json)
         if img_path is None:
+            skip_reasons["missing_image"] += 1
+            if skip_reasons["missing_image"] <= 3:
+                print(f"[EVAL-SKIP missing_image] id={item_id} image={image_file}")
             searched_dirs = list(image_dirs)
             if source_json is not None:
                 searched_dirs.append(os.path.dirname(os.path.abspath(source_json)))
@@ -173,6 +222,9 @@ def run_evaluation(json_paths, model, image_dirs=None, max_new_tokens=256, tempe
         try:
             image = Image.open(img_path).convert("RGB")
         except Exception as e:
+            skip_reasons["image_read_error"] += 1
+            if skip_reasons["image_read_error"] <= 3:
+                print(f"[EVAL-SKIP image_read_error] id={item_id} error={e}")
             logs.append({"id": item_id, "status": "SKIP", "reason": f"图片读取失败: {e}"})
             continue
 
@@ -180,6 +232,11 @@ def run_evaluation(json_paths, model, image_dirs=None, max_new_tokens=256, tempe
         try:
             output = model.infer(image, human_text, max_new_tokens=max_new_tokens, temperature=temperature)
         except Exception as e:
+            inference_errors += 1
+            if first_inference_error is None:
+                first_inference_error = str(e)
+            if inference_errors <= 3:
+                print(f"[EVAL-ERROR {inference_errors}] id={item_id} error={e}")
             logs.append({"id": item_id, "status": "ERROR", "reason": str(e)})
             continue
 
@@ -230,6 +287,9 @@ def run_evaluation(json_paths, model, image_dirs=None, max_new_tokens=256, tempe
         "correct": correct,
         "wrong": wrong,
         "regex_fail": regex_fail,
+        "inference_errors": inference_errors,
+        "first_inference_error": first_inference_error,
+        "skip_reasons": skip_reasons,
         "score": round(score, 2),
         "elapsed_seconds": round(elapsed, 1),
         "avg_seconds_per_question": round(elapsed / max(evaluated, 1), 2),
@@ -243,6 +303,10 @@ def run_evaluation(json_paths, model, image_dirs=None, max_new_tokens=256, tempe
     print(f"  正确:         {summary['correct']}")
     print(f"  错误:         {summary['wrong']}")
     print(f"  正则提取失败: {summary['regex_fail']}")
+    print(f"  推理异常:     {summary['inference_errors']}")
+    if summary["first_inference_error"] is not None:
+        print(f"  首个异常:     {summary['first_inference_error']}")
+    print(f"  跳过原因:     {summary['skip_reasons']}")
     print(f"  百分制分数:   {summary['score']}")
     print(f"  总耗时:       {summary['elapsed_seconds']}s")
     print(f"  平均每题:     {summary['avg_seconds_per_question']}s")

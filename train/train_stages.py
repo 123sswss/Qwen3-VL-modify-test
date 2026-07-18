@@ -278,10 +278,11 @@ class StageScheduleCallback(TrainerCallback):
 
 
 class EpochEvaluationCallback(TrainerCallback):
-    def __init__(self, processor, output_dir, stage_id):
+    def __init__(self, processor, output_dir, stage_id, total_epochs):
         self.processor = processor
         self.output_dir = output_dir
         self.stage_id = int(stage_id)
+        self.total_epochs = int(total_epochs)
         self.completed_epochs = set()
 
     def on_epoch_end(self, args, state, control, **kwargs):
@@ -291,6 +292,12 @@ class EpochEvaluationCallback(TrainerCallback):
         if epoch_id in self.completed_epochs:
             return
         self.completed_epochs.add(epoch_id)
+        if self.stage_id == 4 and epoch_id >= self.total_epochs:
+            print(
+                f"[EPOCH-EVAL] stage=4 epoch={epoch_id} skipped; "
+                "the normal final evaluation covers the identical weights"
+            )
+            return
         log_path = os.path.join(
             self.output_dir,
             "eval_epochs",
@@ -1466,7 +1473,12 @@ def run_stage34_full(stage_id, model, processor, data_cfg, train_cfg, output_dir
 
     callbacks = [cb, grad_monitor_cb, metrics_cb, diag_cb]
     if train_cfg.get("eval_each_epoch", False):
-        callbacks.append(EpochEvaluationCallback(processor, output_dir, stage_id))
+        callbacks.append(EpochEvaluationCallback(
+            processor,
+            output_dir,
+            stage_id,
+            train_cfg["epochs"][stage_id],
+        ))
 
     trainer = Trainer(
         model=model,

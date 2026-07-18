@@ -2,8 +2,10 @@ import contextlib
 import importlib.util
 import os
 from pathlib import Path
+from types import MethodType
 
 import torch
+from transformers import Qwen3VLForConditionalGeneration
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -31,6 +33,17 @@ def _load_test_module():
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+def preflight_live_epoch_evaluation():
+    evaluator = _load_test_module()
+    counts = evaluator.validate_evaluation_data(
+        evaluator.DEFAULT_JSON_PATHS,
+        evaluator.DEFAULT_IMAGE_DIRS,
+    )
+    if counts.get("valid", 0) == 0:
+        raise RuntimeError("逐 epoch 测评数据预检失败：没有任何可评测样本")
+    return counts
 
 
 class _LiveModelInterface:
@@ -87,6 +100,14 @@ def run_live_epoch_evaluation(model, processor, log_path):
     log_path = Path(log_path)
     log_path.parent.mkdir(parents=True, exist_ok=True)
     was_training = model.training
+    training_forward = model.forward
+    outer_temperature = getattr(model, "temperature_override", None)
+    inner_temperature = getattr(model.model, "temperature_override", None)
+
+    # 独立 inferEngine 使用原生生成 forward，而不是训练包装器的 loss/监控 forward。
+    model.forward = MethodType(Qwen3VLForConditionalGeneration.forward, model)
+    model.temperature_override = None
+    model.model.temperature_override = None
     model.eval()
 
     try:
@@ -94,12 +115,18 @@ def run_live_epoch_evaluation(model, processor, log_path):
             tee = _Tee(os.sys.stdout, log_file)
             with contextlib.redirect_stdout(tee), contextlib.redirect_stderr(tee):
                 print(f"[EPOCH-EVAL] log_path={log_path}")
-                return evaluator.run_evaluation(
+                summary = evaluator.run_evaluation(
                     evaluator.DEFAULT_JSON_PATHS,
                     _LiveModelInterface(model, processor),
                     evaluator.DEFAULT_IMAGE_DIRS,
                 )
+                if summary.get("evaluated", 0) == 0:
+                    raise RuntimeError("逐 epoch 测评没有成功完成任何题目，请检查上方 EVAL-ERROR")
+                return summary
     finally:
+        model.forward = training_forward
+        model.temperature_override = outer_temperature
+        model.model.temperature_override = inner_temperature
         if was_training:
             model.train()
         torch.cuda.empty_cache()

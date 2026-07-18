@@ -35,6 +35,7 @@ INITIAL_SEED="${MMRL_INITIAL_SEED:-42}"
 mkdir -p "$OUTPUT_ROOT" "$CHECKPOINT_ROOT"
 
 RUN_SUFFIX="${MMRL_RUN_SUFFIX:-}"
+RUN_DATE="${MMRL_RUN_DATE:-$(date +%Y%m%d)}"
 
 # 持久分配实验 seed；脚本重启后继续递增，不重复使用已分配 seed。
 allocate_seed() {
@@ -58,9 +59,9 @@ allocate_seed() {
 with_run_suffix() {
   local base_tag="$1"
   if [ -n "$RUN_SUFFIX" ]; then
-    echo "${base_tag}_${RUN_SUFFIX}"
+    echo "${base_tag}_${RUN_SUFFIX}_${RUN_DATE}"
   else
-    echo "$base_tag"
+    echo "${base_tag}_${RUN_DATE}"
   fi
 }
 
@@ -71,7 +72,7 @@ find_available_tag() {
   local i=1
   while [ -d "$CHECKPOINT_ROOT/$candidate" ]; do
     candidate="${base_tag}_${i}"
-    ((i++))
+    i=$((i + 1))
   done
   echo "$candidate"
 }

@@ -1,0 +1,125 @@
+\relax 
+\citation{rocha2025advances}
+\citation{liu2026review}
+\citation{zhang2024vision}
+\citation{wang2024power}
+\citation{hao2025power}
+\citation{lin2025defectgpt}
+\citation{sharshar2025vision}
+\citation{jeon2026edgev}
+\citation{zhai2023investigating}
+\citation{zhu2024model}
+\citation{hu2022lora}
+\citation{zhou2024empirical}
+\citation{wang2025parameter}
+\citation{wu2026domain}
+\citation{tuning83same}
+\citation{ge2025dynamic}
+\citation{guo2025mmrl}
+\citation{radford2021learning}
+\citation{liu2023visual}
+\citation{bai2025qwen3}
+\@writefile{lof}{\contentsline {figure}{\numberline {1}{\ignorespaces 所提出的即插即用适配框架整体架构。主干 VLM（包含视觉塔、MLP 和 LLM）被严格冻结。为了实现按需的知识注入且不发生灾难性遗忘，引入了一个外部可训练模块。通用查询（如识别玩具）直接绕过专业模块，确保对模型通用能力的零干扰；特定领域查询（如电气安全评估）则通过任务分类器激活专业视觉分支。最后，K-预算门（K-Budget Gate）动态控制专业表征注入回冻结主干的强度。}}{1}{}\protected@file@percent }
+\providecommand*\caption@xref[2]{\@setref\relax\@undefined{#1}}
+\newlabel{fig:1}{{1}{1}{}{figure.1}{}}
+\@writefile{toc}{\contentsline {section}{\numberline {I}Introduction}{1}{}\protected@file@percent }
+\citation{zhou2024empirical}
+\citation{hu2022lora}
+\citation{wang2025parameter}
+\citation{zhou2024empirical}
+\citation{wu2026domain}
+\citation{zhai2023investigating}
+\citation{zhu2024model}
+\citation{li2026fine}
+\citation{gao2025enhanced}
+\citation{tuning83same}
+\citation{ge2025dynamic}
+\citation{lin2026moe}
+\citation{radford2021learning}
+\citation{guo2025mmrl}
+\citation{liu2023visual}
+\citation{bai2025qwen3}
+\@writefile{toc}{\contentsline {section}{\numberline {II}Related Work}{2}{}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {\mbox  {II-A}}多模态大模型的领域适配与参数高效微调}{2}{}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {\mbox  {II-B}}抗遗忘适配与低干扰学习}{2}{}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {\mbox  {II-C}}动态路由、专家机制与共享表征学习}{2}{}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {III}Methodology}{2}{}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {\mbox  {III-A}}Overview}{2}{}\protected@file@percent }
+\newlabel{sec:method_overview}{{\mbox  {III-A}}{2}{}{subsection.3.1}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {\mbox  {III-B}}MMRL表征token生成}{2}{}\protected@file@percent }
+\newlabel{sec:mmrl_token_generation}{{\mbox  {III-B}}{2}{}{subsection.3.2}{}}
+\citation{louizos2017learning}
+\@writefile{lof}{\contentsline {figure}{\numberline {2}{\ignorespaces 本文所提出 MMRL 框架的整体结构示意图。MMRL 首先学习一组共享表示，并将其投影为不同视觉注入层所需的视觉代表 token；随后，任务分类器利用池化后的视觉状态与文本嵌入预测样本级增强需求，并通过 Hard-Concrete 门控控制增强分支是否生效；最后，视觉残差经由文本条件化的 router-adapter 模块进行选择性调制，再写回视觉表示。整个过程仅改变视觉编码阶段的表示，不改变语言模型侧的输入序列结构。}}{3}{}\protected@file@percent }
+\newlabel{fig:method_overview}{{2}{3}{}{figure.2}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {\mbox  {III-C}}任务分类器}{3}{}\protected@file@percent }
+\newlabel{sec:task_classifier}{{\mbox  {III-C}}{3}{}{subsection.3.3}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {\mbox  {III-D}}视觉支路}{3}{}\protected@file@percent }
+\newlabel{sec:visual_branch}{{\mbox  {III-D}}{3}{}{subsection.3.4}{}}
+\citation{shazeer2017outrageously}
+\citation{houlsby2019parameter}
+\@writefile{lof}{\contentsline {figure}{\numberline {3}{\ignorespaces  任务分类器与视觉增强支路的整体框架。MMRL 首先生成视觉代表 token，并在视觉编码器的指定层中插入或更新，以形成增强分支。任务分类器对中间视觉状态与文本嵌入进行注意力池化和特征融合，输出任务相关分数 $\alpha $，再经 Hard-Concrete 映射为门控变量 $G$。在此基础上，模型对原始分支和增强分支的差异进行门控与残差路由，从而获得任务自适应的视觉表示。 }}{4}{}\protected@file@percent }
+\newlabel{fig:task_classifier_visual_branch}{{3}{4}{}{figure.3}{}}
+\citation{fedus2022switch}
+\@writefile{lof}{\contentsline {figure}{\numberline {4}{\ignorespaces 视觉 residual adapter router 设计示意图。模型首先利用池化视觉表示、池化文本表示及 expertise score 生成各视觉残差适配器的路由权重；随后，各残差适配器分别对门控后的视觉残差进行变换，并经加权求和后写回原始视觉状态，得到最终视觉隐藏表示。该模块是后续路由均衡、熵约束、共模抑制、有效残差约束、原型锚定与适配器多样性约束的共同作用对象。}}{5}{}\protected@file@percent }
+\newlabel{fig:shared_router_adapter}{{4}{5}{}{figure.4}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {\mbox  {III-E}}Training Objective}{5}{}\protected@file@percent }
+\newlabel{sec:training_objective}{{\mbox  {III-E}}{5}{}{subsection.3.5}{}}
+\@writefile{toc}{\contentsline {paragraph}{\numberline {\mbox  {III-E}0a}Stage 1: task classifier pretraining.}{5}{}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{\numberline {\mbox  {III-E}0b}Stage 2: gate fitting.}{5}{}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{\numberline {\mbox  {III-E}0c}Stage 3--4: full optimization of MMRL.}{6}{}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{\numberline {\mbox  {III-E}0d}Visual-side regularization.}{6}{}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{\numberline {\mbox  {III-E}0e}Text-side regularization.}{6}{}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{\numberline {\mbox  {III-E}0f}Overall loss for Stage 3--4.}{6}{}\protected@file@percent }
+\newlabel{eq:full_loss}{{45}{6}{}{equation.45}{}}
+\@writefile{toc}{\contentsline {section}{\numberline {IV}Experiment}{6}{}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {\mbox  {IV-A}}Experimental Setup}{6}{}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {\mbox  {IV-A}1}Domain Dataset Construction}{6}{}\protected@file@percent }
+\@writefile{lot}{\contentsline {table}{\numberline {I}{\ignorespaces 自建电力电气多模态数据集统计。}}{7}{}\protected@file@percent }
+\newlabel{tab:dataset_statistics}{{I}{7}{}{table.1}{}}
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {\mbox  {IV-A}2}Compared Methods}{7}{}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {\mbox  {IV-A}3}Implementation Details}{7}{}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {\mbox  {IV-A}4}Evaluation Metrics}{7}{}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {\mbox  {IV-B}}Overall Performance and Parameter Efficiency}{7}{}\protected@file@percent }
+\@writefile{lot}{\contentsline {table}{\numberline {II}{\ignorespaces 不同方法在自建电力电气测试集上的整体性能、参数效率与推理效率对比。}}{8}{}\protected@file@percent }
+\newlabel{tab:main_result}{{II}{8}{}{table.2}{}}
+\@writefile{lot}{\contentsline {table}{\numberline {III}{\ignorespaces 不同视觉侧参数高效微调方法对基座模型输出行为的扰动。 所有方法均与两次独立基座模型运行进行比较；$\Delta $JS 表示超出基座模型自然扰动的额外 JS 散度。}}{8}{}\protected@file@percent }
+\newlabel{tab:output_disruption}{{III}{8}{}{table.3}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {\mbox  {IV-C}}Base-Model Behavior Preservation}{8}{}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {\mbox  {IV-D}}Ablation Study}{9}{}\protected@file@percent }
+\@writefile{lot}{\contentsline {table}{\numberline {IV}{\ignorespaces 关键模块消融实验。}}{9}{}\protected@file@percent }
+\newlabel{tab:ablation}{{IV}{9}{}{table.4}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {\mbox  {IV-E}}Discussion}{9}{}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {\mbox  {IV-F}}本节小结}{9}{}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{Appendix\nobreakspace  A: Proof of the First Zonklar Equation (公式证明附录)}{9}{}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{Appendix\nobreakspace  B}{9}{}\protected@file@percent }
+\bibstyle{IEEEtran}
+\bibdata{references}
+\bibcite{rocha2025advances}{1}
+\bibcite{liu2026review}{2}
+\bibcite{zhang2024vision}{3}
+\bibcite{wang2024power}{4}
+\bibcite{hao2025power}{5}
+\bibcite{lin2025defectgpt}{6}
+\bibcite{sharshar2025vision}{7}
+\bibcite{jeon2026edgev}{8}
+\bibcite{zhai2023investigating}{9}
+\bibcite{zhu2024model}{10}
+\bibcite{hu2022lora}{11}
+\bibcite{zhou2024empirical}{12}
+\bibcite{wang2025parameter}{13}
+\bibcite{wu2026domain}{14}
+\bibcite{tuning83same}{15}
+\bibcite{ge2025dynamic}{16}
+\bibcite{guo2025mmrl}{17}
+\bibcite{radford2021learning}{18}
+\bibcite{liu2023visual}{19}
+\bibcite{bai2025qwen3}{20}
+\bibcite{li2026fine}{21}
+\bibcite{gao2025enhanced}{22}
+\bibcite{lin2026moe}{23}
+\bibcite{louizos2017learning}{24}
+\bibcite{shazeer2017outrageously}{25}
+\bibcite{houlsby2019parameter}{26}
+\bibcite{fedus2022switch}{27}
+\@writefile{toc}{\contentsline {section}{References}{10}{}\protected@file@percent }
+\gdef \@abspage@last{10}

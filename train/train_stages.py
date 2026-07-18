@@ -48,9 +48,6 @@ def _build_experiment_context(train_cfg, output_dir, stage_id):
             "metric_smooth_window": train_cfg.get("metric_smooth_window"),
             "metric_ema_alpha": train_cfg.get("metric_ema_alpha"),
             "metric_scatter_stride": train_cfg.get("metric_scatter_stride"),
-            "enable_gate_loss_stage2": train_cfg.get("enable_gate_loss_stage2"),
-            "enable_alpha_guide_loss_s4": train_cfg.get("enable_alpha_guide_loss_s4"),
-            "alpha_loss_weight_s4": train_cfg.get("alpha_loss_weight_s4"),
             "visual_residual_adapter_count": train_cfg.get("visual_residual_adapter_count"),
             "adapter_usage_balance_loss_weight": train_cfg.get("adapter_usage_balance_loss_weight"),
             "adapter_sample_entropy_loss_weight": train_cfg.get("adapter_sample_entropy_loss_weight"),
@@ -69,25 +66,9 @@ def _build_experiment_context(train_cfg, output_dir, stage_id):
                 "adapter_effective_delta_target_high",
                 experiment_cfg.get("adapter_effective_delta_target_high"),
             ),
-            "adapter_effective_delta_loss_weight_s3": train_cfg.get(
-                "adapter_effective_delta_loss_weight_s3",
-                experiment_cfg.get("adapter_effective_delta_loss_weight_s3"),
-            ),
-            "adapter_effective_delta_loss_weight_s4": train_cfg.get(
-                "adapter_effective_delta_loss_weight_s4",
-                experiment_cfg.get("adapter_effective_delta_loss_weight_s4"),
-            ),
             "adapter_diversity_loss_weight": train_cfg.get(
                 "adapter_diversity_loss_weight",
                 experiment_cfg.get("adapter_diversity_loss_weight"),
-            ),
-            "adapter_diversity_loss_weight_s3": train_cfg.get(
-                "adapter_diversity_loss_weight_s3",
-                experiment_cfg.get("adapter_diversity_loss_weight_s3"),
-            ),
-            "adapter_diversity_loss_weight_s4": train_cfg.get(
-                "adapter_diversity_loss_weight_s4",
-                experiment_cfg.get("adapter_diversity_loss_weight_s4"),
             ),
             "adapter_diversity_target_low": train_cfg.get(
                 "adapter_diversity_target_low",
@@ -108,14 +89,6 @@ def _build_experiment_context(train_cfg, output_dir, stage_id):
             "prototype_anchor_loss_weight": train_cfg.get(
                 "prototype_anchor_loss_weight",
                 experiment_cfg.get("prototype_anchor_loss_weight"),
-            ),
-            "prototype_anchor_loss_weight_s3": train_cfg.get(
-                "prototype_anchor_loss_weight_s3",
-                experiment_cfg.get("prototype_anchor_loss_weight_s3"),
-            ),
-            "prototype_anchor_loss_weight_s4": train_cfg.get(
-                "prototype_anchor_loss_weight_s4",
-                experiment_cfg.get("prototype_anchor_loss_weight_s4"),
             ),
             "prototype_anchor_temperature": train_cfg.get(
                 "prototype_anchor_temperature",
@@ -146,21 +119,10 @@ def _build_experiment_context(train_cfg, output_dir, stage_id):
                 experiment_cfg.get("deepstack_mmrl_residual_scale"),
             ),
             "diag_every_steps": train_cfg.get("diag_every_steps"),
-            "enable_expert_floor_loss_s4": train_cfg.get("enable_expert_floor_loss_s4"),
-            "expert_floor_loss_weight": train_cfg.get("expert_floor_loss_weight"),
-            "expert_min_active_tokens": train_cfg.get("expert_min_active_tokens"),
-            "enable_collapse_loss_s4": train_cfg.get("enable_collapse_loss_s4"),
-            "anti_collapse_weight": train_cfg.get("anti_collapse_weight"),
-            "collapse_max_ratio": train_cfg.get("collapse_max_ratio"),
-            "collapse_min_ratio": train_cfg.get("collapse_min_ratio"),
-            "collapse_entropy_target": train_cfg.get("collapse_entropy_target"),
-            "group_usage_dead_threshold": train_cfg.get("group_usage_dead_threshold"),
-            "group_usage_ema_alpha": train_cfg.get("group_usage_ema_alpha"),
             "grad_spike_ema_alpha": train_cfg.get("grad_spike_ema_alpha"),
             "grad_spike_ratio_threshold": train_cfg.get("grad_spike_ratio_threshold"),
             "grad_spike_abs_threshold": train_cfg.get("grad_spike_abs_threshold"),
             "grad_spike_cooldown_steps": train_cfg.get("grad_spike_cooldown_steps"),
-            "disable_general_mm_stage34": train_cfg.get("disable_general_mm_stage34"),
         },
         "experiment_cfg": experiment_cfg,
     }
@@ -292,9 +254,9 @@ class EpochEvaluationCallback(TrainerCallback):
         if epoch_id in self.completed_epochs:
             return
         self.completed_epochs.add(epoch_id)
-        if self.stage_id == 4 and epoch_id >= self.total_epochs:
+        if self.stage_id == 3 and epoch_id >= self.total_epochs:
             print(
-                f"[EPOCH-EVAL] stage=4 epoch={epoch_id} skipped; "
+                f"[EPOCH-EVAL] stage=3 epoch={epoch_id} skipped; "
                 "the normal final evaluation covers the identical weights"
             )
             return
@@ -575,7 +537,7 @@ class SharedRepGradMonitorCallback(TrainerCallback):
                 self._write_event(event_payload)
 
 # =========================
-#  Full model (Stage3/4用)
+#  Full model (Stage3)
 # =========================
 class Qwen3VLMMRLForStages(Qwen3VLForConditionalGeneration):
     def __init__(self, config, tokenizer):
@@ -596,31 +558,13 @@ class Qwen3VLMMRLForStages(Qwen3VLForConditionalGeneration):
         self.current_stage_step = 0
         self.current_stage_progress = 0.0
         self.enable_alpha_guide_loss = False
-        self.enable_gate_loss_stage2 = True
         self.adapter_usage_balance_loss_weight = 0.0
         self.adapter_sample_entropy_loss_weight = 0.0
         self.adapter_common_mode_loss_weight = 0.0
         self.adapter_effective_delta_loss_weight = 0.0
-        self.adapter_effective_delta_loss_weight_s3 = None
-        self.adapter_effective_delta_loss_weight_s4 = None
         self.prototype_anchor_loss_weight = 0.0
-        self.prototype_anchor_loss_weight_s3 = None
-        self.prototype_anchor_loss_weight_s4 = None
         self.adapter_diversity_loss_weight = 0.0
-        self.adapter_diversity_loss_weight_s3 = None
-        self.adapter_diversity_loss_weight_s4 = None
-        self.enable_expert_floor_loss = False
-        self.expert_floor_loss_weight = 0.0
-        self.expert_min_active_tokens = 4.0
-        self.enable_collapse_loss = False
-        self.anti_collapse_weight = 0.0
-        self.collapse_max_ratio = 0.45
-        self.collapse_min_ratio = 0.05
-        self.collapse_entropy_target = 0.75
-        self.group_usage_dead_threshold = 0.03
-        self.group_usage_ema_alpha = 0.10
-        self.group_usage_ema = None
-        
+
         self.temperature_override = None
 
         self.debug_mode = True
@@ -633,18 +577,6 @@ class Qwen3VLMMRLForStages(Qwen3VLForConditionalGeneration):
 
     def _get_mmrl_module(self):
         return getattr(self.model, "MMRL", None)
-
-    def _scheduled_weight(self, base_weight, stage3_weight=None, stage4_weight=None, ramp_stage4=False):
-        stage_id = int(getattr(self, "current_stage_id", 0) or 0)
-        if stage_id == 3 and stage3_weight is not None:
-            return float(stage3_weight)
-        if stage_id == 4 and stage4_weight is not None:
-            weight = float(stage4_weight)
-            if ramp_stage4:
-                progress = max(0.0, min(float(getattr(self, "current_stage_progress", 0.0)), 1.0))
-                weight *= progress
-            return weight
-        return float(base_weight)
 
     def _collect_rep_grad_metrics(self, device):
         result = {}
@@ -826,22 +758,9 @@ class Qwen3VLMMRLForStages(Qwen3VLForConditionalGeneration):
             adapter_diversity_loss = torch.tensor(adapter_diversity_loss, device=input_ids.device, dtype=ce_loss.dtype)
         else:
             adapter_diversity_loss = adapter_diversity_loss.to(device=input_ids.device, dtype=ce_loss.dtype)
-        effective_delta_weight = self._scheduled_weight(
-            self.adapter_effective_delta_loss_weight,
-            self.adapter_effective_delta_loss_weight_s3,
-            self.adapter_effective_delta_loss_weight_s4,
-        )
-        prototype_anchor_weight = self._scheduled_weight(
-            self.prototype_anchor_loss_weight,
-            self.prototype_anchor_loss_weight_s3,
-            self.prototype_anchor_loss_weight_s4,
-        )
-        adapter_diversity_weight = self._scheduled_weight(
-            self.adapter_diversity_loss_weight,
-            self.adapter_diversity_loss_weight_s3,
-            self.adapter_diversity_loss_weight_s4,
-            ramp_stage4=True,
-        )
+        effective_delta_weight = float(self.adapter_effective_delta_loss_weight)
+        prototype_anchor_weight = float(self.prototype_anchor_loss_weight)
+        adapter_diversity_weight = float(self.adapter_diversity_loss_weight)
         scaled_adapter_usage_balance_loss = adapter_usage_balance_loss * float(self.adapter_usage_balance_loss_weight)
         scaled_adapter_sample_entropy_loss = adapter_sample_entropy_loss * float(self.adapter_sample_entropy_loss_weight)
         scaled_adapter_common_mode_loss = adapter_common_mode_loss * float(self.adapter_common_mode_loss_weight)
@@ -1114,19 +1033,16 @@ def set_trainable_stage(model, stage, train_cfg=None):
 
     v = model.model.visual
     if stage == 1:
-        mods = [v.hidden_state_pooling, v.embedding_pooling, v.Task_classifier, v.adapter_router]
-    elif stage == 2:
-        mods = [v.hidden_state_pooling, v.embedding_pooling, v.Task_classifier, v.adapter_router, v.visionGating]
-    elif stage in [3, 4]:
+        mods = [v.hidden_state_pooling, v.embedding_pooling, v.Task_classifier]
+    elif stage == 3:
         mods = [model.model.MMRL,
                 # v.blocks_with_rep, # ablation: keep rep-token branch forward, but freeze branch blocks
                 v.hidden_state_pooling, 
                 v.embedding_pooling,
                 v.adapter_router,
-                v.residual_adapters,
-                v.visionGating]
+                v.residual_adapters]
     else:
-        raise ValueError("stage must be 1/2/3/4")
+        raise ValueError("stage must be 1 or 3")
 
     for m in mods:
         if isinstance(m, nn.Parameter):
@@ -1136,22 +1052,18 @@ def set_trainable_stage(model, stage, train_cfg=None):
                 p.requires_grad = True
 
 
-def print_stage4_trainable_params_before_stage1(model):
-    set_trainable_stage(model, 4)
+def print_joint_trainable_params_before_stage1(model):
+    set_trainable_stage(model, 3)
     trainable = [(name, p) for name, p in model.named_parameters() if p.requires_grad]
     total = sum(p.numel() for _, p in trainable)
 
     print("\n" + "!" * 120)
-    # print("!" * 30 + " STAGE4 TRAINABLE PARAMETERS BEFORE STAGE1 " + "!" * 30)
-    # print("!" * 120)
-    # for name, p in trainable:
-    #     print(f"[STAGE4-TRAINABLE] name={name} shape={tuple(p.shape)} numel={p.numel()}")
-    print(f"[STAGE4-TRAINABLE][TOTAL] tensors={len(trainable)} total_numel={total}")
+    print(f"[JOINT-TRAINABLE][TOTAL] tensors={len(trainable)} total_numel={total}")
     print("!" * 120 + "\n")
 
 
 # =========================
-#  轻前向工具（Stage1/2）
+#  Stage1 lightweight classifier pretraining
 # =========================
 def _build_text_pool_mask(attention_mask):
     return attention_mask.bool()
@@ -1176,8 +1088,8 @@ def _extract_mm_pooled_vision(v, pixel_values, image_grid_thw):
     return pooled
 
 
-def run_stage12_light(stage_id, model, processor, data_cfg, train_cfg, output_dir):
-    assert stage_id in [1, 2]
+def run_stage1_light(model, processor, data_cfg, train_cfg, output_dir):
+    stage_id = 1
     set_trainable_stage(model, stage_id)
     model.train()
 
@@ -1227,7 +1139,6 @@ def run_stage12_light(stage_id, model, processor, data_cfg, train_cfg, output_di
 
     steps_per_update = train_cfg["gradient_accumulation_steps"]
     epochs = train_cfg["epochs"][stage_id]
-    use_focal = (stage_id == 1)
     updates_per_epoch = max((len(dl) + steps_per_update - 1) // steps_per_update, 1)
     total_optimizer_steps = max(epochs * updates_per_epoch, 1)
     warmup_steps = int(total_optimizer_steps * 0.05)
@@ -1248,7 +1159,6 @@ def run_stage12_light(stage_id, model, processor, data_cfg, train_cfg, output_di
             input_ids = batch["input_ids"].cuda(non_blocking=True)
             attention_mask = batch["attention_mask"].cuda(non_blocking=True)
             alpha_labels = batch["alpha_labels"].cuda(non_blocking=True).view(-1, 1).to(dtype=v.dtype)
-            task_type_ids = batch["task_type_ids"].cuda(non_blocking=True)
             is_mm = batch["is_mm"].cuda(non_blocking=True)
             pixel_values = batch["pixel_values"]
             image_grid_thw = batch["image_grid_thw"]
@@ -1273,19 +1183,8 @@ def run_stage12_light(stage_id, model, processor, data_cfg, train_cfg, output_di
 
             alpha_logits = v.Task_classifier(vision_pooled, text_pooled)
 
-            if use_focal:
-                cls_loss = focal_bce_with_logits(alpha_logits, alpha_labels)
-            else:
-                cls_loss = torch.nn.functional.binary_cross_entropy_with_logits(alpha_logits, alpha_labels)
-
-            # stage2：把分类结果传递给gate（轻量约束）
-            gate_loss = torch.tensor(0.0, device=cls_loss.device)
-            if stage_id == 2 and getattr(model, "enable_gate_loss_stage2", True):
-                g = v.visionGating(alpha_logits, getattr(model, "temperature_override", None))
-                target = alpha_labels
-                gate_loss = torch.nn.functional.mse_loss(g, target)
-
-            loss = (cls_loss + gate_loss) / steps_per_update
+            cls_loss = focal_bce_with_logits(alpha_logits, alpha_labels)
+            loss = cls_loss / steps_per_update
             loss.backward()
 
             if ((i + 1) % steps_per_update == 0) or (i + 1 == len(dl)):
@@ -1299,21 +1198,17 @@ def run_stage12_light(stage_id, model, processor, data_cfg, train_cfg, output_di
 
                     metric_logger.log(
                         step=global_step,
-                        total_loss=(cls_loss.detach() + gate_loss.detach()),
+                        total_loss=cls_loss.detach(),
                         cls_loss=cls_loss.detach(),
-                        gate_loss=gate_loss.detach(),
                         alpha_mae=alpha_mae,
-                        temperature=getattr(model, "temperature_override", float("nan")),
                         learning_rate=opt.param_groups[0]["lr"],
                     )
                 print_every = train_cfg.get("console_log_every", 50)
                 if global_step % print_every == 0:
                     row = {
-                        "total_loss": (cls_loss.detach() + gate_loss.detach()),
+                        "total_loss": cls_loss.detach(),
                         "cls_loss": cls_loss.detach(),
-                        "gate_loss": gate_loss.detach(),
                         "alpha_mae": alpha_mae,
-                        "temperature": getattr(model, "temperature_override", float("nan")),
                         "learning_rate": opt.param_groups[0]["lr"],
                     }
                     print_stage_step_summary(f"stage{stage_id}", global_step, row)
@@ -1325,35 +1220,15 @@ def run_stage12_light(stage_id, model, processor, data_cfg, train_cfg, output_di
 
 
 # =========================
-#  Stage3/4 (完整Trainer)
+#  Stage3 joint adaptation
 # =========================
-def run_stage34_full(stage_id, model, processor, data_cfg, train_cfg, output_dir):
-    assert stage_id in [3, 4]
-    set_trainable_stage(model, stage_id, train_cfg=train_cfg)
+def run_stage3_full(model, processor, data_cfg, train_cfg, output_dir):
+    stage_id = 3
+    set_trainable_stage(model, stage_id)
 
-    if stage_id == 3:
-        model.ce_loss_weight = 1.0
-        model.alpha_loss_weight = 0.0
-        model.enable_alpha_guide_loss = False
-        model.enable_expert_floor_loss = False
-        model.expert_floor_loss_weight = 0.0
-        model.enable_collapse_loss = False
-        model.anti_collapse_weight = 0.0
-    else:  # stage4
-        model.ce_loss_weight = 1.0
-        model.alpha_loss_weight = 0.0
-        model.enable_alpha_guide_loss = False
-        model.enable_expert_floor_loss = False
-        model.expert_floor_loss_weight = 0.0
-        model.expert_min_active_tokens = float(train_cfg.get("expert_min_active_tokens", 4.0))
-        model.enable_collapse_loss = False
-        model.anti_collapse_weight = 0.0
-        model.collapse_max_ratio = float(train_cfg.get("collapse_max_ratio", 0.45))
-        model.collapse_min_ratio = float(train_cfg.get("collapse_min_ratio", 0.05))
-        model.collapse_entropy_target = float(train_cfg.get("collapse_entropy_target", 0.75))
-        model.group_usage_dead_threshold = float(train_cfg.get("group_usage_dead_threshold", 0.03))
-        model.group_usage_ema_alpha = float(train_cfg.get("group_usage_ema_alpha", 0.10))
-        model.group_usage_ema = None
+    model.ce_loss_weight = 1.0
+    model.alpha_loss_weight = 0.0
+    model.enable_alpha_guide_loss = False
 
     model.current_stage_id = int(stage_id)
     model.current_stage_step = 0
@@ -1366,42 +1241,17 @@ def run_stage34_full(stage_id, model, processor, data_cfg, train_cfg, output_dir
         "adapter_effective_delta_loss_weight",
         experiment_cfg.get("adapter_effective_delta_loss_weight", 0.0),
     ))
-    model.adapter_effective_delta_loss_weight_s3 = train_cfg.get(
-        "adapter_effective_delta_loss_weight_s3",
-        experiment_cfg.get("adapter_effective_delta_loss_weight_s3"),
-    )
-    model.adapter_effective_delta_loss_weight_s4 = train_cfg.get(
-        "adapter_effective_delta_loss_weight_s4",
-        experiment_cfg.get("adapter_effective_delta_loss_weight_s4"),
-    )
     model.prototype_anchor_loss_weight = float(train_cfg.get(
         "prototype_anchor_loss_weight",
         experiment_cfg.get("prototype_anchor_loss_weight", 0.0),
     ))
-    model.prototype_anchor_loss_weight_s3 = train_cfg.get(
-        "prototype_anchor_loss_weight_s3",
-        experiment_cfg.get("prototype_anchor_loss_weight_s3"),
-    )
-    model.prototype_anchor_loss_weight_s4 = train_cfg.get(
-        "prototype_anchor_loss_weight_s4",
-        experiment_cfg.get("prototype_anchor_loss_weight_s4"),
-    )
     model.adapter_diversity_loss_weight = float(train_cfg.get(
         "adapter_diversity_loss_weight",
         experiment_cfg.get("adapter_diversity_loss_weight", 0.0),
     ))
-    model.adapter_diversity_loss_weight_s3 = train_cfg.get(
-        "adapter_diversity_loss_weight_s3",
-        experiment_cfg.get("adapter_diversity_loss_weight_s3"),
-    )
-    model.adapter_diversity_loss_weight_s4 = train_cfg.get(
-        "adapter_diversity_loss_weight_s4",
-        experiment_cfg.get("adapter_diversity_loss_weight_s4"),
-    )
-    model.enable_gate_loss_stage2 = train_cfg.get("enable_gate_loss_stage2", True)
 
-    stage34_views = ("expert-mm",)
-    print(f"[Stage{stage_id}] enable_views={stage34_views}")
+    stage3_views = ("expert-mm",)
+    print(f"[Stage{stage_id}] enable_views={stage3_views}")
 
     ds = FourViewMMRLDataset(
         processor=processor,
@@ -1410,7 +1260,7 @@ def run_stage34_full(stage_id, model, processor, data_cfg, train_cfg, output_dir
         general_json=data_cfg["general_json"],
         general_img_dir=data_cfg["general_img_dir"],
         total_limit=data_cfg["total_limit"],
-        enable_views=stage34_views,
+        enable_views=stage3_views,
         mode=f"stage{stage_id}",
         ce_enabled=True,
         seed=train_cfg.get("data_sampling_seed", 42),
@@ -1494,10 +1344,9 @@ def run_stage34_full(stage_id, model, processor, data_cfg, train_cfg, output_dir
 def run_stage(stage_id, model, processor, data_cfg, train_cfg, output_dir):
     if stage_id == 1:
         _write_experiment_manifest(output_dir, train_cfg)
-        print_stage4_trainable_params_before_stage1(model)
-    if stage_id in [1, 2]:
-        run_stage12_light(stage_id, model, processor, data_cfg, train_cfg, output_dir)
-    elif stage_id in [3, 4]:
-        run_stage34_full(stage_id, model, processor, data_cfg, train_cfg, output_dir)
+        print_joint_trainable_params_before_stage1(model)
+        run_stage1_light(model, processor, data_cfg, train_cfg, output_dir)
+    elif stage_id == 3:
+        run_stage3_full(model, processor, data_cfg, train_cfg, output_dir)
     else:
-        raise ValueError("stage_id must be 1/2/3/4")
+        raise ValueError("stage_id must be 1 or 3")

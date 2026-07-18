@@ -11,6 +11,7 @@ import platform
 import random
 import socket
 import sys
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
@@ -19,7 +20,7 @@ import numpy as np
 import torch
 from PIL import Image
 from tqdm import tqdm
-from transformers import AutoModelForCausalLM, AutoProcessor
+from transformers import AutoModelForCausalLM, AutoProcessor, LogitsProcessor
 
 try:
     from transformers import AutoModelForImageTextToText
@@ -198,6 +199,43 @@ def encode_tensor(tensor: torch.Tensor) -> Dict[str, Any]:
     }
 
 
+class TokenTimingLogitsProcessor(LogitsProcessor):
+    """Record approximate completion times for each generated token."""
+
+    def __init__(self, device: torch.device) -> None:
+        self.device = device
+        self.started_at = time.perf_counter()
+        self.token_ready_at: List[float] = []
+
+    def __call__(self, input_ids: torch.LongTensor, scores: torch.FloatTensor) -> torch.FloatTensor:
+        # Generation kernels are asynchronous on CUDA. Synchronizing here makes the
+        # timestamps useful as a simple latency measurement, at the cost of some speed.
+        if self.device.type == "cuda":
+            torch.cuda.synchronize(self.device)
+        self.token_ready_at.append(time.perf_counter())
+        return scores
+
+    def result(self, generated_token_count: int, finished_at: float) -> Dict[str, Any]:
+        first_latency = (
+            self.token_ready_at[0] - self.started_at if self.token_ready_at else None
+        )
+        subsequent_intervals = [
+            current - previous
+            for previous, current in zip(self.token_ready_at, self.token_ready_at[1:])
+        ]
+        return {
+            "first_token_latency_seconds": first_latency,
+            "subsequent_token_mean_seconds": (
+                sum(subsequent_intervals) / len(subsequent_intervals)
+                if subsequent_intervals
+                else None
+            ),
+            "generation_total_seconds": finished_at - self.started_at,
+            "generated_token_count": generated_token_count,
+            "measured_token_steps": len(self.token_ready_at),
+        }
+
+
 def infer_one(
     model: Any,
     processor: Any,
@@ -226,14 +264,20 @@ def infer_one(
         logits = outputs.logits[0, -1, :].float()
         probabilities = torch.softmax(logits, dim=-1)
         top_values, top_indices = torch.topk(probabilities, k=50)
+        token_timer = TokenTimingLogitsProcessor(device)
         generated = model.generate(
             **inputs,
             max_new_tokens=max_new_tokens,
             do_sample=False,
+            logits_processor=[token_timer],
         )
+        if device.type == "cuda":
+            torch.cuda.synchronize(device)
+        generation_finished_at = time.perf_counter()
 
     input_length = inputs["input_ids"].shape[-1]
     generated_ids = generated[:, input_length:]
+    timing = token_timer.result(generated_ids.shape[-1], generation_finished_at)
     generated_text = processor.batch_decode(
         generated_ids, skip_special_tokens=True
     )[0].strip()
@@ -254,6 +298,7 @@ def infer_one(
         "top50_probabilities": top_values.cpu().tolist(),
         "generated_token_ids": generated_ids[0].detach().cpu().tolist(),
         "generated_text": generated_text,
+        "timing": timing,
     }
 
 
@@ -300,6 +345,12 @@ def run_experiment(
         "num_samples": args.num_samples,
         "seed": args.seed,
         "generation": {"do_sample": False, "max_new_tokens": args.max_new_tokens},
+        "timing": {
+            "clock": "time.perf_counter",
+            "first_token": "generate start to first generated-token logits becoming ready",
+            "subsequent_token": "mean interval between later generated-token logits",
+            "cuda_synchronize_each_token": True,
+        },
         "environment": _environment(),
     }
 

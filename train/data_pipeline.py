@@ -122,7 +122,7 @@ class FourViewMMRLDataset(Dataset):
         general_img_dir,
         total_limit=50000,
         enable_views=("expert-mm", "expert-text", "general-mm", "general-text"),
-        mode="stage1_cls",  # stage1_cls / stage2_gate / stage3_joint / stage4_sparse
+        mode="stage1_cls",  # stage1_cls / stage3_joint
         ce_enabled=False,
         seed=42,
         deterministic_sampling=False,

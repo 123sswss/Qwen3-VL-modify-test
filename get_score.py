@@ -14,7 +14,7 @@ ACC_PATTERN = re.compile(r"Acc=\d+\.\d%")
 SCORE_KEYWORD = "百分制分数"
 SCORE_PATTERN = re.compile(r"百分制分数\s*[:：]\s*(-?\d+(?:\.\d+)?)")
 DIAGNOSTICS_FILENAME = "mmrl_diagnostics.jsonl"
-DIAGNOSTIC_STAGES = (3, 4)
+DIAGNOSTIC_STAGES = (3,)
 SEED_LOG_PATTERN = re.compile(r"seed=(\d+)")
 
 

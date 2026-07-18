@@ -2,7 +2,16 @@
 set -uo pipefail
 
 cd "$(dirname "$0")"
-mkdir -p logs
+RUN_DATE="${BASELINE_RUN_DATE:-$(date +%Y%m%d)}"
+LOG_DIR="logs_${RUN_DATE}"
+if [ -d "${LOG_DIR}" ]; then
+    i=1
+    while [ -d "${LOG_DIR}_${i}" ]; do
+        ((i++))
+    done
+    LOG_DIR="${LOG_DIR}_${i}"
+fi
+mkdir -p "${LOG_DIR}"
 
 FAILED_STEPS=()
 LOG_FILTER_PATTERN='Loading weights:|Materializing param='
@@ -48,25 +57,25 @@ run_step() {
     fi
 }
 
-# run_step "LoRA full-attention train: rank8/rank16/rank32" logs/train_lora.log python trainLora.py
-# run_step "LoRA full-attention eval: rank8/rank16/rank32" logs/eval_lora.log python loraTest.py
+# run_step "LoRA full-attention train: rank8/rank16/rank32" "${LOG_DIR}/train_lora.log" python trainLora.py
+# run_step "LoRA full-attention eval: rank8/rank16/rank32" "${LOG_DIR}/eval_lora.log" python loraTest.py
 
-run_step "LoRA vision-attention train: rank8/rank16/rank32" logs/train_lora_vision_attn.log python trainLoraVision.py
-run_step "LoRA vision-attention eval: rank8/rank16/rank32" logs/eval_lora_vision_attn.log python loraVisionTest.py
+run_step "LoRA vision-attention train: rank8/rank16/rank32" "${LOG_DIR}/train_lora_vision_attn.log" python trainLoraVision.py
+run_step "LoRA vision-attention eval: rank8/rank16/rank32" "${LOG_DIR}/eval_lora_vision_attn.log" python loraVisionTest.py
 
-run_step "LoRA last-8 vision train+eval: rank32 full-linear/attention" logs/lora_last8_vision_experiments.log python loraLast8VisionExperiments.py
+run_step "LoRA last-8 vision train+eval: rank32 full-linear/attention" "${LOG_DIR}/lora_last8_vision_experiments.log" python loraLast8VisionExperiments.py
 
-run_step "DoRA full-attention train: rank8/rank16" logs/train_dora.log python trainDora.py
-run_step "DoRA full-attention eval: rank8/rank16" logs/eval_dora.log python doraTest.py
+run_step "DoRA full-attention train: rank8/rank16" "${LOG_DIR}/train_dora.log" python trainDora.py
+run_step "DoRA full-attention eval: rank8/rank16" "${LOG_DIR}/eval_dora.log" python doraTest.py
 
-run_step "DoRA vision-attention train: rank8/rank16" logs/train_dora_vision_attn.log python trainDoraVision.py
-run_step "DoRA vision-attention eval: rank8/rank16" logs/eval_dora_vision_attn.log python doraVisionTest.py
+run_step "DoRA vision-attention train: rank8/rank16" "${LOG_DIR}/train_dora_vision_attn.log" python trainDoraVision.py
+run_step "DoRA vision-attention eval: rank8/rank16" "${LOG_DIR}/eval_dora_vision_attn.log" python doraVisionTest.py
 
-# run_step "IA3 train" logs/train_ia3.log python trainIA3.py
-# run_step "IA3 eval" logs/eval_ia3.log python ia3Test.py
+# run_step "IA3 train" "${LOG_DIR}/train_ia3.log" python trainIA3.py
+# run_step "IA3 eval" "${LOG_DIR}/eval_ia3.log" python ia3Test.py
 
-# run_step "Adapter train" logs/train_adapter.log python trainAdapter.py
-# run_step "Adapter eval" logs/eval_adapter.log python adapterTest.py
+# run_step "Adapter train" "${LOG_DIR}/train_adapter.log" python trainAdapter.py
+# run_step "Adapter eval" "${LOG_DIR}/eval_adapter.log" python adapterTest.py
 
 echo "========== All PEFT experiments attempted =========="
 if [ "${#FAILED_STEPS[@]}" -gt 0 ]; then

@@ -51,6 +51,7 @@ def metrics(left: Dict[str, Any], right: Dict[str, Any]) -> Dict[str, Any]:
     )
     top_a = left["top50_token_ids"]
     top_b = right["top50_token_ids"]
+    right_timing = right.get("timing", {})
     return {
         "sample_id": left["sample_id"],
         "js_divergence": js.item(),
@@ -60,6 +61,9 @@ def metrics(left: Dict[str, Any], right: Dict[str, Any]) -> Dict[str, Any]:
         "top1_agreement": int(top_a[0] == top_b[0]),
         "top10_overlap": len(set(top_a[:10]) & set(top_b[:10])) / 10.0,
         "generated_exact_match": int(left["generated_token_ids"] == right["generated_token_ids"]),
+        "first_token_latency_seconds": right_timing.get("first_token_latency_seconds"),
+        "subsequent_token_mean_seconds": right_timing.get("subsequent_token_mean_seconds"),
+        "generation_total_seconds": right_timing.get("generation_total_seconds"),
         "left_generated_text": left["generated_text"],
         "right_generated_text": right["generated_text"],
     }
@@ -75,9 +79,17 @@ def summarize(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
         "top1_agreement",
         "top10_overlap",
         "generated_exact_match",
+        "first_token_latency_seconds",
+        "subsequent_token_mean_seconds",
+        "generation_total_seconds",
     ]
     for key in numeric_keys:
-        values = np.asarray([row[key] for row in rows], dtype=np.float64)
+        values = np.asarray(
+            [row[key] for row in rows if row.get(key) is not None], dtype=np.float64
+        )
+        if values.size == 0:
+            result[key] = None
+            continue
         result[key] = {
             "mean": float(values.mean()),
             "std": float(values.std()),
@@ -146,7 +158,16 @@ def main() -> None:
             for key in first:
                 if key in {"sample_id", "left_generated_text", "right_generated_text"}:
                     continue
-                row[key] = 0.5 * (first[key] + second[key])
+                first_value = first[key]
+                second_value = second[key]
+                if first_value is None and second_value is None:
+                    row[key] = None
+                elif first_value is None:
+                    row[key] = second_value
+                elif second_value is None:
+                    row[key] = first_value
+                else:
+                    row[key] = 0.5 * (first_value + second_value)
             row["method_generated_text"] = first["right_generated_text"]
             combined.append(row)
         aggregate = summarize(combined)

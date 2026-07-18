@@ -142,7 +142,7 @@ run_one() {
     MMRL_SEED="$experiment_seed" \
     MMRL_DATA_SAMPLING_SEED="42" \
     MMRL_DETERMINISTIC_SAMPLING="1" \
-    MMRL_EVAL_EACH_EPOCH="1" \
+    MMRL_EVAL_EACH_EPOCH="0" \
     python train.py 2>&1 | tee "$output_dir/train.log"
   )
 
@@ -173,8 +173,8 @@ run_N() {
   done
 }
 
-# 完整复跑历史 64.99 配置，优先恢复一个可供解剖的 60+ checkpoint。
-run_one "visual_router_layer_fixed_v4_diversity_recover" "visual_router_layer_fixed_v4_diversity_recover"
+# 连续运行后续五个 seed；每轮只在训练结束后正式测评一次。
+run_N "visual_router_layer_fixed_v4_diversity_recover" "visual_router_layer_fixed_v4_diversity_recover" 5
 
 
 

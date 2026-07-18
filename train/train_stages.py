@@ -239,6 +239,21 @@ class StageScheduleCallback(TrainerCallback):
         model.current_stage_step = int(state.global_step) + 1
 
 
+class StopAfterEpochCallback(TrainerCallback):
+    def __init__(self, stop_after_epochs):
+        self.stop_after_epochs = int(stop_after_epochs)
+
+    def on_epoch_end(self, args, state, control, **kwargs):
+        completed_epochs = int(round(float(state.epoch or 0.0)))
+        if completed_epochs >= self.stop_after_epochs:
+            print(
+                f"[EARLY-STOP] completed_epochs={completed_epochs} "
+                f"planned_epochs={int(args.num_train_epochs)}"
+            )
+            control.should_training_stop = True
+        return control
+
+
 class EpochEvaluationCallback(TrainerCallback):
     def __init__(self, processor, output_dir, stage_id, total_epochs):
         self.processor = processor
@@ -1225,6 +1240,19 @@ def run_stage1_light(model, processor, data_cfg, train_cfg, output_dir):
 def run_stage3_full(model, processor, data_cfg, train_cfg, output_dir):
     stage_id = 3
     set_trainable_stage(model, stage_id)
+    actual_epochs = int(train_cfg["epochs"][stage_id])
+    schedule_epochs = int(
+        train_cfg.get("schedule_epochs", {}).get(stage_id, actual_epochs)
+    )
+    if actual_epochs < 1 or schedule_epochs < actual_epochs:
+        raise ValueError(
+            "Stage3 requires 1 <= actual epochs <= schedule epochs, got "
+            f"actual={actual_epochs}, schedule={schedule_epochs}"
+        )
+    print(
+        f"[Stage3] actual_epochs={actual_epochs} "
+        f"schedule_epochs={schedule_epochs}"
+    )
 
     model.ce_loss_weight = 1.0
     model.alpha_loss_weight = 0.0
@@ -1269,13 +1297,13 @@ def run_stage3_full(model, processor, data_cfg, train_cfg, output_dir):
     collator = MMRLDataCollator(processor)
     cb = StageScheduleCallback(
         dataset=ds,
-        total_epochs=train_cfg["epochs"][stage_id],
+        total_epochs=schedule_epochs,
         init_temp=train_cfg.get("initial_temp", 1.0),
         final_temp=train_cfg.get("final_temp", 0.1),
     )
     args = TrainingArguments(
         output_dir=f"{output_dir}/stage{stage_id}",
-        num_train_epochs=train_cfg["epochs"][stage_id],
+        num_train_epochs=schedule_epochs,
         per_device_train_batch_size=train_cfg["per_device_train_batch_size"],
         gradient_accumulation_steps=train_cfg["gradient_accumulation_steps"],
         learning_rate=train_cfg["learning_rate"][stage_id],
@@ -1321,13 +1349,19 @@ def run_stage3_full(model, processor, data_cfg, train_cfg, output_dir):
         cooldown_steps=train_cfg.get("grad_spike_cooldown_steps", 20),
     )
 
-    callbacks = [cb, grad_monitor_cb, metrics_cb, diag_cb]
+    callbacks = [
+        cb,
+        StopAfterEpochCallback(actual_epochs),
+        grad_monitor_cb,
+        metrics_cb,
+        diag_cb,
+    ]
     if train_cfg.get("eval_each_epoch", False):
         callbacks.append(EpochEvaluationCallback(
             processor,
             output_dir,
             stage_id,
-            train_cfg["epochs"][stage_id],
+            actual_epochs,
         ))
 
     trainer = Trainer(

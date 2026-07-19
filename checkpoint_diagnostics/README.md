@@ -38,3 +38,28 @@ python checkpoint_diagnostics/compare_runs.py \
 
 比较脚本会按题目对齐，自动搜索四个专家的最佳排列，并报告 router 一致率、
 adapter 方向相似度和最终 delta 方向相似度。
+
+## 高低分混合消融
+
+完成方向比较并得到专家排列后，可以只替换 router 或 adapters 做两次完整评测。
+当前高低分 checkpoint 的排列已经写入脚本，直接在项目根目录执行：
+
+```bash
+bash checkpoint_diagnostics/run_hybrid_ablation.sh
+```
+
+脚本不会复制或保存完整 checkpoint。两次评测都以高分 checkpoint 为底座：
+
+- `high_adapters_low_router`：只安装对齐后的低分 router。
+- `low_adapters_high_router`：只安装对齐后的低分 adapters。
+
+结果位于 `checkpoint_diagnostics/outputs/hybrid_*/`，每轮包含 `test.log` 和
+`summary.json`；后者同时记录总分与两个数据源的分数。
+
+若 checkpoint 路径发生变化，可以用环境变量覆盖：
+
+```bash
+HIGH_CHECKPOINT=/path/to/high/final \
+LOW_CHECKPOINT=/path/to/low/final \
+bash checkpoint_diagnostics/run_hybrid_ablation.sh
+```

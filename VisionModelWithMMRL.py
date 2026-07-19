@@ -588,6 +588,11 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
         self.adapter_pairwise_cos_above_band = nan
         self.adapter_diversity_mean_component = nan
         self.adapter_diversity_worst_component = nan
+        for idx in range(self.visual_residual_adapter_count):
+            setattr(self, f"adapter_output_norm_{idx}", nan)
+            setattr(self, f"adapter_contribution_norm_{idx}", nan)
+            for other_idx in range(idx + 1, self.visual_residual_adapter_count):
+                setattr(self, f"adapter_pairwise_cos_{idx}_{other_idx}", nan)
 
         pooled = self._pool_adapter_outputs_by_image_mean(adapter_outputs, cu_seqlens)
         if pooled is None or pooled.numel() == 0 or pooled.shape[1] <= 1:
@@ -628,6 +633,39 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
             )
             self.adapter_diversity_mean_component = mean_component.detach().to(device=device, dtype=dtype)
             self.adapter_diversity_worst_component = worst_component.detach().to(device=device, dtype=dtype)
+
+            pooled_detached = pooled.detach()
+            output_norms = pooled_detached.norm(dim=-1).mean(dim=0)
+            for idx, value in enumerate(output_norms):
+                setattr(
+                    self,
+                    f"adapter_output_norm_{idx}",
+                    value.to(device=device, dtype=dtype),
+                )
+
+            routes = self.route_probs
+            if torch.is_tensor(routes) and routes.numel() > 0:
+                routes = routes.detach().float()
+                n = min(pooled_detached.shape[0], routes.shape[0])
+                if n > 0:
+                    contribution_norms = (
+                        pooled_detached[:n] * routes[:n].unsqueeze(-1)
+                    ).norm(dim=-1).mean(dim=0)
+                    for idx, value in enumerate(contribution_norms):
+                        setattr(
+                            self,
+                            f"adapter_contribution_norm_{idx}",
+                            value.to(device=device, dtype=dtype),
+                        )
+
+            pairwise_mean = pairwise.detach().mean(dim=0)
+            for idx in range(pairwise_mean.shape[0]):
+                for other_idx in range(idx + 1, pairwise_mean.shape[1]):
+                    setattr(
+                        self,
+                        f"adapter_pairwise_cos_{idx}_{other_idx}",
+                        pairwise_mean[idx, other_idx].to(device=device, dtype=dtype),
+                    )
         return loss.to(device=device, dtype=dtype)
 
     def _compute_router_aux_losses(
@@ -1066,6 +1104,17 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
                 hidden_states.new_tensor(float("nan")),
             )
             self.debug_context[f"prototype_usage_{idx}"] = value.detach() if torch.is_tensor(value) else hidden_states.new_tensor(float(value))
+            for prefix in ("adapter_output_norm", "adapter_contribution_norm"):
+                value = getattr(
+                    self,
+                    f"{prefix}_{idx}",
+                    hidden_states.new_tensor(float("nan")),
+                )
+                self.debug_context[f"{prefix}_{idx}"] = value.detach()
+            for other_idx in range(idx + 1, self.visual_residual_adapter_count):
+                key = f"adapter_pairwise_cos_{idx}_{other_idx}"
+                value = getattr(self, key, hidden_states.new_tensor(float("nan")))
+                self.debug_context[key] = value.detach()
 
         hidden_states = self.merger(hidden_states)
         k_results = None

@@ -31,6 +31,8 @@ OUTPUT_ROOT="$ROOT_DIR/experiment_outputs"
 CHECKPOINT_ROOT="$OUTPUT_ROOT/output"
 SEED_STATE_FILE="${MMRL_SEED_STATE_FILE:-$OUTPUT_ROOT/next_seed.txt}"
 INITIAL_SEED="${MMRL_INITIAL_SEED:-42}"
+AUTO_INCREMENT_SEED="${MMRL_AUTO_INCREMENT_SEED:-0}"
+FIXED_SEED="${MMRL_FIXED_SEED:-44}"
 
 mkdir -p "$OUTPUT_ROOT" "$CHECKPOINT_ROOT"
 
@@ -40,6 +42,19 @@ RUN_DATE="${MMRL_RUN_DATE:-$(date +%Y%m%d)}"
 # 持久分配实验 seed；脚本重启后继续递增，不重复使用已分配 seed。
 allocate_seed() {
   local seed
+  if [ "$AUTO_INCREMENT_SEED" = "0" ]; then
+    if ! [[ "$FIXED_SEED" =~ ^[0-9]+$ ]]; then
+      echo "[ERR] 非法固定 seed: '$FIXED_SEED'" >&2
+      return 1
+    fi
+    printf '%s\n' "$FIXED_SEED"
+    return 0
+  fi
+  if [ "$AUTO_INCREMENT_SEED" != "1" ]; then
+    echo "[ERR] MMRL_AUTO_INCREMENT_SEED 必须为 0 或 1，当前为 '$AUTO_INCREMENT_SEED'" >&2
+    return 1
+  fi
+
   if [ -f "$SEED_STATE_FILE" ]; then
     read -r seed < "$SEED_STATE_FILE"
   else
@@ -129,6 +144,11 @@ run_one() {
   echo "[EXP] 开始实验: $tag"
   echo "[EXP] MMRL_EXPERIMENT=$experiment_name"
   echo "[EXP] seed=$experiment_seed"
+  if [ "$AUTO_INCREMENT_SEED" = "1" ]; then
+    echo "[EXP] seed_mode=auto_increment"
+  else
+    echo "[EXP] seed_mode=fixed"
+  fi
   echo "[EXP] data_sampling_seed=42"
   echo "[EXP] checkpoint目录: $output_dir"
   echo "============================================================"
@@ -173,8 +193,9 @@ run_N() {
   done
 }
 
-# 连续运行后续五个 seed；每轮只在训练结束后正式测评一次。
-run_N "visual_router_layer_fixed_v4_diversity_recover" "visual_router_layer_fixed_v4_diversity_recover" 5
+# 当前诊断复测：固定 seed 44，只运行一轮。
+# 设 MMRL_AUTO_INCREMENT_SEED=1 可恢复持久递增模式。
+run_one "visual_router_layer_fixed_v4_diversity_recover" "visual_router_layer_fixed_v4_diversity_recover"
 
 
 

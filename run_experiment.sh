@@ -193,9 +193,10 @@ run_N() {
   done
 }
 
-# 当前诊断复测：固定 seed 44，只运行一轮。
+# 当前两轮诊断：固定 seed 44，先原样复现，再仅打开 adapter-router 恒等残差。
 # 设 MMRL_AUTO_INCREMENT_SEED=1 可恢复持久递增模式。
 run_one "visual_router_layer_fixed_v4_diversity_recover" "visual_router_layer_fixed_v4_diversity_recover"
+run_one "visual_router_layer_fixed_v4_diversity_recover_identity_residual" "visual_router_layer_fixed_v4_diversity_recover_identity_residual"
 
 
 

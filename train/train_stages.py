@@ -110,6 +110,10 @@ def _build_experiment_context(train_cfg, output_dir, stage_id):
                 "prototype_anchor_init_noise",
                 experiment_cfg.get("prototype_anchor_init_noise"),
             ),
+            "enable_adapter_router_identity_residual": train_cfg.get(
+                "enable_adapter_router_identity_residual",
+                experiment_cfg.get("enable_adapter_router_identity_residual"),
+            ),
             "enable_deepstack_mmrl_residual": train_cfg.get(
                 "enable_deepstack_mmrl_residual",
                 experiment_cfg.get("enable_deepstack_mmrl_residual"),
@@ -960,6 +964,10 @@ def build_model_and_processor(model_path, experiment_cfg=None):
         "prototype_anchor_init_noise",
         os.getenv("MMRL_PROTOTYPE_ANCHOR_INIT_NOISE", "0.10"),
     ))
+    config.ENABLE_ADAPTER_ROUTER_IDENTITY_RESIDUAL = os.getenv(
+        "MMRL_ENABLE_ADAPTER_ROUTER_IDENTITY_RESIDUAL",
+        "1" if experiment_cfg.get("enable_adapter_router_identity_residual", False) else "0",
+    ) == "1"
     config.ENABLE_DEEPSTACK_MMRL_RESIDUAL = os.getenv(
         "MMRL_ENABLE_DEEPSTACK_MMRL_RESIDUAL",
         "1" if experiment_cfg.get("enable_deepstack_mmrl_residual", False) else "0",
@@ -1032,6 +1040,7 @@ def build_model_and_processor(model_path, experiment_cfg=None):
         f"prototype_anchor_min_confidence={config.PROTOTYPE_ANCHOR_MIN_CONFIDENCE} "
         f"prototype_anchor_assignment_power={config.PROTOTYPE_ANCHOR_ASSIGNMENT_POWER} "
         f"prototype_anchor_init_noise={config.PROTOTYPE_ANCHOR_INIT_NOISE} "
+        f"enable_adapter_router_identity_residual={config.ENABLE_ADAPTER_ROUTER_IDENTITY_RESIDUAL} "
         f"enable_deepstack_mmrl_residual={config.ENABLE_DEEPSTACK_MMRL_RESIDUAL} "
         f"deepstack_mmrl_residual_scale={config.DEEPSTACK_MMRL_RESIDUAL_SCALE}"
     )

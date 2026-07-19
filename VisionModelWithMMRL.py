@@ -219,6 +219,9 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
         self.adapter_diversity_worst_pair_weight = float(
             getattr(self.cfg, "ADAPTER_DIVERSITY_WORST_PAIR_WEIGHT", 1.0)
         )
+        self.enable_adapter_router_identity_residual = bool(
+            getattr(self.cfg, "ENABLE_ADAPTER_ROUTER_IDENTITY_RESIDUAL", False)
+        )
         self.enable_deepstack_mmrl_residual = bool(getattr(self.cfg, "ENABLE_DEEPSTACK_MMRL_RESIDUAL", False))
         self.deepstack_mmrl_residual_scale = float(getattr(self.cfg, "DEEPSTACK_MMRL_RESIDUAL_SCALE", 0.0))
         self.adapter_effective_delta_ratio_mean = torch.tensor(float("nan"))
@@ -1012,6 +1015,8 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
                 dim=1,
             )
             routed_delta = (adapter_outputs * token_route_probs.unsqueeze(-1)).sum(dim=1)
+            if self.enable_adapter_router_identity_residual:
+                routed_delta = delta + routed_delta
             # Gate the complete residual so adapter biases cannot bypass G=0.
             final_delta = routed_delta * G_mask
             hidden_states = org_hidden_states + final_delta

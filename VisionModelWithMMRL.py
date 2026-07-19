@@ -1008,10 +1008,12 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
                     dtype=gated_delta.dtype,
                 ) / float(self.visual_residual_adapter_count)
             adapter_outputs = torch.stack(
-                [adapter(gated_delta) for adapter in self.residual_adapters],
+                [adapter(delta) for adapter in self.residual_adapters],
                 dim=1,
             )
-            final_delta = (adapter_outputs * token_route_probs.unsqueeze(-1)).sum(dim=1)
+            routed_delta = (adapter_outputs * token_route_probs.unsqueeze(-1)).sum(dim=1)
+            # Gate the complete residual so adapter biases cannot bypass G=0.
+            final_delta = routed_delta * G_mask
             hidden_states = org_hidden_states + final_delta
         else:
             hidden_states = org_hidden_states

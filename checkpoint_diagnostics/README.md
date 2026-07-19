@@ -63,3 +63,14 @@ HIGH_CHECKPOINT=/path/to/high/final \
 LOW_CHECKPOINT=/path/to/low/final \
 bash checkpoint_diagnostics/run_hybrid_ablation.sh
 ```
+
+## 固定高分专家 3
+
+强制高分 checkpoint 的所有样本只使用专家 3：
+
+```bash
+bash checkpoint_diagnostics/run_fixed_expert3.sh
+```
+
+该评测只在内存中把 router 输出覆盖为 `[0, 0, 0, 1]`，不会修改或保存模型
+权重。结果保存在 `checkpoint_diagnostics/outputs/fixed_expert_3_*/`。

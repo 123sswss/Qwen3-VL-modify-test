@@ -14,8 +14,8 @@ ACC_PATTERN = re.compile(r"Acc=\d+\.\d%")
 SCORE_KEYWORD = "百分制分数"
 SCORE_PATTERN = re.compile(r"百分制分数\s*[:：]\s*(-?\d+(?:\.\d+)?)")
 DIAGNOSTICS_FILENAME = "mmrl_diagnostics.jsonl"
-DIAGNOSTIC_STAGES = (3,)
 SEED_LOG_PATTERN = re.compile(r"seed=(\d+)")
+STAGE_DIR_PATTERN = re.compile(r"stage(\d+)$")
 
 
 def should_skip(log_path: Path) -> bool:
@@ -29,6 +29,17 @@ def should_skip(log_path: Path) -> bool:
 
 def diagnostics_relative_path(stage_id: int) -> Path:
     return Path(f"stage{stage_id}") / "metrics" / DIAGNOSTICS_FILENAME
+
+
+def discover_diagnostic_stages(experiment_dir: Path) -> tuple[int, ...]:
+    stage_ids = []
+    for diagnostics_path in experiment_dir.glob(
+        f"stage*/metrics/{DIAGNOSTICS_FILENAME}"
+    ):
+        match = STAGE_DIR_PATTERN.fullmatch(diagnostics_path.parents[1].name)
+        if match:
+            stage_ids.append(int(match.group(1)))
+    return tuple(sorted(set(stage_ids)))
 
 
 def read_stage_metrics(experiment_dir: Path, stage_id: int) -> tuple[str, str]:
@@ -87,7 +98,12 @@ def extract_info(log_path: Path) -> dict[str, object]:
     experiment_dir = log_path.parents[1] if len(log_path.parents) >= 2 else None
     experiment_name = experiment_dir.name if experiment_dir is not None else "路径层级不足"
     diagnostics_by_stage = {}
-    for stage_id in DIAGNOSTIC_STAGES:
+    diagnostic_stages = (
+        discover_diagnostic_stages(experiment_dir)
+        if experiment_dir is not None
+        else ()
+    )
+    for stage_id in diagnostic_stages:
         diagnostics_by_stage[stage_id] = (
             read_stage_metrics(experiment_dir, stage_id)
             if experiment_dir is not None
@@ -239,7 +255,7 @@ def main() -> None:
                 for name, score in info["epoch_scores"]
             )
             print(f"逐epoch分数: {epoch_curve}")
-        for stage_id in DIAGNOSTIC_STAGES:
+        for stage_id in sorted(info["diagnostics_by_stage"]):
             diagnostics_path, diagnostics_content = info["diagnostics_by_stage"][stage_id]
             print(f"stage{stage_id} 指标路径: {diagnostics_path}")
             print(f"stage{stage_id}/metrics/{DIAGNOSTICS_FILENAME} 内容:")

@@ -74,3 +74,14 @@ bash checkpoint_diagnostics/run_fixed_expert3.sh
 
 该评测只在内存中把 router 输出覆盖为 `[0, 0, 0, 1]`，不会修改或保存模型
 权重。结果保存在 `checkpoint_diagnostics/outputs/fixed_expert_3_*/`。
+
+## 扫描低分 checkpoint 的四个专家
+
+按高分 checkpoint 的使用率从高到低扫描专家 `3 → 2 → 1 → 0`：
+
+```bash
+bash checkpoint_diagnostics/run_low_expert_sweep.sh
+```
+
+每个专家一旦出现无法提取 A-D 答案的输出便立即结束当前评测，并继续下一个
+专家。结果位于 `checkpoint_diagnostics/outputs/low_expert_sweep_*/expert_*/summary.json`。

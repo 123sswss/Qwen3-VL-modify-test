@@ -266,6 +266,10 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
         self.alpha_list = []
         self.G_list = []
         self.route_probs = None
+        self._route_utility_ema = None
+        self._route_utility_ema_initialized = False
+        self._route_utility_step_metrics = {}
+        self._route_utility_hook_warned = False
         self.k_results = None
         self.k_mask_results = None
         self.tax_loss = None
@@ -467,6 +471,167 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
         if not pooled:
             return None
         return torch.stack(pooled, dim=0)
+
+    def _prepare_route_utility_metrics(self, reference: torch.Tensor):
+        device = reference.device
+        if (
+            self._route_utility_ema is None
+            or self._route_utility_ema.shape[0] != self.visual_residual_adapter_count
+            or self._route_utility_ema.device != device
+        ):
+            self._route_utility_ema = torch.full(
+                (self.visual_residual_adapter_count,),
+                float("nan"),
+                device=device,
+                dtype=torch.float32,
+            )
+            self._route_utility_ema_initialized = False
+
+        nan = torch.tensor(float("nan"), device=device, dtype=torch.float32)
+        self._route_utility_step_metrics = {
+            "route_utility_agreement": nan.clone(),
+            "route_utility_regret": nan.clone(),
+            "utility_margin": nan.clone(),
+            "utility_grad_norm": nan.clone(),
+            "route_utility_valid_fraction": nan.clone(),
+        }
+        for idx in range(self.visual_residual_adapter_count):
+            self._route_utility_step_metrics[f"adapter_utility_ema_{idx}"] = self._route_utility_ema[idx]
+
+    def _register_route_utility_monitor(
+        self,
+        hidden_states: torch.Tensor,
+        adapter_outputs: torch.Tensor,
+        final_delta: torch.Tensor,
+        delta: torch.Tensor,
+        G_mask: torch.Tensor,
+        cu_seqlens: torch.Tensor,
+    ):
+        self._prepare_route_utility_metrics(hidden_states)
+        if (
+            not self.training
+            or not hidden_states.requires_grad
+            or adapter_outputs is None
+            or not torch.is_tensor(self.route_probs)
+            or self.route_probs.numel() == 0
+        ):
+            return
+
+        metric_slots = self._route_utility_step_metrics
+        ema_state = self._route_utility_ema
+        adapter_outputs_detached = adapter_outputs.detach()
+        final_delta_detached = final_delta.detach()
+        delta_detached = delta.detach()
+        gate_detached = G_mask.detach()
+        routes_detached = self.route_probs.detach()
+        seqlens_detached = (cu_seqlens[1:] - cu_seqlens[:-1]).detach().to(torch.long)
+        include_identity = self.enable_adapter_router_identity_residual
+
+        # This tensor is upstream of the merger/LLM but not the auxiliary losses,
+        # so its hook observes task-CE credit without changing the backward pass.
+        def _route_utility_hook(grad):
+            try:
+                with torch.no_grad():
+                    grad_f = grad.detach().float()
+                    final_f = final_delta_detached.float()
+                    gate_f = gate_detached.float().view(-1)
+                    routes_f = routes_detached.float()
+
+                    image_count = min(int(seqlens_detached.numel()), int(routes_f.shape[0]))
+                    token_count = min(
+                        int(grad_f.shape[0]),
+                        int(final_f.shape[0]),
+                        int(adapter_outputs_detached.shape[0]),
+                        int(gate_f.shape[0]),
+                        int(seqlens_detached[:image_count].sum().item()) if image_count > 0 else 0,
+                    )
+                    if image_count <= 0 or token_count <= 0:
+                        return grad
+
+                    image_ids = torch.repeat_interleave(
+                        torch.arange(image_count, device=grad_f.device),
+                        seqlens_detached[:image_count].to(device=grad_f.device),
+                    )[:token_count]
+                    grad_f = grad_f[:token_count]
+                    final_f = final_f[:token_count]
+                    gate_f = gate_f[:token_count]
+
+                    grad_sq = grad_f.square().sum(dim=-1)
+                    final_sq = final_f.square().sum(dim=-1)
+                    grad_sq_by_image = torch.zeros(image_count, device=grad_f.device).index_add_(
+                        0, image_ids, grad_sq
+                    )
+                    final_sq_by_image = torch.zeros(image_count, device=grad_f.device).index_add_(
+                        0, image_ids, final_sq
+                    )
+                    grad_norm = grad_sq_by_image.clamp_min(0.0).sqrt()
+                    final_norm = final_sq_by_image.clamp_min(0.0).sqrt()
+                    denominator = grad_norm * final_norm
+
+                    mix_dot = (grad_f * final_f).sum(dim=-1)
+                    identity_dot = None
+                    if include_identity:
+                        identity_dot = (
+                            grad_f * delta_detached[:token_count].float()
+                        ).sum(dim=-1) * gate_f
+
+                    utility_numerator = torch.zeros(
+                        image_count,
+                        self.visual_residual_adapter_count,
+                        device=grad_f.device,
+                        dtype=torch.float32,
+                    )
+                    for idx in range(self.visual_residual_adapter_count):
+                        expert_dot = (
+                            grad_f * adapter_outputs_detached[:token_count, idx].float()
+                        ).sum(dim=-1) * gate_f
+                        if identity_dot is not None:
+                            expert_dot = expert_dot + identity_dot
+                        token_utility = -(expert_dot - mix_dot)
+                        utility_numerator[:, idx].index_add_(0, image_ids, token_utility)
+
+                    utility = utility_numerator / denominator.clamp_min(1e-12).unsqueeze(-1)
+                    valid = (
+                        (grad_norm > 1e-12)
+                        & (final_norm > 1e-12)
+                        & torch.isfinite(utility).all(dim=-1)
+                    )
+                    metric_slots["route_utility_valid_fraction"].copy_(valid.float().mean())
+                    finite_grad_norm = grad_norm[torch.isfinite(grad_norm)]
+                    if finite_grad_norm.numel() > 0:
+                        metric_slots["utility_grad_norm"].copy_(finite_grad_norm.mean())
+                    if not valid.any():
+                        return grad
+
+                    utility = utility[valid]
+                    routes = routes_f[:image_count][valid]
+                    routes = routes / routes.sum(dim=-1, keepdim=True).clamp_min(1e-8)
+                    batch_utility = utility.mean(dim=0)
+                    if not self._route_utility_ema_initialized:
+                        ema_state.copy_(batch_utility)
+                        self._route_utility_ema_initialized = True
+                    else:
+                        ema_state.mul_(0.90).add_(batch_utility, alpha=0.10)
+
+                    utility_best, utility_winner = utility.max(dim=-1)
+                    route_winner = routes.argmax(dim=-1)
+                    routed_top_utility = utility.gather(1, route_winner.unsqueeze(-1)).squeeze(-1)
+                    metric_slots["route_utility_agreement"].copy_(
+                        (utility_winner == route_winner).float().mean()
+                    )
+                    metric_slots["route_utility_regret"].copy_(
+                        (utility_best - routed_top_utility).clamp_min(0.0).mean()
+                    )
+                    if utility.shape[-1] > 1:
+                        top_two = utility.topk(k=2, dim=-1).values
+                        metric_slots["utility_margin"].copy_((top_two[:, 0] - top_two[:, 1]).mean())
+            except Exception as exc:
+                if not self._route_utility_hook_warned:
+                    print(f"[ROUTE_UTILITY_MONITOR_WARN] disabled for failed batch: {exc}")
+                    self._route_utility_hook_warned = True
+            return grad
+
+        hidden_states.register_hook(_route_utility_hook)
 
     @torch.no_grad()
     def _initialize_prototypes_from_batch(self, features: torch.Tensor):
@@ -1020,11 +1185,20 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
             # Gate the complete residual so adapter biases cannot bypass G=0.
             final_delta = routed_delta * G_mask
             hidden_states = org_hidden_states + final_delta
+            self._register_route_utility_monitor(
+                hidden_states,
+                adapter_outputs,
+                final_delta,
+                delta,
+                G_mask,
+                cu_seqlens,
+            )
         else:
             hidden_states = org_hidden_states
             gated_delta = torch.zeros_like(hidden_states)
             final_delta = torch.zeros_like(hidden_states)
             adapter_outputs = None
+            self._prepare_route_utility_metrics(hidden_states)
 
         (
             self.adapter_usage_balance_loss,
@@ -1103,6 +1277,7 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
             "deepstack_delta_to_org_ratio": self.deepstack_delta_to_org_ratio.detach(),
             "deepstack_residual_layers": self.deepstack_residual_layers.detach(),
             **residual_debug,
+            **self._route_utility_step_metrics,
         }
         for idx in range(self.visual_residual_adapter_count):
             value = getattr(

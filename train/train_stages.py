@@ -995,6 +995,23 @@ def build_model_and_processor(model_path, experiment_cfg=None):
     print("Tokenizer loaded. Now building MMRL model...")
     model = Qwen3VLMMRLForStages(config, tokenizer).to("cuda").to(torch.bfloat16)
     model._ensure_shared_rep_grad_hook()
+    visual = model.model.visual
+    if visual.direct_mmrl_output != config.DIRECT_MMRL_OUTPUT:
+        raise RuntimeError(
+            "DIRECT_MMRL_OUTPUT config propagation failed: "
+            f"requested={config.DIRECT_MMRL_OUTPUT} actual={visual.direct_mmrl_output}"
+        )
+    if visual.visual_residual_adapter_count != config.VISUAL_RESIDUAL_ADAPTER_COUNT:
+        raise RuntimeError(
+            "VISUAL_RESIDUAL_ADAPTER_COUNT config propagation failed: "
+            f"requested={config.VISUAL_RESIDUAL_ADAPTER_COUNT} "
+            f"actual={visual.visual_residual_adapter_count}"
+        )
+    print(
+        "[MMRL_STRUCTURE_AUDIT] "
+        f"direct_mmrl_output={visual.direct_mmrl_output} "
+        f"visual_residual_adapter_count={visual.visual_residual_adapter_count}"
+    )
     model.model.load_state_dict(base.model.state_dict(), strict=False)
     model.lm_head.load_state_dict(base.lm_head.state_dict(), strict=False)
     del base

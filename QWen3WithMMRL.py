@@ -65,6 +65,7 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
             "ENABLE_ADAPTER_ROUTER_IDENTITY_RESIDUAL": _cfg_attr(
                 config, "ENABLE_ADAPTER_ROUTER_IDENTITY_RESIDUAL", False
             ),
+            "DIRECT_MMRL_OUTPUT": _cfg_attr(config, "DIRECT_MMRL_OUTPUT", False),
             "ENABLE_DEEPSTACK_MMRL_RESIDUAL": _cfg_attr(config, "ENABLE_DEEPSTACK_MMRL_RESIDUAL", False),
             "DEEPSTACK_MMRL_RESIDUAL_SCALE": _cfg_attr(config, "DEEPSTACK_MMRL_RESIDUAL_SCALE", 0.0),
             "vision_token_dim": vision_dim,

@@ -114,6 +114,10 @@ def _build_experiment_context(train_cfg, output_dir, stage_id):
                 "enable_adapter_router_identity_residual",
                 experiment_cfg.get("enable_adapter_router_identity_residual"),
             ),
+            "direct_mmrl_output": train_cfg.get(
+                "direct_mmrl_output",
+                experiment_cfg.get("direct_mmrl_output"),
+            ),
             "enable_deepstack_mmrl_residual": train_cfg.get(
                 "enable_deepstack_mmrl_residual",
                 experiment_cfg.get("enable_deepstack_mmrl_residual"),
@@ -299,6 +303,8 @@ class MMRLDiagnosticsCallback(TrainerCallback):
         "active_token_count_mean",
         "delta_pool_common_mode_ratio",
         "delta_pool_specificity_ratio",
+        "mmrl_delta_pool_common_mode_ratio",
+        "mmrl_delta_pool_specificity_ratio",
         "adapter_route_entropy_norm",
     }
     KEEP_KEY_ALIASES = {
@@ -968,6 +974,10 @@ def build_model_and_processor(model_path, experiment_cfg=None):
         "MMRL_ENABLE_ADAPTER_ROUTER_IDENTITY_RESIDUAL",
         "1" if experiment_cfg.get("enable_adapter_router_identity_residual", False) else "0",
     ) == "1"
+    config.DIRECT_MMRL_OUTPUT = os.getenv(
+        "MMRL_DIRECT_MMRL_OUTPUT",
+        "1" if experiment_cfg.get("direct_mmrl_output", False) else "0",
+    ) == "1"
     config.ENABLE_DEEPSTACK_MMRL_RESIDUAL = os.getenv(
         "MMRL_ENABLE_DEEPSTACK_MMRL_RESIDUAL",
         "1" if experiment_cfg.get("enable_deepstack_mmrl_residual", False) else "0",
@@ -1041,6 +1051,7 @@ def build_model_and_processor(model_path, experiment_cfg=None):
         f"prototype_anchor_assignment_power={config.PROTOTYPE_ANCHOR_ASSIGNMENT_POWER} "
         f"prototype_anchor_init_noise={config.PROTOTYPE_ANCHOR_INIT_NOISE} "
         f"enable_adapter_router_identity_residual={config.ENABLE_ADAPTER_ROUTER_IDENTITY_RESIDUAL} "
+        f"direct_mmrl_output={config.DIRECT_MMRL_OUTPUT} "
         f"enable_deepstack_mmrl_residual={config.ENABLE_DEEPSTACK_MMRL_RESIDUAL} "
         f"deepstack_mmrl_residual_scale={config.DEEPSTACK_MMRL_RESIDUAL_SCALE}"
     )
@@ -1062,9 +1073,9 @@ def set_trainable_stage(model, stage, train_cfg=None):
         mods = [model.model.MMRL,
                 # v.blocks_with_rep, # ablation: keep rep-token branch forward, but freeze branch blocks
                 v.hidden_state_pooling, 
-                v.embedding_pooling,
-                v.adapter_router,
-                v.residual_adapters]
+                v.embedding_pooling]
+        if not v.direct_mmrl_output:
+            mods.extend([v.adapter_router, v.residual_adapters])
     else:
         raise ValueError("stage must be 1 or 3")
 

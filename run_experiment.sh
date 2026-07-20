@@ -1,7 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 
-SHUTDOWN_ON_EXIT=1
+SHUTDOWN_ON_EXIT="${MMRL_SHUTDOWN_ON_EXIT:-1}"
 
 cancel_shutdown_on_interrupt() {
   SHUTDOWN_ON_EXIT=0
@@ -30,8 +30,9 @@ OUTPUT_ROOT="$ROOT_DIR/experiment_outputs"
 CHECKPOINT_ROOT="$OUTPUT_ROOT/output"
 SEED_STATE_FILE="${MMRL_SEED_STATE_FILE:-$OUTPUT_ROOT/next_seed.txt}"
 INITIAL_SEED="${MMRL_INITIAL_SEED:-42}"
-AUTO_INCREMENT_SEED="${MMRL_AUTO_INCREMENT_SEED:-1}"
+AUTO_INCREMENT_SEED="${MMRL_AUTO_INCREMENT_SEED:-0}"
 FIXED_SEED="${MMRL_FIXED_SEED:-44}"
+RUN_TARGET="${1:-${MMRL_RUN_TARGET:-all}}"
 
 mkdir -p "$OUTPUT_ROOT" "$CHECKPOINT_ROOT"
 
@@ -187,10 +188,25 @@ run_N() {
   done
 }
 
-# 当前两轮诊断：固定 seed 44，先原样复现，再仅打开 adapter-router 恒等残差。
-# 设 MMRL_AUTO_INCREMENT_SEED=1 可恢复持久递增模式。
-run_one "visual_router_layer_fixed_v4_diversity_recover" "visual_router_layer_fixed_v4_diversity_recover"
-run_one "visual_router_layer_fixed_v4_diversity_recover_identity_residual" "visual_router_layer_fixed_v4_diversity_recover_identity_residual"
+# 当前两轮激进消融默认固定 seed 44。两张卡可分别执行：
+#   bash run_experiment.sh direct_mmrl
+#   bash run_experiment.sh two_adapter
+case "$RUN_TARGET" in
+  direct_mmrl)
+    run_one "visual_router_direct_mmrl_seed44" "visual_router_direct_mmrl_seed44"
+    ;;
+  two_adapter)
+    run_one "visual_router_two_adapter_seed44" "visual_router_two_adapter_seed44"
+    ;;
+  all)
+    run_one "visual_router_direct_mmrl_seed44" "visual_router_direct_mmrl_seed44"
+    run_one "visual_router_two_adapter_seed44" "visual_router_two_adapter_seed44"
+    ;;
+  *)
+    echo "[ERR] 未知实验目标: $RUN_TARGET（可选: direct_mmrl, two_adapter, all）" >&2
+    exit 2
+    ;;
+esac
 
 
 
@@ -199,4 +215,4 @@ run_one "visual_router_layer_fixed_v4_diversity_recover_identity_residual" "visu
 # run_one "ablation_wo_visual_gate" "ablation_wo_visual_gate"
 # run_one "ablation_replace_mmrl_with_40_learnable_tokens" "ablation_replace_mmrl_with_40_learnable_tokens"
 
-echo "[DONE] 所有实验均已串行完成。"
+echo "[DONE] 已完成实验目标: $RUN_TARGET"

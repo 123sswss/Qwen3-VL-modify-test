@@ -222,6 +222,7 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
         self.enable_adapter_router_identity_residual = bool(
             getattr(self.cfg, "ENABLE_ADAPTER_ROUTER_IDENTITY_RESIDUAL", False)
         )
+        self.direct_mmrl_output = bool(getattr(self.cfg, "DIRECT_MMRL_OUTPUT", False))
         self.enable_deepstack_mmrl_residual = bool(getattr(self.cfg, "ENABLE_DEEPSTACK_MMRL_RESIDUAL", False))
         self.deepstack_mmrl_residual_scale = float(getattr(self.cfg, "DEEPSTACK_MMRL_RESIDUAL_SCALE", 0.0))
         self.adapter_effective_delta_ratio_mean = torch.tensor(float("nan"))
@@ -350,6 +351,8 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
             "delta_pool_pairwise_cos_std": nan,
             "delta_pool_common_mode_ratio": nan,
             "delta_pool_specificity_ratio": nan,
+            "mmrl_delta_pool_common_mode_ratio": nan,
+            "mmrl_delta_pool_specificity_ratio": nan,
             "delta_org_pool_cos_mean": nan,
             "delta_org_pool_cos_std": nan,
             "delta_token_norm_entropy": nan,
@@ -404,6 +407,7 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
                 metrics["delta_transform_cos_std"] = transform_cos.std(unbiased=False)
 
             pooled_delta = self._pool_tokens_by_image_mean(final_delta, cu_seqlens)
+            pooled_mmrl_delta = self._pool_tokens_by_image_mean(gated_delta, cu_seqlens)
             pooled_org = self._pool_tokens_by_image_mean(org_hidden_states, cu_seqlens)
             if pooled_delta is not None:
                 pooled_delta_norm = pooled_delta.norm(dim=-1)
@@ -425,6 +429,18 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
                     if pairwise_vals.numel() > 0:
                         metrics["delta_pool_pairwise_cos_mean"] = pairwise_vals.mean()
                         metrics["delta_pool_pairwise_cos_std"] = pairwise_vals.std(unbiased=False)
+
+            if pooled_mmrl_delta is not None:
+                pooled_mmrl_norm = pooled_mmrl_delta.norm(dim=-1)
+                pooled_mmrl_mean_norm = pooled_mmrl_norm.mean().clamp_min(1e-8)
+                pooled_mmrl_common = pooled_mmrl_delta.mean(dim=0)
+                pooled_mmrl_specific = pooled_mmrl_delta - pooled_mmrl_common
+                metrics["mmrl_delta_pool_common_mode_ratio"] = (
+                    pooled_mmrl_common.norm() / pooled_mmrl_mean_norm
+                )
+                metrics["mmrl_delta_pool_specificity_ratio"] = (
+                    pooled_mmrl_specific.norm(dim=-1).mean() / pooled_mmrl_mean_norm
+                )
 
             if pooled_delta is not None and pooled_org is not None:
                 valid_pool = (pooled_delta.norm(dim=-1) > 1e-8) & (pooled_org.norm(dim=-1) > 1e-8)
@@ -1045,11 +1061,14 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
                         run_mmrl_branch = True
                     else:
                         self.alpha_list = self.Task_classifier(pooled_vision_states, expanded_text_embedding)
-                        self.route_probs = self.adapter_router(
-                            pooled_vision_states,
-                            expanded_text_embedding,
-                            self.alpha_list,
-                        ).to(dtype=hidden_states.dtype)
+                        if self.direct_mmrl_output:
+                            self.route_probs = None
+                        else:
+                            self.route_probs = self.adapter_router(
+                                pooled_vision_states,
+                                expanded_text_embedding,
+                                self.alpha_list,
+                            ).to(dtype=hidden_states.dtype)
                         # G_list: [Total_Images, 1]
                         if self.training:
                             # 训练时保留 soft gate，保证梯度可过
@@ -1168,31 +1187,37 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
             delta = hidden_states_with_rep - org_hidden_states
             G_mask = torch.repeat_interleave(self.G_list, seqlens, dim=0)
             gated_delta = delta * G_mask
-            if torch.is_tensor(self.route_probs) and self.route_probs.numel() > 0:
-                token_route_probs = torch.repeat_interleave(self.route_probs, seqlens, dim=0)
+            if self.direct_mmrl_output:
+                adapter_outputs = None
+                final_delta = gated_delta
+                hidden_states = org_hidden_states + final_delta
+                self._prepare_route_utility_metrics(hidden_states)
             else:
-                token_route_probs = gated_delta.new_ones(
-                    (gated_delta.shape[0], self.visual_residual_adapter_count),
-                    dtype=gated_delta.dtype,
-                ) / float(self.visual_residual_adapter_count)
-            adapter_outputs = torch.stack(
-                [adapter(delta) for adapter in self.residual_adapters],
-                dim=1,
-            )
-            routed_delta = (adapter_outputs * token_route_probs.unsqueeze(-1)).sum(dim=1)
-            if self.enable_adapter_router_identity_residual:
-                routed_delta = delta + routed_delta
-            # Gate the complete residual so adapter biases cannot bypass G=0.
-            final_delta = routed_delta * G_mask
-            hidden_states = org_hidden_states + final_delta
-            self._register_route_utility_monitor(
-                hidden_states,
-                adapter_outputs,
-                final_delta,
-                delta,
-                G_mask,
-                cu_seqlens,
-            )
+                if torch.is_tensor(self.route_probs) and self.route_probs.numel() > 0:
+                    token_route_probs = torch.repeat_interleave(self.route_probs, seqlens, dim=0)
+                else:
+                    token_route_probs = gated_delta.new_ones(
+                        (gated_delta.shape[0], self.visual_residual_adapter_count),
+                        dtype=gated_delta.dtype,
+                    ) / float(self.visual_residual_adapter_count)
+                adapter_outputs = torch.stack(
+                    [adapter(delta) for adapter in self.residual_adapters],
+                    dim=1,
+                )
+                routed_delta = (adapter_outputs * token_route_probs.unsqueeze(-1)).sum(dim=1)
+                if self.enable_adapter_router_identity_residual:
+                    routed_delta = delta + routed_delta
+                # Gate the complete residual so adapter biases cannot bypass G=0.
+                final_delta = routed_delta * G_mask
+                hidden_states = org_hidden_states + final_delta
+                self._register_route_utility_monitor(
+                    hidden_states,
+                    adapter_outputs,
+                    final_delta,
+                    delta,
+                    G_mask,
+                    cu_seqlens,
+                )
         else:
             hidden_states = org_hidden_states
             gated_delta = torch.zeros_like(hidden_states)

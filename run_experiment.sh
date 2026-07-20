@@ -31,7 +31,7 @@ OUTPUT_ROOT="$ROOT_DIR/experiment_outputs"
 CHECKPOINT_ROOT="$OUTPUT_ROOT/output"
 SEED_STATE_FILE="${MMRL_SEED_STATE_FILE:-$OUTPUT_ROOT/next_seed.txt}"
 INITIAL_SEED="${MMRL_INITIAL_SEED:-42}"
-AUTO_INCREMENT_SEED="${MMRL_AUTO_INCREMENT_SEED:-1}"
+AUTO_INCREMENT_SEED="${MMRL_AUTO_INCREMENT_SEED:-0}"
 FIXED_SEED="${MMRL_FIXED_SEED:-44}"
 
 mkdir -p "$OUTPUT_ROOT" "$CHECKPOINT_ROOT"
@@ -193,10 +193,8 @@ run_N() {
   done
 }
 
-# 当前两轮诊断：固定 seed 44，先原样复现，再仅打开 adapter-router 恒等残差。
-# 设 MMRL_AUTO_INCREMENT_SEED=1 可恢复持久递增模式。
-run_one "visual_router_layer_fixed_v4_diversity_recover" "visual_router_layer_fixed_v4_diversity_recover"
-run_one "visual_router_layer_fixed_v4_diversity_recover_identity_residual" "visual_router_layer_fixed_v4_diversity_recover_identity_residual"
+# 固定 seed 44，只验证一路恒等专家替换一路可训练 adapter。
+run_one "visual_router_routed_identity_expert_v1" "visual_router_routed_identity_expert_v1"
 
 
 

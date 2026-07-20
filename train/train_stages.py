@@ -1134,10 +1134,53 @@ def build_model_and_processor(model_path, experiment_cfg=None):
             f"requested={config.VISUAL_RESIDUAL_ADAPTER_COUNT} "
             f"actual={visual.visual_residual_adapter_count}"
         )
+    propagation_checks = {
+        "MMRL_DELTA_CEILING_TARGET": (
+            config.MMRL_DELTA_CEILING_TARGET,
+            visual.mmrl_delta_ceiling_target,
+        ),
+        "MMRL_RELATION_MAX_TOKENS": (
+            config.MMRL_RELATION_MAX_TOKENS,
+            visual.mmrl_relation_max_tokens,
+        ),
+        "MMRL_VARIANCE_FLOOR_RATIO": (
+            config.MMRL_VARIANCE_FLOOR_RATIO,
+            visual.mmrl_variance_floor_ratio,
+        ),
+        "MMRL_VARIANCE_FLOOR_WEIGHT": (
+            config.MMRL_VARIANCE_FLOOR_WEIGHT,
+            visual.mmrl_variance_floor_weight,
+        ),
+        "ROUTE_UTILITY_TEACHER_TEMPERATURE": (
+            config.ROUTE_UTILITY_TEACHER_TEMPERATURE,
+            visual.route_utility_teacher_temperature,
+        ),
+    }
+    for name, (requested, actual) in propagation_checks.items():
+        if abs(float(requested) - float(actual)) > 1e-9:
+            raise RuntimeError(
+                f"{name} config propagation failed: requested={requested} actual={actual}"
+            )
+    expected_relation_enabled = config.MMRL_RELATION_LOSS_WEIGHT > 0.0
+    if visual.mmrl_relation_enabled != expected_relation_enabled:
+        raise RuntimeError(
+            "MMRL_RELATION_LOSS_WEIGHT config propagation failed: "
+            f"requested={config.MMRL_RELATION_LOSS_WEIGHT} "
+            f"enabled={visual.mmrl_relation_enabled}"
+        )
+    expected_utility_enabled = config.ROUTE_UTILITY_TEACHER_LOSS_WEIGHT > 0.0
+    if visual.route_utility_teacher_enabled != expected_utility_enabled:
+        raise RuntimeError(
+            "ROUTE_UTILITY_TEACHER_LOSS_WEIGHT config propagation failed: "
+            f"requested={config.ROUTE_UTILITY_TEACHER_LOSS_WEIGHT} "
+            f"enabled={visual.route_utility_teacher_enabled}"
+        )
     print(
         "[MMRL_STRUCTURE_AUDIT] "
         f"direct_mmrl_output={visual.direct_mmrl_output} "
-        f"visual_residual_adapter_count={visual.visual_residual_adapter_count}"
+        f"visual_residual_adapter_count={visual.visual_residual_adapter_count} "
+        f"mmrl_relation_enabled={visual.mmrl_relation_enabled} "
+        f"route_utility_teacher_enabled={visual.route_utility_teacher_enabled}"
     )
     model.model.load_state_dict(base.model.state_dict(), strict=False)
     model.lm_head.load_state_dict(base.lm_head.state_dict(), strict=False)

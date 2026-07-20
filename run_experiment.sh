@@ -192,9 +192,17 @@ run_N() {
 #   bash run_experiment.sh direct_mmrl
 #   bash run_experiment.sh two_adapter
 #   bash run_experiment.sh single_adapter
+#   bash run_experiment.sh relation_only
+#   bash run_experiment.sh utility_only
 #   bash run_experiment.sh explore_prune_a
 #   bash run_experiment.sh explore_prune_b
 case "$RUN_TARGET" in
+  relation_only)
+    run_one "visual_router_relation_only" "visual_router_relation_only"
+    ;;
+  utility_only)
+    run_one "visual_router_utility_teacher_only" "visual_router_utility_teacher_only"
+    ;;
   explore_prune_a)
     run_one "visual_router_explore_prune_demo_a" "visual_router_explore_prune_demo_a"
     ;;
@@ -211,11 +219,11 @@ case "$RUN_TARGET" in
     run_one "visual_router_single_adapter_seed44" "visual_router_single_adapter_seed44"
     ;;
   all)
-    run_one "visual_router_explore_prune_demo_a" "visual_router_explore_prune_demo_a"
-    run_one "visual_router_explore_prune_demo_b" "visual_router_explore_prune_demo_b"
+    run_one "visual_router_relation_only" "visual_router_relation_only"
+    run_one "visual_router_utility_teacher_only" "visual_router_utility_teacher_only"
     ;;
   *)
-    echo "[ERR] 未知实验目标: $RUN_TARGET（可选: explore_prune_a, explore_prune_b, direct_mmrl, two_adapter, single_adapter, all）" >&2
+    echo "[ERR] 未知实验目标: $RUN_TARGET（可选: relation_only, utility_only, explore_prune_a, explore_prune_b, direct_mmrl, two_adapter, single_adapter, all）" >&2
     exit 2
     ;;
 esac

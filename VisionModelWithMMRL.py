@@ -202,12 +202,14 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
         self.adapter_sample_entropy_loss = torch.tensor(0.0)
         self.adapter_common_mode_loss = torch.tensor(0.0)
         self.adapter_effective_delta_loss = torch.tensor(0.0)
+        self.mmrl_delta_ceiling_loss = torch.tensor(0.0)
         self.prototype_anchor_loss = torch.tensor(0.0)
         self.adapter_diversity_loss = torch.tensor(0.0)
         self.adapter_sample_entropy_target = float(getattr(self.cfg, "ADAPTER_SAMPLE_ENTROPY_TARGET", 0.40))
         self.adapter_common_mode_target = float(getattr(self.cfg, "ADAPTER_COMMON_MODE_TARGET", 0.85))
         self.adapter_effective_delta_target_low = float(getattr(self.cfg, "ADAPTER_EFFECTIVE_DELTA_TARGET_LOW", 0.78))
         self.adapter_effective_delta_target_high = float(getattr(self.cfg, "ADAPTER_EFFECTIVE_DELTA_TARGET_HIGH", 1.10))
+        self.mmrl_delta_ceiling_target = float(getattr(self.cfg, "MMRL_DELTA_CEILING_TARGET", 1.75))
         self.prototype_anchor_temperature = float(getattr(self.cfg, "PROTOTYPE_ANCHOR_TEMPERATURE", 0.20))
         self.prototype_anchor_momentum = float(getattr(self.cfg, "PROTOTYPE_ANCHOR_MOMENTUM", 0.95))
         self.prototype_anchor_min_confidence = float(getattr(self.cfg, "PROTOTYPE_ANCHOR_MIN_CONFIDENCE", 0.40))
@@ -228,6 +230,7 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
         self.adapter_effective_delta_ratio_mean = torch.tensor(float("nan"))
         self.adapter_effective_delta_ratio_min = torch.tensor(float("nan"))
         self.adapter_effective_delta_ratio_max = torch.tensor(float("nan"))
+        self.mmrl_delta_to_org_ratio = torch.tensor(float("nan"))
         self.route_proto_kl = torch.tensor(float("nan"))
         self.route_proto_agreement = torch.tensor(float("nan"))
         self.prototype_usage_max = torch.tensor(float("nan"))
@@ -1187,6 +1190,16 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
             delta = hidden_states_with_rep - org_hidden_states
             G_mask = torch.repeat_interleave(self.G_list, seqlens, dim=0)
             gated_delta = delta * G_mask
+            raw_mmrl_norm = gated_delta.float().norm(dim=-1).mean()
+            raw_org_norm = org_hidden_states.detach().float().norm(dim=-1).mean().clamp_min(1e-8)
+            raw_mmrl_ratio = raw_mmrl_norm / raw_org_norm
+            self.mmrl_delta_to_org_ratio = raw_mmrl_ratio.detach().to(
+                device=hidden_states.device,
+                dtype=hidden_states.dtype,
+            )
+            self.mmrl_delta_ceiling_loss = torch.relu(
+                raw_mmrl_ratio - raw_mmrl_ratio.new_tensor(self.mmrl_delta_ceiling_target)
+            ).pow(2).to(device=hidden_states.device)
             if self.direct_mmrl_output:
                 adapter_outputs = None
                 final_delta = gated_delta
@@ -1223,6 +1236,8 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
             gated_delta = torch.zeros_like(hidden_states)
             final_delta = torch.zeros_like(hidden_states)
             adapter_outputs = None
+            self.mmrl_delta_to_org_ratio = hidden_states.new_tensor(float("nan"))
+            self.mmrl_delta_ceiling_loss = hidden_states.new_tensor(0.0)
             self._prepare_route_utility_metrics(hidden_states)
 
         (
@@ -1282,6 +1297,8 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
             "adapter_sample_entropy_loss": self.adapter_sample_entropy_loss.detach(),
             "adapter_common_mode_loss": self.adapter_common_mode_loss.detach(),
             "adapter_effective_delta_loss": self.adapter_effective_delta_loss.detach(),
+            "mmrl_delta_ceiling_loss": self.mmrl_delta_ceiling_loss.detach(),
+            "mmrl_delta_to_org_ratio": self.mmrl_delta_to_org_ratio.detach(),
             "prototype_anchor_loss": self.prototype_anchor_loss.detach(),
             "adapter_diversity_loss": self.adapter_diversity_loss.detach(),
             "adapter_effective_delta_ratio_mean": self.adapter_effective_delta_ratio_mean.detach(),

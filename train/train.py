@@ -71,6 +71,9 @@ BASE_VISUAL_ROUTER_MODEL = {
     "adapter_sample_entropy_loss_weight": 0.02,
     "adapter_common_mode_loss_weight": 0.03,
     "adapter_effective_delta_loss_weight": 0.0,
+    "mmrl_delta_ceiling_loss_weight": 0.0,
+    "mmrl_delta_ceiling_target": 1.75,
+    "router_exploration_fraction": 0.0,
     "adapter_diversity_loss_weight": 0.0,
     "adapter_diversity_target_low": 0.30,
     "adapter_diversity_target_high": 0.58,
@@ -96,7 +99,34 @@ BASE_VISUAL_ROUTER_MODEL = {
 }
 
 
+EXPLORATION_PRUNE_DEMO = {
+    **BASE_VISUAL_ROUTER_MODEL,
+    "adapter_usage_balance_loss_weight": 0.010,
+    "adapter_sample_entropy_loss_weight": 0.005,
+    "adapter_sample_entropy_target": 0.50,
+    "router_exploration_fraction": 0.35,
+
+    "mmrl_delta_ceiling_loss_weight": 0.010,
+    "mmrl_delta_ceiling_target": 1.75,
+
+    "adapter_common_mode_loss_weight": 0.0,
+    "adapter_effective_delta_loss_weight": 0.0003,
+    "adapter_effective_delta_target_low": 0.52,
+    "adapter_effective_delta_target_high": 0.98,
+    "prototype_anchor_loss_weight": 0.0,
+    "adapter_diversity_loss_weight": 0.0,
+    "enable_deepstack_mmrl_residual": False,
+    "deepstack_mmrl_residual_scale": 0.0,
+}
+
+
 EXPERIMENTS = {
+    "visual_router_explore_prune_demo_a": {
+        **EXPLORATION_PRUNE_DEMO,
+    },
+    "visual_router_explore_prune_demo_b": {
+        **EXPLORATION_PRUNE_DEMO,
+    },
     "visual_router_layer_fixed_v4_diversity_recover": {
         **BASE_VISUAL_ROUTER_MODEL,
         "adapter_usage_balance_loss_weight": 0.0026,
@@ -235,6 +265,18 @@ CFG = {
             "MMRL_ADAPTER_EFFECTIVE_DELTA_LOSS_WEIGHT",
             str(EXP_CFG.get("adapter_effective_delta_loss_weight", 0.0)),
         )),
+        "mmrl_delta_ceiling_loss_weight": float(os.getenv(
+            "MMRL_DELTA_CEILING_LOSS_WEIGHT",
+            str(EXP_CFG.get("mmrl_delta_ceiling_loss_weight", 0.0)),
+        )),
+        "mmrl_delta_ceiling_target": float(os.getenv(
+            "MMRL_DELTA_CEILING_TARGET",
+            str(EXP_CFG.get("mmrl_delta_ceiling_target", 1.75)),
+        )),
+        "router_exploration_fraction": float(os.getenv(
+            "MMRL_ROUTER_EXPLORATION_FRACTION",
+            str(EXP_CFG.get("router_exploration_fraction", 0.0)),
+        )),
         "adapter_diversity_loss_weight": float(os.getenv(
             "MMRL_ADAPTER_DIVERSITY_LOSS_WEIGHT",
             str(EXP_CFG.get("adapter_diversity_loss_weight", 0.0)),
@@ -330,6 +372,10 @@ CFG = {
         "mmrl_diagnostics_keep_keys": [
             "ce_loss",
             "delta_to_org_ratio",
+            "mmrl_delta_to_org_ratio",
+            "mmrl_delta_ceiling_loss_scaled",
+            "route_protection_scale",
+            "run_progress",
             "adapter_effective_delta_ratio_mean",
             "adapter_effective_delta_ratio_min",
             "adapter_effective_delta_ratio_max",

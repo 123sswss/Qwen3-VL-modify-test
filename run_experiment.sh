@@ -188,9 +188,10 @@ run_N() {
   done
 }
 
-# 当前两轮激进消融默认固定 seed 44。两张卡可分别执行：
+# 当前激进消融默认固定 seed 44。多张卡可分别执行：
 #   bash run_experiment.sh direct_mmrl
 #   bash run_experiment.sh two_adapter
+#   bash run_experiment.sh single_adapter
 case "$RUN_TARGET" in
   direct_mmrl)
     run_one "visual_router_direct_mmrl_seed44" "visual_router_direct_mmrl_seed44"
@@ -198,12 +199,16 @@ case "$RUN_TARGET" in
   two_adapter)
     run_one "visual_router_two_adapter_seed44" "visual_router_two_adapter_seed44"
     ;;
+  single_adapter)
+    run_one "visual_router_single_adapter_seed44" "visual_router_single_adapter_seed44"
+    ;;
   all)
     run_one "visual_router_direct_mmrl_seed44" "visual_router_direct_mmrl_seed44"
     run_one "visual_router_two_adapter_seed44" "visual_router_two_adapter_seed44"
+    run_one "visual_router_single_adapter_seed44" "visual_router_single_adapter_seed44"
     ;;
   *)
-    echo "[ERR] 未知实验目标: $RUN_TARGET（可选: direct_mmrl, two_adapter, all）" >&2
+    echo "[ERR] 未知实验目标: $RUN_TARGET（可选: direct_mmrl, two_adapter, single_adapter, all）" >&2
     exit 2
     ;;
 esac

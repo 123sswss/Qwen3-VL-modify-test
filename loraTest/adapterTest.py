@@ -18,6 +18,8 @@ from PIL import Image
 from torch import nn
 from transformers import AutoModelForCausalLM, AutoProcessor
 
+from generation_timing import generate_with_timing
+
 try:
     from transformers import Qwen3VLForConditionalGeneration
 except ImportError:
@@ -182,7 +184,9 @@ class AdapterModelInterface:
         if generate_kwargs["do_sample"]:
             generate_kwargs["temperature"] = temperature
         with torch.inference_mode():
-            output_ids = self.model.generate(**inputs, **generate_kwargs)
+            output_ids, self.last_generation_timing = generate_with_timing(
+                self.model, inputs, generate_kwargs
+            )
         input_len = inputs["input_ids"].shape[-1]
         generated_ids = output_ids[:, input_len:]
         return self.processor.batch_decode(generated_ids, skip_special_tokens=True)[0].strip()

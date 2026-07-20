@@ -24,6 +24,8 @@ from torch import nn
 from torch.utils.data import Dataset
 from transformers import AutoModelForCausalLM, AutoProcessor, Trainer, TrainingArguments
 
+from generation_timing import generate_with_timing
+
 from trainLora import (
     build_fair_collator,
     build_fair_dataset,
@@ -318,7 +320,9 @@ class LoraModelInterface:
         if generate_kwargs["do_sample"]:
             generate_kwargs["temperature"] = temperature
         with torch.inference_mode():
-            output_ids = self.model.generate(**inputs, **generate_kwargs)
+            output_ids, self.last_generation_timing = generate_with_timing(
+                self.model, inputs, generate_kwargs
+            )
         input_len = inputs["input_ids"].shape[-1]
         generated_ids = output_ids[:, input_len:]
         return self.processor.batch_decode(generated_ids, skip_special_tokens=True)[0].strip()

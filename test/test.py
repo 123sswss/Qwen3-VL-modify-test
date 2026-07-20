@@ -170,6 +170,7 @@ def run_evaluation(json_paths, model, image_dirs=None, max_new_tokens=256, tempe
     first_inference_error = None
     skip_reasons = {"missing_gt": 0, "missing_image": 0, "image_read_error": 0}
     logs = []
+    generation_timings = []
 
     print(f"={'='*60}")
     print(f"开始评测 | 共 {total} 题 | {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
@@ -240,6 +241,11 @@ def run_evaluation(json_paths, model, image_dirs=None, max_new_tokens=256, tempe
             logs.append({"id": item_id, "status": "ERROR", "reason": str(e)})
             continue
 
+        generation_timing = getattr(model, "last_generation_timing", None)
+        if isinstance(generation_timing, dict):
+            generation_timing = dict(generation_timing)
+            generation_timings.append(generation_timing)
+
         # 提取答案
         pred_answer, extracted = extract_answer(output)
 
@@ -253,6 +259,8 @@ def run_evaluation(json_paths, model, image_dirs=None, max_new_tokens=256, tempe
             "extracted": extracted,
             "model_output": output,
         }
+        if generation_timing is not None:
+            log_entry["generation_timing"] = generation_timing
 
         if not extracted:
             regex_fail += 1
@@ -277,6 +285,17 @@ def run_evaluation(json_paths, model, image_dirs=None, max_new_tokens=256, tempe
     evaluated = correct + wrong
     score = correct / evaluated * 100 if evaluated > 0 else 0
 
+    def timing_mean(key):
+        values = [
+            float(row[key])
+            for row in generation_timings
+            if row.get(key) is not None
+        ]
+        return sum(values) / len(values) if values else None
+
+    first_token_latency = timing_mean("first_token_latency_seconds")
+    subsequent_token_time = timing_mean("subsequent_token_mean_seconds")
+
     # 汇总
     summary = {
         "json_paths": json_paths,
@@ -293,6 +312,18 @@ def run_evaluation(json_paths, model, image_dirs=None, max_new_tokens=256, tempe
         "score": round(score, 2),
         "elapsed_seconds": round(elapsed, 1),
         "avg_seconds_per_question": round(elapsed / max(evaluated, 1), 2),
+        "timed_generations": len(generation_timings),
+        "first_token_latency_seconds": (
+            round(first_token_latency, 4) if first_token_latency is not None else None
+        ),
+        "subsequent_token_mean_seconds": (
+            round(subsequent_token_time, 4) if subsequent_token_time is not None else None
+        ),
+        "subsequent_tokens_per_second": (
+            round(1.0 / subsequent_token_time, 2)
+            if subsequent_token_time is not None and subsequent_token_time > 0
+            else None
+        ),
     }
 
     print(f"\n{'='*60}")
@@ -310,6 +341,13 @@ def run_evaluation(json_paths, model, image_dirs=None, max_new_tokens=256, tempe
     print(f"  百分制分数:   {summary['score']}")
     print(f"  总耗时:       {summary['elapsed_seconds']}s")
     print(f"  平均每题:     {summary['avg_seconds_per_question']}s")
+    if summary["timed_generations"]:
+        print(f"  计时样本数:   {summary['timed_generations']}")
+        print(f"  首Token延迟:  {summary['first_token_latency_seconds']}s")
+        print(f"  后续Token耗时: {summary['subsequent_token_mean_seconds']}s/token")
+        print(f"  后续生成速度: {summary['subsequent_tokens_per_second']} token/s")
+    else:
+        print("  Token生成速度: 未采集（当前模型推理接口未接入逐Token计时）")
     print(f"{'='*60}")
 
     # 保存日志

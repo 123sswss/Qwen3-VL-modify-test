@@ -2,13 +2,19 @@
 import os
 os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":4096:8")
 
+import math
 import random
+import re
+from pathlib import Path
 
 import numpy as np
 import torch
 
 from train_stages import build_model_and_processor, run_stage
-from live_epoch_eval import preflight_live_epoch_evaluation
+from live_epoch_eval import preflight_live_epoch_evaluation, run_live_epoch_evaluation
+
+
+SCORE_PATTERN = re.compile(r"百分制分数\s*[:：]\s*(-?\d+(?:\.\d+)?)")
 
 
 def seed_before_model_init(seed):
@@ -19,6 +25,43 @@ def seed_before_model_init(seed):
     torch.backends.cudnn.benchmark = False
     torch.backends.cudnn.deterministic = True
     print(f"[Reproducibility] seeded model init and training RNGs with seed={seed}")
+
+
+def _read_evaluation_score(log_path):
+    try:
+        lines = Path(log_path).read_text(encoding="utf-8", errors="ignore").splitlines()
+    except OSError:
+        return None
+    score = None
+    for line in lines:
+        match = SCORE_PATTERN.search(line)
+        if match:
+            score = float(match.group(1))
+    return score
+
+
+def _should_keep_extrema_checkpoint(output_dir, score):
+    output_dir = Path(output_dir).resolve()
+    checkpoint_root = output_dir.parent
+    retained_scores = []
+    if checkpoint_root.is_dir():
+        for experiment_dir in checkpoint_root.iterdir():
+            if (
+                not experiment_dir.is_dir()
+                or experiment_dir.name == "trash"
+                or experiment_dir.resolve() == output_dir
+                or not (experiment_dir / "final").is_dir()
+            ):
+                continue
+            prior_score = _read_evaluation_score(experiment_dir / "eval" / "test.log")
+            if prior_score is not None and math.isfinite(prior_score):
+                retained_scores.append(prior_score)
+
+    if not retained_scores:
+        return True, None, None
+    current_min = min(retained_scores)
+    current_max = max(retained_scores)
+    return score <= current_min or score >= current_max, current_min, current_max
 
 
 BASE_VISUAL_ROUTER_MODEL = {
@@ -138,6 +181,8 @@ CFG = {
         "data_sampling_seed": int(os.getenv("MMRL_DATA_SAMPLING_SEED", "42")),
         "deterministic_sampling": os.getenv("MMRL_DETERMINISTIC_SAMPLING", "1") == "1",
         "eval_each_epoch": os.getenv("MMRL_EVAL_EACH_EPOCH", "0") == "1",
+        "live_final_eval": os.getenv("MMRL_LIVE_FINAL_EVAL", "0") == "1",
+        "save_extrema_checkpoints": os.getenv("MMRL_SAVE_EXTREMA_CHECKPOINTS", "1") == "1",
         "visual_residual_adapter_count": int(os.getenv(
             "MMRL_VISUAL_RESIDUAL_ADAPTER_COUNT",
             str(EXP_CFG.get("visual_residual_adapter_count", 4)),
@@ -328,7 +373,8 @@ CFG = {
 
 def main():
     seed_before_model_init(CFG["train"]["seed"])
-    if CFG["train"].get("eval_each_epoch", False):
+    live_final_eval = CFG["train"].get("live_final_eval", False)
+    if CFG["train"].get("eval_each_epoch", False) or live_final_eval:
         preflight_live_epoch_evaluation()
     model, processor = build_model_and_processor(CFG["model_path"], experiment_cfg=CFG["experiment"])
 
@@ -342,10 +388,36 @@ def main():
             train_cfg=CFG["train"],
             output_dir=CFG["output_dir"]
         )
-    final_dir = f"{CFG['output_dir']}/final"
-    model.save_pretrained(final_dir)
-    processor.save_pretrained(final_dir)
-    print(f"final model saved to {final_dir}")
+    final_dir = Path(CFG["output_dir"]) / "final"
+    if live_final_eval:
+        log_path = Path(CFG["output_dir"]) / "eval" / "test.log"
+        print("[FINAL-EVAL] online evaluation begin")
+        summary = run_live_epoch_evaluation(model, processor, log_path)
+        score = float(summary["score"])
+        print(f"[FINAL-EVAL] score={score} completed")
+
+        if CFG["train"].get("save_extrema_checkpoints", True):
+            keep, prior_min, prior_max = _should_keep_extrema_checkpoint(
+                CFG["output_dir"], score
+            )
+            if keep:
+                model.save_pretrained(final_dir)
+                processor.save_pretrained(final_dir)
+                print(
+                    f"[CHECKPOINT] saved extrema candidate to {final_dir}; "
+                    f"score={score} prior_min={prior_min} prior_max={prior_max}"
+                )
+            else:
+                print(
+                    f"[CHECKPOINT] skipped non-extrema score={score}; "
+                    f"retained_range=[{prior_min}, {prior_max}]"
+                )
+        else:
+            print("[CHECKPOINT] final checkpoint saving disabled")
+    else:
+        model.save_pretrained(final_dir)
+        processor.save_pretrained(final_dir)
+        print(f"final model saved to {final_dir}")
 
     print("All stages done.")
 

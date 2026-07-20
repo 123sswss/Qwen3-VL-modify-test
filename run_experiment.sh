@@ -26,7 +26,6 @@ trap cancel_shutdown_on_interrupt INT
 
 ROOT_DIR="/root/autodl-tmp/Qwen3-VL-modify-test"
 TRAIN_DIR="$ROOT_DIR/train"
-TEST_DIR="$ROOT_DIR/test"
 OUTPUT_ROOT="$ROOT_DIR/experiment_outputs"
 CHECKPOINT_ROOT="$OUTPUT_ROOT/output"
 SEED_STATE_FILE="${MMRL_SEED_STATE_FILE:-$OUTPUT_ROOT/next_seed.txt}"
@@ -135,7 +134,6 @@ run_one() {
   local tag
   tag="$(find_available_tag "$base_tag")"
   local output_dir="$CHECKPOINT_ROOT/$tag"
-  local final_dir="$output_dir/final"
   local eval_dir="$output_dir/eval"
   local experiment_seed
   experiment_seed="$(allocate_seed)"
@@ -163,21 +161,17 @@ run_one() {
     MMRL_DATA_SAMPLING_SEED="42" \
     MMRL_DETERMINISTIC_SAMPLING="1" \
     MMRL_EVAL_EACH_EPOCH="0" \
+    MMRL_LIVE_FINAL_EVAL="1" \
+    MMRL_SAVE_EXTREMA_CHECKPOINTS="1" \
     python train.py 2>&1 | tee "$output_dir/train.log"
   )
 
-  if [ ! -d "$final_dir" ]; then
-    echo "[ERR] 训练完成后未找到目录: $final_dir"
+  if [ ! -f "$eval_dir/test.log" ]; then
+    echo "[ERR] 训练完成后未找到在线测评日志: $eval_dir/test.log"
     exit 1
   fi
 
-  (
-    cd "$TEST_DIR"
-    MMRL_TRAINED_MODEL_PATH="$final_dir" \
-    python test.py 2>&1 | tee "$eval_dir/test.log"
-  )
-
-  # 测试日志生成分数后，保留全局并列最高/最低，清理其他 final。
+  # 在线测评后只保留全局并列最高/最低，清理已经失去极值资格的 final。
   prune_middle_final_dirs
 }
 

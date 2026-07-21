@@ -72,10 +72,6 @@ def _build_experiment_context(train_cfg, output_dir, stage_id):
                 "mmrl_variance_floor_weight",
                 experiment_cfg.get("mmrl_variance_floor_weight"),
             ),
-            "mmrl_radial_limit": train_cfg.get(
-                "mmrl_radial_limit",
-                experiment_cfg.get("mmrl_radial_limit"),
-            ),
             "adapter_sample_entropy_target": train_cfg.get("adapter_sample_entropy_target"),
             "adapter_common_mode_target": train_cfg.get("adapter_common_mode_target"),
             "adapter_effective_delta_target_low": train_cfg.get(
@@ -109,6 +105,10 @@ def _build_experiment_context(train_cfg, output_dir, stage_id):
             "enable_adapter_router_identity_residual": train_cfg.get(
                 "enable_adapter_router_identity_residual",
                 experiment_cfg.get("enable_adapter_router_identity_residual"),
+            ),
+            "raw_visual_adapter": train_cfg.get(
+                "raw_visual_adapter",
+                experiment_cfg.get("raw_visual_adapter"),
             ),
             "direct_mmrl_output": train_cfg.get(
                 "direct_mmrl_output",
@@ -922,10 +922,6 @@ def build_model_and_processor(model_path, experiment_cfg=None):
         "mmrl_variance_floor_weight",
         os.getenv("MMRL_VARIANCE_FLOOR_WEIGHT", "0.10"),
     ))
-    config.MMRL_RADIAL_LIMIT = float(experiment_cfg.get(
-        "mmrl_radial_limit",
-        os.getenv("MMRL_RADIAL_LIMIT", "1.60"),
-    ))
     config.ADAPTER_SAMPLE_ENTROPY_TARGET = float(experiment_cfg.get(
         "adapter_sample_entropy_target",
         os.getenv("MMRL_ADAPTER_SAMPLE_ENTROPY_TARGET", "0.40"),
@@ -970,6 +966,10 @@ def build_model_and_processor(model_path, experiment_cfg=None):
         "MMRL_DIRECT_MMRL_OUTPUT",
         "1" if experiment_cfg.get("direct_mmrl_output", False) else "0",
     ) == "1"
+    config.RAW_VISUAL_ADAPTER = os.getenv(
+        "MMRL_RAW_VISUAL_ADAPTER",
+        "1" if experiment_cfg.get("raw_visual_adapter", False) else "0",
+    ) == "1"
     config.ENABLE_DEEPSTACK_MMRL_RESIDUAL = os.getenv(
         "MMRL_ENABLE_DEEPSTACK_MMRL_RESIDUAL",
         "1" if experiment_cfg.get("enable_deepstack_mmrl_residual", False) else "0",
@@ -993,6 +993,11 @@ def build_model_and_processor(model_path, experiment_cfg=None):
             "DIRECT_MMRL_OUTPUT config propagation failed: "
             f"requested={config.DIRECT_MMRL_OUTPUT} actual={visual.direct_mmrl_output}"
         )
+    if visual.raw_visual_adapter != config.RAW_VISUAL_ADAPTER:
+        raise RuntimeError(
+            "RAW_VISUAL_ADAPTER config propagation failed: "
+            f"requested={config.RAW_VISUAL_ADAPTER} actual={visual.raw_visual_adapter}"
+        )
     if visual.visual_residual_adapter_count != config.VISUAL_RESIDUAL_ADAPTER_COUNT:
         raise RuntimeError(
             "VISUAL_RESIDUAL_ADAPTER_COUNT config propagation failed: "
@@ -1012,10 +1017,6 @@ def build_model_and_processor(model_path, experiment_cfg=None):
             config.MMRL_VARIANCE_FLOOR_WEIGHT,
             visual.mmrl_variance_floor_weight,
         ),
-        "MMRL_RADIAL_LIMIT": (
-            config.MMRL_RADIAL_LIMIT,
-            visual.mmrl_radial_limit,
-        ),
     }
     for name, (requested, actual) in propagation_checks.items():
         if abs(float(requested) - float(actual)) > 1e-9:
@@ -1025,6 +1026,7 @@ def build_model_and_processor(model_path, experiment_cfg=None):
     print(
         "[MMRL_STRUCTURE_AUDIT] "
         f"direct_mmrl_output={visual.direct_mmrl_output} "
+        f"raw_visual_adapter={visual.raw_visual_adapter} "
         f"visual_residual_adapter_count={visual.visual_residual_adapter_count}"
     )
     model.model.load_state_dict(base.model.state_dict(), strict=False)
@@ -1070,7 +1072,6 @@ def build_model_and_processor(model_path, experiment_cfg=None):
         f"mmrl_relation_loss_weight={config.MMRL_RELATION_LOSS_WEIGHT} "
         f"mmrl_variance_floor_ratio={config.MMRL_VARIANCE_FLOOR_RATIO} "
         f"mmrl_variance_floor_weight={config.MMRL_VARIANCE_FLOOR_WEIGHT} "
-        f"mmrl_radial_limit={config.MMRL_RADIAL_LIMIT} "
         f"adapter_sample_entropy_target={config.ADAPTER_SAMPLE_ENTROPY_TARGET} "
         f"adapter_common_mode_target={config.ADAPTER_COMMON_MODE_TARGET} "
         f"adapter_effective_delta_target_low={config.ADAPTER_EFFECTIVE_DELTA_TARGET_LOW} "
@@ -1082,6 +1083,7 @@ def build_model_and_processor(model_path, experiment_cfg=None):
         f"adapter_diversity_worst_pair_weight={config.ADAPTER_DIVERSITY_WORST_PAIR_WEIGHT} "
         f"enable_adapter_router_identity_residual={config.ENABLE_ADAPTER_ROUTER_IDENTITY_RESIDUAL} "
         f"direct_mmrl_output={config.DIRECT_MMRL_OUTPUT} "
+        f"raw_visual_adapter={config.RAW_VISUAL_ADAPTER} "
         f"enable_deepstack_mmrl_residual={config.ENABLE_DEEPSTACK_MMRL_RESIDUAL} "
         f"deepstack_mmrl_residual_scale={config.DEEPSTACK_MMRL_RESIDUAL_SCALE}"
     )
@@ -1100,10 +1102,10 @@ def set_trainable_stage(model, stage, train_cfg=None):
     if stage == 1:
         mods = [v.hidden_state_pooling, v.embedding_pooling, v.Task_classifier]
     elif stage == 3:
-        mods = [model.model.MMRL,
-                # v.blocks_with_rep, # ablation: keep rep-token branch forward, but freeze branch blocks
-                v.hidden_state_pooling, 
-                v.embedding_pooling]
+        mods = [v.hidden_state_pooling, v.embedding_pooling]
+        if not v.raw_visual_adapter:
+            mods.insert(0, model.model.MMRL)
+            # v.blocks_with_rep stay frozen while the rep-token branch remains active.
         if not v.direct_mmrl_output:
             mods.extend([v.adapter_router, v.residual_adapters])
     else:
@@ -1333,8 +1335,7 @@ def run_stage3_full(model, processor, data_cfg, train_cfg, output_dir):
         f"weight={model.mmrl_relation_loss_weight} "
         f"max_tokens={model.model.visual.mmrl_relation_max_tokens} "
         f"variance_floor_ratio={model.model.visual.mmrl_variance_floor_ratio} "
-        f"variance_floor_weight={model.model.visual.mmrl_variance_floor_weight} "
-        f"radial_limit={model.model.visual.mmrl_radial_limit}"
+        f"variance_floor_weight={model.model.visual.mmrl_variance_floor_weight}"
     )
     model.adapter_diversity_loss_weight = float(train_cfg.get(
         "adapter_diversity_loss_weight",

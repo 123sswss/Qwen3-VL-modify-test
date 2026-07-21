@@ -205,7 +205,6 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
         self.mmrl_relation_loss = torch.tensor(0.0)
         self.mmrl_relation_gram_loss = torch.tensor(0.0)
         self.mmrl_variance_floor_loss = torch.tensor(0.0)
-        self.mmrl_radial_excess_loss = torch.tensor(0.0)
         self.adapter_diversity_loss = torch.tensor(0.0)
         self.adapter_sample_entropy_target = float(getattr(self.cfg, "ADAPTER_SAMPLE_ENTROPY_TARGET", 0.40))
         self.adapter_common_mode_target = float(getattr(self.cfg, "ADAPTER_COMMON_MODE_TARGET", 0.85))
@@ -214,9 +213,6 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
         self.mmrl_relation_max_tokens = int(getattr(self.cfg, "MMRL_RELATION_MAX_TOKENS", 64))
         self.mmrl_variance_floor_ratio = float(getattr(self.cfg, "MMRL_VARIANCE_FLOOR_RATIO", 0.50))
         self.mmrl_variance_floor_weight = float(getattr(self.cfg, "MMRL_VARIANCE_FLOOR_WEIGHT", 0.10))
-        self.mmrl_radial_limit = float(getattr(self.cfg, "MMRL_RADIAL_LIMIT", 1.60))
-        if self.mmrl_radial_limit <= 0.0:
-            raise ValueError("MMRL_RADIAL_LIMIT must be positive")
         self.adapter_diversity_target_low = float(getattr(self.cfg, "ADAPTER_DIVERSITY_TARGET_LOW", 0.30))
         self.adapter_diversity_target_high = float(getattr(self.cfg, "ADAPTER_DIVERSITY_TARGET_HIGH", 0.58))
         self.adapter_diversity_upper_weight = float(getattr(self.cfg, "ADAPTER_DIVERSITY_UPPER_WEIGHT", 2.0))
@@ -227,15 +223,15 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
             getattr(self.cfg, "ENABLE_ADAPTER_ROUTER_IDENTITY_RESIDUAL", False)
         )
         self.direct_mmrl_output = bool(getattr(self.cfg, "DIRECT_MMRL_OUTPUT", False))
+        self.raw_visual_adapter = bool(getattr(self.cfg, "RAW_VISUAL_ADAPTER", False))
+        if self.raw_visual_adapter and self.direct_mmrl_output:
+            raise ValueError("RAW_VISUAL_ADAPTER and DIRECT_MMRL_OUTPUT cannot both be enabled")
         self.enable_deepstack_mmrl_residual = bool(getattr(self.cfg, "ENABLE_DEEPSTACK_MMRL_RESIDUAL", False))
         self.deepstack_mmrl_residual_scale = float(getattr(self.cfg, "DEEPSTACK_MMRL_RESIDUAL_SCALE", 0.0))
         self.adapter_effective_delta_ratio_mean = torch.tensor(float("nan"))
         self.adapter_effective_delta_ratio_min = torch.tensor(float("nan"))
         self.adapter_effective_delta_ratio_max = torch.tensor(float("nan"))
         self.mmrl_delta_to_org_ratio = torch.tensor(float("nan"))
-        self.mmrl_radial_ratio_mean = torch.tensor(float("nan"))
-        self.mmrl_radial_ratio_p95 = torch.tensor(float("nan"))
-        self.mmrl_radial_ratio_max = torch.tensor(float("nan"))
         self.adapter_pairwise_cos_mean = torch.tensor(float("nan"))
         self.adapter_pairwise_cos_max = torch.tensor(float("nan"))
         self.adapter_pairwise_cos_below_band = torch.tensor(float("nan"))
@@ -312,14 +308,11 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
         cu_seqlens: torch.Tensor,
     ):
         zero = adapted_states.new_tensor(0.0, dtype=torch.float32)
-        nan = adapted_states.new_tensor(float("nan"), dtype=torch.float32)
         if cu_seqlens is None or cu_seqlens.numel() <= 1:
-            return zero, zero, zero, zero, nan, nan, nan
+            return zero, zero, zero
 
         relation_losses = []
         variance_losses = []
-        radial_losses = []
-        radial_ratios = []
         max_tokens = max(int(self.mmrl_relation_max_tokens), 2)
         starts = cu_seqlens[:-1].tolist()
         ends = cu_seqlens[1:].tolist()
@@ -355,35 +348,12 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
                 original_dispersion.detach() * self.mmrl_variance_floor_ratio - adapted_dispersion
             ).pow(2))
 
-            delta_rms = (adapted - original).square().mean().clamp_min(1e-12).sqrt()
-            original_rms = original.square().mean().clamp_min(1e-12).sqrt().detach()
-            radial_ratio = delta_rms / original_rms
-            radial_excess = torch.relu(torch.log(
-                radial_ratio.clamp_min(1e-8) / self.mmrl_radial_limit
-            ))
-            radial_losses.append(F.smooth_l1_loss(
-                radial_excess,
-                radial_excess.new_tensor(0.0),
-                beta=0.10,
-            ))
-            radial_ratios.append(radial_ratio)
-
         if not relation_losses:
-            return zero, zero, zero, zero, nan, nan, nan
+            return zero, zero, zero
         gram_loss = torch.stack(relation_losses).mean()
         variance_loss = torch.stack(variance_losses).mean()
-        radial_loss = torch.stack(radial_losses).mean()
-        total = gram_loss + self.mmrl_variance_floor_weight * variance_loss + radial_loss
-        radial_ratio_values = torch.stack(radial_ratios).detach().float()
-        return (
-            total,
-            gram_loss,
-            variance_loss,
-            radial_loss,
-            radial_ratio_values.mean(),
-            torch.quantile(radial_ratio_values, 0.95),
-            radial_ratio_values.max(),
-        )
+        total = gram_loss + self.mmrl_variance_floor_weight * variance_loss
+        return total, gram_loss, variance_loss
 
     def _compute_absolute_alignment_metrics(
         self,
@@ -426,7 +396,7 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
                 metrics[f"{prefix}_pooled_cos_mean"] = pooled_cos.mean().to(device)
 
             if include_gram:
-                _, gram_loss, *_ = self._compute_mmrl_relation_loss(
+                _, gram_loss, _ = self._compute_mmrl_relation_loss(
                     candidate,
                     original,
                     cu_seqlens,
@@ -987,7 +957,7 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
         cu_seqlens_with_rep, position_embeddings_with_rep = None, None
         hidden_states_with_rep, org_hidden_states= None, None
         total_pic_num = cu_seqlens.size(0) - 1
-        run_mmrl_branch = True
+        run_mmrl_branch = not self.raw_visual_adapter
         forward_hit_layers = []
         if not self._printed_forward_layer_entry_audit:
             print("[MMRL_FORWARD_ENTRY_AUDIT]")
@@ -998,7 +968,10 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
             print(f"  deepstack_visual_indexes_natural={[idx + 1 for idx in self.deepstack_visual_indexes]}")
             self._printed_forward_layer_entry_audit = True
         for layer_num, blk in enumerate(self.blocks):
-            if layer_num not in self.insert_layers or v_r_token_list is None:
+            if (
+                layer_num not in self.insert_layers
+                or (v_r_token_list is None and not self.raw_visual_adapter)
+            ):
                 hidden_states = blk(
                     hidden_states,
                     cu_seqlens=cu_seqlens,
@@ -1039,7 +1012,7 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
                             device=hidden_states.device,
                             dtype=hidden_states.dtype,
                         )
-                        run_mmrl_branch = True
+                        run_mmrl_branch = not self.raw_visual_adapter
                     else:
                         self.alpha_list = self.Task_classifier(pooled_vision_states, expanded_text_embedding)
                         if self.direct_mmrl_output:
@@ -1068,10 +1041,12 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
 
                 ############ N图切分+门控 ############
                 idx = self.insert_layers.index(layer_num)
-                forward_hit_layers.append(layer_num)
-                assert v_r_token_list[idx] is not None
-                r_tokens_input = v_r_token_list[idx]
-                assert r_tokens_input is not None
+                r_tokens_input = None
+                if not self.raw_visual_adapter:
+                    forward_hit_layers.append(layer_num)
+                    assert v_r_token_list[idx] is not None
+                    r_tokens_input = v_r_token_list[idx]
+                    assert r_tokens_input is not None
 
                 org_hidden_states = blk(hidden_states if first_insert else org_hidden_states,
                                         cu_seqlens=cu_seqlens,
@@ -1079,7 +1054,7 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
                                         rotary_pos_emb=rotary_pos_emb,
                                         **kwargs)
                 hidden_states = org_hidden_states
-                if self.training or run_mmrl_branch:
+                if not self.raw_visual_adapter and (self.training or run_mmrl_branch):
                     if first_insert:
                         hidden_states_with_rep = self.blocks_with_rep[idx](
                             org_input_states,
@@ -1154,11 +1129,49 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
             print("[MMRL_FORWARD_HIT_AUDIT]")
             print(f"  actual_hit_layers_0based={forward_hit_layers}")
             print(f"  actual_hit_layers_natural={[idx + 1 for idx in forward_hit_layers]}")
-            print(f"  expected_insert_layers_0based={self.insert_layers if v_r_token_list is not None else []}")
-            print(f"  expected_insert_layers_natural={[idx + 1 for idx in self.insert_layers] if v_r_token_list is not None else []}")
+            expected_insert_layers = (
+                self.insert_layers
+                if v_r_token_list is not None and not self.raw_visual_adapter
+                else []
+            )
+            print(f"  expected_insert_layers_0based={expected_insert_layers}")
+            print(f"  expected_insert_layers_natural={[idx + 1 for idx in expected_insert_layers]}")
             self._printed_forward_layer_hit_audit = True
 
-        if run_mmrl_branch and hidden_states_with_rep is not None:
+        if self.raw_visual_adapter:
+            seqlens = cu_seqlens[1:] - cu_seqlens[:-1]
+            if not isinstance(self.G_list, torch.Tensor):
+                raise RuntimeError("RAW_VISUAL_ADAPTER requires visual gate outputs")
+            G_mask = torch.repeat_interleave(self.G_list, seqlens, dim=0)
+            adapter_input = org_hidden_states
+            gated_delta = adapter_input * G_mask
+            if torch.is_tensor(self.route_probs) and self.route_probs.numel() > 0:
+                token_route_probs = torch.repeat_interleave(self.route_probs, seqlens, dim=0)
+            else:
+                token_route_probs = adapter_input.new_ones(
+                    (adapter_input.shape[0], self.visual_residual_adapter_count),
+                    dtype=adapter_input.dtype,
+                ) / float(self.visual_residual_adapter_count)
+            adapter_outputs = torch.stack(
+                [adapter(adapter_input) for adapter in self.residual_adapters],
+                dim=1,
+            )
+            routed_delta = (adapter_outputs * token_route_probs.unsqueeze(-1)).sum(dim=1)
+            final_delta = routed_delta * G_mask
+            hidden_states = org_hidden_states + final_delta
+            self.mmrl_delta_to_org_ratio = hidden_states.new_tensor(float("nan"))
+            self.mmrl_relation_loss = hidden_states.new_tensor(0.0)
+            self.mmrl_relation_gram_loss = hidden_states.new_tensor(0.0)
+            self.mmrl_variance_floor_loss = hidden_states.new_tensor(0.0)
+            self._register_route_utility_monitor(
+                hidden_states,
+                adapter_outputs,
+                final_delta,
+                adapter_input,
+                G_mask,
+                cu_seqlens,
+            )
+        elif run_mmrl_branch and hidden_states_with_rep is not None:
             hidden_states_with_rep = _strip_r_token(hidden_states_with_rep,
                                                     original_seq_lens_list,
                                                     current_num_r_token)
@@ -1169,10 +1182,6 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
                 self.mmrl_relation_loss,
                 self.mmrl_relation_gram_loss,
                 self.mmrl_variance_floor_loss,
-                self.mmrl_radial_excess_loss,
-                self.mmrl_radial_ratio_mean,
-                self.mmrl_radial_ratio_p95,
-                self.mmrl_radial_ratio_max,
             ) = self._compute_mmrl_relation_loss(
                 hidden_states_with_rep,
                 org_hidden_states,
@@ -1228,10 +1237,6 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
             self.mmrl_relation_loss = hidden_states.new_tensor(0.0)
             self.mmrl_relation_gram_loss = hidden_states.new_tensor(0.0)
             self.mmrl_variance_floor_loss = hidden_states.new_tensor(0.0)
-            self.mmrl_radial_excess_loss = hidden_states.new_tensor(0.0)
-            self.mmrl_radial_ratio_mean = hidden_states.new_tensor(float("nan"))
-            self.mmrl_radial_ratio_p95 = hidden_states.new_tensor(float("nan"))
-            self.mmrl_radial_ratio_max = hidden_states.new_tensor(float("nan"))
             self._prepare_route_utility_metrics(hidden_states)
 
         mmrl_state_alignment = self._compute_absolute_alignment_metrics(
@@ -1297,6 +1302,7 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
             "final_delta_norm_mean": final_delta_norm,
             "org_hidden_norm_mean": org_hidden_norm,
             "delta_to_org_ratio": delta_to_org_ratio,
+            "raw_visual_adapter": hidden_states.new_tensor(float(self.raw_visual_adapter)),
             "visual_adapter_count": hidden_states.new_tensor(float(self.visual_residual_adapter_count)),
             "adapter_weight_norm": self._adapter_weight_norm(hidden_states.device),
             "adapter_usage_balance_loss": self.adapter_usage_balance_loss.detach(),
@@ -1307,10 +1313,6 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
             "mmrl_relation_loss": self.mmrl_relation_loss.detach(),
             "mmrl_relation_gram_loss": self.mmrl_relation_gram_loss.detach(),
             "mmrl_variance_floor_loss": self.mmrl_variance_floor_loss.detach(),
-            "mmrl_radial_excess_loss": self.mmrl_radial_excess_loss.detach(),
-            "mmrl_radial_ratio_mean": self.mmrl_radial_ratio_mean.detach(),
-            "mmrl_radial_ratio_p95": self.mmrl_radial_ratio_p95.detach(),
-            "mmrl_radial_ratio_max": self.mmrl_radial_ratio_max.detach(),
             "adapter_diversity_loss": self.adapter_diversity_loss.detach(),
             "adapter_effective_delta_ratio_mean": self.adapter_effective_delta_ratio_mean.detach(),
             "adapter_effective_delta_ratio_min": self.adapter_effective_delta_ratio_min.detach(),

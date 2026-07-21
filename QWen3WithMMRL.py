@@ -52,7 +52,6 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
             "MMRL_RELATION_MAX_TOKENS": _cfg_attr(config, "MMRL_RELATION_MAX_TOKENS", 64),
             "MMRL_VARIANCE_FLOOR_RATIO": _cfg_attr(config, "MMRL_VARIANCE_FLOOR_RATIO", 0.50),
             "MMRL_VARIANCE_FLOOR_WEIGHT": _cfg_attr(config, "MMRL_VARIANCE_FLOOR_WEIGHT", 0.10),
-            "MMRL_RADIAL_LIMIT": _cfg_attr(config, "MMRL_RADIAL_LIMIT", 1.60),
             "ADAPTER_DIVERSITY_LOSS_WEIGHT": _cfg_attr(config, "ADAPTER_DIVERSITY_LOSS_WEIGHT", 0.0),
             "ADAPTER_DIVERSITY_TARGET_LOW": _cfg_attr(config, "ADAPTER_DIVERSITY_TARGET_LOW", 0.30),
             "ADAPTER_DIVERSITY_TARGET_HIGH": _cfg_attr(config, "ADAPTER_DIVERSITY_TARGET_HIGH", 0.58),
@@ -64,6 +63,7 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
                 config, "ENABLE_ADAPTER_ROUTER_IDENTITY_RESIDUAL", False
             ),
             "DIRECT_MMRL_OUTPUT": _cfg_attr(config, "DIRECT_MMRL_OUTPUT", False),
+            "RAW_VISUAL_ADAPTER": _cfg_attr(config, "RAW_VISUAL_ADAPTER", False),
             "ENABLE_DEEPSTACK_MMRL_RESIDUAL": _cfg_attr(config, "ENABLE_DEEPSTACK_MMRL_RESIDUAL", False),
             "DEEPSTACK_MMRL_RESIDUAL_SCALE": _cfg_attr(config, "DEEPSTACK_MMRL_RESIDUAL_SCALE", 0.0),
             "vision_token_dim": vision_dim,
@@ -110,9 +110,9 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
                         embedding: Optional[torch.nn.Module] = None,
                         images_per_sample: Optional[list[int]] = None,
                         text_pooling_mask: Optional[torch.Tensor] = None,):
-        if self.use_mmrl and v_r_token_list is None:
+        if self.use_mmrl and v_r_token_list is None and not self.visual.raw_visual_adapter:
             raise ValueError("v_r_token_list must be specified")
-        elif self.use_mmrl and v_r_token_list is not None:
+        elif self.use_mmrl:
             pixel_values = pixel_values.type(self.visual.dtype)
             image_embeds, deepstack_image_embeds, k = self.visual(
                 pixel_values,
@@ -195,7 +195,7 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
         embedding_for_gating = inputs_embeds
         
         v_r_token_list = None
-        if self.use_mmrl:
+        if self.use_mmrl and not self.visual.raw_visual_adapter:
             v_r_token_list = self.MMRL()
         visual_pos_masks = None
         deepstack_visual_embeds = None

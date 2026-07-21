@@ -75,7 +75,6 @@ BASE_VISUAL_ROUTER_MODEL = {
     "mmrl_relation_max_tokens": 64,
     "mmrl_variance_floor_ratio": 0.50,
     "mmrl_variance_floor_weight": 0.10,
-    "mmrl_radial_limit": 1.60,
     "adapter_diversity_loss_weight": 0.0,
     "adapter_diversity_target_low": 0.30,
     "adapter_diversity_target_high": 0.58,
@@ -83,6 +82,7 @@ BASE_VISUAL_ROUTER_MODEL = {
     "adapter_diversity_worst_pair_weight": 1.0,
     "enable_adapter_router_identity_residual": False,
     "direct_mmrl_output": False,
+    "raw_visual_adapter": False,
     "enable_deepstack_mmrl_residual": False,
     "deepstack_mmrl_residual_scale": 0.0,
     "adapter_sample_entropy_target": 0.55,
@@ -117,13 +117,19 @@ EXPERIMENTS = {
     "visual_router_layer_fixed_v4_diversity_recover": {
         **V4_RECOVER_BASE,
     },
-    "visual_router_relation_radial_v1": {
+    "visual_router_relation_alignment_diag": {
         **V4_RECOVER_BASE,
         "mmrl_relation_loss_weight": 0.010,
         "mmrl_relation_max_tokens": 64,
         "mmrl_variance_floor_ratio": 0.50,
         "mmrl_variance_floor_weight": 0.10,
-        "mmrl_radial_limit": 1.60,
+    },
+    "visual_router_raw_adapter_v1": {
+        **V4_RECOVER_BASE,
+        "raw_visual_adapter": True,
+        "mmrl_relation_loss_weight": 0.0,
+        "direct_mmrl_output": False,
+        "enable_adapter_router_identity_residual": False,
     },
     "visual_router_direct_mmrl_seed44": {
         **BASE_VISUAL_ROUTER_MODEL,
@@ -259,10 +265,6 @@ CFG = {
             "MMRL_VARIANCE_FLOOR_WEIGHT",
             str(EXP_CFG.get("mmrl_variance_floor_weight", 0.10)),
         )),
-        "mmrl_radial_limit": float(os.getenv(
-            "MMRL_RADIAL_LIMIT",
-            str(EXP_CFG.get("mmrl_radial_limit", 1.60)),
-        )),
         "adapter_diversity_loss_weight": float(os.getenv(
             "MMRL_ADAPTER_DIVERSITY_LOSS_WEIGHT",
             str(EXP_CFG.get("adapter_diversity_loss_weight", 0.0)),
@@ -290,6 +292,10 @@ CFG = {
         "direct_mmrl_output": os.getenv(
             "MMRL_DIRECT_MMRL_OUTPUT",
             "1" if EXP_CFG.get("direct_mmrl_output", False) else "0",
+        ) == "1",
+        "raw_visual_adapter": os.getenv(
+            "MMRL_RAW_VISUAL_ADAPTER",
+            "1" if EXP_CFG.get("raw_visual_adapter", False) else "0",
         ) == "1",
         "enable_deepstack_mmrl_residual": os.getenv(
             "MMRL_ENABLE_DEEPSTACK_MMRL_RESIDUAL",
@@ -333,15 +339,12 @@ CFG = {
         )),
         "mmrl_diagnostics_keep_keys": [
             "ce_loss",
+            "raw_visual_adapter",
             "delta_to_org_ratio",
             "mmrl_delta_to_org_ratio",
             "mmrl_relation_loss_scaled",
             "mmrl_relation_gram_loss",
             "mmrl_variance_floor_loss",
-            "mmrl_radial_excess_loss",
-            "mmrl_radial_ratio_mean",
-            "mmrl_radial_ratio_p95",
-            "mmrl_radial_ratio_max",
             "mmrl_state_token_cos_mean",
             "mmrl_state_token_cos_p05",
             "mmrl_state_pooled_cos_mean",

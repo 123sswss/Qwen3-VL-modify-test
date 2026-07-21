@@ -188,23 +188,23 @@ run_N() {
   done
 }
 
-# 多张卡可分别执行 radial44 与 radial45，验证径向稳定器能否保上限、抬下限。
-#   bash run_experiment.sh radial44
-#   bash run_experiment.sh radial45
+# 两张卡使用同一新 seed 做配对结构实验。
+#   bash run_experiment.sh relation47
+#   bash run_experiment.sh raw_adapter47
 # 当前激进消融默认固定 seed 44：
 #   bash run_experiment.sh direct_mmrl
 #   bash run_experiment.sh two_adapter
 #   bash run_experiment.sh single_adapter
 case "$RUN_TARGET" in
-  radial44)
+  relation47)
     AUTO_INCREMENT_SEED=0
-    FIXED_SEED=44
-    run_one "visual_router_relation_radial_v1" "visual_router_relation_radial_v1_seed44"
+    FIXED_SEED=47
+    run_one "visual_router_relation_alignment_diag" "visual_router_relation_retest_seed47"
     ;;
-  radial45)
+  raw_adapter47)
     AUTO_INCREMENT_SEED=0
-    FIXED_SEED=45
-    run_one "visual_router_relation_radial_v1" "visual_router_relation_radial_v1_seed45"
+    FIXED_SEED=47
+    run_one "visual_router_raw_adapter_v1" "visual_router_raw_adapter_v1_seed47"
     ;;
   direct_mmrl)
     run_one "visual_router_direct_mmrl_seed44" "visual_router_direct_mmrl_seed44"
@@ -217,13 +217,12 @@ case "$RUN_TARGET" in
     ;;
   all)
     AUTO_INCREMENT_SEED=0
-    FIXED_SEED=44
-    run_one "visual_router_relation_radial_v1" "visual_router_relation_radial_v1_seed44"
-    FIXED_SEED=45
-    run_one "visual_router_relation_radial_v1" "visual_router_relation_radial_v1_seed45"
+    FIXED_SEED=47
+    run_one "visual_router_relation_alignment_diag" "visual_router_relation_retest_seed47"
+    run_one "visual_router_raw_adapter_v1" "visual_router_raw_adapter_v1_seed47"
     ;;
   *)
-    echo "[ERR] 未知实验目标: $RUN_TARGET（可选: radial44, radial45, direct_mmrl, two_adapter, single_adapter, all）" >&2
+    echo "[ERR] 未知实验目标: $RUN_TARGET（可选: relation47, raw_adapter47, direct_mmrl, two_adapter, single_adapter, all）" >&2
     exit 2
     ;;
 esac

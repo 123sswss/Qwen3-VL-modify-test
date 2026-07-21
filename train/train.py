@@ -72,8 +72,9 @@ BASE_VISUAL_ROUTER_MODEL = {
     "adapter_common_mode_loss_weight": 0.03,
     "adapter_effective_delta_loss_weight": 0.0,
     "mmrl_relation_loss_weight": 0.0,
-    "mmrl_relation_trust_threshold": 0.065,
     "mmrl_relation_max_tokens": 64,
+    "mmrl_variance_floor_ratio": 0.50,
+    "mmrl_variance_floor_weight": 0.10,
     "adapter_diversity_loss_weight": 0.0,
     "adapter_diversity_target_low": 0.30,
     "adapter_diversity_target_high": 0.58,
@@ -115,11 +116,12 @@ EXPERIMENTS = {
     "visual_router_layer_fixed_v4_diversity_recover": {
         **V4_RECOVER_BASE,
     },
-    "visual_router_relation_trust_v1": {
+    "visual_router_relation_alignment_diag": {
         **V4_RECOVER_BASE,
-        "mmrl_relation_loss_weight": 0.030,
-        "mmrl_relation_trust_threshold": 0.065,
+        "mmrl_relation_loss_weight": 0.010,
         "mmrl_relation_max_tokens": 64,
+        "mmrl_variance_floor_ratio": 0.50,
+        "mmrl_variance_floor_weight": 0.10,
     },
     "visual_router_direct_mmrl_seed44": {
         **BASE_VISUAL_ROUTER_MODEL,
@@ -243,13 +245,17 @@ CFG = {
             "MMRL_RELATION_LOSS_WEIGHT",
             str(EXP_CFG.get("mmrl_relation_loss_weight", 0.0)),
         )),
-        "mmrl_relation_trust_threshold": float(os.getenv(
-            "MMRL_RELATION_TRUST_THRESHOLD",
-            str(EXP_CFG.get("mmrl_relation_trust_threshold", 0.065)),
-        )),
         "mmrl_relation_max_tokens": int(os.getenv(
             "MMRL_RELATION_MAX_TOKENS",
             str(EXP_CFG.get("mmrl_relation_max_tokens", 64)),
+        )),
+        "mmrl_variance_floor_ratio": float(os.getenv(
+            "MMRL_VARIANCE_FLOOR_RATIO",
+            str(EXP_CFG.get("mmrl_variance_floor_ratio", 0.50)),
+        )),
+        "mmrl_variance_floor_weight": float(os.getenv(
+            "MMRL_VARIANCE_FLOOR_WEIGHT",
+            str(EXP_CFG.get("mmrl_variance_floor_weight", 0.10)),
         )),
         "adapter_diversity_loss_weight": float(os.getenv(
             "MMRL_ADAPTER_DIVERSITY_LOSS_WEIGHT",
@@ -325,6 +331,14 @@ CFG = {
             "mmrl_delta_to_org_ratio",
             "mmrl_relation_loss_scaled",
             "mmrl_relation_gram_loss",
+            "mmrl_variance_floor_loss",
+            "mmrl_state_token_cos_mean",
+            "mmrl_state_token_cos_p05",
+            "mmrl_state_pooled_cos_mean",
+            "final_state_token_cos_mean",
+            "final_state_token_cos_p05",
+            "final_state_pooled_cos_mean",
+            "final_state_gram_loss",
             "adapter_effective_delta_ratio_mean",
             "adapter_effective_delta_ratio_min",
             "adapter_effective_delta_ratio_max",

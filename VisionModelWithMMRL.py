@@ -204,15 +204,15 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
         self.adapter_effective_delta_loss = torch.tensor(0.0)
         self.mmrl_relation_loss = torch.tensor(0.0)
         self.mmrl_relation_gram_loss = torch.tensor(0.0)
+        self.mmrl_variance_floor_loss = torch.tensor(0.0)
         self.adapter_diversity_loss = torch.tensor(0.0)
         self.adapter_sample_entropy_target = float(getattr(self.cfg, "ADAPTER_SAMPLE_ENTROPY_TARGET", 0.40))
         self.adapter_common_mode_target = float(getattr(self.cfg, "ADAPTER_COMMON_MODE_TARGET", 0.85))
         self.adapter_effective_delta_target_low = float(getattr(self.cfg, "ADAPTER_EFFECTIVE_DELTA_TARGET_LOW", 0.78))
         self.adapter_effective_delta_target_high = float(getattr(self.cfg, "ADAPTER_EFFECTIVE_DELTA_TARGET_HIGH", 1.10))
-        self.mmrl_relation_trust_threshold = float(
-            getattr(self.cfg, "MMRL_RELATION_TRUST_THRESHOLD", 0.065)
-        )
         self.mmrl_relation_max_tokens = int(getattr(self.cfg, "MMRL_RELATION_MAX_TOKENS", 64))
+        self.mmrl_variance_floor_ratio = float(getattr(self.cfg, "MMRL_VARIANCE_FLOOR_RATIO", 0.50))
+        self.mmrl_variance_floor_weight = float(getattr(self.cfg, "MMRL_VARIANCE_FLOOR_WEIGHT", 0.10))
         self.adapter_diversity_target_low = float(getattr(self.cfg, "ADAPTER_DIVERSITY_TARGET_LOW", 0.30))
         self.adapter_diversity_target_high = float(getattr(self.cfg, "ADAPTER_DIVERSITY_TARGET_HIGH", 0.58))
         self.adapter_diversity_upper_weight = float(getattr(self.cfg, "ADAPTER_DIVERSITY_UPPER_WEIGHT", 2.0))
@@ -306,9 +306,10 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
     ):
         zero = adapted_states.new_tensor(0.0, dtype=torch.float32)
         if cu_seqlens is None or cu_seqlens.numel() <= 1:
-            return zero, zero
+            return zero, zero, zero
 
         relation_losses = []
+        variance_losses = []
         max_tokens = max(int(self.mmrl_relation_max_tokens), 2)
         starts = cu_seqlens[:-1].tolist()
         ends = cu_seqlens[1:].tolist()
@@ -336,14 +337,69 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
             original_gram = original_unit @ original_unit.transpose(0, 1)
             relation_losses.append(F.mse_loss(adapted_gram, original_gram))
 
+            adapted_centered = adapted_unit - adapted_unit.mean(dim=0, keepdim=True)
+            original_centered = original_unit - original_unit.mean(dim=0, keepdim=True)
+            adapted_dispersion = adapted_centered.square().sum(dim=-1).mean().clamp_min(1e-12).sqrt()
+            original_dispersion = original_centered.square().sum(dim=-1).mean().clamp_min(1e-12).sqrt()
+            variance_losses.append(torch.relu(
+                original_dispersion.detach() * self.mmrl_variance_floor_ratio - adapted_dispersion
+            ).pow(2))
+
         if not relation_losses:
-            return zero, zero
+            return zero, zero, zero
         gram_loss = torch.stack(relation_losses).mean()
-        # Preserve task-useful movement inside the safe region; only resist measured drift beyond it.
-        relation_excess = torch.relu(
-            gram_loss - gram_loss.new_tensor(self.mmrl_relation_trust_threshold)
-        )
-        return relation_excess, gram_loss
+        variance_loss = torch.stack(variance_losses).mean()
+        total = gram_loss + self.mmrl_variance_floor_weight * variance_loss
+        return total, gram_loss, variance_loss
+
+    def _compute_absolute_alignment_metrics(
+        self,
+        candidate_states: torch.Tensor,
+        org_states: torch.Tensor,
+        cu_seqlens: torch.Tensor,
+        prefix: str,
+        include_gram: bool = False,
+    ):
+        device = org_states.device
+        nan = torch.tensor(float("nan"), device=device)
+        metrics = {
+            f"{prefix}_token_cos_mean": nan,
+            f"{prefix}_token_cos_p05": nan,
+            f"{prefix}_pooled_cos_mean": nan,
+        }
+        if include_gram:
+            metrics[f"{prefix}_gram_loss"] = nan
+        if candidate_states is None or candidate_states.numel() == 0 or org_states.numel() == 0:
+            return metrics
+
+        with torch.no_grad():
+            count = min(candidate_states.shape[0], org_states.shape[0])
+            candidate = candidate_states[:count].detach().float()
+            original = org_states[:count].detach().float()
+            token_cos = F.cosine_similarity(candidate, original, dim=-1, eps=1e-6)
+            metrics[f"{prefix}_token_cos_mean"] = token_cos.mean().to(device)
+            metrics[f"{prefix}_token_cos_p05"] = torch.quantile(token_cos, 0.05).to(device)
+
+            pooled_candidate = self._pool_tokens_by_image_mean(candidate, cu_seqlens)
+            pooled_original = self._pool_tokens_by_image_mean(original, cu_seqlens)
+            if pooled_candidate is not None and pooled_original is not None:
+                pooled_count = min(pooled_candidate.shape[0], pooled_original.shape[0])
+                pooled_cos = F.cosine_similarity(
+                    pooled_candidate[:pooled_count],
+                    pooled_original[:pooled_count],
+                    dim=-1,
+                    eps=1e-6,
+                )
+                metrics[f"{prefix}_pooled_cos_mean"] = pooled_cos.mean().to(device)
+
+            if include_gram:
+                _, gram_loss, _ = self._compute_mmrl_relation_loss(
+                    candidate,
+                    original,
+                    cu_seqlens,
+                )
+                metrics[f"{prefix}_gram_loss"] = gram_loss.detach().to(device)
+        return metrics
 
     def _compute_residual_debug_metrics(
         self,
@@ -1079,6 +1135,7 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
             (
                 self.mmrl_relation_loss,
                 self.mmrl_relation_gram_loss,
+                self.mmrl_variance_floor_loss,
             ) = self._compute_mmrl_relation_loss(
                 hidden_states_with_rep,
                 org_hidden_states,
@@ -1133,7 +1190,22 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
             self.mmrl_delta_to_org_ratio = hidden_states.new_tensor(float("nan"))
             self.mmrl_relation_loss = hidden_states.new_tensor(0.0)
             self.mmrl_relation_gram_loss = hidden_states.new_tensor(0.0)
+            self.mmrl_variance_floor_loss = hidden_states.new_tensor(0.0)
             self._prepare_route_utility_metrics(hidden_states)
+
+        mmrl_state_alignment = self._compute_absolute_alignment_metrics(
+            hidden_states_with_rep if run_mmrl_branch else None,
+            org_hidden_states,
+            cu_seqlens,
+            prefix="mmrl_state",
+        )
+        final_state_alignment = self._compute_absolute_alignment_metrics(
+            hidden_states,
+            org_hidden_states,
+            cu_seqlens,
+            prefix="final_state",
+            include_gram=True,
+        )
 
         (
             self.adapter_usage_balance_loss,
@@ -1193,6 +1265,7 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
             "mmrl_delta_to_org_ratio": self.mmrl_delta_to_org_ratio.detach(),
             "mmrl_relation_loss": self.mmrl_relation_loss.detach(),
             "mmrl_relation_gram_loss": self.mmrl_relation_gram_loss.detach(),
+            "mmrl_variance_floor_loss": self.mmrl_variance_floor_loss.detach(),
             "adapter_diversity_loss": self.adapter_diversity_loss.detach(),
             "adapter_effective_delta_ratio_mean": self.adapter_effective_delta_ratio_mean.detach(),
             "adapter_effective_delta_ratio_min": self.adapter_effective_delta_ratio_min.detach(),
@@ -1207,6 +1280,8 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
             "deepstack_delta_norm_mean": self.deepstack_delta_norm_mean.detach(),
             "deepstack_delta_to_org_ratio": self.deepstack_delta_to_org_ratio.detach(),
             "deepstack_residual_layers": self.deepstack_residual_layers.detach(),
+            **mmrl_state_alignment,
+            **final_state_alignment,
             **residual_debug,
             **self._route_utility_step_metrics,
         }

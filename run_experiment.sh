@@ -188,23 +188,23 @@ run_N() {
   done
 }
 
-# 多张卡可分别执行 trust44 与 trust45，验证已知好/坏 seed。
-#   bash run_experiment.sh trust44
-#   bash run_experiment.sh trust45
+# 多张卡可分别执行 diag44 与 diag45，比较已知好/坏 seed 的绝对坐标对齐。
+#   bash run_experiment.sh diag44
+#   bash run_experiment.sh diag45
 # 当前激进消融默认固定 seed 44：
 #   bash run_experiment.sh direct_mmrl
 #   bash run_experiment.sh two_adapter
 #   bash run_experiment.sh single_adapter
 case "$RUN_TARGET" in
-  trust44)
+  diag44)
     AUTO_INCREMENT_SEED=0
     FIXED_SEED=44
-    run_one "visual_router_relation_trust_v1" "visual_router_relation_trust_v1_seed44"
+    run_one "visual_router_relation_alignment_diag" "visual_router_relation_alignment_diag_seed44"
     ;;
-  trust45)
+  diag45)
     AUTO_INCREMENT_SEED=0
     FIXED_SEED=45
-    run_one "visual_router_relation_trust_v1" "visual_router_relation_trust_v1_seed45"
+    run_one "visual_router_relation_alignment_diag" "visual_router_relation_alignment_diag_seed45"
     ;;
   direct_mmrl)
     run_one "visual_router_direct_mmrl_seed44" "visual_router_direct_mmrl_seed44"
@@ -218,12 +218,12 @@ case "$RUN_TARGET" in
   all)
     AUTO_INCREMENT_SEED=0
     FIXED_SEED=44
-    run_one "visual_router_relation_trust_v1" "visual_router_relation_trust_v1_seed44"
+    run_one "visual_router_relation_alignment_diag" "visual_router_relation_alignment_diag_seed44"
     FIXED_SEED=45
-    run_one "visual_router_relation_trust_v1" "visual_router_relation_trust_v1_seed45"
+    run_one "visual_router_relation_alignment_diag" "visual_router_relation_alignment_diag_seed45"
     ;;
   *)
-    echo "[ERR] 未知实验目标: $RUN_TARGET（可选: trust44, trust45, direct_mmrl, two_adapter, single_adapter, all）" >&2
+    echo "[ERR] 未知实验目标: $RUN_TARGET（可选: diag44, diag45, direct_mmrl, two_adapter, single_adapter, all）" >&2
     exit 2
     ;;
 esac

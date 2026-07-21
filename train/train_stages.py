@@ -60,13 +60,17 @@ def _build_experiment_context(train_cfg, output_dir, stage_id):
                 "mmrl_relation_loss_weight",
                 experiment_cfg.get("mmrl_relation_loss_weight"),
             ),
-            "mmrl_relation_trust_threshold": train_cfg.get(
-                "mmrl_relation_trust_threshold",
-                experiment_cfg.get("mmrl_relation_trust_threshold"),
-            ),
             "mmrl_relation_max_tokens": train_cfg.get(
                 "mmrl_relation_max_tokens",
                 experiment_cfg.get("mmrl_relation_max_tokens"),
+            ),
+            "mmrl_variance_floor_ratio": train_cfg.get(
+                "mmrl_variance_floor_ratio",
+                experiment_cfg.get("mmrl_variance_floor_ratio"),
+            ),
+            "mmrl_variance_floor_weight": train_cfg.get(
+                "mmrl_variance_floor_weight",
+                experiment_cfg.get("mmrl_variance_floor_weight"),
             ),
             "adapter_sample_entropy_target": train_cfg.get("adapter_sample_entropy_target"),
             "adapter_common_mode_target": train_cfg.get("adapter_common_mode_target"),
@@ -902,13 +906,17 @@ def build_model_and_processor(model_path, experiment_cfg=None):
         "mmrl_relation_loss_weight",
         os.getenv("MMRL_RELATION_LOSS_WEIGHT", "0.0"),
     ))
-    config.MMRL_RELATION_TRUST_THRESHOLD = float(experiment_cfg.get(
-        "mmrl_relation_trust_threshold",
-        os.getenv("MMRL_RELATION_TRUST_THRESHOLD", "0.065"),
-    ))
     config.MMRL_RELATION_MAX_TOKENS = int(experiment_cfg.get(
         "mmrl_relation_max_tokens",
         os.getenv("MMRL_RELATION_MAX_TOKENS", "64"),
+    ))
+    config.MMRL_VARIANCE_FLOOR_RATIO = float(experiment_cfg.get(
+        "mmrl_variance_floor_ratio",
+        os.getenv("MMRL_VARIANCE_FLOOR_RATIO", "0.50"),
+    ))
+    config.MMRL_VARIANCE_FLOOR_WEIGHT = float(experiment_cfg.get(
+        "mmrl_variance_floor_weight",
+        os.getenv("MMRL_VARIANCE_FLOOR_WEIGHT", "0.10"),
     ))
     config.ADAPTER_SAMPLE_ENTROPY_TARGET = float(experiment_cfg.get(
         "adapter_sample_entropy_target",
@@ -984,13 +992,17 @@ def build_model_and_processor(model_path, experiment_cfg=None):
             f"actual={visual.visual_residual_adapter_count}"
         )
     propagation_checks = {
-        "MMRL_RELATION_TRUST_THRESHOLD": (
-            config.MMRL_RELATION_TRUST_THRESHOLD,
-            visual.mmrl_relation_trust_threshold,
-        ),
         "MMRL_RELATION_MAX_TOKENS": (
             config.MMRL_RELATION_MAX_TOKENS,
             visual.mmrl_relation_max_tokens,
+        ),
+        "MMRL_VARIANCE_FLOOR_RATIO": (
+            config.MMRL_VARIANCE_FLOOR_RATIO,
+            visual.mmrl_variance_floor_ratio,
+        ),
+        "MMRL_VARIANCE_FLOOR_WEIGHT": (
+            config.MMRL_VARIANCE_FLOOR_WEIGHT,
+            visual.mmrl_variance_floor_weight,
         ),
     }
     for name, (requested, actual) in propagation_checks.items():
@@ -1044,7 +1056,8 @@ def build_model_and_processor(model_path, experiment_cfg=None):
         f"adapter_common_mode_loss_weight={config.ADAPTER_COMMON_MODE_LOSS_WEIGHT} "
         f"adapter_effective_delta_loss_weight={config.ADAPTER_EFFECTIVE_DELTA_LOSS_WEIGHT} "
         f"mmrl_relation_loss_weight={config.MMRL_RELATION_LOSS_WEIGHT} "
-        f"mmrl_relation_trust_threshold={config.MMRL_RELATION_TRUST_THRESHOLD} "
+        f"mmrl_variance_floor_ratio={config.MMRL_VARIANCE_FLOOR_RATIO} "
+        f"mmrl_variance_floor_weight={config.MMRL_VARIANCE_FLOOR_WEIGHT} "
         f"adapter_sample_entropy_target={config.ADAPTER_SAMPLE_ENTROPY_TARGET} "
         f"adapter_common_mode_target={config.ADAPTER_COMMON_MODE_TARGET} "
         f"adapter_effective_delta_target_low={config.ADAPTER_EFFECTIVE_DELTA_TARGET_LOW} "
@@ -1305,8 +1318,9 @@ def run_stage3_full(model, processor, data_cfg, train_cfg, output_dir):
     print(
         "[MMRL_RELATION] "
         f"weight={model.mmrl_relation_loss_weight} "
-        f"trust_threshold={model.model.visual.mmrl_relation_trust_threshold} "
-        f"max_tokens={model.model.visual.mmrl_relation_max_tokens}"
+        f"max_tokens={model.model.visual.mmrl_relation_max_tokens} "
+        f"variance_floor_ratio={model.model.visual.mmrl_variance_floor_ratio} "
+        f"variance_floor_weight={model.model.visual.mmrl_variance_floor_weight}"
     )
     model.adapter_diversity_loss_weight = float(train_cfg.get(
         "adapter_diversity_loss_weight",

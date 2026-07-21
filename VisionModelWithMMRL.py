@@ -202,34 +202,17 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
         self.adapter_sample_entropy_loss = torch.tensor(0.0)
         self.adapter_common_mode_loss = torch.tensor(0.0)
         self.adapter_effective_delta_loss = torch.tensor(0.0)
-        self.mmrl_delta_ceiling_loss = torch.tensor(0.0)
         self.mmrl_relation_loss = torch.tensor(0.0)
         self.mmrl_relation_gram_loss = torch.tensor(0.0)
-        self.mmrl_variance_floor_loss = torch.tensor(0.0)
-        self.route_utility_teacher_loss = torch.tensor(0.0)
-        self.prototype_anchor_loss = torch.tensor(0.0)
         self.adapter_diversity_loss = torch.tensor(0.0)
         self.adapter_sample_entropy_target = float(getattr(self.cfg, "ADAPTER_SAMPLE_ENTROPY_TARGET", 0.40))
         self.adapter_common_mode_target = float(getattr(self.cfg, "ADAPTER_COMMON_MODE_TARGET", 0.85))
         self.adapter_effective_delta_target_low = float(getattr(self.cfg, "ADAPTER_EFFECTIVE_DELTA_TARGET_LOW", 0.78))
         self.adapter_effective_delta_target_high = float(getattr(self.cfg, "ADAPTER_EFFECTIVE_DELTA_TARGET_HIGH", 1.10))
-        self.mmrl_delta_ceiling_target = float(getattr(self.cfg, "MMRL_DELTA_CEILING_TARGET", 1.75))
-        self.mmrl_relation_enabled = float(getattr(self.cfg, "MMRL_RELATION_LOSS_WEIGHT", 0.0)) > 0.0
-        self.mmrl_relation_max_tokens = int(getattr(self.cfg, "MMRL_RELATION_MAX_TOKENS", 64))
-        self.mmrl_variance_floor_ratio = float(getattr(self.cfg, "MMRL_VARIANCE_FLOOR_RATIO", 0.50))
-        self.mmrl_variance_floor_weight = float(getattr(self.cfg, "MMRL_VARIANCE_FLOOR_WEIGHT", 0.10))
-        self.route_utility_teacher_enabled = float(
-            getattr(self.cfg, "ROUTE_UTILITY_TEACHER_LOSS_WEIGHT", 0.0)
-        ) > 0.0
-        self.route_utility_teacher_active = False
-        self.route_utility_teacher_temperature = float(
-            getattr(self.cfg, "ROUTE_UTILITY_TEACHER_TEMPERATURE", 2.0)
+        self.mmrl_relation_trust_threshold = float(
+            getattr(self.cfg, "MMRL_RELATION_TRUST_THRESHOLD", 0.065)
         )
-        self.prototype_anchor_temperature = float(getattr(self.cfg, "PROTOTYPE_ANCHOR_TEMPERATURE", 0.20))
-        self.prototype_anchor_momentum = float(getattr(self.cfg, "PROTOTYPE_ANCHOR_MOMENTUM", 0.95))
-        self.prototype_anchor_min_confidence = float(getattr(self.cfg, "PROTOTYPE_ANCHOR_MIN_CONFIDENCE", 0.40))
-        self.prototype_anchor_assignment_power = float(getattr(self.cfg, "PROTOTYPE_ANCHOR_ASSIGNMENT_POWER", 2.0))
-        self.prototype_anchor_init_noise = float(getattr(self.cfg, "PROTOTYPE_ANCHOR_INIT_NOISE", 0.10))
+        self.mmrl_relation_max_tokens = int(getattr(self.cfg, "MMRL_RELATION_MAX_TOKENS", 64))
         self.adapter_diversity_target_low = float(getattr(self.cfg, "ADAPTER_DIVERSITY_TARGET_LOW", 0.30))
         self.adapter_diversity_target_high = float(getattr(self.cfg, "ADAPTER_DIVERSITY_TARGET_HIGH", 0.58))
         self.adapter_diversity_upper_weight = float(getattr(self.cfg, "ADAPTER_DIVERSITY_UPPER_WEIGHT", 2.0))
@@ -246,12 +229,6 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
         self.adapter_effective_delta_ratio_min = torch.tensor(float("nan"))
         self.adapter_effective_delta_ratio_max = torch.tensor(float("nan"))
         self.mmrl_delta_to_org_ratio = torch.tensor(float("nan"))
-        for idx in range(self.visual_residual_adapter_count):
-            setattr(self, f"route_utility_teacher_target_{idx}", torch.tensor(float("nan")))
-        self.route_proto_kl = torch.tensor(float("nan"))
-        self.route_proto_agreement = torch.tensor(float("nan"))
-        self.prototype_usage_max = torch.tensor(float("nan"))
-        self.prototype_usage_min = torch.tensor(float("nan"))
         self.adapter_pairwise_cos_mean = torch.tensor(float("nan"))
         self.adapter_pairwise_cos_max = torch.tensor(float("nan"))
         self.adapter_pairwise_cos_below_band = torch.tensor(float("nan"))
@@ -261,29 +238,6 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
         self.deepstack_delta_norm_mean = torch.tensor(float("nan"))
         self.deepstack_delta_to_org_ratio = torch.tensor(float("nan"))
         self.deepstack_residual_layers = torch.tensor(0.0)
-        for idx in range(self.visual_residual_adapter_count):
-            setattr(self, f"prototype_usage_{idx}", torch.tensor(float("nan")))
-        self.register_buffer(
-            "prototype_vectors",
-            torch.zeros(self.visual_residual_adapter_count, self.cfg.vision_token_dim),
-            persistent=True,
-        )
-        self.register_buffer(
-            "prototype_initialized",
-            torch.zeros(self.visual_residual_adapter_count, dtype=torch.bool),
-            persistent=True,
-        )
-        slot_offsets = torch.zeros(self.visual_residual_adapter_count, self.cfg.vision_token_dim)
-        for idx in range(self.visual_residual_adapter_count):
-            slot_offsets[idx, idx::self.visual_residual_adapter_count] = 1.0
-            if idx % 2 == 1:
-                slot_offsets[idx, (idx + 1)::self.visual_residual_adapter_count] = -1.0
-        slot_offsets = F.normalize(slot_offsets, dim=-1)
-        self.register_buffer(
-            "prototype_slot_offsets",
-            slot_offsets,
-            persistent=False,
-        )
         self.alpha_list = []
         self.G_list = []
         self.route_probs = None
@@ -351,11 +305,10 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
         cu_seqlens: torch.Tensor,
     ):
         zero = adapted_states.new_tensor(0.0, dtype=torch.float32)
-        if not self.mmrl_relation_enabled or cu_seqlens is None or cu_seqlens.numel() <= 1:
-            return zero, zero, zero
+        if cu_seqlens is None or cu_seqlens.numel() <= 1:
+            return zero, zero
 
         relation_losses = []
-        variance_losses = []
         max_tokens = max(int(self.mmrl_relation_max_tokens), 2)
         starts = cu_seqlens[:-1].tolist()
         ends = cu_seqlens[1:].tolist()
@@ -383,20 +336,14 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
             original_gram = original_unit @ original_unit.transpose(0, 1)
             relation_losses.append(F.mse_loss(adapted_gram, original_gram))
 
-            adapted_centered = adapted_unit - adapted_unit.mean(dim=0, keepdim=True)
-            original_centered = original_unit - original_unit.mean(dim=0, keepdim=True)
-            adapted_dispersion = adapted_centered.square().sum(dim=-1).mean().clamp_min(1e-12).sqrt()
-            original_dispersion = original_centered.square().sum(dim=-1).mean().clamp_min(1e-12).sqrt()
-            variance_losses.append(torch.relu(
-                original_dispersion.detach() * self.mmrl_variance_floor_ratio - adapted_dispersion
-            ).pow(2))
-
         if not relation_losses:
-            return zero, zero, zero
+            return zero, zero
         gram_loss = torch.stack(relation_losses).mean()
-        variance_loss = torch.stack(variance_losses).mean()
-        total = gram_loss + self.mmrl_variance_floor_weight * variance_loss
-        return total, gram_loss, variance_loss
+        # Preserve task-useful movement inside the safe region; only resist measured drift beyond it.
+        relation_excess = torch.relu(
+            gram_loss - gram_loss.new_tensor(self.mmrl_relation_trust_threshold)
+        )
+        return relation_excess, gram_loss
 
     def _compute_residual_debug_metrics(
         self,
@@ -723,120 +670,6 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
 
         hidden_states.register_hook(_route_utility_hook)
 
-    @torch.no_grad()
-    def _initialize_prototypes_from_batch(self, features: torch.Tensor):
-        if features is None or features.numel() == 0:
-            return
-        features = F.normalize(features.detach().float(), dim=-1)
-        n = features.shape[0]
-        if n <= 0:
-            return
-
-        offsets = self.prototype_slot_offsets.to(device=features.device, dtype=features.dtype)
-        init_noise = max(float(self.prototype_anchor_init_noise), 0.0)
-        proto = []
-        for idx in range(self.visual_residual_adapter_count):
-            base = features[idx % n]
-            proto.append(F.normalize(base + offsets[idx] * init_noise, dim=-1))
-        proto = torch.stack(proto, dim=0)
-        self.prototype_vectors.copy_(proto.to(device=self.prototype_vectors.device, dtype=self.prototype_vectors.dtype))
-        self.prototype_initialized.fill_(True)
-
-    @torch.no_grad()
-    def _update_prototypes(self, pooled_vision_states: torch.Tensor, route_probs: torch.Tensor):
-        if pooled_vision_states is None or route_probs is None:
-            return
-        if pooled_vision_states.numel() == 0 or route_probs.numel() == 0:
-            return
-
-        features = F.normalize(pooled_vision_states.detach().float(), dim=-1)
-        routes = route_probs.detach().float()
-        n = min(features.shape[0], routes.shape[0])
-        if n <= 0:
-            return
-        features = features[:n]
-        routes = routes[:n]
-
-        if not bool(self.prototype_initialized.all().item()):
-            self._initialize_prototypes_from_batch(features)
-
-        confidence, winners = routes.max(dim=-1)
-        active_sample = confidence >= float(self.prototype_anchor_min_confidence)
-        if not active_sample.any():
-            return
-
-        assignment_power = max(float(self.prototype_anchor_assignment_power), 1.0)
-        weights = routes.clamp_min(1e-8).pow(assignment_power)
-
-        proto = self.prototype_vectors.to(device=features.device, dtype=features.dtype).clone()
-        initialized = self.prototype_initialized.to(device=features.device)
-        momentum = float(self.prototype_anchor_momentum)
-        for idx in range(self.visual_residual_adapter_count):
-            mask = active_sample & (winners == idx)
-            if not mask.any():
-                continue
-            slot_weights = weights[mask, idx]
-            batch_proto = (features[mask] * slot_weights.unsqueeze(-1)).sum(dim=0)
-            batch_proto = batch_proto / slot_weights.sum().clamp_min(1e-8)
-            batch_proto = F.normalize(batch_proto, dim=-1)
-            proto[idx].mul_(momentum).add_(batch_proto, alpha=1.0 - momentum)
-            proto[idx] = F.normalize(proto[idx], dim=-1)
-            initialized[idx] = True
-        self.prototype_vectors.copy_(proto.to(device=self.prototype_vectors.device, dtype=self.prototype_vectors.dtype))
-        self.prototype_initialized.copy_(initialized.to(device=self.prototype_initialized.device))
-
-    def _compute_prototype_anchor_loss(self, pooled_vision_states, route_probs, dtype, device):
-        zero = torch.tensor(0.0, device=device, dtype=dtype)
-        nan = torch.tensor(float("nan"), device=device, dtype=dtype)
-        self.route_proto_kl = nan
-        self.route_proto_agreement = nan
-        self.prototype_usage_max = nan
-        self.prototype_usage_min = nan
-
-        if pooled_vision_states is None or route_probs is None:
-            return zero
-        if pooled_vision_states.numel() == 0 or route_probs.numel() == 0:
-            return zero
-        initialized_before = bool(self.prototype_initialized.any().item())
-        if not initialized_before:
-            self._update_prototypes(pooled_vision_states, route_probs)
-        if not bool(self.prototype_initialized.any().item()):
-            return zero
-
-        features = pooled_vision_states.detach().float()
-        routes = route_probs.float()
-        n = min(features.shape[0], routes.shape[0])
-        if n <= 0:
-            return zero
-        features = F.normalize(features[:n], dim=-1)
-        prototypes = self.prototype_vectors.detach().to(device=features.device, dtype=features.dtype)
-        prototypes = F.normalize(prototypes, dim=-1)
-        valid = self.prototype_initialized.to(device=features.device)
-        logits = features @ prototypes.transpose(0, 1)
-        logits = logits / max(float(self.prototype_anchor_temperature), 1e-4)
-        if (~valid).any():
-            logits[:, ~valid] = -1e4
-        proto_probs = torch.softmax(logits, dim=-1)
-        proto_probs = proto_probs.detach()
-        routes = routes[:n].clamp_min(1e-8)
-        loss = (proto_probs * (proto_probs.clamp_min(1e-8).log() - routes.log())).sum(dim=-1).mean()
-
-        with torch.no_grad():
-            usage = proto_probs.mean(dim=0)
-            self.route_proto_kl = loss.detach().to(device=device, dtype=dtype)
-            self.route_proto_agreement = (
-                routes.detach().argmax(dim=-1) == proto_probs.argmax(dim=-1)
-            ).float().mean().to(device=device, dtype=dtype)
-            self.prototype_usage_max = usage.max().to(device=device, dtype=dtype)
-            self.prototype_usage_min = usage.min().to(device=device, dtype=dtype)
-            for idx, value in enumerate(usage.tolist()):
-                setattr(self, f"prototype_usage_{idx}", torch.tensor(float(value), device=device, dtype=dtype))
-
-        if self.training and initialized_before:
-            self._update_prototypes(pooled_vision_states, route_probs)
-
-        return loss.to(device=device, dtype=dtype)
-
     def _compute_adapter_diversity_loss(self, adapter_outputs, cu_seqlens, dtype, device):
         zero = torch.tensor(0.0, device=device, dtype=dtype)
         nan = torch.tensor(float("nan"), device=device, dtype=dtype)
@@ -931,7 +764,6 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
         final_delta,
         cu_seqlens,
         org_hidden_states=None,
-        pooled_vision_states=None,
         adapter_outputs=None,
     ):
         device = final_delta.device
@@ -940,25 +772,16 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
         self.adapter_effective_delta_ratio_mean = nan
         self.adapter_effective_delta_ratio_min = nan
         self.adapter_effective_delta_ratio_max = nan
-        self.prototype_anchor_loss = zero
         self.adapter_diversity_loss = zero
-        self.route_proto_kl = nan
-        self.route_proto_agreement = nan
-        self.prototype_usage_max = nan
-        self.prototype_usage_min = nan
         self.adapter_pairwise_cos_mean = nan
         self.adapter_pairwise_cos_max = nan
         self.adapter_pairwise_cos_below_band = nan
         self.adapter_pairwise_cos_above_band = nan
         self.adapter_diversity_mean_component = nan
         self.adapter_diversity_worst_component = nan
-        self.route_utility_teacher_loss = zero
-        for idx in range(self.visual_residual_adapter_count):
-            setattr(self, f"prototype_usage_{idx}", nan)
-            setattr(self, f"route_utility_teacher_target_{idx}", nan)
         route_probs = self.route_probs
         if not torch.is_tensor(route_probs) or route_probs.numel() == 0:
-            return zero, zero, zero, zero, zero, zero
+            return zero, zero, zero, zero, zero
 
         route_probs = route_probs.float()
         adapter_count = route_probs.shape[-1]
@@ -967,35 +790,6 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
         usage = usage / usage.sum().clamp_min(1e-8)
         uniform = torch.full_like(usage, 1.0 / max(adapter_count, 1))
         usage_balance_loss = (usage * (usage.clamp_min(1e-8).log() - uniform.log())).sum()
-
-        if (
-            self.route_utility_teacher_enabled
-            and self.route_utility_teacher_active
-            and self._route_utility_ema_initialized
-            and self._route_utility_ema is not None
-            and self._route_utility_ema.shape[0] == adapter_count
-            and torch.isfinite(self._route_utility_ema).all()
-        ):
-            utility_ema = self._route_utility_ema.detach().float()
-            utility_centered = utility_ema - utility_ema.mean()
-            utility_scale = utility_centered.std(unbiased=False).clamp_min(1e-6)
-            teacher_logits = utility_centered / (
-                utility_scale * max(self.route_utility_teacher_temperature, 1e-6)
-            )
-            teacher_target = torch.softmax(teacher_logits, dim=-1)
-            self.route_utility_teacher_loss = (
-                teacher_target
-                * (
-                    teacher_target.clamp_min(1e-8).log()
-                    - usage.clamp_min(1e-8).log()
-                )
-            ).sum().to(device=device, dtype=final_delta.dtype)
-            for idx, value in enumerate(teacher_target):
-                setattr(
-                    self,
-                    f"route_utility_teacher_target_{idx}",
-                    value.detach().to(device=device, dtype=final_delta.dtype),
-                )
 
         if adapter_count > 1:
             sample_entropy = -(route_probs * route_probs.clamp_min(1e-8).log()).sum(dim=-1)
@@ -1039,12 +833,6 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
                     self.adapter_effective_delta_ratio_min = delta_ratio.detach().min().to(device=device, dtype=final_delta.dtype)
                     self.adapter_effective_delta_ratio_max = delta_ratio.detach().max().to(device=device, dtype=final_delta.dtype)
 
-        prototype_anchor_loss = self._compute_prototype_anchor_loss(
-            pooled_vision_states,
-            route_probs,
-            final_delta.dtype,
-            device,
-        )
         adapter_diversity_loss = self._compute_adapter_diversity_loss(
             adapter_outputs,
             cu_seqlens,
@@ -1057,7 +845,6 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
             sample_entropy_loss.to(device=device, dtype=final_delta.dtype),
             common_mode_loss.to(device=device, dtype=final_delta.dtype),
             effective_delta_loss.to(device=device, dtype=final_delta.dtype),
-            prototype_anchor_loss.to(device=device, dtype=final_delta.dtype),
             adapter_diversity_loss.to(device=device, dtype=final_delta.dtype),
         )
 
@@ -1292,7 +1079,6 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
             (
                 self.mmrl_relation_loss,
                 self.mmrl_relation_gram_loss,
-                self.mmrl_variance_floor_loss,
             ) = self._compute_mmrl_relation_loss(
                 hidden_states_with_rep,
                 org_hidden_states,
@@ -1308,9 +1094,6 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
                 device=hidden_states.device,
                 dtype=hidden_states.dtype,
             )
-            self.mmrl_delta_ceiling_loss = torch.relu(
-                raw_mmrl_ratio - raw_mmrl_ratio.new_tensor(self.mmrl_delta_ceiling_target)
-            ).pow(2).to(device=hidden_states.device)
             if self.direct_mmrl_output:
                 adapter_outputs = None
                 final_delta = gated_delta
@@ -1348,10 +1131,8 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
             final_delta = torch.zeros_like(hidden_states)
             adapter_outputs = None
             self.mmrl_delta_to_org_ratio = hidden_states.new_tensor(float("nan"))
-            self.mmrl_delta_ceiling_loss = hidden_states.new_tensor(0.0)
             self.mmrl_relation_loss = hidden_states.new_tensor(0.0)
             self.mmrl_relation_gram_loss = hidden_states.new_tensor(0.0)
-            self.mmrl_variance_floor_loss = hidden_states.new_tensor(0.0)
             self._prepare_route_utility_metrics(hidden_states)
 
         (
@@ -1359,13 +1140,11 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
             self.adapter_sample_entropy_loss,
             self.adapter_common_mode_loss,
             self.adapter_effective_delta_loss,
-            self.prototype_anchor_loss,
             self.adapter_diversity_loss,
         ) = self._compute_router_aux_losses(
             final_delta,
             cu_seqlens,
             org_hidden_states=org_hidden_states,
-            pooled_vision_states=pooled_vision_states,
             adapter_outputs=adapter_outputs,
         )
 
@@ -1411,21 +1190,13 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
             "adapter_sample_entropy_loss": self.adapter_sample_entropy_loss.detach(),
             "adapter_common_mode_loss": self.adapter_common_mode_loss.detach(),
             "adapter_effective_delta_loss": self.adapter_effective_delta_loss.detach(),
-            "mmrl_delta_ceiling_loss": self.mmrl_delta_ceiling_loss.detach(),
             "mmrl_delta_to_org_ratio": self.mmrl_delta_to_org_ratio.detach(),
             "mmrl_relation_loss": self.mmrl_relation_loss.detach(),
             "mmrl_relation_gram_loss": self.mmrl_relation_gram_loss.detach(),
-            "mmrl_variance_floor_loss": self.mmrl_variance_floor_loss.detach(),
-            "route_utility_teacher_loss": self.route_utility_teacher_loss.detach(),
-            "prototype_anchor_loss": self.prototype_anchor_loss.detach(),
             "adapter_diversity_loss": self.adapter_diversity_loss.detach(),
             "adapter_effective_delta_ratio_mean": self.adapter_effective_delta_ratio_mean.detach(),
             "adapter_effective_delta_ratio_min": self.adapter_effective_delta_ratio_min.detach(),
             "adapter_effective_delta_ratio_max": self.adapter_effective_delta_ratio_max.detach(),
-            "route_proto_kl": self.route_proto_kl.detach(),
-            "route_proto_agreement": self.route_proto_agreement.detach(),
-            "prototype_usage_max": self.prototype_usage_max.detach(),
-            "prototype_usage_min": self.prototype_usage_min.detach(),
             "adapter_pairwise_cos_mean": self.adapter_pairwise_cos_mean.detach(),
             "adapter_pairwise_cos_max": self.adapter_pairwise_cos_max.detach(),
             "adapter_pairwise_cos_below_band": self.adapter_pairwise_cos_below_band.detach(),
@@ -1440,22 +1211,6 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
             **self._route_utility_step_metrics,
         }
         for idx in range(self.visual_residual_adapter_count):
-            value = getattr(
-                self,
-                f"prototype_usage_{idx}",
-                hidden_states.new_tensor(float("nan")),
-            )
-            self.debug_context[f"prototype_usage_{idx}"] = value.detach() if torch.is_tensor(value) else hidden_states.new_tensor(float(value))
-            teacher_target = getattr(
-                self,
-                f"route_utility_teacher_target_{idx}",
-                hidden_states.new_tensor(float("nan")),
-            )
-            self.debug_context[f"route_utility_teacher_target_{idx}"] = (
-                teacher_target.detach()
-                if torch.is_tensor(teacher_target)
-                else hidden_states.new_tensor(float(teacher_target))
-            )
             for prefix in ("adapter_output_norm", "adapter_contribution_norm"):
                 value = getattr(
                     self,

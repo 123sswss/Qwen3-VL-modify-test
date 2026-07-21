@@ -49,17 +49,8 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
             "ADAPTER_EFFECTIVE_DELTA_LOSS_WEIGHT": _cfg_attr(config, "ADAPTER_EFFECTIVE_DELTA_LOSS_WEIGHT", 0.0),
             "ADAPTER_EFFECTIVE_DELTA_TARGET_LOW": _cfg_attr(config, "ADAPTER_EFFECTIVE_DELTA_TARGET_LOW", 0.78),
             "ADAPTER_EFFECTIVE_DELTA_TARGET_HIGH": _cfg_attr(config, "ADAPTER_EFFECTIVE_DELTA_TARGET_HIGH", 1.10),
-            "MMRL_DELTA_CEILING_TARGET": _cfg_attr(config, "MMRL_DELTA_CEILING_TARGET", 1.75),
-            "MMRL_RELATION_LOSS_WEIGHT": _cfg_attr(config, "MMRL_RELATION_LOSS_WEIGHT", 0.0),
+            "MMRL_RELATION_TRUST_THRESHOLD": _cfg_attr(config, "MMRL_RELATION_TRUST_THRESHOLD", 0.065),
             "MMRL_RELATION_MAX_TOKENS": _cfg_attr(config, "MMRL_RELATION_MAX_TOKENS", 64),
-            "MMRL_VARIANCE_FLOOR_RATIO": _cfg_attr(config, "MMRL_VARIANCE_FLOOR_RATIO", 0.50),
-            "MMRL_VARIANCE_FLOOR_WEIGHT": _cfg_attr(config, "MMRL_VARIANCE_FLOOR_WEIGHT", 0.10),
-            "ROUTE_UTILITY_TEACHER_LOSS_WEIGHT": _cfg_attr(
-                config, "ROUTE_UTILITY_TEACHER_LOSS_WEIGHT", 0.0
-            ),
-            "ROUTE_UTILITY_TEACHER_TEMPERATURE": _cfg_attr(
-                config, "ROUTE_UTILITY_TEACHER_TEMPERATURE", 2.0
-            ),
             "ADAPTER_DIVERSITY_LOSS_WEIGHT": _cfg_attr(config, "ADAPTER_DIVERSITY_LOSS_WEIGHT", 0.0),
             "ADAPTER_DIVERSITY_TARGET_LOW": _cfg_attr(config, "ADAPTER_DIVERSITY_TARGET_LOW", 0.30),
             "ADAPTER_DIVERSITY_TARGET_HIGH": _cfg_attr(config, "ADAPTER_DIVERSITY_TARGET_HIGH", 0.58),
@@ -67,12 +58,6 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
             "ADAPTER_DIVERSITY_WORST_PAIR_WEIGHT": _cfg_attr(
                 config, "ADAPTER_DIVERSITY_WORST_PAIR_WEIGHT", 1.0
             ),
-            "PROTOTYPE_ANCHOR_LOSS_WEIGHT": _cfg_attr(config, "PROTOTYPE_ANCHOR_LOSS_WEIGHT", 0.0),
-            "PROTOTYPE_ANCHOR_TEMPERATURE": _cfg_attr(config, "PROTOTYPE_ANCHOR_TEMPERATURE", 0.20),
-            "PROTOTYPE_ANCHOR_MOMENTUM": _cfg_attr(config, "PROTOTYPE_ANCHOR_MOMENTUM", 0.95),
-            "PROTOTYPE_ANCHOR_MIN_CONFIDENCE": _cfg_attr(config, "PROTOTYPE_ANCHOR_MIN_CONFIDENCE", 0.40),
-            "PROTOTYPE_ANCHOR_ASSIGNMENT_POWER": _cfg_attr(config, "PROTOTYPE_ANCHOR_ASSIGNMENT_POWER", 2.0),
-            "PROTOTYPE_ANCHOR_INIT_NOISE": _cfg_attr(config, "PROTOTYPE_ANCHOR_INIT_NOISE", 0.10),
             "ENABLE_ADAPTER_ROUTER_IDENTITY_RESIDUAL": _cfg_attr(
                 config, "ENABLE_ADAPTER_ROUTER_IDENTITY_RESIDUAL", False
             ),

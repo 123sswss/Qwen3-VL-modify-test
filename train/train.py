@@ -71,27 +71,14 @@ BASE_VISUAL_ROUTER_MODEL = {
     "adapter_sample_entropy_loss_weight": 0.02,
     "adapter_common_mode_loss_weight": 0.03,
     "adapter_effective_delta_loss_weight": 0.0,
-    "mmrl_delta_ceiling_loss_weight": 0.0,
-    "mmrl_delta_ceiling_target": 1.75,
     "mmrl_relation_loss_weight": 0.0,
+    "mmrl_relation_trust_threshold": 0.065,
     "mmrl_relation_max_tokens": 64,
-    "mmrl_variance_floor_ratio": 0.50,
-    "mmrl_variance_floor_weight": 0.10,
-    "route_utility_teacher_loss_weight": 0.0,
-    "route_utility_teacher_warmup_fraction": 0.20,
-    "route_utility_teacher_temperature": 2.0,
-    "router_exploration_fraction": 0.0,
     "adapter_diversity_loss_weight": 0.0,
     "adapter_diversity_target_low": 0.30,
     "adapter_diversity_target_high": 0.58,
     "adapter_diversity_upper_weight": 2.0,
     "adapter_diversity_worst_pair_weight": 1.0,
-    "prototype_anchor_loss_weight": 0.0,
-    "prototype_anchor_temperature": 0.20,
-    "prototype_anchor_momentum": 0.95,
-    "prototype_anchor_min_confidence": 0.40,
-    "prototype_anchor_assignment_power": 2.0,
-    "prototype_anchor_init_noise": 0.10,
     "enable_adapter_router_identity_residual": False,
     "direct_mmrl_output": False,
     "enable_deepstack_mmrl_residual": False,
@@ -106,34 +93,12 @@ BASE_VISUAL_ROUTER_MODEL = {
 }
 
 
-EXPLORATION_PRUNE_DEMO = {
-    **BASE_VISUAL_ROUTER_MODEL,
-    "adapter_usage_balance_loss_weight": 0.010,
-    "adapter_sample_entropy_loss_weight": 0.005,
-    "adapter_sample_entropy_target": 0.50,
-    "router_exploration_fraction": 0.35,
-
-    "mmrl_delta_ceiling_loss_weight": 0.010,
-    "mmrl_delta_ceiling_target": 1.75,
-
-    "adapter_common_mode_loss_weight": 0.0,
-    "adapter_effective_delta_loss_weight": 0.0003,
-    "adapter_effective_delta_target_low": 0.52,
-    "adapter_effective_delta_target_high": 0.98,
-    "prototype_anchor_loss_weight": 0.0,
-    "adapter_diversity_loss_weight": 0.0,
-    "enable_deepstack_mmrl_residual": False,
-    "deepstack_mmrl_residual_scale": 0.0,
-}
-
-
 V4_RECOVER_BASE = {
     **BASE_VISUAL_ROUTER_MODEL,
     "adapter_usage_balance_loss_weight": 0.0026,
     "adapter_sample_entropy_loss_weight": 0.020,
     "adapter_common_mode_loss_weight": 0.0,
     "adapter_effective_delta_loss_weight": 0.0003,
-    "prototype_anchor_loss_weight": 0.0,
     "adapter_diversity_loss_weight": 0.0,
     "adapter_diversity_target_low": 0.30,
     "adapter_diversity_target_high": 0.58,
@@ -147,33 +112,14 @@ V4_RECOVER_BASE = {
 
 
 EXPERIMENTS = {
-    "visual_router_explore_prune_demo_a": {
-        **EXPLORATION_PRUNE_DEMO,
-    },
-    "visual_router_explore_prune_demo_b": {
-        **EXPLORATION_PRUNE_DEMO,
-    },
     "visual_router_layer_fixed_v4_diversity_recover": {
         **V4_RECOVER_BASE,
     },
-    "visual_router_relation_only": {
+    "visual_router_relation_trust_v1": {
         **V4_RECOVER_BASE,
-        "mmrl_relation_loss_weight": 0.010,
+        "mmrl_relation_loss_weight": 0.030,
+        "mmrl_relation_trust_threshold": 0.065,
         "mmrl_relation_max_tokens": 64,
-        "mmrl_variance_floor_ratio": 0.50,
-        "mmrl_variance_floor_weight": 0.10,
-        "route_utility_teacher_loss_weight": 0.0,
-        "router_exploration_fraction": 0.0,
-        "mmrl_delta_ceiling_loss_weight": 0.0,
-    },
-    "visual_router_utility_teacher_only": {
-        **V4_RECOVER_BASE,
-        "mmrl_relation_loss_weight": 0.0,
-        "route_utility_teacher_loss_weight": 0.005,
-        "route_utility_teacher_warmup_fraction": 0.20,
-        "route_utility_teacher_temperature": 2.0,
-        "router_exploration_fraction": 0.0,
-        "mmrl_delta_ceiling_loss_weight": 0.0,
     },
     "visual_router_direct_mmrl_seed44": {
         **BASE_VISUAL_ROUTER_MODEL,
@@ -181,7 +127,6 @@ EXPERIMENTS = {
         "adapter_sample_entropy_loss_weight": 0.0,
         "adapter_common_mode_loss_weight": 0.0,
         "adapter_effective_delta_loss_weight": 0.0,
-        "prototype_anchor_loss_weight": 0.0,
         "adapter_diversity_loss_weight": 0.0,
         "direct_mmrl_output": True,
         "enable_adapter_router_identity_residual": False,
@@ -195,7 +140,6 @@ EXPERIMENTS = {
         "adapter_sample_entropy_loss_weight": 0.020,
         "adapter_common_mode_loss_weight": 0.0,
         "adapter_effective_delta_loss_weight": 0.0003,
-        "prototype_anchor_loss_weight": 0.0,
         "adapter_diversity_loss_weight": 0.0,
         "adapter_diversity_target_low": 0.30,
         "adapter_diversity_target_high": 0.58,
@@ -213,7 +157,6 @@ EXPERIMENTS = {
         "adapter_sample_entropy_loss_weight": 0.020,
         "adapter_common_mode_loss_weight": 0.0,
         "adapter_effective_delta_loss_weight": 0.0003,
-        "prototype_anchor_loss_weight": 0.0,
         "adapter_diversity_loss_weight": 0.0,
         "adapter_diversity_target_low": 0.30,
         "adapter_diversity_target_high": 0.58,
@@ -296,45 +239,17 @@ CFG = {
             "MMRL_ADAPTER_EFFECTIVE_DELTA_LOSS_WEIGHT",
             str(EXP_CFG.get("adapter_effective_delta_loss_weight", 0.0)),
         )),
-        "mmrl_delta_ceiling_loss_weight": float(os.getenv(
-            "MMRL_DELTA_CEILING_LOSS_WEIGHT",
-            str(EXP_CFG.get("mmrl_delta_ceiling_loss_weight", 0.0)),
-        )),
-        "mmrl_delta_ceiling_target": float(os.getenv(
-            "MMRL_DELTA_CEILING_TARGET",
-            str(EXP_CFG.get("mmrl_delta_ceiling_target", 1.75)),
-        )),
         "mmrl_relation_loss_weight": float(os.getenv(
             "MMRL_RELATION_LOSS_WEIGHT",
             str(EXP_CFG.get("mmrl_relation_loss_weight", 0.0)),
         )),
+        "mmrl_relation_trust_threshold": float(os.getenv(
+            "MMRL_RELATION_TRUST_THRESHOLD",
+            str(EXP_CFG.get("mmrl_relation_trust_threshold", 0.065)),
+        )),
         "mmrl_relation_max_tokens": int(os.getenv(
             "MMRL_RELATION_MAX_TOKENS",
             str(EXP_CFG.get("mmrl_relation_max_tokens", 64)),
-        )),
-        "mmrl_variance_floor_ratio": float(os.getenv(
-            "MMRL_VARIANCE_FLOOR_RATIO",
-            str(EXP_CFG.get("mmrl_variance_floor_ratio", 0.50)),
-        )),
-        "mmrl_variance_floor_weight": float(os.getenv(
-            "MMRL_VARIANCE_FLOOR_WEIGHT",
-            str(EXP_CFG.get("mmrl_variance_floor_weight", 0.10)),
-        )),
-        "route_utility_teacher_loss_weight": float(os.getenv(
-            "MMRL_ROUTE_UTILITY_TEACHER_LOSS_WEIGHT",
-            str(EXP_CFG.get("route_utility_teacher_loss_weight", 0.0)),
-        )),
-        "route_utility_teacher_warmup_fraction": float(os.getenv(
-            "MMRL_ROUTE_UTILITY_TEACHER_WARMUP_FRACTION",
-            str(EXP_CFG.get("route_utility_teacher_warmup_fraction", 0.20)),
-        )),
-        "route_utility_teacher_temperature": float(os.getenv(
-            "MMRL_ROUTE_UTILITY_TEACHER_TEMPERATURE",
-            str(EXP_CFG.get("route_utility_teacher_temperature", 2.0)),
-        )),
-        "router_exploration_fraction": float(os.getenv(
-            "MMRL_ROUTER_EXPLORATION_FRACTION",
-            str(EXP_CFG.get("router_exploration_fraction", 0.0)),
         )),
         "adapter_diversity_loss_weight": float(os.getenv(
             "MMRL_ADAPTER_DIVERSITY_LOSS_WEIGHT",
@@ -355,30 +270,6 @@ CFG = {
         "adapter_diversity_worst_pair_weight": float(os.getenv(
             "MMRL_ADAPTER_DIVERSITY_WORST_PAIR_WEIGHT",
             str(EXP_CFG.get("adapter_diversity_worst_pair_weight", 1.0)),
-        )),
-        "prototype_anchor_loss_weight": float(os.getenv(
-            "MMRL_PROTOTYPE_ANCHOR_LOSS_WEIGHT",
-            str(EXP_CFG.get("prototype_anchor_loss_weight", 0.0)),
-        )),
-        "prototype_anchor_temperature": float(os.getenv(
-            "MMRL_PROTOTYPE_ANCHOR_TEMPERATURE",
-            str(EXP_CFG.get("prototype_anchor_temperature", 0.20)),
-        )),
-        "prototype_anchor_momentum": float(os.getenv(
-            "MMRL_PROTOTYPE_ANCHOR_MOMENTUM",
-            str(EXP_CFG.get("prototype_anchor_momentum", 0.95)),
-        )),
-        "prototype_anchor_min_confidence": float(os.getenv(
-            "MMRL_PROTOTYPE_ANCHOR_MIN_CONFIDENCE",
-            str(EXP_CFG.get("prototype_anchor_min_confidence", 0.40)),
-        )),
-        "prototype_anchor_assignment_power": float(os.getenv(
-            "MMRL_PROTOTYPE_ANCHOR_ASSIGNMENT_POWER",
-            str(EXP_CFG.get("prototype_anchor_assignment_power", 2.0)),
-        )),
-        "prototype_anchor_init_noise": float(os.getenv(
-            "MMRL_PROTOTYPE_ANCHOR_INIT_NOISE",
-            str(EXP_CFG.get("prototype_anchor_init_noise", 0.10)),
         )),
         "enable_adapter_router_identity_residual": os.getenv(
             "MMRL_ENABLE_ADAPTER_ROUTER_IDENTITY_RESIDUAL",
@@ -432,18 +323,8 @@ CFG = {
             "ce_loss",
             "delta_to_org_ratio",
             "mmrl_delta_to_org_ratio",
-            "mmrl_delta_ceiling_loss_scaled",
             "mmrl_relation_loss_scaled",
             "mmrl_relation_gram_loss",
-            "mmrl_variance_floor_loss",
-            "route_utility_teacher_loss_scaled",
-            "route_utility_teacher_active",
-            "route_utility_teacher_target_0",
-            "route_utility_teacher_target_1",
-            "route_utility_teacher_target_2",
-            "route_utility_teacher_target_3",
-            "route_protection_scale",
-            "run_progress",
             "adapter_effective_delta_ratio_mean",
             "adapter_effective_delta_ratio_min",
             "adapter_effective_delta_ratio_max",
@@ -462,12 +343,6 @@ CFG = {
             "adapter_usage_1",
             "adapter_usage_2",
             "adapter_usage_3",
-            "route_proto_kl",
-            "route_proto_agreement",
-            "prototype_usage_0",
-            "prototype_usage_1",
-            "prototype_usage_2",
-            "prototype_usage_3",
             "adapter_usage_balance_loss_scaled",
             "adapter_sample_entropy_loss_scaled",
             "adapter_effective_delta_loss_scaled",

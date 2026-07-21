@@ -188,26 +188,23 @@ run_N() {
   done
 }
 
-# 当前激进消融默认固定 seed 44。多张卡可分别执行：
+# 多张卡可分别执行 trust44 与 trust45，验证已知好/坏 seed。
+#   bash run_experiment.sh trust44
+#   bash run_experiment.sh trust45
+# 当前激进消融默认固定 seed 44：
 #   bash run_experiment.sh direct_mmrl
 #   bash run_experiment.sh two_adapter
 #   bash run_experiment.sh single_adapter
-#   bash run_experiment.sh relation_only
-#   bash run_experiment.sh utility_only
-#   bash run_experiment.sh explore_prune_a
-#   bash run_experiment.sh explore_prune_b
 case "$RUN_TARGET" in
-  relation_only)
-    run_one "visual_router_relation_only" "visual_router_relation_only"
+  trust44)
+    AUTO_INCREMENT_SEED=0
+    FIXED_SEED=44
+    run_one "visual_router_relation_trust_v1" "visual_router_relation_trust_v1_seed44"
     ;;
-  utility_only)
-    run_one "visual_router_utility_teacher_only" "visual_router_utility_teacher_only"
-    ;;
-  explore_prune_a)
-    run_one "visual_router_explore_prune_demo_a" "visual_router_explore_prune_demo_a"
-    ;;
-  explore_prune_b)
-    run_one "visual_router_explore_prune_demo_b" "visual_router_explore_prune_demo_b"
+  trust45)
+    AUTO_INCREMENT_SEED=0
+    FIXED_SEED=45
+    run_one "visual_router_relation_trust_v1" "visual_router_relation_trust_v1_seed45"
     ;;
   direct_mmrl)
     run_one "visual_router_direct_mmrl_seed44" "visual_router_direct_mmrl_seed44"
@@ -219,11 +216,14 @@ case "$RUN_TARGET" in
     run_one "visual_router_single_adapter_seed44" "visual_router_single_adapter_seed44"
     ;;
   all)
-    run_one "visual_router_relation_only" "visual_router_relation_only"
-    run_one "visual_router_utility_teacher_only" "visual_router_utility_teacher_only"
+    AUTO_INCREMENT_SEED=0
+    FIXED_SEED=44
+    run_one "visual_router_relation_trust_v1" "visual_router_relation_trust_v1_seed44"
+    FIXED_SEED=45
+    run_one "visual_router_relation_trust_v1" "visual_router_relation_trust_v1_seed45"
     ;;
   *)
-    echo "[ERR] 未知实验目标: $RUN_TARGET（可选: relation_only, utility_only, explore_prune_a, explore_prune_b, direct_mmrl, two_adapter, single_adapter, all）" >&2
+    echo "[ERR] 未知实验目标: $RUN_TARGET（可选: trust44, trust45, direct_mmrl, two_adapter, single_adapter, all）" >&2
     exit 2
     ;;
 esac

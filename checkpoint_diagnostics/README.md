@@ -2,6 +2,28 @@
 
 本目录只包含离线 checkpoint 诊断代码与输出，不修改训练流程。
 
+## MMRL delta 推理缩放
+
+在坏 checkpoint 所在的容器中，把进入四个 visual adapter 的 MMRL delta 缩放后
+进行一次完整评测。建议先测试 `0.7`：
+
+```bash
+bash checkpoint_diagnostics/run_mmrl_scale.sh 0.7
+```
+
+如 checkpoint 路径不同，可显式覆盖：
+
+```bash
+CHECKPOINT=/path/to/bad/final \
+bash checkpoint_diagnostics/run_mmrl_scale.sh 0.7
+```
+
+需要继续测试更强缩放时，再执行 `bash checkpoint_diagnostics/run_mmrl_scale.sh 0.5`。
+
+该实验通过 adapter `forward_pre_hook` 只修改内存中的推理输入，不修改正式模型
+代码、Gate、router、最终残差、模型权重或 checkpoint 文件。输出位于
+`checkpoint_diagnostics/outputs/mmrl_scale_<系数>_<时间>/`。
+
 ## 运行高分 checkpoint
 
 在项目根目录执行：

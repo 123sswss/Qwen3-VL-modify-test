@@ -149,6 +149,7 @@ run_one() {
     echo "[EXP] seed_mode=fixed"
   fi
   echo "[EXP] data_sampling_seed=42"
+  echo "[EXP] data_order_seed=42"
   echo "[EXP] checkpoint目录: $output_dir"
   echo "============================================================"
 
@@ -160,6 +161,7 @@ run_one() {
     MMRL_EXPERIMENT="$experiment_name" \
     MMRL_SEED="$experiment_seed" \
     MMRL_DATA_SAMPLING_SEED="42" \
+    MMRL_DATA_ORDER_SEED="42" \
     MMRL_DETERMINISTIC_SAMPLING="1" \
     MMRL_EVAL_EACH_EPOCH="0" \
     MMRL_LIVE_FINAL_EVAL="1" \
@@ -189,6 +191,7 @@ run_N() {
 }
 
 # 两张卡使用同一新 seed 做配对结构实验。
+#   bash run_experiment.sh relation44
 #   bash run_experiment.sh relation47
 #   bash run_experiment.sh raw_adapter47
 # 当前激进消融默认固定 seed 44：
@@ -196,6 +199,11 @@ run_N() {
 #   bash run_experiment.sh two_adapter
 #   bash run_experiment.sh single_adapter
 case "$RUN_TARGET" in
+  relation44)
+    AUTO_INCREMENT_SEED=0
+    FIXED_SEED=44
+    run_one "visual_router_relation_alignment_diag" "visual_router_relation_retest_seed44"
+    ;;
   relation47)
     AUTO_INCREMENT_SEED=0
     FIXED_SEED=47
@@ -222,7 +230,7 @@ case "$RUN_TARGET" in
     run_one "visual_router_raw_adapter_v1" "visual_router_raw_adapter_v1_seed47"
     ;;
   *)
-    echo "[ERR] 未知实验目标: $RUN_TARGET（可选: relation47, raw_adapter47, direct_mmrl, two_adapter, single_adapter, all）" >&2
+    echo "[ERR] 未知实验目标: $RUN_TARGET（可选: relation44, relation47, raw_adapter47, direct_mmrl, two_adapter, single_adapter, all）" >&2
     exit 2
     ;;
 esac

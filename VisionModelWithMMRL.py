@@ -422,6 +422,24 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
             "final_delta_norm_std": nan,
             "final_delta_norm_p95": nan,
             "final_delta_norm_max": nan,
+            "mmrl_token_ratio_mean": nan,
+            "mmrl_token_ratio_p50": nan,
+            "mmrl_token_ratio_p90": nan,
+            "mmrl_token_ratio_p95": nan,
+            "mmrl_token_ratio_p99": nan,
+            "mmrl_token_ratio_max": nan,
+            "mmrl_token_ratio_over_1_fraction": nan,
+            "mmrl_token_ratio_over_1_5_fraction": nan,
+            "mmrl_token_ratio_over_2_fraction": nan,
+            "final_token_ratio_mean": nan,
+            "final_token_ratio_p50": nan,
+            "final_token_ratio_p90": nan,
+            "final_token_ratio_p95": nan,
+            "final_token_ratio_p99": nan,
+            "final_token_ratio_max": nan,
+            "final_token_ratio_over_1_fraction": nan,
+            "final_token_ratio_over_1_5_fraction": nan,
+            "final_token_ratio_over_2_fraction": nan,
             "final_to_gated_ratio": nan,
             "delta_transform_cos_mean": nan,
             "delta_transform_cos_std": nan,
@@ -470,6 +488,9 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
 
             final_token_norm = final_delta.norm(dim=-1)
             gated_token_norm = gated_delta.norm(dim=-1)
+            org_token_norm = org_hidden_states.norm(dim=-1).clamp_min(1e-8)
+            mmrl_token_ratio = gated_token_norm / org_token_norm
+            final_token_ratio = final_token_norm / org_token_norm
 
             metrics["gated_delta_norm_mean"] = gated_token_norm.mean()
             metrics["gated_delta_norm_std"] = gated_token_norm.std(unbiased=False)
@@ -478,6 +499,24 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
             metrics["final_delta_norm_std"] = final_token_norm.std(unbiased=False)
             metrics["final_delta_norm_p95"] = torch.quantile(final_token_norm, 0.95) if final_token_norm.numel() > 0 else nan
             metrics["final_delta_norm_max"] = final_token_norm.max() if final_token_norm.numel() > 0 else nan
+            if mmrl_token_ratio.numel() > 0:
+                quantiles = mmrl_token_ratio.new_tensor([0.50, 0.90, 0.95, 0.99])
+                mmrl_q = torch.quantile(mmrl_token_ratio, quantiles)
+                final_q = torch.quantile(final_token_ratio, quantiles)
+                for idx, suffix in enumerate(("p50", "p90", "p95", "p99")):
+                    metrics[f"mmrl_token_ratio_{suffix}"] = mmrl_q[idx]
+                    metrics[f"final_token_ratio_{suffix}"] = final_q[idx]
+                metrics["mmrl_token_ratio_mean"] = mmrl_token_ratio.mean()
+                metrics["mmrl_token_ratio_max"] = mmrl_token_ratio.max()
+                metrics["final_token_ratio_mean"] = final_token_ratio.mean()
+                metrics["final_token_ratio_max"] = final_token_ratio.max()
+                for threshold, suffix in ((1.0, "1"), (1.5, "1_5"), (2.0, "2")):
+                    metrics[f"mmrl_token_ratio_over_{suffix}_fraction"] = (
+                        mmrl_token_ratio > threshold
+                    ).float().mean()
+                    metrics[f"final_token_ratio_over_{suffix}_fraction"] = (
+                        final_token_ratio > threshold
+                    ).float().mean()
             metrics["final_to_gated_ratio"] = final_token_norm.mean() / gated_token_norm.mean().clamp_min(1e-8)
 
             valid_transform = (final_token_norm > 1e-8) & (gated_token_norm > 1e-8)

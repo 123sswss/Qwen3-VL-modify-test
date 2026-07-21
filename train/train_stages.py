@@ -39,6 +39,7 @@ def _build_experiment_context(train_cfg, output_dir, stage_id):
         "train_cfg": {
             "seed": train_cfg.get("seed"),
             "data_sampling_seed": train_cfg.get("data_sampling_seed"),
+            "data_order_seed": train_cfg.get("data_order_seed"),
             "deterministic_sampling": train_cfg.get("deterministic_sampling", False),
             "per_device_train_batch_size": train_cfg.get("per_device_train_batch_size"),
             "gradient_accumulation_steps": train_cfg.get("gradient_accumulation_steps"),
@@ -1187,7 +1188,7 @@ def run_stage1_light(model, processor, data_cfg, train_cfg, output_dir):
     )
     collator = MMRLDataCollator(processor)
     data_generator = torch.Generator()
-    data_generator.manual_seed(int(train_cfg["seed"]) + int(stage_id))
+    data_generator.manual_seed(int(train_cfg.get("data_order_seed", 42)) + int(stage_id))
 
     dl = DataLoader(
         ds,
@@ -1380,7 +1381,7 @@ def run_stage3_full(model, processor, data_cfg, train_cfg, output_dir):
         dataloader_pin_memory=False,
         dataloader_num_workers=train_cfg.get("dataloader_num_workers", 4),
         seed=train_cfg["seed"],
-        data_seed=train_cfg["seed"] + stage_id,
+        data_seed=int(train_cfg.get("data_order_seed", 42)) + int(stage_id),
     )
     experiment_context = _build_experiment_context(train_cfg, output_dir, stage_id)
     metric_logger = StageMetricLogger(

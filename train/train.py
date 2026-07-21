@@ -75,6 +75,7 @@ BASE_VISUAL_ROUTER_MODEL = {
     "mmrl_relation_max_tokens": 64,
     "mmrl_variance_floor_ratio": 0.50,
     "mmrl_variance_floor_weight": 0.10,
+    "mmrl_radial_limit": 1.60,
     "adapter_diversity_loss_weight": 0.0,
     "adapter_diversity_target_low": 0.30,
     "adapter_diversity_target_high": 0.58,
@@ -116,12 +117,13 @@ EXPERIMENTS = {
     "visual_router_layer_fixed_v4_diversity_recover": {
         **V4_RECOVER_BASE,
     },
-    "visual_router_relation_alignment_diag": {
+    "visual_router_relation_radial_v1": {
         **V4_RECOVER_BASE,
         "mmrl_relation_loss_weight": 0.010,
         "mmrl_relation_max_tokens": 64,
         "mmrl_variance_floor_ratio": 0.50,
         "mmrl_variance_floor_weight": 0.10,
+        "mmrl_radial_limit": 1.60,
     },
     "visual_router_direct_mmrl_seed44": {
         **BASE_VISUAL_ROUTER_MODEL,
@@ -257,6 +259,10 @@ CFG = {
             "MMRL_VARIANCE_FLOOR_WEIGHT",
             str(EXP_CFG.get("mmrl_variance_floor_weight", 0.10)),
         )),
+        "mmrl_radial_limit": float(os.getenv(
+            "MMRL_RADIAL_LIMIT",
+            str(EXP_CFG.get("mmrl_radial_limit", 1.60)),
+        )),
         "adapter_diversity_loss_weight": float(os.getenv(
             "MMRL_ADAPTER_DIVERSITY_LOSS_WEIGHT",
             str(EXP_CFG.get("adapter_diversity_loss_weight", 0.0)),
@@ -332,6 +338,10 @@ CFG = {
             "mmrl_relation_loss_scaled",
             "mmrl_relation_gram_loss",
             "mmrl_variance_floor_loss",
+            "mmrl_radial_excess_loss",
+            "mmrl_radial_ratio_mean",
+            "mmrl_radial_ratio_p95",
+            "mmrl_radial_ratio_max",
             "mmrl_state_token_cos_mean",
             "mmrl_state_token_cos_p05",
             "mmrl_state_pooled_cos_mean",

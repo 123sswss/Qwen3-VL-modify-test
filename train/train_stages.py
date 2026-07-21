@@ -72,6 +72,10 @@ def _build_experiment_context(train_cfg, output_dir, stage_id):
                 "mmrl_variance_floor_weight",
                 experiment_cfg.get("mmrl_variance_floor_weight"),
             ),
+            "mmrl_radial_limit": train_cfg.get(
+                "mmrl_radial_limit",
+                experiment_cfg.get("mmrl_radial_limit"),
+            ),
             "adapter_sample_entropy_target": train_cfg.get("adapter_sample_entropy_target"),
             "adapter_common_mode_target": train_cfg.get("adapter_common_mode_target"),
             "adapter_effective_delta_target_low": train_cfg.get(
@@ -918,6 +922,10 @@ def build_model_and_processor(model_path, experiment_cfg=None):
         "mmrl_variance_floor_weight",
         os.getenv("MMRL_VARIANCE_FLOOR_WEIGHT", "0.10"),
     ))
+    config.MMRL_RADIAL_LIMIT = float(experiment_cfg.get(
+        "mmrl_radial_limit",
+        os.getenv("MMRL_RADIAL_LIMIT", "1.60"),
+    ))
     config.ADAPTER_SAMPLE_ENTROPY_TARGET = float(experiment_cfg.get(
         "adapter_sample_entropy_target",
         os.getenv("MMRL_ADAPTER_SAMPLE_ENTROPY_TARGET", "0.40"),
@@ -1004,6 +1012,10 @@ def build_model_and_processor(model_path, experiment_cfg=None):
             config.MMRL_VARIANCE_FLOOR_WEIGHT,
             visual.mmrl_variance_floor_weight,
         ),
+        "MMRL_RADIAL_LIMIT": (
+            config.MMRL_RADIAL_LIMIT,
+            visual.mmrl_radial_limit,
+        ),
     }
     for name, (requested, actual) in propagation_checks.items():
         if abs(float(requested) - float(actual)) > 1e-9:
@@ -1058,6 +1070,7 @@ def build_model_and_processor(model_path, experiment_cfg=None):
         f"mmrl_relation_loss_weight={config.MMRL_RELATION_LOSS_WEIGHT} "
         f"mmrl_variance_floor_ratio={config.MMRL_VARIANCE_FLOOR_RATIO} "
         f"mmrl_variance_floor_weight={config.MMRL_VARIANCE_FLOOR_WEIGHT} "
+        f"mmrl_radial_limit={config.MMRL_RADIAL_LIMIT} "
         f"adapter_sample_entropy_target={config.ADAPTER_SAMPLE_ENTROPY_TARGET} "
         f"adapter_common_mode_target={config.ADAPTER_COMMON_MODE_TARGET} "
         f"adapter_effective_delta_target_low={config.ADAPTER_EFFECTIVE_DELTA_TARGET_LOW} "
@@ -1320,7 +1333,8 @@ def run_stage3_full(model, processor, data_cfg, train_cfg, output_dir):
         f"weight={model.mmrl_relation_loss_weight} "
         f"max_tokens={model.model.visual.mmrl_relation_max_tokens} "
         f"variance_floor_ratio={model.model.visual.mmrl_variance_floor_ratio} "
-        f"variance_floor_weight={model.model.visual.mmrl_variance_floor_weight}"
+        f"variance_floor_weight={model.model.visual.mmrl_variance_floor_weight} "
+        f"radial_limit={model.model.visual.mmrl_radial_limit}"
     )
     model.adapter_diversity_loss_weight = float(train_cfg.get(
         "adapter_diversity_loss_weight",

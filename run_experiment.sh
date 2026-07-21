@@ -16,9 +16,9 @@ shutdown_on_exit() {
     return "$exit_code"
   fi
   echo "[EXIT] 脚本退出，exit_code=$exit_code"
-  echo "[EXIT] 60 秒后自动关机。"
+  echo "[EXIT] 600 秒后自动关机。"
   echo "[EXIT] 如需取消自动关机，请在倒计时内按 Ctrl+C。"
-  sleep 60
+  sleep 600
   /usr/bin/shutdown
 }
 trap shutdown_on_exit EXIT
@@ -188,23 +188,23 @@ run_N() {
   done
 }
 
-# 多张卡可分别执行 diag44 与 diag45，比较已知好/坏 seed 的绝对坐标对齐。
-#   bash run_experiment.sh diag44
-#   bash run_experiment.sh diag45
+# 多张卡可分别执行 radial44 与 radial45，验证径向稳定器能否保上限、抬下限。
+#   bash run_experiment.sh radial44
+#   bash run_experiment.sh radial45
 # 当前激进消融默认固定 seed 44：
 #   bash run_experiment.sh direct_mmrl
 #   bash run_experiment.sh two_adapter
 #   bash run_experiment.sh single_adapter
 case "$RUN_TARGET" in
-  diag44)
+  radial44)
     AUTO_INCREMENT_SEED=0
     FIXED_SEED=44
-    run_one "visual_router_relation_alignment_diag" "visual_router_relation_alignment_diag_seed44"
+    run_one "visual_router_relation_radial_v1" "visual_router_relation_radial_v1_seed44"
     ;;
-  diag45)
+  radial45)
     AUTO_INCREMENT_SEED=0
     FIXED_SEED=45
-    run_one "visual_router_relation_alignment_diag" "visual_router_relation_alignment_diag_seed45"
+    run_one "visual_router_relation_radial_v1" "visual_router_relation_radial_v1_seed45"
     ;;
   direct_mmrl)
     run_one "visual_router_direct_mmrl_seed44" "visual_router_direct_mmrl_seed44"
@@ -218,12 +218,12 @@ case "$RUN_TARGET" in
   all)
     AUTO_INCREMENT_SEED=0
     FIXED_SEED=44
-    run_one "visual_router_relation_alignment_diag" "visual_router_relation_alignment_diag_seed44"
+    run_one "visual_router_relation_radial_v1" "visual_router_relation_radial_v1_seed44"
     FIXED_SEED=45
-    run_one "visual_router_relation_alignment_diag" "visual_router_relation_alignment_diag_seed45"
+    run_one "visual_router_relation_radial_v1" "visual_router_relation_radial_v1_seed45"
     ;;
   *)
-    echo "[ERR] 未知实验目标: $RUN_TARGET（可选: diag44, diag45, direct_mmrl, two_adapter, single_adapter, all）" >&2
+    echo "[ERR] 未知实验目标: $RUN_TARGET（可选: radial44, radial45, direct_mmrl, two_adapter, single_adapter, all）" >&2
     exit 2
     ;;
 esac

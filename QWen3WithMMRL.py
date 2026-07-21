@@ -64,6 +64,18 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
             ),
             "DIRECT_MMRL_OUTPUT": _cfg_attr(config, "DIRECT_MMRL_OUTPUT", False),
             "RAW_VISUAL_ADAPTER": _cfg_attr(config, "RAW_VISUAL_ADAPTER", False),
+            "ENABLE_EARLY_MMRL_GUARD": _cfg_attr(
+                config, "ENABLE_EARLY_MMRL_GUARD", False
+            ),
+            "EARLY_MMRL_GUARD_RATIO": _cfg_attr(
+                config, "EARLY_MMRL_GUARD_RATIO", 1.25
+            ),
+            "EARLY_MMRL_GUARD_HOLD_STEPS": _cfg_attr(
+                config, "EARLY_MMRL_GUARD_HOLD_STEPS", 250
+            ),
+            "EARLY_MMRL_GUARD_RELEASE_STEPS": _cfg_attr(
+                config, "EARLY_MMRL_GUARD_RELEASE_STEPS", 125
+            ),
             "ENABLE_DEEPSTACK_MMRL_RESIDUAL": _cfg_attr(config, "ENABLE_DEEPSTACK_MMRL_RESIDUAL", False),
             "DEEPSTACK_MMRL_RESIDUAL_SCALE": _cfg_attr(config, "DEEPSTACK_MMRL_RESIDUAL_SCALE", 0.0),
             "vision_token_dim": vision_dim,

@@ -224,6 +224,22 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
         )
         self.direct_mmrl_output = bool(getattr(self.cfg, "DIRECT_MMRL_OUTPUT", False))
         self.raw_visual_adapter = bool(getattr(self.cfg, "RAW_VISUAL_ADAPTER", False))
+        self.enable_early_mmrl_guard = bool(
+            getattr(self.cfg, "ENABLE_EARLY_MMRL_GUARD", False)
+        )
+        self.early_mmrl_guard_ratio = float(
+            getattr(self.cfg, "EARLY_MMRL_GUARD_RATIO", 1.25)
+        )
+        self.early_mmrl_guard_hold_steps = int(
+            getattr(self.cfg, "EARLY_MMRL_GUARD_HOLD_STEPS", 250)
+        )
+        self.early_mmrl_guard_release_steps = int(
+            getattr(self.cfg, "EARLY_MMRL_GUARD_RELEASE_STEPS", 125)
+        )
+        self.current_stage_id = 0
+        self.current_stage_step = 0
+        self.early_mmrl_guard_scale = torch.tensor(1.0)
+        self.early_mmrl_guard_effective_ratio = torch.tensor(float("nan"))
         if self.raw_visual_adapter and self.direct_mmrl_output:
             raise ValueError("RAW_VISUAL_ADAPTER and DIRECT_MMRL_OUTPUT cannot both be enabled")
         self.enable_deepstack_mmrl_residual = bool(getattr(self.cfg, "ENABLE_DEEPSTACK_MMRL_RESIDUAL", False))
@@ -946,6 +962,30 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
             adapter_diversity_loss.to(device=device, dtype=final_delta.dtype),
         )
 
+    def _compute_early_mmrl_guard_scale(self, raw_ratio: torch.Tensor):
+        one = raw_ratio.new_tensor(1.0)
+        if (
+            not self.training
+            or not self.enable_early_mmrl_guard
+            or self.direct_mmrl_output
+            or int(self.current_stage_id) != 3
+        ):
+            return one
+
+        step = max(int(self.current_stage_step), 1)
+        hold_steps = max(int(self.early_mmrl_guard_hold_steps), 0)
+        release_steps = max(int(self.early_mmrl_guard_release_steps), 0)
+        if step > hold_steps + release_steps:
+            return one
+
+        cap = raw_ratio.new_tensor(float(self.early_mmrl_guard_ratio))
+        capped_scale = torch.clamp(cap / raw_ratio.detach().clamp_min(1e-8), max=1.0)
+        if step <= hold_steps or release_steps == 0:
+            return capped_scale
+
+        release_progress = float(step - hold_steps) / float(release_steps)
+        return capped_scale + (one - capped_scale) * release_progress
+
     def forward(self,
                 hidden_states: torch.Tensor,
                 grid_thw: torch.Tensor,
@@ -956,6 +996,8 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
                 images_per_sample: Optional[list[int]] = None,
                 **kwargs):
         assert len(images_per_sample) == embedding.shape[0]
+        self.early_mmrl_guard_scale = hidden_states.new_tensor(1.0)
+        self.early_mmrl_guard_effective_ratio = hidden_states.new_tensor(float("nan"))
         batch_size = embedding.shape[0]
         pic_seqlens = [0] + list(accumulate(images_per_sample))
 
@@ -1236,12 +1278,22 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
                 device=hidden_states.device,
                 dtype=hidden_states.dtype,
             )
+            guard_scale = self._compute_early_mmrl_guard_scale(raw_mmrl_ratio)
+            self.early_mmrl_guard_scale = guard_scale.detach().to(
+                device=hidden_states.device,
+                dtype=hidden_states.dtype,
+            )
+            self.early_mmrl_guard_effective_ratio = (raw_mmrl_ratio * guard_scale).detach().to(
+                device=hidden_states.device,
+                dtype=hidden_states.dtype,
+            )
             if self.direct_mmrl_output:
                 adapter_outputs = None
                 final_delta = gated_delta
                 hidden_states = org_hidden_states + final_delta
                 self._prepare_route_utility_metrics(hidden_states)
             else:
+                adapter_input_delta = delta * guard_scale.to(device=delta.device, dtype=delta.dtype)
                 if torch.is_tensor(self.route_probs) and self.route_probs.numel() > 0:
                     token_route_probs = torch.repeat_interleave(self.route_probs, seqlens, dim=0)
                 else:
@@ -1250,7 +1302,7 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
                         dtype=gated_delta.dtype,
                     ) / float(self.visual_residual_adapter_count)
                 adapter_outputs = torch.stack(
-                    [adapter(delta) for adapter in self.residual_adapters],
+                    [adapter(adapter_input_delta) for adapter in self.residual_adapters],
                     dim=1,
                 )
                 routed_delta = (adapter_outputs * token_route_probs.unsqueeze(-1)).sum(dim=1)
@@ -1263,7 +1315,7 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
                     hidden_states,
                     adapter_outputs,
                     final_delta,
-                    delta,
+                    adapter_input_delta,
                     G_mask,
                     cu_seqlens,
                 )
@@ -1349,6 +1401,8 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
             "adapter_common_mode_loss": self.adapter_common_mode_loss.detach(),
             "adapter_effective_delta_loss": self.adapter_effective_delta_loss.detach(),
             "mmrl_delta_to_org_ratio": self.mmrl_delta_to_org_ratio.detach(),
+            "early_mmrl_guard_scale": self.early_mmrl_guard_scale.detach(),
+            "early_mmrl_guard_effective_ratio": self.early_mmrl_guard_effective_ratio.detach(),
             "mmrl_relation_loss": self.mmrl_relation_loss.detach(),
             "mmrl_relation_gram_loss": self.mmrl_relation_gram_loss.detach(),
             "mmrl_variance_floor_loss": self.mmrl_variance_floor_loss.detach(),

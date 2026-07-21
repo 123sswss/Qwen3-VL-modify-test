@@ -708,6 +708,8 @@ class Qwen3VLMMRLForStages(Qwen3VLForConditionalGeneration):
     def forward(self, input_ids=None, alpha_labels=None, images_per_sample=None, task_type_ids=None, **kwargs):
         self._last_shared_rep_grad = {}
         self._ensure_shared_rep_grad_hook()
+        self.model.visual.current_stage_id = int(self.current_stage_id)
+        self.model.visual.current_stage_step = int(self.current_stage_step)
         if hasattr(self, "temperature_override") and self.temperature_override is not None:
             self.model.temperature_override = self.temperature_override
             kwargs["gating_temperature_override"] = self.temperature_override
@@ -971,6 +973,18 @@ def build_model_and_processor(model_path, experiment_cfg=None):
         "MMRL_RAW_VISUAL_ADAPTER",
         "1" if experiment_cfg.get("raw_visual_adapter", False) else "0",
     ) == "1"
+    config.ENABLE_EARLY_MMRL_GUARD = bool(
+        experiment_cfg.get("enable_early_mmrl_guard", False)
+    )
+    config.EARLY_MMRL_GUARD_RATIO = float(
+        experiment_cfg.get("early_mmrl_guard_ratio", 1.25)
+    )
+    config.EARLY_MMRL_GUARD_HOLD_STEPS = int(
+        experiment_cfg.get("early_mmrl_guard_hold_steps", 250)
+    )
+    config.EARLY_MMRL_GUARD_RELEASE_STEPS = int(
+        experiment_cfg.get("early_mmrl_guard_release_steps", 125)
+    )
     config.ENABLE_DEEPSTACK_MMRL_RESIDUAL = os.getenv(
         "MMRL_ENABLE_DEEPSTACK_MMRL_RESIDUAL",
         "1" if experiment_cfg.get("enable_deepstack_mmrl_residual", False) else "0",
@@ -998,6 +1012,12 @@ def build_model_and_processor(model_path, experiment_cfg=None):
         raise RuntimeError(
             "RAW_VISUAL_ADAPTER config propagation failed: "
             f"requested={config.RAW_VISUAL_ADAPTER} actual={visual.raw_visual_adapter}"
+        )
+    if visual.enable_early_mmrl_guard != config.ENABLE_EARLY_MMRL_GUARD:
+        raise RuntimeError(
+            "ENABLE_EARLY_MMRL_GUARD config propagation failed: "
+            f"requested={config.ENABLE_EARLY_MMRL_GUARD} "
+            f"actual={visual.enable_early_mmrl_guard}"
         )
     if visual.visual_residual_adapter_count != config.VISUAL_RESIDUAL_ADAPTER_COUNT:
         raise RuntimeError(
@@ -1337,6 +1357,13 @@ def run_stage3_full(model, processor, data_cfg, train_cfg, output_dir):
         f"max_tokens={model.model.visual.mmrl_relation_max_tokens} "
         f"variance_floor_ratio={model.model.visual.mmrl_variance_floor_ratio} "
         f"variance_floor_weight={model.model.visual.mmrl_variance_floor_weight}"
+    )
+    print(
+        "[EARLY_MMRL_GUARD] "
+        f"enabled={model.model.visual.enable_early_mmrl_guard} "
+        f"ratio={model.model.visual.early_mmrl_guard_ratio} "
+        f"hold_steps={model.model.visual.early_mmrl_guard_hold_steps} "
+        f"release_steps={model.model.visual.early_mmrl_guard_release_steps}"
     )
     model.adapter_diversity_loss_weight = float(train_cfg.get(
         "adapter_diversity_loss_weight",

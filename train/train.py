@@ -165,6 +165,32 @@ EXPERIMENTS = {
         "mmrl_variance_floor_ratio": 0.50,
         "mmrl_variance_floor_weight": 0.10,
     },
+    "visual_router_relation_one_epoch_lr6e5_v1": {
+        **V4_RECOVER_BASE,
+        "random_init_adapter_output_count": 0,
+        "mmrl_relation_loss_weight": 0.010,
+        "mmrl_relation_max_tokens": 64,
+        "mmrl_variance_floor_ratio": 0.50,
+        "mmrl_variance_floor_weight": 0.10,
+        "stage3_learning_rate": 6e-5,
+        "stage3_schedule_epochs": 1,
+        "stage3_warmup_ratio": 0.10,
+        "stage3_initial_temp": 1.0,
+        "stage3_final_temp": 0.775,
+    },
+    "visual_router_relation_one_epoch_lr4e5_v1": {
+        **V4_RECOVER_BASE,
+        "random_init_adapter_output_count": 0,
+        "mmrl_relation_loss_weight": 0.010,
+        "mmrl_relation_max_tokens": 64,
+        "mmrl_variance_floor_ratio": 0.50,
+        "mmrl_variance_floor_weight": 0.10,
+        "stage3_learning_rate": 4e-5,
+        "stage3_schedule_epochs": 1,
+        "stage3_warmup_ratio": 0.10,
+        "stage3_initial_temp": 1.0,
+        "stage3_final_temp": 0.775,
+    },
     "visual_router_relation_early_guard_v1": {
         **V4_RECOVER_BASE,
         "mmrl_relation_loss_weight": 0.010,
@@ -483,16 +509,18 @@ CFG = {
 
         "learning_rate": {
             1: 1e-4,  # 仅分类器
-            3: 8e-5,  # MMRL + router-adapter 联合适配
+            3: float(EXP_CFG.get("stage3_learning_rate", 8e-5)),
         },
         "epochs": {
             1: 1,
             3: 1,
         },
-        # 实际只训练一轮，但保持本次 64.36 分实验的四轮调度轨迹。
         "schedule_epochs": {
-            3: 4,
+            3: int(EXP_CFG.get("stage3_schedule_epochs", 4)),
         },
+        "stage3_warmup_ratio": float(EXP_CFG.get("stage3_warmup_ratio", 0.05)),
+        "initial_temp": float(EXP_CFG.get("stage3_initial_temp", 1.0)),
+        "final_temp": float(EXP_CFG.get("stage3_final_temp", 0.1)),
     },
     "ablation_order": [1, 3]
 }

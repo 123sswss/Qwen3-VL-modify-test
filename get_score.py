@@ -153,7 +153,7 @@ def find_log_files() -> list[Path]:
     return sorted(
         log_files,
         key=lambda log_path: (log_path.stat().st_mtime_ns, str(log_path)),
-        reverse=True,
+        reverse=False,
     )
 
 

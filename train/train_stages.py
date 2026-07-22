@@ -1401,7 +1401,11 @@ def run_stage3_full(model, processor, data_cfg, train_cfg, output_dir):
         )
     print(
         f"[Stage3] actual_epochs={actual_epochs} "
-        f"schedule_epochs={schedule_epochs}"
+        f"schedule_epochs={schedule_epochs} "
+        f"peak_lr={train_cfg['learning_rate'][stage_id]} "
+        f"warmup_ratio={train_cfg.get('stage3_warmup_ratio', 0.05)} "
+        f"temperature={train_cfg.get('initial_temp', 1.0)}"
+        f"->{train_cfg.get('final_temp', 0.1)}"
     )
 
     model.ce_loss_weight = 1.0
@@ -1477,7 +1481,7 @@ def run_stage3_full(model, processor, data_cfg, train_cfg, output_dir):
         gradient_accumulation_steps=train_cfg["gradient_accumulation_steps"],
         learning_rate=train_cfg["learning_rate"][stage_id],
         lr_scheduler_type="cosine",
-        warmup_ratio=0.05,
+        warmup_ratio=train_cfg.get("stage3_warmup_ratio", 0.05),
         logging_steps=10,
         save_strategy="no",
         remove_unused_columns=False,

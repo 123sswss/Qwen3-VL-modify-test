@@ -26,11 +26,25 @@ class MMRLVitBlock(qwen3_vl.Qwen3VLVisionBlock):
                 first_insert: Optional[bool] = False,
                 **kwargs):
         assert r_token is not None
-        num_r_tokens = r_token.shape[0]
+        if r_token.ndim not in (2, 3):
+            raise ValueError(f"r_token must be [R, D] or [N, R, D], got {tuple(r_token.shape)}")
+        num_r_tokens = r_token.shape[-2]
         full_seq_lengths = (cu_seqlens[1:] - cu_seqlens[:-1]).cpu().tolist()
+        if r_token.ndim == 3 and r_token.shape[0] != len(full_seq_lengths):
+            raise ValueError(
+                "Per-sequence r_token count must match cu_seqlens: "
+                f"tokens={r_token.shape[0]} sequences={len(full_seq_lengths)}"
+            )
+
+        def token_for_sequence(index):
+            return r_token if r_token.ndim == 2 else r_token[index]
+
         if first_insert:
             hidden_states_split = torch.split(hidden_states, full_seq_lengths, dim=0)
-            new_hidden_states_list = [torch.cat([r_token, s], dim=0) for s in hidden_states_split]
+            new_hidden_states_list = [
+                torch.cat([token_for_sequence(index), states], dim=0)
+                for index, states in enumerate(hidden_states_split)
+            ]
             hidden_states = torch.cat(new_hidden_states_list, dim=0)
             position_embeddings, cu_seqlens, rotary_pos_emb = _resize_cu_and_pos(
                 r_token, cu_seqlens, position_embeddings, rotary_pos_emb
@@ -39,11 +53,12 @@ class MMRLVitBlock(qwen3_vl.Qwen3VLVisionBlock):
             hidden_states_split = torch.split(hidden_states, full_seq_lengths, dim=0)
             new_hidden_states_list = []
             updated_seq = None
-            for seq_hidden in hidden_states_split:
+            for index, seq_hidden in enumerate(hidden_states_split):
+                sequence_r_token = token_for_sequence(index)
                 if self.INSERT_METHOD == "replace":
-                    updated_seq = torch.cat([r_token, seq_hidden[num_r_tokens:]], dim=0)
+                    updated_seq = torch.cat([sequence_r_token, seq_hidden[num_r_tokens:]], dim=0)
                 elif self.INSERT_METHOD == "add":
-                    prefix = seq_hidden[:num_r_tokens] + r_token
+                    prefix = seq_hidden[:num_r_tokens] + sequence_r_token
                     suffix = seq_hidden[num_r_tokens:]
                     updated_seq = torch.cat([prefix, suffix], dim=0)
                 new_hidden_states_list.append(updated_seq)
@@ -58,7 +73,7 @@ class MMRLVitBlock(qwen3_vl.Qwen3VLVisionBlock):
 
 
 def _resize_cu_and_pos(r_token, cu_seqlens, position_embeddings, rotary_pos_emb):
-    num_r_tokens = r_token.shape[0]
+    num_r_tokens = r_token.shape[-2]
     total_pic_num = cu_seqlens.shape[0] - 1
     seq_lengths = (cu_seqlens[1:] - cu_seqlens[:-1]).cpu().tolist()
     original_cos, original_sin = position_embeddings
@@ -222,6 +237,9 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
         self.enable_adapter_router_identity_residual = bool(
             getattr(self.cfg, "ENABLE_ADAPTER_ROUTER_IDENTITY_RESIDUAL", False)
         )
+        self.enable_visual_conditioned_mmrl = bool(
+            getattr(self.cfg, "ENABLE_VISUAL_CONDITIONED_MMRL", False)
+        )
         self.direct_mmrl_output = bool(getattr(self.cfg, "DIRECT_MMRL_OUTPUT", False))
         self.raw_visual_adapter = bool(getattr(self.cfg, "RAW_VISUAL_ADAPTER", False))
         self.enable_early_mmrl_guard = bool(
@@ -248,6 +266,7 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
         self.adapter_effective_delta_ratio_min = torch.tensor(float("nan"))
         self.adapter_effective_delta_ratio_max = torch.tensor(float("nan"))
         self.mmrl_delta_to_org_ratio = torch.tensor(float("nan"))
+        self.mmrl_condition_delta_ratio = torch.tensor(float("nan"))
         self.adapter_pairwise_cos_mean = torch.tensor(float("nan"))
         self.adapter_pairwise_cos_max = torch.tensor(float("nan"))
         self.adapter_pairwise_cos_below_band = torch.tensor(float("nan"))
@@ -990,6 +1009,7 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
                 hidden_states: torch.Tensor,
                 grid_thw: torch.Tensor,
                 v_r_token_list: Optional[list[torch.Tensor]] = None,
+                mmrl_module: Optional[nn.Module] = None,
                 embedding: Optional[torch.Tensor] = None,
                 text_pooling_mask: Optional[torch.Tensor] = None,
                 gating_temperature_override: float = None,
@@ -998,6 +1018,7 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
         assert len(images_per_sample) == embedding.shape[0]
         self.early_mmrl_guard_scale = hidden_states.new_tensor(1.0)
         self.early_mmrl_guard_effective_ratio = hidden_states.new_tensor(float("nan"))
+        self.mmrl_condition_delta_ratio = hidden_states.new_tensor(float("nan"))
         batch_size = embedding.shape[0]
         pic_seqlens = [0] + list(accumulate(images_per_sample))
 
@@ -1027,6 +1048,46 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
             dtype=grid_thw.dtype if torch.jit.is_tracing() else torch.int32,
         )
         cu_seqlens = F.pad(cu_seqlens, (1, 0), value=0)
+
+        if self.enable_visual_conditioned_mmrl:
+            if self.raw_visual_adapter:
+                raise ValueError("Visual-conditioned MMRL cannot be used with RAW_VISUAL_ADAPTER")
+            if mmrl_module is None:
+                raise ValueError("mmrl_module is required when visual-conditioned MMRL is enabled")
+            if v_r_token_list is not None:
+                raise ValueError("Do not provide precomputed r tokens when visual conditioning is enabled")
+
+            # Obtain a semantic summary from the frozen final raw-vision states.
+            with torch.no_grad():
+                condition_states = hidden_states.detach()
+                for condition_block in self.blocks:
+                    condition_states = condition_block(
+                        condition_states,
+                        cu_seqlens=cu_seqlens,
+                        position_embeddings=position_embeddings,
+                        rotary_pos_emb=rotary_pos_emb,
+                        **kwargs,
+                    )
+                condition_splits = torch.split(
+                    condition_states,
+                    original_seq_lens_list,
+                    dim=0,
+                )
+                visual_condition = torch.stack(
+                    [states.mean(dim=0) for states in condition_splits],
+                    dim=0,
+                )
+
+            per_image_tokens = mmrl_module(visual_condition.detach())
+            temporal_repeats = grid_thw[:, 0].to(dtype=torch.long)
+            v_r_token_list = [
+                torch.repeat_interleave(tokens, temporal_repeats, dim=0)
+                for tokens in per_image_tokens
+            ]
+            self.mmrl_condition_delta_ratio = mmrl_module.condition_delta_ratio.detach().to(
+                device=hidden_states.device,
+                dtype=hidden_states.dtype,
+            )
 
         first_insert = True
         current_num_r_token = self.cfg.RP_SPACE_LENGTH
@@ -1401,6 +1462,7 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
             "adapter_common_mode_loss": self.adapter_common_mode_loss.detach(),
             "adapter_effective_delta_loss": self.adapter_effective_delta_loss.detach(),
             "mmrl_delta_to_org_ratio": self.mmrl_delta_to_org_ratio.detach(),
+            "mmrl_condition_delta_ratio": self.mmrl_condition_delta_ratio.detach(),
             "early_mmrl_guard_scale": self.early_mmrl_guard_scale.detach(),
             "early_mmrl_guard_effective_ratio": self.early_mmrl_guard_effective_ratio.detach(),
             "mmrl_relation_loss": self.mmrl_relation_loss.detach(),

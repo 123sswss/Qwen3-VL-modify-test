@@ -81,6 +81,8 @@ BASE_VISUAL_ROUTER_MODEL = {
     "adapter_diversity_upper_weight": 2.0,
     "adapter_diversity_worst_pair_weight": 1.0,
     "enable_adapter_router_identity_residual": False,
+    "enable_visual_conditioned_mmrl": False,
+    "mmrl_condition_hidden_dim": 128,
     "direct_mmrl_output": False,
     "raw_visual_adapter": False,
     "enable_early_mmrl_guard": False,
@@ -127,6 +129,15 @@ EXPERIMENTS = {
         "mmrl_relation_max_tokens": 64,
         "mmrl_variance_floor_ratio": 0.50,
         "mmrl_variance_floor_weight": 0.10,
+    },
+    "visual_router_conditioned_mmrl_v1": {
+        **V4_RECOVER_BASE,
+        "mmrl_relation_loss_weight": 0.010,
+        "mmrl_relation_max_tokens": 64,
+        "mmrl_variance_floor_ratio": 0.50,
+        "mmrl_variance_floor_weight": 0.10,
+        "enable_visual_conditioned_mmrl": True,
+        "mmrl_condition_hidden_dim": 128,
     },
     "visual_router_relation_early_guard_v1": {
         **V4_RECOVER_BASE,
@@ -305,6 +316,14 @@ CFG = {
             "MMRL_ENABLE_ADAPTER_ROUTER_IDENTITY_RESIDUAL",
             "1" if EXP_CFG.get("enable_adapter_router_identity_residual", False) else "0",
         ) == "1",
+        "enable_visual_conditioned_mmrl": os.getenv(
+            "MMRL_ENABLE_VISUAL_CONDITIONED_MMRL",
+            "1" if EXP_CFG.get("enable_visual_conditioned_mmrl", False) else "0",
+        ) == "1",
+        "mmrl_condition_hidden_dim": int(os.getenv(
+            "MMRL_CONDITION_HIDDEN_DIM",
+            str(EXP_CFG.get("mmrl_condition_hidden_dim", 128)),
+        )),
         "direct_mmrl_output": os.getenv(
             "MMRL_DIRECT_MMRL_OUTPUT",
             "1" if EXP_CFG.get("direct_mmrl_output", False) else "0",
@@ -358,6 +377,7 @@ CFG = {
             "raw_visual_adapter",
             "delta_to_org_ratio",
             "mmrl_delta_to_org_ratio",
+            "mmrl_condition_delta_ratio",
             "early_mmrl_guard_scale",
             "early_mmrl_guard_effective_ratio",
             "mmrl_token_ratio_mean",

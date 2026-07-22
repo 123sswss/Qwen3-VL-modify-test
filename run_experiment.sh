@@ -197,6 +197,8 @@ run_N() {
 #   bash run_experiment.sh random_init44
 #   bash run_experiment.sh hybrid_init47
 #   bash run_experiment.sh zero_init47
+#   bash run_experiment.sh zero_init44
+#   bash run_experiment.sh zero_init48
 #   bash run_experiment.sh guard44
 #   bash run_experiment.sh guard47
 #   bash run_experiment.sh raw_adapter47
@@ -235,6 +237,16 @@ case "$RUN_TARGET" in
     FIXED_SEED=47
     run_one "visual_router_relation_true_zero_adapter_init_v1" "visual_router_relation_true_zero_adapter_init_v1_seed47"
     ;;
+  zero_init44)
+    AUTO_INCREMENT_SEED=0
+    FIXED_SEED=44
+    run_one "visual_router_relation_true_zero_adapter_init_v1" "visual_router_relation_true_zero_adapter_init_v1_seed44"
+    ;;
+  zero_init48)
+    AUTO_INCREMENT_SEED=0
+    FIXED_SEED=48
+    run_one "visual_router_relation_true_zero_adapter_init_v1" "visual_router_relation_true_zero_adapter_init_v1_seed48"
+    ;;
   guard44)
     AUTO_INCREMENT_SEED=0
     FIXED_SEED=44
@@ -266,7 +278,7 @@ case "$RUN_TARGET" in
     run_one "visual_router_raw_adapter_v1" "visual_router_raw_adapter_v1_seed47"
     ;;
   *)
-    echo "[ERR] 未知实验目标: $RUN_TARGET（可选: relation44, relation47, random_init47, random_init44, hybrid_init47, zero_init47, guard44, guard47, raw_adapter47, direct_mmrl, two_adapter, single_adapter, all）" >&2
+    echo "[ERR] 未知实验目标: $RUN_TARGET（可选: relation44, relation47, random_init47, random_init44, hybrid_init47, zero_init47, zero_init44, zero_init48, guard44, guard47, raw_adapter47, direct_mmrl, two_adapter, single_adapter, all）" >&2
     exit 2
     ;;
 esac

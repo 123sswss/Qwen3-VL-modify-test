@@ -41,6 +41,7 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
             "ABLATE_VISUAL_GATE": _cfg_attr(config, "ABLATE_VISUAL_GATE", False),
             "ABLATE_DIRECT_LEARNABLE_REP": _cfg_attr(config, "ABLATE_DIRECT_LEARNABLE_REP", False),
             "VISUAL_RESIDUAL_ADAPTER_COUNT": _cfg_attr(config, "VISUAL_RESIDUAL_ADAPTER_COUNT", 4),
+            "ADAPTER_OUTPUT_INIT_SCALE": _cfg_attr(config, "ADAPTER_OUTPUT_INIT_SCALE", 0.0),
             "ADAPTER_USAGE_BALANCE_LOSS_WEIGHT": _cfg_attr(config, "ADAPTER_USAGE_BALANCE_LOSS_WEIGHT", 0.0),
             "ADAPTER_SAMPLE_ENTROPY_LOSS_WEIGHT": _cfg_attr(config, "ADAPTER_SAMPLE_ENTROPY_LOSS_WEIGHT", 0.0),
             "ADAPTER_COMMON_MODE_LOSS_WEIGHT": _cfg_attr(config, "ADAPTER_COMMON_MODE_LOSS_WEIGHT", 0.0),
@@ -61,12 +62,6 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
             ),
             "ENABLE_ADAPTER_ROUTER_IDENTITY_RESIDUAL": _cfg_attr(
                 config, "ENABLE_ADAPTER_ROUTER_IDENTITY_RESIDUAL", False
-            ),
-            "ENABLE_VISUAL_CONDITIONED_MMRL": _cfg_attr(
-                config, "ENABLE_VISUAL_CONDITIONED_MMRL", False
-            ),
-            "MMRL_CONDITION_HIDDEN_DIM": _cfg_attr(
-                config, "MMRL_CONDITION_HIDDEN_DIM", 128
             ),
             "DIRECT_MMRL_OUTPUT": _cfg_attr(config, "DIRECT_MMRL_OUTPUT", False),
             "RAW_VISUAL_ADAPTER": _cfg_attr(config, "RAW_VISUAL_ADAPTER", False),
@@ -125,16 +120,10 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
                         pixel_values: torch.FloatTensor,
                         image_grid_thw: Optional[torch.LongTensor] = None,
                         v_r_token_list: Optional[list[torch.Tensor]] = None,
-                        mmrl_module: Optional[torch.nn.Module] = None,
                         embedding: Optional[torch.nn.Module] = None,
                         images_per_sample: Optional[list[int]] = None,
                         text_pooling_mask: Optional[torch.Tensor] = None,):
-        if (
-            self.use_mmrl
-            and v_r_token_list is None
-            and mmrl_module is None
-            and not self.visual.raw_visual_adapter
-        ):
+        if self.use_mmrl and v_r_token_list is None and not self.visual.raw_visual_adapter:
             raise ValueError("v_r_token_list must be specified")
         elif self.use_mmrl:
             pixel_values = pixel_values.type(self.visual.dtype)
@@ -142,7 +131,6 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
                 pixel_values,
                 grid_thw=image_grid_thw,
                 v_r_token_list=v_r_token_list,
-                mmrl_module=mmrl_module,
                 embedding=embedding,
                 text_pooling_mask=text_pooling_mask,
                 gating_temperature_override=self.temperature_override,
@@ -220,12 +208,8 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
         embedding_for_gating = inputs_embeds
         
         v_r_token_list = None
-        mmrl_module = None
         if self.use_mmrl and not self.visual.raw_visual_adapter:
-            if self.visual.enable_visual_conditioned_mmrl:
-                mmrl_module = self.MMRL
-            else:
-                v_r_token_list = self.MMRL()
+            v_r_token_list = self.MMRL()
         visual_pos_masks = None
         deepstack_visual_embeds = None
         k_results = None
@@ -246,7 +230,6 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
                     pixel_values=pixel_values,
                     image_grid_thw=image_grid_thw,
                     v_r_token_list=v_r_token_list,
-                    mmrl_module=mmrl_module,
                     embedding=embedding_for_gating,
                     images_per_sample=images_per_sample,
                     text_pooling_mask=text_pooling_mask,

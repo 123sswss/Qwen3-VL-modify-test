@@ -893,6 +893,10 @@ def build_model_and_processor(model_path, experiment_cfg=None):
         "visual_residual_adapter_count",
         os.getenv("MMRL_VISUAL_RESIDUAL_ADAPTER_COUNT", "4"),
     ))
+    config.ADAPTER_OUTPUT_INIT_SCALE = float(experiment_cfg.get(
+        "adapter_output_init_scale",
+        os.getenv("MMRL_ADAPTER_OUTPUT_INIT_SCALE", "0.0"),
+    ))
     config.ADAPTER_USAGE_BALANCE_LOSS_WEIGHT = float(experiment_cfg.get(
         "adapter_usage_balance_loss_weight",
         os.getenv("MMRL_ADAPTER_USAGE_BALANCE_LOSS_WEIGHT", "0.0"),
@@ -965,14 +969,6 @@ def build_model_and_processor(model_path, experiment_cfg=None):
         "MMRL_ENABLE_ADAPTER_ROUTER_IDENTITY_RESIDUAL",
         "1" if experiment_cfg.get("enable_adapter_router_identity_residual", False) else "0",
     ) == "1"
-    config.ENABLE_VISUAL_CONDITIONED_MMRL = os.getenv(
-        "MMRL_ENABLE_VISUAL_CONDITIONED_MMRL",
-        "1" if experiment_cfg.get("enable_visual_conditioned_mmrl", False) else "0",
-    ) == "1"
-    config.MMRL_CONDITION_HIDDEN_DIM = int(experiment_cfg.get(
-        "mmrl_condition_hidden_dim",
-        os.getenv("MMRL_CONDITION_HIDDEN_DIM", "128"),
-    ))
     config.DIRECT_MMRL_OUTPUT = os.getenv(
         "MMRL_DIRECT_MMRL_OUTPUT",
         "1" if experiment_cfg.get("direct_mmrl_output", False) else "0",
@@ -1021,18 +1017,6 @@ def build_model_and_processor(model_path, experiment_cfg=None):
             "RAW_VISUAL_ADAPTER config propagation failed: "
             f"requested={config.RAW_VISUAL_ADAPTER} actual={visual.raw_visual_adapter}"
         )
-    if visual.enable_visual_conditioned_mmrl != config.ENABLE_VISUAL_CONDITIONED_MMRL:
-        raise RuntimeError(
-            "ENABLE_VISUAL_CONDITIONED_MMRL config propagation failed: "
-            f"requested={config.ENABLE_VISUAL_CONDITIONED_MMRL} "
-            f"actual={visual.enable_visual_conditioned_mmrl}"
-        )
-    if model.model.MMRL.use_visual_conditioning != config.ENABLE_VISUAL_CONDITIONED_MMRL:
-        raise RuntimeError(
-            "MMRL visual conditioner construction mismatch: "
-            f"requested={config.ENABLE_VISUAL_CONDITIONED_MMRL} "
-            f"actual={model.model.MMRL.use_visual_conditioning}"
-        )
     if visual.enable_early_mmrl_guard != config.ENABLE_EARLY_MMRL_GUARD:
         raise RuntimeError(
             "ENABLE_EARLY_MMRL_GUARD config propagation failed: "
@@ -1044,6 +1028,12 @@ def build_model_and_processor(model_path, experiment_cfg=None):
             "VISUAL_RESIDUAL_ADAPTER_COUNT config propagation failed: "
             f"requested={config.VISUAL_RESIDUAL_ADAPTER_COUNT} "
             f"actual={visual.visual_residual_adapter_count}"
+        )
+    if abs(float(visual.adapter_output_init_scale) - float(config.ADAPTER_OUTPUT_INIT_SCALE)) > 1e-12:
+        raise RuntimeError(
+            "ADAPTER_OUTPUT_INIT_SCALE config propagation failed: "
+            f"requested={config.ADAPTER_OUTPUT_INIT_SCALE} "
+            f"actual={visual.adapter_output_init_scale}"
         )
     propagation_checks = {
         "MMRL_RELATION_MAX_TOKENS": (
@@ -1068,11 +1058,28 @@ def build_model_and_processor(model_path, experiment_cfg=None):
         "[MMRL_STRUCTURE_AUDIT] "
         f"direct_mmrl_output={visual.direct_mmrl_output} "
         f"raw_visual_adapter={visual.raw_visual_adapter} "
-        f"visual_conditioned_mmrl={visual.enable_visual_conditioned_mmrl} "
-        f"visual_residual_adapter_count={visual.visual_residual_adapter_count}"
+        f"visual_residual_adapter_count={visual.visual_residual_adapter_count} "
+        f"adapter_output_init_scale={visual.adapter_output_init_scale}"
     )
     model.model.load_state_dict(base.model.state_dict(), strict=False)
     model.lm_head.load_state_dict(base.lm_head.state_dict(), strict=False)
+    adapter_output_weight_norms = [
+        float(adapter.net[-1].weight.detach().float().norm().item())
+        for adapter in visual.residual_adapters
+    ]
+    if config.ADAPTER_OUTPUT_INIT_SCALE == 0.0 and any(
+        norm != 0.0 for norm in adapter_output_weight_norms
+    ):
+        raise RuntimeError("Strict-zero adapter initialization produced nonzero output weights")
+    if config.ADAPTER_OUTPUT_INIT_SCALE > 0.0 and any(
+        norm == 0.0 for norm in adapter_output_weight_norms
+    ):
+        raise RuntimeError("Tiny adapter initialization produced zero output weights")
+    print(
+        "[ADAPTER_OUTPUT_INIT_AUDIT] "
+        f"scale={config.ADAPTER_OUTPUT_INIT_SCALE} "
+        f"weight_norms={adapter_output_weight_norms}"
+    )
     del base
     torch.cuda.empty_cache()
     print("MMRL model built and loaded with base weights.")
@@ -1107,6 +1114,7 @@ def build_model_and_processor(model_path, experiment_cfg=None):
         f"ablate_visual_gate={config.ABLATE_VISUAL_GATE} "
         f"ablate_direct_learnable_rep={config.ABLATE_DIRECT_LEARNABLE_REP} "
         f"visual_residual_adapter_count={config.VISUAL_RESIDUAL_ADAPTER_COUNT} "
+        f"adapter_output_init_scale={config.ADAPTER_OUTPUT_INIT_SCALE} "
         f"adapter_usage_balance_loss_weight={config.ADAPTER_USAGE_BALANCE_LOSS_WEIGHT} "
         f"adapter_sample_entropy_loss_weight={config.ADAPTER_SAMPLE_ENTROPY_LOSS_WEIGHT} "
         f"adapter_common_mode_loss_weight={config.ADAPTER_COMMON_MODE_LOSS_WEIGHT} "
@@ -1124,8 +1132,6 @@ def build_model_and_processor(model_path, experiment_cfg=None):
         f"adapter_diversity_upper_weight={config.ADAPTER_DIVERSITY_UPPER_WEIGHT} "
         f"adapter_diversity_worst_pair_weight={config.ADAPTER_DIVERSITY_WORST_PAIR_WEIGHT} "
         f"enable_adapter_router_identity_residual={config.ENABLE_ADAPTER_ROUTER_IDENTITY_RESIDUAL} "
-        f"enable_visual_conditioned_mmrl={config.ENABLE_VISUAL_CONDITIONED_MMRL} "
-        f"mmrl_condition_hidden_dim={config.MMRL_CONDITION_HIDDEN_DIM} "
         f"direct_mmrl_output={config.DIRECT_MMRL_OUTPUT} "
         f"raw_visual_adapter={config.RAW_VISUAL_ADAPTER} "
         f"enable_deepstack_mmrl_residual={config.ENABLE_DEEPSTACK_MMRL_RESIDUAL} "

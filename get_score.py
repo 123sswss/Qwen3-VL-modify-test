@@ -145,10 +145,15 @@ def extract_info(log_path: Path) -> dict[str, object]:
 
 
 def find_log_files() -> list[Path]:
-    return sorted(
+    log_files = [
         log_path
         for log_path in OUTPUT_DIR.glob(f"*/eval/{TARGET_NAME}")
         if not should_skip(log_path)
+    ]
+    return sorted(
+        log_files,
+        key=lambda log_path: (log_path.stat().st_mtime_ns, str(log_path)),
+        reverse=True,
     )
 
 

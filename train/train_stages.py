@@ -899,6 +899,9 @@ def build_model_and_processor(model_path, experiment_cfg=None):
             config.VISUAL_RESIDUAL_ADAPTER_COUNT,
         )
     )
+    config.ZERO_INIT_ADAPTER_ROUTER_OUTPUT = bool(
+        experiment_cfg.get("zero_init_adapter_router_output", False)
+    )
     config.ADAPTER_USAGE_BALANCE_LOSS_WEIGHT = float(experiment_cfg.get(
         "adapter_usage_balance_loss_weight",
         os.getenv("MMRL_ADAPTER_USAGE_BALANCE_LOSS_WEIGHT", "0.0"),
@@ -1078,6 +1081,9 @@ def build_model_and_processor(model_path, experiment_cfg=None):
             if index >= random_count:
                 adapter.net[-1].weight.zero_()
             adapter.net[-1].bias.zero_()
+        if config.ZERO_INIT_ADAPTER_ROUTER_OUTPUT:
+            visual.adapter_router.output_head.weight.zero_()
+            visual.adapter_router.output_head.bias.zero_()
 
     adapter_output_weight_norms = [
         float(adapter.net[-1].weight.detach().float().norm().item())
@@ -1087,6 +1093,12 @@ def build_model_and_processor(model_path, experiment_cfg=None):
         float(adapter.net[-1].bias.detach().float().norm().item())
         for adapter in visual.residual_adapters
     ]
+    router_output_weight_norm = float(
+        visual.adapter_router.output_head.weight.detach().float().norm().item()
+    )
+    router_output_bias_norm = float(
+        visual.adapter_router.output_head.bias.detach().float().norm().item()
+    )
     for index, norm in enumerate(adapter_output_weight_norms):
         expected_random = index < random_count
         if expected_random and norm == 0.0:
@@ -1099,14 +1111,21 @@ def build_model_and_processor(model_path, experiment_cfg=None):
             )
     if any(norm != 0.0 for norm in adapter_output_bias_norms):
         raise RuntimeError("Adapter output initialization produced nonzero bias")
+    if config.ZERO_INIT_ADAPTER_ROUTER_OUTPUT and (
+        router_output_weight_norm != 0.0 or router_output_bias_norm != 0.0
+    ):
+        raise RuntimeError(
+            "Strict-zero adapter router output initialization produced nonzero parameters"
+        )
     print(
         "[ADAPTER_OUTPUT_INIT_AUDIT] "
         f"random_count={random_count} "
         f"random_indices={list(range(random_count))} "
         f"weight_norms={adapter_output_weight_norms} "
         f"bias_norms={adapter_output_bias_norms} "
-        f"router_output_weight_norm="
-        f"{float(visual.adapter_router.output_head.weight.detach().float().norm().item())}"
+        f"zero_init_router_output={config.ZERO_INIT_ADAPTER_ROUTER_OUTPUT} "
+        f"router_output_weight_norm={router_output_weight_norm} "
+        f"router_output_bias_norm={router_output_bias_norm}"
     )
     del base
     torch.cuda.empty_cache()
@@ -1143,6 +1162,7 @@ def build_model_and_processor(model_path, experiment_cfg=None):
         f"ablate_direct_learnable_rep={config.ABLATE_DIRECT_LEARNABLE_REP} "
         f"visual_residual_adapter_count={config.VISUAL_RESIDUAL_ADAPTER_COUNT} "
         f"random_init_adapter_output_count={config.RANDOM_INIT_ADAPTER_OUTPUT_COUNT} "
+        f"zero_init_adapter_router_output={config.ZERO_INIT_ADAPTER_ROUTER_OUTPUT} "
         f"adapter_usage_balance_loss_weight={config.ADAPTER_USAGE_BALANCE_LOSS_WEIGHT} "
         f"adapter_sample_entropy_loss_weight={config.ADAPTER_SAMPLE_ENTROPY_LOSS_WEIGHT} "
         f"adapter_common_mode_loss_weight={config.ADAPTER_COMMON_MODE_LOSS_WEIGHT} "

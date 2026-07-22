@@ -70,6 +70,7 @@ BASE_VISUAL_ROUTER_MODEL = {
     # Historical runs were effectively random-initialized because outer post_init
     # overwrote the adapter constructor's zero initialization.
     "random_init_adapter_output_count": 4,
+    "zero_init_adapter_router_output": False,
     "adapter_usage_balance_loss_weight": 0.005,
     "adapter_sample_entropy_loss_weight": 0.02,
     "adapter_common_mode_loss_weight": 0.03,
@@ -150,6 +151,15 @@ EXPERIMENTS = {
     "visual_router_relation_true_zero_adapter_init_v1": {
         **V4_RECOVER_BASE,
         "random_init_adapter_output_count": 0,
+        "mmrl_relation_loss_weight": 0.010,
+        "mmrl_relation_max_tokens": 64,
+        "mmrl_variance_floor_ratio": 0.50,
+        "mmrl_variance_floor_weight": 0.10,
+    },
+    "visual_router_relation_true_zero_adapter_router_init_v1": {
+        **V4_RECOVER_BASE,
+        "random_init_adapter_output_count": 0,
+        "zero_init_adapter_router_output": True,
         "mmrl_relation_loss_weight": 0.010,
         "mmrl_relation_max_tokens": 64,
         "mmrl_variance_floor_ratio": 0.50,

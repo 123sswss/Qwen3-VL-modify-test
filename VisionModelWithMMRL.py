@@ -190,7 +190,11 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
             1,
         ))
         self.random_init_adapter_output_count = int(
-            getattr(self.cfg, "RANDOM_INIT_ADAPTER_OUTPUT_COUNT", 0)
+            getattr(
+                self.cfg,
+                "RANDOM_INIT_ADAPTER_OUTPUT_COUNT",
+                self.visual_residual_adapter_count,
+            )
         )
         if not 0 <= self.random_init_adapter_output_count <= self.visual_residual_adapter_count:
             raise ValueError(

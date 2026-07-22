@@ -894,7 +894,10 @@ def build_model_and_processor(model_path, experiment_cfg=None):
         os.getenv("MMRL_VISUAL_RESIDUAL_ADAPTER_COUNT", "4"),
     ))
     config.RANDOM_INIT_ADAPTER_OUTPUT_COUNT = int(
-        experiment_cfg.get("random_init_adapter_output_count", 0)
+        experiment_cfg.get(
+            "random_init_adapter_output_count",
+            config.VISUAL_RESIDUAL_ADAPTER_COUNT,
+        )
     )
     config.ADAPTER_USAGE_BALANCE_LOSS_WEIGHT = float(experiment_cfg.get(
         "adapter_usage_balance_loss_weight",
@@ -1065,11 +1068,25 @@ def build_model_and_processor(model_path, experiment_cfg=None):
     )
     model.model.load_state_dict(base.model.state_dict(), strict=False)
     model.lm_head.load_state_dict(base.lm_head.state_dict(), strict=False)
+
+    # QWen3WithMMRL.post_init runs after VisionWithMMRL is constructed and
+    # reinitializes its Linear layers. Apply the requested expert policy only
+    # after both post_init and base-weight loading have completed.
+    random_count = config.RANDOM_INIT_ADAPTER_OUTPUT_COUNT
+    with torch.no_grad():
+        for index, adapter in enumerate(visual.residual_adapters):
+            if index >= random_count:
+                adapter.net[-1].weight.zero_()
+            adapter.net[-1].bias.zero_()
+
     adapter_output_weight_norms = [
         float(adapter.net[-1].weight.detach().float().norm().item())
         for adapter in visual.residual_adapters
     ]
-    random_count = config.RANDOM_INIT_ADAPTER_OUTPUT_COUNT
+    adapter_output_bias_norms = [
+        float(adapter.net[-1].bias.detach().float().norm().item())
+        for adapter in visual.residual_adapters
+    ]
     for index, norm in enumerate(adapter_output_weight_norms):
         expected_random = index < random_count
         if expected_random and norm == 0.0:
@@ -1080,11 +1097,16 @@ def build_model_and_processor(model_path, experiment_cfg=None):
             raise RuntimeError(
                 f"Strict-zero adapter output initialization produced nonzero weights at index {index}"
             )
+    if any(norm != 0.0 for norm in adapter_output_bias_norms):
+        raise RuntimeError("Adapter output initialization produced nonzero bias")
     print(
         "[ADAPTER_OUTPUT_INIT_AUDIT] "
         f"random_count={random_count} "
         f"random_indices={list(range(random_count))} "
-        f"weight_norms={adapter_output_weight_norms}"
+        f"weight_norms={adapter_output_weight_norms} "
+        f"bias_norms={adapter_output_bias_norms} "
+        f"router_output_weight_norm="
+        f"{float(visual.adapter_router.output_head.weight.detach().float().norm().item())}"
     )
     del base
     torch.cuda.empty_cache()

@@ -104,20 +104,13 @@ def _strip_r_token(hidden_states, original_lens, num_r_token):
     return torch.cat(clean_list, dim=0)
 
 class zeroInit(nn.Module):
-    def __init__(self, dim, output_init_scale=0.0):
+    def __init__(self, dim, random_output_init=False):
         super(zeroInit, self).__init__()
         self.net = nn.Sequential(nn.Linear(dim, dim // 4),
                                  nn.ReLU(),
                                  nn.Linear(dim // 4, dim))
-        output_init_scale = float(output_init_scale)
-        if output_init_scale < 0.0:
-            raise ValueError("output_init_scale must be non-negative")
-        if output_init_scale == 0.0:
+        if not random_output_init:
             nn.init.zeros_(self.net[-1].weight)
-        else:
-            # Keep the standard Linear initialization direction at a tiny scale.
-            with torch.no_grad():
-                self.net[-1].weight.mul_(output_init_scale)
         nn.init.zeros_(self.net[-1].bias)
 
     def forward(self, x):
@@ -196,11 +189,9 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
             getattr(self.cfg, "VISUAL_RESIDUAL_ADAPTER_COUNT", 4),
             1,
         ))
-        self.adapter_output_init_scale = float(
-            getattr(self.cfg, "ADAPTER_OUTPUT_INIT_SCALE", 0.0)
+        self.random_init_adapter_output = bool(
+            getattr(self.cfg, "RANDOM_INIT_ADAPTER_OUTPUT", False)
         )
-        if self.adapter_output_init_scale < 0.0:
-            raise ValueError("ADAPTER_OUTPUT_INIT_SCALE must be non-negative")
         self.adapter_router = ResidualRouter(
             self.cfg.vision_token_dim,
             self.cfg.text_token_dim,
@@ -210,7 +201,7 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
         self.residual_adapters = nn.ModuleList([
             zeroInit(
                 self.cfg.vision_token_dim,
-                output_init_scale=self.adapter_output_init_scale,
+                random_output_init=self.random_init_adapter_output,
             )
             for _ in range(self.visual_residual_adapter_count)
         ])
@@ -1411,7 +1402,6 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
             "delta_to_org_ratio": delta_to_org_ratio,
             "raw_visual_adapter": hidden_states.new_tensor(float(self.raw_visual_adapter)),
             "visual_adapter_count": hidden_states.new_tensor(float(self.visual_residual_adapter_count)),
-            "adapter_output_init_scale": hidden_states.new_tensor(self.adapter_output_init_scale),
             "adapter_weight_norm": self._adapter_weight_norm(hidden_states.device),
             "adapter_usage_balance_loss": self.adapter_usage_balance_loss.detach(),
             "adapter_sample_entropy_loss": self.adapter_sample_entropy_loss.detach(),

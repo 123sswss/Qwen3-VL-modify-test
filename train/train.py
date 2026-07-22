@@ -67,7 +67,7 @@ def _should_keep_extrema_checkpoint(output_dir, score):
 BASE_VISUAL_ROUTER_MODEL = {
     "rp_space_length": 40,
     "visual_residual_adapter_count": 4,
-    "adapter_output_init_scale": 0.0,
+    "random_init_adapter_output": False,
     "adapter_usage_balance_loss_weight": 0.005,
     "adapter_sample_entropy_loss_weight": 0.02,
     "adapter_common_mode_loss_weight": 0.03,
@@ -129,9 +129,9 @@ EXPERIMENTS = {
         "mmrl_variance_floor_ratio": 0.50,
         "mmrl_variance_floor_weight": 0.10,
     },
-    "visual_router_relation_tiny_adapter_init_v1": {
+    "visual_router_relation_random_adapter_init_v1": {
         **V4_RECOVER_BASE,
-        "adapter_output_init_scale": 0.01,
+        "random_init_adapter_output": True,
         "mmrl_relation_loss_weight": 0.010,
         "mmrl_relation_max_tokens": 64,
         "mmrl_variance_floor_ratio": 0.50,
@@ -258,10 +258,6 @@ CFG = {
             "MMRL_VISUAL_RESIDUAL_ADAPTER_COUNT",
             str(EXP_CFG.get("visual_residual_adapter_count", 4)),
         )),
-        "adapter_output_init_scale": float(os.getenv(
-            "MMRL_ADAPTER_OUTPUT_INIT_SCALE",
-            str(EXP_CFG.get("adapter_output_init_scale", 0.0)),
-        )),
         "adapter_usage_balance_loss_weight": float(os.getenv(
             "MMRL_ADAPTER_USAGE_BALANCE_LOSS_WEIGHT",
             str(EXP_CFG.get("adapter_usage_balance_loss_weight", 0.0)),
@@ -369,7 +365,6 @@ CFG = {
         "mmrl_diagnostics_keep_keys": [
             "ce_loss",
             "raw_visual_adapter",
-            "adapter_output_init_scale",
             "delta_to_org_ratio",
             "mmrl_delta_to_org_ratio",
             "early_mmrl_guard_scale",

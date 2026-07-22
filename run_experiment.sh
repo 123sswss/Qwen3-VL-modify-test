@@ -193,10 +193,10 @@ run_N() {
 # 两张卡使用同一新 seed 做配对结构实验。
 #   bash run_experiment.sh relation44
 #   bash run_experiment.sh relation47
+#   bash run_experiment.sh random_init47
 #   bash run_experiment.sh guard44
 #   bash run_experiment.sh guard47
 #   bash run_experiment.sh raw_adapter47
-#   bash run_experiment.sh tiny_init47
 # 当前激进消融默认固定 seed 44：
 #   bash run_experiment.sh direct_mmrl
 #   bash run_experiment.sh two_adapter
@@ -212,6 +212,11 @@ case "$RUN_TARGET" in
     FIXED_SEED=47
     run_one "visual_router_relation_alignment_diag" "visual_router_relation_retest_seed47"
     ;;
+  random_init47)
+    AUTO_INCREMENT_SEED=0
+    FIXED_SEED=47
+    run_one "visual_router_relation_random_adapter_init_v1" "visual_router_relation_random_adapter_init_v1_seed47"
+    ;;
   guard44)
     AUTO_INCREMENT_SEED=0
     FIXED_SEED=44
@@ -226,11 +231,6 @@ case "$RUN_TARGET" in
     AUTO_INCREMENT_SEED=0
     FIXED_SEED=47
     run_one "visual_router_raw_adapter_v1" "visual_router_raw_adapter_v1_seed47"
-    ;;
-  tiny_init47)
-    AUTO_INCREMENT_SEED=0
-    FIXED_SEED=47
-    run_one "visual_router_relation_tiny_adapter_init_v1" "visual_router_relation_tiny_adapter_init_v1_seed47"
     ;;
   direct_mmrl)
     run_one "visual_router_direct_mmrl_seed44" "visual_router_direct_mmrl_seed44"
@@ -248,7 +248,7 @@ case "$RUN_TARGET" in
     run_one "visual_router_raw_adapter_v1" "visual_router_raw_adapter_v1_seed47"
     ;;
   *)
-    echo "[ERR] 未知实验目标: $RUN_TARGET（可选: relation44, relation47, guard44, guard47, raw_adapter47, tiny_init47, direct_mmrl, two_adapter, single_adapter, all）" >&2
+    echo "[ERR] 未知实验目标: $RUN_TARGET（可选: relation44, relation47, random_init47, guard44, guard47, raw_adapter47, direct_mmrl, two_adapter, single_adapter, all）" >&2
     exit 2
     ;;
 esac

@@ -41,7 +41,9 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
             "ABLATE_VISUAL_GATE": _cfg_attr(config, "ABLATE_VISUAL_GATE", False),
             "ABLATE_DIRECT_LEARNABLE_REP": _cfg_attr(config, "ABLATE_DIRECT_LEARNABLE_REP", False),
             "VISUAL_RESIDUAL_ADAPTER_COUNT": _cfg_attr(config, "VISUAL_RESIDUAL_ADAPTER_COUNT", 4),
-            "RANDOM_INIT_ADAPTER_OUTPUT": _cfg_attr(config, "RANDOM_INIT_ADAPTER_OUTPUT", False),
+            "RANDOM_INIT_ADAPTER_OUTPUT_COUNT": _cfg_attr(
+                config, "RANDOM_INIT_ADAPTER_OUTPUT_COUNT", 0
+            ),
             "ADAPTER_USAGE_BALANCE_LOSS_WEIGHT": _cfg_attr(config, "ADAPTER_USAGE_BALANCE_LOSS_WEIGHT", 0.0),
             "ADAPTER_SAMPLE_ENTROPY_LOSS_WEIGHT": _cfg_attr(config, "ADAPTER_SAMPLE_ENTROPY_LOSS_WEIGHT", 0.0),
             "ADAPTER_COMMON_MODE_LOSS_WEIGHT": _cfg_attr(config, "ADAPTER_COMMON_MODE_LOSS_WEIGHT", 0.0),

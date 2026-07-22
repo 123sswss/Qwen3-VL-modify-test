@@ -893,8 +893,8 @@ def build_model_and_processor(model_path, experiment_cfg=None):
         "visual_residual_adapter_count",
         os.getenv("MMRL_VISUAL_RESIDUAL_ADAPTER_COUNT", "4"),
     ))
-    config.RANDOM_INIT_ADAPTER_OUTPUT = bool(
-        experiment_cfg.get("random_init_adapter_output", False)
+    config.RANDOM_INIT_ADAPTER_OUTPUT_COUNT = int(
+        experiment_cfg.get("random_init_adapter_output_count", 0)
     )
     config.ADAPTER_USAGE_BALANCE_LOSS_WEIGHT = float(experiment_cfg.get(
         "adapter_usage_balance_loss_weight",
@@ -1028,11 +1028,14 @@ def build_model_and_processor(model_path, experiment_cfg=None):
             f"requested={config.VISUAL_RESIDUAL_ADAPTER_COUNT} "
             f"actual={visual.visual_residual_adapter_count}"
         )
-    if visual.random_init_adapter_output != config.RANDOM_INIT_ADAPTER_OUTPUT:
+    if (
+        visual.random_init_adapter_output_count
+        != config.RANDOM_INIT_ADAPTER_OUTPUT_COUNT
+    ):
         raise RuntimeError(
-            "RANDOM_INIT_ADAPTER_OUTPUT config propagation failed: "
-            f"requested={config.RANDOM_INIT_ADAPTER_OUTPUT} "
-            f"actual={visual.random_init_adapter_output}"
+            "RANDOM_INIT_ADAPTER_OUTPUT_COUNT config propagation failed: "
+            f"requested={config.RANDOM_INIT_ADAPTER_OUTPUT_COUNT} "
+            f"actual={visual.random_init_adapter_output_count}"
         )
     propagation_checks = {
         "MMRL_RELATION_MAX_TOKENS": (
@@ -1058,7 +1061,7 @@ def build_model_and_processor(model_path, experiment_cfg=None):
         f"direct_mmrl_output={visual.direct_mmrl_output} "
         f"raw_visual_adapter={visual.raw_visual_adapter} "
         f"visual_residual_adapter_count={visual.visual_residual_adapter_count} "
-        f"random_init_adapter_output={visual.random_init_adapter_output}"
+        f"random_init_adapter_output_count={visual.random_init_adapter_output_count}"
     )
     model.model.load_state_dict(base.model.state_dict(), strict=False)
     model.lm_head.load_state_dict(base.lm_head.state_dict(), strict=False)
@@ -1066,14 +1069,21 @@ def build_model_and_processor(model_path, experiment_cfg=None):
         float(adapter.net[-1].weight.detach().float().norm().item())
         for adapter in visual.residual_adapters
     ]
-    if config.RANDOM_INIT_ADAPTER_OUTPUT:
-        if any(norm == 0.0 for norm in adapter_output_weight_norms):
-            raise RuntimeError("Random adapter output initialization produced zero weights")
-    elif any(norm != 0.0 for norm in adapter_output_weight_norms):
-        raise RuntimeError("Strict-zero adapter output initialization produced nonzero weights")
+    random_count = config.RANDOM_INIT_ADAPTER_OUTPUT_COUNT
+    for index, norm in enumerate(adapter_output_weight_norms):
+        expected_random = index < random_count
+        if expected_random and norm == 0.0:
+            raise RuntimeError(
+                f"Random adapter output initialization produced zero weights at index {index}"
+            )
+        if not expected_random and norm != 0.0:
+            raise RuntimeError(
+                f"Strict-zero adapter output initialization produced nonzero weights at index {index}"
+            )
     print(
         "[ADAPTER_OUTPUT_INIT_AUDIT] "
-        f"random={config.RANDOM_INIT_ADAPTER_OUTPUT} "
+        f"random_count={random_count} "
+        f"random_indices={list(range(random_count))} "
         f"weight_norms={adapter_output_weight_norms}"
     )
     del base
@@ -1110,7 +1120,7 @@ def build_model_and_processor(model_path, experiment_cfg=None):
         f"ablate_visual_gate={config.ABLATE_VISUAL_GATE} "
         f"ablate_direct_learnable_rep={config.ABLATE_DIRECT_LEARNABLE_REP} "
         f"visual_residual_adapter_count={config.VISUAL_RESIDUAL_ADAPTER_COUNT} "
-        f"random_init_adapter_output={config.RANDOM_INIT_ADAPTER_OUTPUT} "
+        f"random_init_adapter_output_count={config.RANDOM_INIT_ADAPTER_OUTPUT_COUNT} "
         f"adapter_usage_balance_loss_weight={config.ADAPTER_USAGE_BALANCE_LOSS_WEIGHT} "
         f"adapter_sample_entropy_loss_weight={config.ADAPTER_SAMPLE_ENTROPY_LOSS_WEIGHT} "
         f"adapter_common_mode_loss_weight={config.ADAPTER_COMMON_MODE_LOSS_WEIGHT} "

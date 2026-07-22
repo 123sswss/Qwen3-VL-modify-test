@@ -189,9 +189,15 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
             getattr(self.cfg, "VISUAL_RESIDUAL_ADAPTER_COUNT", 4),
             1,
         ))
-        self.random_init_adapter_output = bool(
-            getattr(self.cfg, "RANDOM_INIT_ADAPTER_OUTPUT", False)
+        self.random_init_adapter_output_count = int(
+            getattr(self.cfg, "RANDOM_INIT_ADAPTER_OUTPUT_COUNT", 0)
         )
+        if not 0 <= self.random_init_adapter_output_count <= self.visual_residual_adapter_count:
+            raise ValueError(
+                "RANDOM_INIT_ADAPTER_OUTPUT_COUNT must be between 0 and "
+                f"{self.visual_residual_adapter_count}, got "
+                f"{self.random_init_adapter_output_count}"
+            )
         self.adapter_router = ResidualRouter(
             self.cfg.vision_token_dim,
             self.cfg.text_token_dim,
@@ -201,9 +207,9 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
         self.residual_adapters = nn.ModuleList([
             zeroInit(
                 self.cfg.vision_token_dim,
-                random_output_init=self.random_init_adapter_output,
+                random_output_init=index < self.random_init_adapter_output_count,
             )
-            for _ in range(self.visual_residual_adapter_count)
+            for index in range(self.visual_residual_adapter_count)
         ])
         self.adapter_usage_balance_loss = torch.tensor(0.0)
         self.adapter_sample_entropy_loss = torch.tensor(0.0)

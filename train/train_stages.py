@@ -1227,6 +1227,65 @@ def print_joint_trainable_params_before_stage1(model):
     print("!" * 120 + "\n")
 
 
+def _build_stage3_grouped_optimizer(model, train_cfg):
+    experiment_cfg = train_cfg.get("experiment_cfg", {}) or {}
+    adapter_lrs = experiment_cfg.get("stage3_adapter_learning_rates")
+    if adapter_lrs is None:
+        return None
+
+    adapter_lrs = [float(lr) for lr in adapter_lrs]
+    adapter_count = int(model.model.visual.visual_residual_adapter_count)
+    if len(adapter_lrs) != adapter_count:
+        raise ValueError(
+            "stage3_adapter_learning_rates must match adapter count, got "
+            f"rates={adapter_lrs} adapter_count={adapter_count}"
+        )
+
+    mmrl_lr = float(experiment_cfg["stage3_mmrl_learning_rate"])
+    router_lr = float(experiment_cfg["stage3_router_learning_rate"])
+    grouped = {"mmrl": [] , "router": []}
+    grouped.update({f"adapter_{idx}": [] for idx in range(adapter_count)})
+
+    for name, param in model.named_parameters():
+        if not param.requires_grad:
+            continue
+        if ".adapter_router." in name:
+            grouped["router"].append(param)
+            continue
+        matched_adapter = False
+        for idx in range(adapter_count):
+            if f".residual_adapters.{idx}." in name:
+                grouped[f"adapter_{idx}"].append(param)
+                matched_adapter = True
+                break
+        if not matched_adapter:
+            grouped["mmrl"].append(param)
+
+    learning_rates = {"mmrl": mmrl_lr, "router": router_lr}
+    learning_rates.update({f"adapter_{idx}": lr for idx, lr in enumerate(adapter_lrs)})
+    empty_groups = [name for name, params in grouped.items() if not params]
+    if empty_groups:
+        raise RuntimeError(f"Empty Stage3 optimizer groups: {empty_groups}")
+
+    parameter_groups = [
+        {
+            "params": params,
+            "lr": learning_rates[name],
+            "weight_decay": 0.0,
+            "group_name": name,
+        }
+        for name, params in grouped.items()
+    ]
+    print(
+        "[STAGE3_OPTIMIZER_GROUPS] "
+        + " ".join(
+            f"{group['group_name']}:lr={group['lr']}:tensors={len(group['params'])}"
+            for group in parameter_groups
+        )
+    )
+    return torch.optim.AdamW(parameter_groups, betas=(0.9, 0.999), eps=1e-8)
+
+
 # =========================
 #  Stage1 lightweight classifier pretraining
 # =========================
@@ -1404,6 +1463,7 @@ def run_stage3_full(model, processor, data_cfg, train_cfg, output_dir):
         f"schedule_epochs={schedule_epochs} "
         f"peak_lr={train_cfg['learning_rate'][stage_id]} "
         f"warmup_ratio={train_cfg.get('stage3_warmup_ratio', 0.05)} "
+        f"scheduler={train_cfg.get('stage3_lr_scheduler_type', 'cosine')} "
         f"temperature={train_cfg.get('initial_temp', 1.0)}"
         f"->{train_cfg.get('final_temp', 0.1)}"
     )
@@ -1480,7 +1540,7 @@ def run_stage3_full(model, processor, data_cfg, train_cfg, output_dir):
         per_device_train_batch_size=train_cfg["per_device_train_batch_size"],
         gradient_accumulation_steps=train_cfg["gradient_accumulation_steps"],
         learning_rate=train_cfg["learning_rate"][stage_id],
-        lr_scheduler_type="cosine",
+        lr_scheduler_type=train_cfg.get("stage3_lr_scheduler_type", "cosine"),
         warmup_ratio=train_cfg.get("stage3_warmup_ratio", 0.05),
         logging_steps=10,
         save_strategy="no",
@@ -1537,12 +1597,17 @@ def run_stage3_full(model, processor, data_cfg, train_cfg, output_dir):
             actual_epochs,
         ))
 
+    grouped_optimizer = _build_stage3_grouped_optimizer(model, train_cfg)
+    trainer_kwargs = {}
+    if grouped_optimizer is not None:
+        trainer_kwargs["optimizers"] = (grouped_optimizer, None)
     trainer = Trainer(
         model=model,
         args=args,
         train_dataset=ds,
         data_collator=collator,
         callbacks=callbacks,
+        **trainer_kwargs,
     )
     trainer.train()
     # trainer.save_model(f"{output_dir}/stage{stage_id}")

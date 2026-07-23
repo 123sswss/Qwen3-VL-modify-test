@@ -3,6 +3,7 @@ import unittest
 import torch
 
 from data_pipeline import (
+    build_compact_target_window,
     build_target_supervision_masks,
     expand_conversation_by_assistant_turn,
 )
@@ -104,6 +105,31 @@ class TargetSupervisionMaskTests(unittest.TestCase):
         self.assertEqual([len(prefix) for _, prefix in prefixes], [2, 4])
         self.assertEqual(prefixes[0][1][-1]["value"], "A1")
         self.assertEqual(prefixes[1][1][-1]["value"], "A2")
+
+    def test_compact_target_window_keeps_latest_exchange_and_rehomes_image(self):
+        conversations = [
+            {"from": "human", "value": "<image>\nQ1"},
+            {"from": "gpt", "value": "A1"},
+            {"from": "human", "value": "Q2"},
+            {"from": "gpt", "value": "A2"},
+            {"from": "human", "value": "Q3"},
+            {"from": "gpt", "value": "A3"},
+        ]
+
+        compact = build_compact_target_window(conversations, require_image=True)
+
+        self.assertEqual(len(compact), 2)
+        self.assertEqual(compact[0]["from"], "human")
+        self.assertEqual(compact[0]["value"], "<image>\nQ3")
+        self.assertEqual(compact[1]["value"], "A3")
+        self.assertEqual(conversations[0]["value"], "<image>\nQ1")
+
+    def test_compact_target_window_requires_preceding_user(self):
+        with self.assertRaisesRegex(ValueError, "no preceding user"):
+            build_compact_target_window(
+                [{"from": "gpt", "value": "A1"}],
+                require_image=True,
+            )
 
 
 if __name__ == "__main__":

@@ -90,6 +90,31 @@ def expand_conversation_by_assistant_turn(conversations):
     return prefixes
 
 
+def build_compact_target_window(conversations, require_image=False):
+    """Keep the current user/assistant exchange when earlier context overflows."""
+    if not conversations:
+        raise ValueError("cannot compact an empty conversation")
+
+    target_idx = len(conversations) - 1
+    if normalize_conversation_role(conversations[target_idx].get("from")) != "assistant":
+        raise ValueError("target conversation must end with an assistant turn")
+
+    user_idx = None
+    for turn_idx in range(target_idx - 1, -1, -1):
+        if normalize_conversation_role(conversations[turn_idx].get("from")) == "user":
+            user_idx = turn_idx
+            break
+    if user_idx is None:
+        raise ValueError("target assistant turn has no preceding user turn")
+
+    compact = [dict(turn) for turn in conversations[user_idx:target_idx + 1]]
+    if require_image:
+        for turn in compact:
+            turn["value"] = str(turn.get("value", "")).replace("<image>", "")
+        compact[0]["value"] = "<image>\n" + str(compact[0].get("value", "")).lstrip()
+    return compact
+
+
 def _find_subsequence_positions(input_ids, pattern_ids, valid_length):
     if not pattern_ids or valid_length < len(pattern_ids):
         return []
@@ -405,42 +430,29 @@ class FourViewMMRLDataset(Dataset):
         if s["image_path"] is not None:
             image = Image.open(s["image_path"]).convert("RGB")
 
-        qwen_conv = self._build_qwen_conv(s["conversations"], image)
-        text_inputs = self.processor.apply_chat_template(
-            qwen_conv, tokenize=False, add_generation_prompt=False
-        )
-
-        if view_type == "mm":
-            inputs = self.processor(
-                images=image,
-                text=text_inputs,
-                padding="max_length",
-                max_length=1024,
-                truncation=True,
-                return_tensors="pt",
+        def encode_conversation(conversations):
+            qwen_conv = self._build_qwen_conv(conversations, image)
+            text_inputs = self.processor.apply_chat_template(
+                qwen_conv, tokenize=False, add_generation_prompt=False
             )
-            # pixel_values: [num_patches, patch_dim],  image_grid_thw: [num_images, 3]
-            pixel_values = inputs["pixel_values"].squeeze(0) if inputs["pixel_values"].dim() == 3 else inputs["pixel_values"]
-            image_grid_thw = inputs["image_grid_thw"]
-            if image_grid_thw.dim() == 1:
-                image_grid_thw = image_grid_thw.unsqueeze(0)
-            images_per_sample = 1
-            is_mm = 1
-        else:
-            inputs = self.processor(
-                text=text_inputs,
-                padding="max_length",
-                max_length=1024,
-                truncation=True,
-                return_tensors="pt",
+            processor_kwargs = {
+                "text": text_inputs,
+                "padding": "max_length",
+                "max_length": 1024,
+                "truncation": True,
+                "return_tensors": "pt",
+            }
+            if view_type == "mm":
+                processor_kwargs["images"] = image
+            encoded = self.processor(**processor_kwargs)
+            return (
+                encoded,
+                encoded["input_ids"].squeeze(0),
+                encoded["attention_mask"].squeeze(0),
             )
-            pixel_values = None
-            image_grid_thw = None
-            images_per_sample = 0
-            is_mm = 0
 
-        input_ids = inputs["input_ids"].squeeze(0)
-        attention_mask = inputs["attention_mask"].squeeze(0)
+        target_assistant_ordinal = s.get("target_assistant_ordinal", 1)
+        inputs, input_ids, attention_mask = encode_conversation(s["conversations"])
 
         if self.ce_enabled:
             try:
@@ -450,21 +462,57 @@ class FourViewMMRLDataset(Dataset):
                     assistant_header_ids=self.assistant_header_ids,
                     assistant_label_prefix_ids=self.assistant_label_prefix_ids,
                     im_end_token_id=self.im_end_token_id,
-                    target_assistant_ordinal=s.get("target_assistant_ordinal", 1),
+                    target_assistant_ordinal=target_assistant_ordinal,
                 )
-            except ValueError as exc:
-                raise RuntimeError(
-                    "[TARGET_MASK_ERROR] "
-                    f"idx={idx} source={s.get('source_name')} "
-                    f"image={s.get('image_path')} "
-                    f"target_turn_index={s.get('target_turn_index')} "
-                    f"target_assistant_ordinal={s.get('target_assistant_ordinal')} "
-                    f"raw_turn_count={s.get('raw_turn_count')}: {exc}"
-                ) from exc
+            except ValueError as initial_exc:
+                try:
+                    compact_conv = build_compact_target_window(
+                        s["conversations"],
+                        require_image=(view_type == "mm" and image is not None),
+                    )
+                    if len(compact_conv) >= len(s["conversations"]):
+                        raise initial_exc
+                    inputs, input_ids, attention_mask = encode_conversation(compact_conv)
+                    compact_target_ordinal = sum(
+                        normalize_conversation_role(turn.get("from")) == "assistant"
+                        for turn in compact_conv
+                    )
+                    labels, mmrl_gating_mask = build_target_supervision_masks(
+                        input_ids=input_ids,
+                        attention_mask=attention_mask,
+                        assistant_header_ids=self.assistant_header_ids,
+                        assistant_label_prefix_ids=self.assistant_label_prefix_ids,
+                        im_end_token_id=self.im_end_token_id,
+                        target_assistant_ordinal=compact_target_ordinal,
+                    )
+                except ValueError as compact_exc:
+                    raise RuntimeError(
+                        "[TARGET_MASK_ERROR] "
+                        f"idx={idx} source={s.get('source_name')} "
+                        f"image={s.get('image_path')} "
+                        f"target_turn_index={s.get('target_turn_index')} "
+                        f"target_assistant_ordinal={target_assistant_ordinal} "
+                        f"raw_turn_count={s.get('raw_turn_count')}: "
+                        f"initial={initial_exc}; compact={compact_exc}"
+                    ) from compact_exc
         else:
             labels = input_ids.clone()
             labels[:] = -100
             mmrl_gating_mask = attention_mask.bool()
+
+        if view_type == "mm":
+            # pixel_values: [num_patches, patch_dim], image_grid_thw: [num_images, 3]
+            pixel_values = inputs["pixel_values"].squeeze(0) if inputs["pixel_values"].dim() == 3 else inputs["pixel_values"]
+            image_grid_thw = inputs["image_grid_thw"]
+            if image_grid_thw.dim() == 1:
+                image_grid_thw = image_grid_thw.unsqueeze(0)
+            images_per_sample = 1
+            is_mm = 1
+        else:
+            pixel_values = None
+            image_grid_thw = None
+            images_per_sample = 0
+            is_mm = 0
 
         return {
             "input_ids": input_ids,

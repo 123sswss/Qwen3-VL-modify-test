@@ -243,7 +243,6 @@ class FourViewMMRLDataset(Dataset):
         ce_enabled=False,
         seed=42,
         deterministic_sampling=False,
-        max_sequence_length=1024,
     ):
         self.processor = processor
         self.total_limit = total_limit
@@ -253,11 +252,6 @@ class FourViewMMRLDataset(Dataset):
         self.deterministic_sampling = deterministic_sampling
         self.resample_round = 0
         self.ce_enabled = ce_enabled
-        self.max_sequence_length = int(max_sequence_length)
-        if self.max_sequence_length <= 0:
-            raise ValueError(
-                f"max_sequence_length must be positive, got {self.max_sequence_length}"
-            )
 
         tokenizer = self.processor.tokenizer
         self.assistant_header_ids = tokenizer.encode(
@@ -444,7 +438,7 @@ class FourViewMMRLDataset(Dataset):
             processor_kwargs = {
                 "text": text_inputs,
                 "padding": "max_length",
-                "max_length": self.max_sequence_length,
+                "max_length": 1024,
                 "truncation": True,
                 "return_tensors": "pt",
             }

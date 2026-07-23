@@ -211,9 +211,6 @@ EXPERIMENTS = {
     "visual_router_relation_multiturn_fixed_v1": {
         **V4_RECOVER_BASE,
         "random_init_adapter_output_count": 0,
-        "max_sequence_length": 2048,
-        "per_device_train_batch_size": 1,
-        "gradient_accumulation_steps": 32,
         "mmrl_relation_loss_weight": 0.010,
         "mmrl_relation_max_tokens": 64,
         "mmrl_variance_floor_ratio": 0.50,
@@ -505,18 +502,8 @@ CFG = {
             "MMRL_ADAPTER_EFFECTIVE_DELTA_TARGET_HIGH",
             str(EXP_CFG.get("adapter_effective_delta_target_high", 1.10)),
         )),
-        "max_sequence_length": int(os.getenv(
-            "MMRL_MAX_SEQUENCE_LENGTH",
-            str(EXP_CFG.get("max_sequence_length", 1024)),
-        )),
-        "per_device_train_batch_size": int(os.getenv(
-            "MMRL_PER_DEVICE_TRAIN_BATCH_SIZE",
-            str(EXP_CFG.get("per_device_train_batch_size", 2)),
-        )),
-        "gradient_accumulation_steps": int(os.getenv(
-            "MMRL_GRADIENT_ACCUMULATION_STEPS",
-            str(EXP_CFG.get("gradient_accumulation_steps", 16)),
-        )),
+        "per_device_train_batch_size": 2,
+        "gradient_accumulation_steps": 16,
         "grad_spike_ema_alpha": float(os.getenv("MMRL_GRAD_SPIKE_EMA_ALPHA", "0.10")),
         "grad_spike_ratio_threshold": float(os.getenv("MMRL_GRAD_SPIKE_RATIO_THRESHOLD", "3.0")),
         "grad_spike_abs_threshold": float(os.getenv("MMRL_GRAD_SPIKE_ABS_THRESHOLD", "0.5")),

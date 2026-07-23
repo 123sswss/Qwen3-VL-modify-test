@@ -1546,12 +1546,6 @@ def run_stage3_full(model, processor, data_cfg, train_cfg, output_dir):
 
     stage3_views = ("expert-mm",)
     print(f"[Stage{stage_id}] enable_views={stage3_views}")
-    print(
-        f"[Stage{stage_id}] max_sequence_length="
-        f"{train_cfg.get('max_sequence_length', 1024)} "
-        f"micro_batch={train_cfg['per_device_train_batch_size']} "
-        f"gradient_accumulation={train_cfg['gradient_accumulation_steps']}"
-    )
 
     ds = FourViewMMRLDataset(
         processor=processor,
@@ -1565,7 +1559,6 @@ def run_stage3_full(model, processor, data_cfg, train_cfg, output_dir):
         ce_enabled=True,
         seed=train_cfg.get("data_sampling_seed", 42),
         deterministic_sampling=train_cfg.get("deterministic_sampling", False),
-        max_sequence_length=train_cfg.get("max_sequence_length", 1024),
     )
     # Preserve the historical first-epoch seed+1 sample selection while fixing
     # the expanded dataset length before Trainer builds its DataLoader.

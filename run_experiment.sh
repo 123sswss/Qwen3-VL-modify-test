@@ -190,6 +190,19 @@ run_N() {
   done
 }
 
+# 依次运行显式给定的固定 seed；不读取或修改自动递增状态文件。
+run_fixed_seed_sequence() {
+  local experiment_name="$1"
+  local raw_tag_prefix="$2"
+  shift 2
+  local seed
+  AUTO_INCREMENT_SEED=0
+  for seed in "$@"; do
+    FIXED_SEED="$seed"
+    run_one "$experiment_name" "${raw_tag_prefix}_seed${seed}"
+  done
+}
+
 # 两张卡使用同一新 seed 做配对结构实验。
 #   bash run_experiment.sh relation44
 #   bash run_experiment.sh relation47
@@ -208,6 +221,8 @@ run_N() {
 #   bash run_experiment.sh heterogeneous_lr_up48
 #   bash run_experiment.sh heterogeneous_lr_wide44
 #   bash run_experiment.sh heterogeneous_lr_down44
+#   bash run_experiment.sh heterogeneous_relation_100_102
+#   bash run_experiment.sh heterogeneous_no_relation_100_102
 #   bash run_experiment.sh guard44
 #   bash run_experiment.sh guard47
 #   bash run_experiment.sh raw_adapter47
@@ -303,6 +318,18 @@ case "$RUN_TARGET" in
     FIXED_SEED=44
     run_one "visual_router_relation_heterogeneous_adapter_lr_down_v3" "visual_router_relation_heterogeneous_adapter_lr_down_v3_seed44"
     ;;
+  heterogeneous_relation_100_102)
+    run_fixed_seed_sequence \
+      "visual_router_relation_heterogeneous_adapter_lr_v1" \
+      "visual_router_relation_heterogeneous_adapter_lr_v1_paired" \
+      100 101 102
+    ;;
+  heterogeneous_no_relation_100_102)
+    run_fixed_seed_sequence \
+      "visual_router_no_relation_heterogeneous_adapter_lr_v1" \
+      "visual_router_no_relation_heterogeneous_adapter_lr_v1_paired" \
+      100 101 102
+    ;;
   guard44)
     AUTO_INCREMENT_SEED=0
     FIXED_SEED=44
@@ -334,7 +361,7 @@ case "$RUN_TARGET" in
     run_one "visual_router_raw_adapter_v1" "visual_router_raw_adapter_v1_seed47"
     ;;
   *)
-    echo "[ERR] 未知实验目标: $RUN_TARGET（可选: relation44, relation47, random_init47, random_init44, hybrid_init47, zero_init47, zero_init44, zero_init48, router_zero44, router_zero48, one_epoch_lr6, one_epoch_lr4, heterogeneous_lr_pair, heterogeneous_lr_up44, heterogeneous_lr_up48, heterogeneous_lr_wide44, heterogeneous_lr_down44, guard44, guard47, raw_adapter47, direct_mmrl, two_adapter, single_adapter, all）" >&2
+    echo "[ERR] 未知实验目标: $RUN_TARGET（可选: relation44, relation47, random_init47, random_init44, hybrid_init47, zero_init47, zero_init44, zero_init48, router_zero44, router_zero48, one_epoch_lr6, one_epoch_lr4, heterogeneous_lr_pair, heterogeneous_lr_up44, heterogeneous_lr_up48, heterogeneous_lr_wide44, heterogeneous_lr_down44, heterogeneous_relation_100_102, heterogeneous_no_relation_100_102, guard44, guard47, raw_adapter47, direct_mmrl, two_adapter, single_adapter, all）" >&2
     exit 2
     ;;
 esac

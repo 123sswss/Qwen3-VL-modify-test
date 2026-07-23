@@ -1362,6 +1362,13 @@ def run_stage1_light(model, processor, data_cfg, train_cfg, output_dir):
         save_debug_figure=train_cfg.get("save_debug_figure", False),
     )
 
+    stage3_data_seed = train_cfg.get("data_sampling_seed", 42)
+    if train_cfg.get("deterministic_sampling", False):
+        # Historical StageScheduleCallback resampled once at epoch start, so
+        # Stage3 effectively used seed+1. Build that dataset directly to avoid
+        # running expensive target-length filtering twice.
+        stage3_data_seed = int(stage3_data_seed) + 1
+
     ds = FourViewMMRLDataset(
         processor=processor,
         expert_json=data_cfg["expert_json"],
@@ -1557,12 +1564,9 @@ def run_stage3_full(model, processor, data_cfg, train_cfg, output_dir):
         enable_views=stage3_views,
         mode=f"stage{stage_id}",
         ce_enabled=True,
-        seed=train_cfg.get("data_sampling_seed", 42),
+        seed=stage3_data_seed,
         deterministic_sampling=train_cfg.get("deterministic_sampling", False),
     )
-    # Preserve the historical first-epoch seed+1 sample selection while fixing
-    # the expanded dataset length before Trainer builds its DataLoader.
-    ds.resample_data()
     collator = MMRLDataCollator(processor)
     cb = StageScheduleCallback(
         dataset=ds,

@@ -1,0 +1,66 @@
+% !TeX program = xelatex
+% 中文施工主文件：基于 Elsevier CAS 双栏模板，定稿前统一使用中文撰写。
+\documentclass[a4paper,fleqn]{cas-dc}
+
+% 使用 TeX Live 自带 Fandol 字体，避免依赖本机中文字体。
+\usepackage[UTF8,fontset=fandol]{ctex}
+\usepackage[authoryear,longnamesfirst]{natbib}
+\usepackage{booktabs}
+\usepackage{amsmath,amssymb}
+\usepackage{graphicx}
+\graphicspath{{figs/}}
+
+\begin{document}
+\let\WriteBookmarks\relax
+
+\shorttitle{中文施工稿}
+\shortauthors{作者待定}
+\title[mode=title]{面向专业视觉语言模型的冻结式视觉适配方法}
+
+\author[1]{作者待定}
+
+\affiliation[1]{organization={单位待定},
+            city={城市待定},
+            country={中国}}
+
+\begin{abstract}
+本文档是基于 Elsevier CAS 双栏模板建立的中文施工稿。论文内容、作者信息、摘要、图表和参考文献将在后续阶段逐步补充；英文翻译仅在中文定稿后进行。
+\end{abstract}
+
+\begin{highlights}
+\item 使用冻结视觉语言模型主干进行专业领域适配。
+\item 通过 MMRL 表征与条件路由实现视觉侧增量知识注入。
+\item 在中文阶段完成方法、实验和图表的人工审核。
+\end{highlights}
+
+\begin{keywords}
+视觉语言模型 \sep 参数高效微调 \sep 专业领域适配 \sep 路由适配器
+\end{keywords}
+
+\maketitle
+
+\section{引言}
+\label{sec:introduction}
+
+中文正文从这里开始。
+
+\section{方法}
+\label{sec:method}
+
+中文方法描述从这里开始。
+
+\section{实验}
+\label{sec:experiments}
+
+中文实验内容从这里开始。
+
+\section{结论}
+\label{sec:conclusion}
+
+中文结论从这里开始。
+
+% 参考文献在导入真实条目并加入 \cite 后启用，避免空稿阶段触发 BibTeX 报错。
+% \bibliographystyle{cas-model2-names}
+% \bibliography{references}
+
+\end{document}

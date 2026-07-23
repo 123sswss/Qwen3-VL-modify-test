@@ -72,7 +72,7 @@ Multimodal large language model, Parameter-efficient fine-tuning, Frozen backbon
 \maketitle
 \begin{center}
     \captionsetup{type=figure}
-    \includegraphics[width=0.9\linewidth]{备份-抽象.drawio.png}
+    \includegraphics[width=0.9\linewidth]{正式版-抽象.png}
     \caption{所提出的即插即用适配框架整体架构。主干 VLM（包含视觉塔、MLP 和 LLM）被严格冻结。为了实现按需的知识注入且不发生灾难性遗忘，引入了一个外部可训练模块。通用查询（如识别玩具）直接绕过专业模块，确保对模型通用能力的零干扰；特定领域查询（如电气安全评估）则通过任务分类器激活专业视觉分支。最后，K-预算门（K-Budget Gate）动态控制专业表征注入回冻结主干的强度。}
     \label{fig:1}
 \end{center}
@@ -141,7 +141,7 @@ Multimodal large language model, Parameter-efficient fine-tuning, Frozen backbon
 
 \begin{figure*}[t]
     \centering
-    \includegraphics[width=\textwidth]{未命名绘图-整体.drawio.png}
+    \includegraphics[width=\textwidth]{正式版-整体.png}
     \caption{本文所提出 MMRL 框架的整体结构示意图。MMRL 首先学习一组共享表示，并将其投影为不同视觉注入层所需的视觉代表 token；随后，任务分类器利用池化后的视觉状态与文本嵌入预测样本级增强需求，并通过 Hard-Concrete 门控控制增强分支是否生效；最后，视觉残差经由文本条件化的 router-adapter 模块进行选择性调制，再写回视觉表示。整个过程仅改变视觉编码阶段的表示，不改变语言模型侧的输入序列结构。}
     \label{fig:method_overview}
 \end{figure*}
@@ -222,7 +222,7 @@ G=\min\!\left(1,\max\!\left(0,\tilde{g}(\zeta-\gamma)+\gamma\right)\right),
 
 \begin{figure*}[t]
     \centering
-    \includegraphics[width=\textwidth]{未命名绘图-视觉部分.drawio.png}
+    \includegraphics[width=\textwidth]{正式版-视觉部分.png}
     \caption{
     任务分类器与视觉增强支路的整体框架。MMRL 首先生成视觉代表 token，并在视觉编码器的指定层中插入或更新，以形成增强分支。任务分类器对中间视觉状态与文本嵌入进行注意力池化和特征融合，输出任务相关分数 $\alpha$，再经 Hard-Concrete 映射为门控变量 $G$。在此基础上，模型对原始分支和增强分支的差异进行门控与残差路由，从而获得任务自适应的视觉表示。
     }
@@ -278,7 +278,7 @@ G=\min\!\left(1,\max\!\left(0,\tilde{g}(\zeta-\gamma)+\gamma\right)\right),
 
 \begin{figure*}[t]
     \centering
-    \includegraphics[width=0.92\linewidth]{未命名绘图-路由器.drawio.png}
+    \includegraphics[width=0.92\linewidth]{正式版-路由器.png}
     \caption{视觉 residual adapter router 设计示意图。模型首先利用池化视觉表示、池化文本表示及 expertise score 生成各视觉残差适配器的路由权重；随后，各残差适配器分别对门控后的视觉残差进行变换，并经加权求和后写回原始视觉状态，得到最终视觉隐藏表示。该模块是后续路由均衡、熵约束、共模抑制、有效残差约束、原型锚定与适配器多样性约束的共同作用对象。}
     \label{fig:shared_router_adapter}
 \end{figure*}
@@ -800,149 +800,7 @@ MMRL $\rightarrow$ Learnable Tokens & -- & -- \\
 综合上述实验，本文重点关注三个问题：第一，领域适配是否能够提升模型在电力电气专业场景中的识别与判断能力；第二，在达到相近专业性能时，不同方法所需的可训练参数量和推理新增参数量是否存在显著差异；第三，专业适配是否会明显改变原始基座模型的通用输出行为。
 
 实验结果将表明，相较于直接修改模型内部大量线性层的 PEFT 方法，本文方法通过外挂式专业模块与条件注入机制实现领域增强，具有更低的推理扰动和更强的部署灵活性。该特点使其适用于需要在保留通用视觉语言能力的同时引入专业知识的应用场景。
-% \subsubsection{对比方法}
 
-% 为验证本文方法的有效性，本文选取以下方法作为对比基线：
-% \begin{itemize}
-%     \item \textbf{Base Model}：未经过领域适配的基座模型。
-%     \item \textbf{LoRA-r8 / LoRA-r16 / LoRA-r32}：在相同训练数据上采用不同秩的 LoRA 进行微调。
-%     \item \textbf{Larger Open-source Model}：参数规模更大的开源模型。
-%     \item \textbf{Closed-source Model}：代表性的闭源大模型。
-% \end{itemize}
-% 除特别说明外，所有可训练方法均在相同数据划分、相同测试题集以及尽可能一致的输入模板与解码设置下进行比较。
-
-% \subsubsection{实现细节}
-
-% 本文方法采用四阶段训练策略，冻结视觉主干与语言主干，仅训练外挂式专业模块。除特别说明外，正文中的实验结果默认采用本文最终选定的文本专家注入方案。训练超参数、优化器设置、学习率、batch size 及训练轮数等细节见附录。
-
-% \subsubsection{评价指标}
-
-% 对于主任务性能，本文采用\textbf{准确率（Accuracy）}作为主要评价指标。
-
-% 对于通用能力保持实验，本文进一步报告以下指标：
-% \begin{itemize}
-%     \item \textbf{KL 散度}：衡量本文方法与原始基座模型输出分布的偏离程度；
-%     \item \textbf{JS 散度}：作为对称分布差异指标，进一步衡量分布接近性；
-%     \item \textbf{首 token Top-1 一致率}：比较两者首 token 的最大概率预测是否一致；
-%     \item \textbf{首 token Top-10 重叠率}：比较两者前 10 个候选集合的一致程度。
-% \end{itemize}
-
-% \subsection{与基线方法的整体性能对比}
-
-% 本节比较本文方法与基座模型、不同秩的 LoRA、参数规模更大的开源模型以及闭源模型在自建测试集上的整体表现。结果如表~\ref{tab:main_result} 所示。
-
-% \begin{table}[htbp]
-% \centering
-% \caption{与不同基线方法在自建测试集上的整体性能对比。}
-% \label{tab:main_result}
-% \begin{tabular}{lccc}
-% \toprule
-% 方法 & 可训练参数量 & 准确率(\%) & 困难样本(\%) \\
-% \midrule
-% Base Model & - & 56.08 & 38.2 \\
-% LoRA-r8 & 16.52M & 65.93 & 41.5 \\
-% LoRA-r16 & 33.03M & 70.23 & 44.5 \\
-% LoRA-r32 & 66.06M & 68.51 & 40.6 \\
-% Gemini3.1-flash-lite & - & 64.15 & 38.2 \\
-% Ours & 22.8M & 67.22 & 49.6 \\
-% \bottomrule
-% \end{tabular}
-% \end{table}
-
-% 从表中可以观察到，本文方法在自建电力电气测试集上取得了较好的整体表现。与基座模型相比，领域适配方法能够显著提升专业场景下的判别能力；与不同秩的 LoRA 相比，本文方法在保持较少可训练参数的同时展现出更强的专业适配效果；同时，本文方法与更大规模开源模型及闭源模型的比较结果也说明，针对领域任务进行结构化适配具有实际价值。具体数值分析将在结果完整填充后进一步展开。
-
-% \subsection{不同文本专家注入策略的比较}
-
-% 为比较不同文本专家注入方式的效果，本文在相同训练设置下分别评估四种候选策略：
-% (A) 动态前缀方案，
-% (B) 固定数量的 token 级选择，
-% (C) 固定数量的组级选择，
-% (D) 静态固定前缀。
-% 结果如表~\ref{tab:abcd_result} 所示。
-
-% \begin{table}[htbp]
-% \centering
-% \caption{四种方法在自建测试集上的整体性能对比。}
-% \label{tab:abcd_result}
-% \begin{tabular}{lccc}
-% \toprule
-% 方法 & 准确率(\%) & 困难样本(\%) \\
-% \midrule
-% Method (A)(Ours) & 64.47 & 49.6 \\
-% Method (B) & 56.71 & 41.5 \\
-% Method (C) & 60.48 & 42.7 \\
-% Method (D) & 46.96 & 42.1 \\
-% \bottomrule
-% \end{tabular}
-% \end{table}
-
-
-
-% 不同注入策略在性能与稳定性上存在差异。总体来看，动态选择类方案通常更有利于在保持参数效率的同时提升专业任务表现，而静态固定前缀方案的灵活性相对较弱。基于综合结果，本文正文默认采用最终效果最优的文本专家注入策略。
-
-% \subsection{通用能力退化评估}
-
-% 除了关注专业任务性能外，本文还进一步考察：在引入条件式视觉专业分支与文本专家注入机制后，模型是否会对原始基座模型的通用能力产生明显干扰。为此，我们从通用任务评测集中随机抽取 500 个样本，并比较本文方法与原始基座模型在相同输入下的首步输出分布。
-
-% 具体而言，我们统计 KL 散度、JS 散度、Top-1 一致率以及 Top-10 重叠率。实验结果如表~\ref{tab:general_degradation} 所示。
-
-% \begin{table}[htbp]
-% \centering
-% \caption{500 个通用任务样本上的通用能力退化评估结果。}
-% \label{tab:general_degradation}
-% \begin{tabular}{lc}
-% \toprule
-% 指标 & 结果 \\
-% \midrule
-% KL 散度 $\downarrow$ & $0.003514 \pm 0.008282$ \\
-% JS 散度 $\downarrow$ & $0.000883 \pm 0.002070$ \\
-% Top-1 一致率 $\uparrow$ & $98.20\%$ \\
-% Top-10 重叠率 $\uparrow$ & $95.90\%$ \\
-% 样本数 & $500$ \\
-% \bottomrule
-% \end{tabular}
-% \end{table}
-
-% 结果表明，本文方法在通用任务上与原始基座模型保持了高度一致的输出行为。KL 与 JS 散度均较低，说明专业模块仅带来了很小的分布偏移；同时，Top-1 一致率达到 $98.20\%$，Top-10 重叠率达到 $95.90\%$，说明两者在大多数样本上的主预测及高置信候选集合基本一致。总体而言，本文方法在提升专业能力的同时较好保留了原模型的通用能力，少量差异更可能来源于专家前缀注入带来的轻微数值扰动，而非通用行为的明显退化。
-
-% \subsection{关键模块拆解消融实验}
-
-% 为分析各关键设计的独立贡献，本文对完整模型进行拆解，并在相同测试集上比较性能变化。具体包括：
-% \begin{itemize}
-%     \item \textbf{w/o Visual Gate}：移除视觉门控，使专业视觉支路永久附着；
-%     \item \textbf{w/o Text Gate}：移除文本门控，使文本专家 token 始终全部注入；
-%     \item \textbf{Replace MMRL with 40 Learnable Tokens}：将 MMRL 结构替换为固定可学习 token；
-% \end{itemize}
-
-% \begin{table}[htbp]
-% \centering
-% \small
-% \caption{关键模块拆解消融实验。}
-% \label{tab:ablation}
-% \begin{tabular}{lcccc}
-% \toprule
-% 方法 & 准确率(\%) & 困难样本(\%) \\
-% \midrule
-% Full Model & 64.47 & 49.6 \\
-% Base Model & 56.08 & 38.2 \\
-% w/o Visual & 50.84 & 45.2 \\
-% w/o Text Gate & 54.19 & 46.6 \\
-% MMRL $\rightarrow$ 40 Learnable Tokens & 47.9 & 42.4 \\
-
-% \bottomrule
-% \end{tabular}
-% \end{table}
-
-% 实验结果如表~\ref{tab:ablation} 所示。整体来看，完整模型取得了最佳表现，说明视觉门控、文本门控以及可学习专业视觉支路均对最终性能具有积极作用。其中，移除门控机制会削弱模型对专业信息的按需调度能力；将 MMRL 替换为固定可学习 token 后，模型的结构表达能力下降。
-
-
-
-% 这里建议逐项写：
-% 1) 去掉视觉门控后的变化
-% 2) 去掉文本门控后的变化
-% 3) 用简单可学习参数替代 MMRL 后的变化
-% 4) 让视觉支路不可学习后的变化
-% 5) 由此反映出的模块贡献
 \subsection{本节小结}
 % 这里只放非常简洁的总结，避免写得像讨论章节
 % 可写模板：

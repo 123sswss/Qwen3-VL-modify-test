@@ -70,6 +70,98 @@ TASK_TYPE_TO_ID = {
 }
 
 
+def normalize_conversation_role(raw_role: Any) -> str:
+    role = str(raw_role or "").strip().lower()
+    if role in {"human", "user"}:
+        return "user"
+    if role in {"gpt", "assistant", "bot"}:
+        return "assistant"
+    if role == "system":
+        return "system"
+    raise ValueError(f"Unsupported conversation role: {raw_role!r}")
+
+
+def expand_conversation_by_assistant_turn(conversations):
+    """Create one causal prefix per assistant response."""
+    prefixes = []
+    for turn_idx, turn in enumerate(conversations):
+        if normalize_conversation_role(turn.get("from")) == "assistant":
+            prefixes.append((turn_idx, conversations[:turn_idx + 1]))
+    return prefixes
+
+
+def _find_subsequence_positions(input_ids, pattern_ids, valid_length):
+    if not pattern_ids or valid_length < len(pattern_ids):
+        return []
+
+    first_id = int(pattern_ids[0])
+    candidates = (input_ids[:valid_length] == first_id).nonzero(as_tuple=True)[0].tolist()
+    positions = []
+    for start in candidates:
+        end = start + len(pattern_ids)
+        if end <= valid_length and input_ids[start:end].tolist() == list(pattern_ids):
+            positions.append(start)
+    return positions
+
+
+def build_target_supervision_masks(
+    input_ids,
+    attention_mask,
+    assistant_header_ids,
+    assistant_label_prefix_ids,
+    im_end_token_id,
+    target_assistant_ordinal=1,
+):
+    """Build current-response labels and its strictly causal text-pooling mask."""
+    active_positions = (attention_mask != 0).nonzero(as_tuple=True)[0]
+    if active_positions.numel() == 0:
+        raise ValueError("tokenized sample has no active tokens")
+
+    valid_length = int(active_positions[-1].item()) + 1
+    expected_active = torch.arange(valid_length, device=active_positions.device)
+    if not torch.equal(active_positions, expected_active):
+        raise ValueError("only right-padded attention masks are supported")
+
+    header_positions = _find_subsequence_positions(
+        input_ids,
+        assistant_header_ids,
+        valid_length,
+    )
+    expected_count = int(target_assistant_ordinal)
+    if expected_count < 1:
+        raise ValueError(f"invalid target assistant ordinal: {expected_count}")
+    if len(header_positions) != expected_count:
+        raise ValueError(
+            "target assistant header is missing after truncation "
+            f"(expected_assistant_headers={expected_count}, "
+            f"found={len(header_positions)}, valid_tokens={valid_length})"
+        )
+
+    header_start = header_positions[-1]
+    if (
+        not assistant_label_prefix_ids
+        or assistant_header_ids[:len(assistant_label_prefix_ids)]
+        != list(assistant_label_prefix_ids)
+    ):
+        raise ValueError("assistant label prefix must match the assistant header")
+    target_start = header_start + len(assistant_label_prefix_ids)
+    target_tokens = input_ids[target_start:valid_length]
+    if not bool((target_tokens == int(im_end_token_id)).any()):
+        raise ValueError(
+            "target assistant response is incomplete after truncation "
+            f"(target_start={target_start}, valid_tokens={valid_length})"
+        )
+
+    labels = torch.full_like(input_ids, -100)
+    # The target assistant is the final turn in this prefix, so the remaining
+    # active tail contains only its response, terminator, and template separator.
+    labels[target_start:valid_length] = input_ids[target_start:valid_length]
+
+    mmrl_gating_mask = torch.zeros_like(attention_mask, dtype=torch.bool)
+    mmrl_gating_mask[:target_start] = attention_mask[:target_start].bool()
+    return labels, mmrl_gating_mask
+
+
 def infer_task_type_from_source(source_json_path: Optional[str]) -> str:
     if not source_json_path:
         return "unknown"
@@ -134,6 +226,24 @@ class FourViewMMRLDataset(Dataset):
         self.seed = seed
         self.deterministic_sampling = deterministic_sampling
         self.resample_round = 0
+        self.ce_enabled = ce_enabled
+
+        tokenizer = self.processor.tokenizer
+        self.assistant_header_ids = tokenizer.encode(
+            "<|im_start|>assistant\n",
+            add_special_tokens=False,
+        )
+        self.assistant_label_prefix_ids = tokenizer.encode(
+            "<|im_start|>assistant",
+            add_special_tokens=False,
+        )
+        self.im_end_token_id = tokenizer.convert_tokens_to_ids("<|im_end|>")
+        if (
+            not self.assistant_header_ids
+            or not self.assistant_label_prefix_ids
+            or self.im_end_token_id is None
+        ):
+            raise RuntimeError("Failed to resolve Qwen assistant boundary tokens")
 
         self.expert_raw = load_jsons(expert_json) if expert_json else []
         self.general_raw = load_jsons(general_json) if general_json else []
@@ -143,8 +253,6 @@ class FourViewMMRLDataset(Dataset):
 
         self.data = []
         self._build()
-
-        self.ce_enabled = ce_enabled
 
     def _resolve_img(self, item, is_expert: bool) -> Optional[str]:
         image_file = item.get("image", "")
@@ -173,40 +281,56 @@ class FourViewMMRLDataset(Dataset):
         mm_key = f"{task_type}-mm"
         text_key = f"{task_type}-text"
 
+        if self.ce_enabled:
+            conversation_variants = expand_conversation_by_assistant_turn(conv)
+            if not conversation_variants:
+                raise ValueError(
+                    "CE sample contains no assistant turn: "
+                    f"source={source_name} image={item.get('image', '')!r}"
+                )
+        else:
+            conversation_variants = [(None, conv)]
+
         out = []
-        if mm_key in self.enable_views:
-            out.append({
+        for target_assistant_ordinal, (target_turn_index, target_conv) in enumerate(
+            conversation_variants,
+            start=1,
+        ):
+            common = {
                 "task_type": task_type,
                 "dataset_task_type": dataset_task_type,
                 "dataset_task_id": dataset_task_id,
                 "source_name": source_name,
-                "view_type": "mm",
-                "image_path": img_path,
-                "conversations": conv,
-                "alpha_label": 1.0 if is_expert else 0.0
-            })
+                "target_turn_index": target_turn_index,
+                "target_assistant_ordinal": target_assistant_ordinal,
+                "raw_turn_count": len(conv),
+                "alpha_label": 1.0 if is_expert else 0.0,
+            }
 
-        if text_key in self.enable_views:
-            # text-only 清洗
-            cleaned_conv = []
-            for t in conv:
-                v = t.get("value", "")
-                v = v.replace("<image>", "")
-                v = clean_text_visual_hints(v)
-                cleaned_conv.append({"from": t.get("from", "human"), "value": v})
-
-            merged_text = " ".join([x["value"] for x in cleaned_conv])
-            if not is_semantic_collapsed(merged_text):
+            if mm_key in self.enable_views:
                 out.append({
-                    "task_type": task_type,
-                    "dataset_task_type": dataset_task_type,
-                    "dataset_task_id": dataset_task_id,
-                    "source_name": source_name,
-                    "view_type": "text",
-                    "image_path": None,  # text-only
-                    "conversations": cleaned_conv,
-                    "alpha_label": 1.0 if is_expert else 0.0
+                    **common,
+                    "view_type": "mm",
+                    "image_path": img_path,
+                    "conversations": target_conv,
                 })
+
+            if text_key in self.enable_views:
+                cleaned_conv = []
+                for t in target_conv:
+                    v = t.get("value", "")
+                    v = v.replace("<image>", "")
+                    v = clean_text_visual_hints(v)
+                    cleaned_conv.append({"from": t.get("from", "human"), "value": v})
+
+                merged_text = " ".join([x["value"] for x in cleaned_conv])
+                if not is_semantic_collapsed(merged_text):
+                    out.append({
+                        **common,
+                        "view_type": "text",
+                        "image_path": None,
+                        "conversations": cleaned_conv,
+                    })
         return out
 
     def _build(self):
@@ -252,7 +376,7 @@ class FourViewMMRLDataset(Dataset):
     def _build_qwen_conv(self, conversations, image_obj_or_none):
         qwen_conv = []
         for turn in conversations:
-            role = "user" if turn["from"] == "human" else "assistant"
+            role = normalize_conversation_role(turn.get("from"))
             content = turn.get("value", "")
             if role == "user" and "检测到：" in content:
                 has_image_tag = "<image>" in content
@@ -318,16 +442,29 @@ class FourViewMMRLDataset(Dataset):
         input_ids = inputs["input_ids"].squeeze(0)
         attention_mask = inputs["attention_mask"].squeeze(0)
 
-        labels = input_ids.clone()
-        assistant_token_id = self.processor.tokenizer.convert_tokens_to_ids("<|im_start|>")
-        assistant_positions = (input_ids == assistant_token_id).nonzero(as_tuple=True)[0]
-        if len(assistant_positions) >= 2:
-            assistant_start = assistant_positions[1].item() + 2
-            labels[:assistant_start] = -100
-        labels[attention_mask == 0] = -100
-
-        if not self.ce_enabled:
+        if self.ce_enabled:
+            try:
+                labels, mmrl_gating_mask = build_target_supervision_masks(
+                    input_ids=input_ids,
+                    attention_mask=attention_mask,
+                    assistant_header_ids=self.assistant_header_ids,
+                    assistant_label_prefix_ids=self.assistant_label_prefix_ids,
+                    im_end_token_id=self.im_end_token_id,
+                    target_assistant_ordinal=s.get("target_assistant_ordinal", 1),
+                )
+            except ValueError as exc:
+                raise RuntimeError(
+                    "[TARGET_MASK_ERROR] "
+                    f"idx={idx} source={s.get('source_name')} "
+                    f"image={s.get('image_path')} "
+                    f"target_turn_index={s.get('target_turn_index')} "
+                    f"target_assistant_ordinal={s.get('target_assistant_ordinal')} "
+                    f"raw_turn_count={s.get('raw_turn_count')}: {exc}"
+                ) from exc
+        else:
+            labels = input_ids.clone()
             labels[:] = -100
+            mmrl_gating_mask = attention_mask.bool()
 
         return {
             "input_ids": input_ids,
@@ -335,6 +472,7 @@ class FourViewMMRLDataset(Dataset):
             "pixel_values": pixel_values,
             "image_grid_thw": image_grid_thw,
             "labels": labels,
+            "mmrl_gating_mask": mmrl_gating_mask,
             "alpha_labels": float(alpha_label),
             "task_type_id": int(s.get("dataset_task_id", TASK_TYPE_TO_ID["unknown"])),
             "task_type_name": s.get("dataset_task_type", "unknown"),

@@ -223,13 +223,17 @@ class StageScheduleCallback(TrainerCallback):
         total_epochs,
         init_temp=1.0,
         final_temp=0.1,
+        resample_on_first_epoch=True,
     ):
         self.dataset = dataset
         self.total_epochs = total_epochs
         self.init_temp = init_temp
         self.final_temp = final_temp
+        self.resample_on_first_epoch = bool(resample_on_first_epoch)
 
     def on_epoch_begin(self, args, state, control, **kwargs):
+        if not self.resample_on_first_epoch and float(state.epoch or 0.0) == 0.0:
+            return
         self.dataset.resample_data()
 
     def on_step_begin(self, args, state, control, **kwargs):
@@ -595,6 +599,7 @@ class Qwen3VLMMRLForStages(Qwen3VLForConditionalGeneration):
         self._last_shared_rep_grad = {}
         self._shared_rep_grad_hook_handle = None
         self._shared_rep_grad_hook_param_id = None
+        self._validated_mmrl_supervision_contract = False
         self._ensure_shared_rep_grad_hook()
 
     def _get_mmrl_module(self):
@@ -714,12 +719,40 @@ class Qwen3VLMMRLForStages(Qwen3VLForConditionalGeneration):
             self.model.temperature_override = self.temperature_override
             kwargs["gating_temperature_override"] = self.temperature_override
         labels = kwargs.get("labels", None)
-        if labels is not None and "attention_mask" in kwargs:
-            is_prompt = (labels == -100)
-            att_mask = kwargs["attention_mask"]
-            if att_mask.dim() == 2 and is_prompt.dim() == 2:
-                is_prompt = is_prompt & (att_mask == 1)
-            kwargs["mmrl_gating_mask"] = is_prompt.to(dtype=self.model.dtype)
+        if labels is not None:
+            att_mask = kwargs.get("attention_mask")
+            mmrl_gating_mask = kwargs.get("mmrl_gating_mask")
+            if att_mask is None or mmrl_gating_mask is None:
+                raise RuntimeError(
+                    "Stage3 CE batches must provide attention_mask and an explicit "
+                    "mmrl_gating_mask"
+                )
+            if (
+                labels.dim() != 2
+                or att_mask.shape != labels.shape
+                or mmrl_gating_mask.shape != labels.shape
+            ):
+                raise RuntimeError(
+                    "labels, attention_mask, and mmrl_gating_mask must share [B, S], "
+                    f"got labels={tuple(labels.shape)} "
+                    f"attention={tuple(att_mask.shape)} "
+                    f"pooling={tuple(mmrl_gating_mask.shape)}"
+                )
+
+            pooling_bool = mmrl_gating_mask.bool()
+            attention_bool = att_mask.bool()
+            if not self._validated_mmrl_supervision_contract:
+                if bool((pooling_bool & ~attention_bool).any()):
+                    raise RuntimeError("mmrl_gating_mask must not include padding tokens")
+                if bool((pooling_bool & (labels != -100)).any()):
+                    raise RuntimeError(
+                        "MMRL pooling context must not overlap supervised assistant tokens"
+                    )
+                if bool(((labels != -100) & ~attention_bool).any()):
+                    raise RuntimeError("labels must not supervise padding tokens")
+                self._validated_mmrl_supervision_contract = True
+
+            kwargs["mmrl_gating_mask"] = pooling_bool.to(dtype=self.model.dtype)
         
         outputs = super().forward(input_ids=input_ids, images_per_sample=images_per_sample, **kwargs)
         logits = outputs.logits
@@ -1527,12 +1560,16 @@ def run_stage3_full(model, processor, data_cfg, train_cfg, output_dir):
         seed=train_cfg.get("data_sampling_seed", 42),
         deterministic_sampling=train_cfg.get("deterministic_sampling", False),
     )
+    # Preserve the historical first-epoch seed+1 sample selection while fixing
+    # the expanded dataset length before Trainer builds its DataLoader.
+    ds.resample_data()
     collator = MMRLDataCollator(processor)
     cb = StageScheduleCallback(
         dataset=ds,
         total_epochs=schedule_epochs,
         init_temp=train_cfg.get("initial_temp", 1.0),
         final_temp=train_cfg.get("final_temp", 0.1),
+        resample_on_first_epoch=False,
     )
     args = TrainingArguments(
         output_dir=f"{output_dir}/stage{stage_id}",

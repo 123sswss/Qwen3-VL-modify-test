@@ -3,6 +3,7 @@ import os
 import re
 import json
 import random
+from collections import Counter
 from typing import List, Dict, Any, Optional
 from PIL import Image
 
@@ -252,6 +253,7 @@ class FourViewMMRLDataset(Dataset):
         self.deterministic_sampling = deterministic_sampling
         self.resample_round = 0
         self.ce_enabled = ce_enabled
+        self.max_length = 1024
 
         tokenizer = self.processor.tokenizer
         self.assistant_header_ids = tokenizer.encode(
@@ -278,6 +280,65 @@ class FourViewMMRLDataset(Dataset):
 
         self.data = []
         self._build()
+
+    def _encode_conversation_for_length(self, conversations, view_type, image_path):
+        image = None
+        if view_type == "mm" and image_path is not None:
+            with Image.open(image_path) as img:
+                image = img.convert("RGB")
+        qwen_conv = self._build_qwen_conv(conversations, image)
+        text_inputs = self.processor.apply_chat_template(
+            qwen_conv,
+            tokenize=False,
+            add_generation_prompt=False,
+        )
+        processor_kwargs = {
+            "text": text_inputs,
+            "padding": False,
+            "truncation": False,
+            "return_tensors": "pt",
+        }
+        if view_type == "mm":
+            processor_kwargs["images"] = image
+        encoded = self.processor(**processor_kwargs)
+        return (
+            encoded["input_ids"].squeeze(0),
+            encoded["attention_mask"].squeeze(0),
+        )
+
+    def _target_fits_after_compaction(self, sample, view_type, image_path):
+        if not self.ce_enabled:
+            return True, ""
+
+        compact_conv = build_compact_target_window(
+            sample["conversations"],
+            require_image=(view_type == "mm" and image_path is not None),
+        )
+        compact_target_ordinal = sum(
+            normalize_conversation_role(turn.get("from")) == "assistant"
+            for turn in compact_conv
+        )
+        compact_ids, compact_mask = self._encode_conversation_for_length(
+            compact_conv,
+            view_type=view_type,
+            image_path=image_path,
+        )
+        valid_length = int((compact_mask != 0).sum().item())
+        if valid_length > self.max_length:
+            return False, f"compact_valid_tokens={valid_length}"
+
+        try:
+            build_target_supervision_masks(
+                input_ids=compact_ids,
+                attention_mask=compact_mask,
+                assistant_header_ids=self.assistant_header_ids,
+                assistant_label_prefix_ids=self.assistant_label_prefix_ids,
+                im_end_token_id=self.im_end_token_id,
+                target_assistant_ordinal=compact_target_ordinal,
+            )
+        except ValueError as exc:
+            return False, str(exc)
+        return True, ""
 
     def _resolve_img(self, item, is_expert: bool) -> Optional[str]:
         image_file = item.get("image", "")
@@ -333,12 +394,26 @@ class FourViewMMRLDataset(Dataset):
             }
 
             if mm_key in self.enable_views:
-                out.append({
+                sample = {
                     **common,
                     "view_type": "mm",
                     "image_path": img_path,
                     "conversations": target_conv,
-                })
+                }
+                fits, reason = self._target_fits_after_compaction(sample, "mm", img_path)
+                if fits:
+                    out.append(sample)
+                else:
+                    self.skipped_overlong_targets += 1
+                    self.skipped_overlong_target_sources[source_name] += 1
+                    self.skipped_overlong_target_examples.append({
+                        "source": source_name,
+                        "image": img_path,
+                        "target_turn_index": target_turn_index,
+                        "target_assistant_ordinal": target_assistant_ordinal,
+                        "raw_turn_count": len(conv),
+                        "reason": reason,
+                    })
 
             if text_key in self.enable_views:
                 cleaned_conv = []
@@ -350,15 +425,32 @@ class FourViewMMRLDataset(Dataset):
 
                 merged_text = " ".join([x["value"] for x in cleaned_conv])
                 if not is_semantic_collapsed(merged_text):
-                    out.append({
+                    sample = {
                         **common,
                         "view_type": "text",
                         "image_path": None,
                         "conversations": cleaned_conv,
-                    })
+                    }
+                    fits, reason = self._target_fits_after_compaction(sample, "text", None)
+                    if fits:
+                        out.append(sample)
+                    else:
+                        self.skipped_overlong_targets += 1
+                        self.skipped_overlong_target_sources[source_name] += 1
+                        self.skipped_overlong_target_examples.append({
+                            "source": source_name,
+                            "image": None,
+                            "target_turn_index": target_turn_index,
+                            "target_assistant_ordinal": target_assistant_ordinal,
+                            "raw_turn_count": len(conv),
+                            "reason": reason,
+                        })
         return out
 
     def _build(self):
+        self.skipped_overlong_targets = 0
+        self.skipped_overlong_target_sources = Counter()
+        self.skipped_overlong_target_examples = []
         if self.deterministic_sampling:
             rng = random.Random(self.seed + self.resample_round)
         else:
@@ -389,6 +481,15 @@ class FourViewMMRLDataset(Dataset):
             f"mode={self.mode} expert_selected={len(e_samples)} general_selected={len(g_samples)} "
             f"total view samples={len(self.data)}"
         )
+        if self.ce_enabled:
+            print(
+                "[TARGET_LENGTH_FILTER] "
+                f"max_length={self.max_length} "
+                f"skipped_overlong_targets={self.skipped_overlong_targets} "
+                f"sources={dict(self.skipped_overlong_target_sources)}"
+            )
+            for example in self.skipped_overlong_target_examples[:5]:
+                print(f"[TARGET_LENGTH_FILTER_EXAMPLE] {example}")
 
     def __len__(self):
         return len(self.data)

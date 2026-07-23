@@ -1362,13 +1362,6 @@ def run_stage1_light(model, processor, data_cfg, train_cfg, output_dir):
         save_debug_figure=train_cfg.get("save_debug_figure", False),
     )
 
-    stage3_data_seed = train_cfg.get("data_sampling_seed", 42)
-    if train_cfg.get("deterministic_sampling", False):
-        # Historical StageScheduleCallback resampled once at epoch start, so
-        # Stage3 effectively used seed+1. Build that dataset directly to avoid
-        # running expensive target-length filtering twice.
-        stage3_data_seed = int(stage3_data_seed) + 1
-
     ds = FourViewMMRLDataset(
         processor=processor,
         expert_json=data_cfg["expert_json"],
@@ -1553,6 +1546,12 @@ def run_stage3_full(model, processor, data_cfg, train_cfg, output_dir):
 
     stage3_views = ("expert-mm",)
     print(f"[Stage{stage_id}] enable_views={stage3_views}")
+
+    stage3_data_seed = train_cfg.get("data_sampling_seed", 42)
+    if train_cfg.get("deterministic_sampling", False):
+        # Stage3 historically resampled once before training and therefore
+        # trained on seed+1. Build that same sample set directly.
+        stage3_data_seed = int(stage3_data_seed) + 1
 
     ds = FourViewMMRLDataset(
         processor=processor,

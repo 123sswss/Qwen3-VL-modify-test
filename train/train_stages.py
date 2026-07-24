@@ -1603,6 +1603,12 @@ def run_stage3_full(model, processor, data_cfg, train_cfg, output_dir):
 
     stage3_views = ("expert-mm",)
     print(f"[Stage{stage_id}] enable_views={stage3_views}")
+    assistant_turn_policy = str(
+        experiment_cfg.get("stage3_assistant_turn_policy", "all")
+    )
+    print(
+        f"[Stage{stage_id}] assistant_turn_policy={assistant_turn_policy}"
+    )
 
     stage3_data_seed = train_cfg.get("data_sampling_seed", 42)
     if train_cfg.get("deterministic_sampling", False):
@@ -1622,6 +1628,7 @@ def run_stage3_full(model, processor, data_cfg, train_cfg, output_dir):
         ce_enabled=True,
         seed=stage3_data_seed,
         deterministic_sampling=train_cfg.get("deterministic_sampling", False),
+        assistant_turn_policy=assistant_turn_policy,
     )
     if use_step_schedule:
         micro_batches = math.ceil(

@@ -106,6 +106,27 @@ class TargetSupervisionMaskTests(unittest.TestCase):
         self.assertEqual(prefixes[0][1][-1]["value"], "A1")
         self.assertEqual(prefixes[1][1][-1]["value"], "A2")
 
+    def test_first_policy_keeps_only_first_assistant_prefix(self):
+        conversations = [
+            {"from": "human", "value": "Q1"},
+            {"from": "gpt", "value": "A1"},
+            {"from": "human", "value": "Q2"},
+            {"from": "assistant", "value": "A2"},
+        ]
+
+        prefixes = expand_conversation_by_assistant_turn(
+            conversations,
+            policy="first",
+        )
+
+        self.assertEqual(len(prefixes), 1)
+        self.assertEqual(prefixes[0][0], 1)
+        self.assertEqual([turn["value"] for turn in prefixes[0][1]], ["Q1", "A1"])
+
+    def test_rejects_unknown_assistant_turn_policy(self):
+        with self.assertRaisesRegex(ValueError, "Unsupported assistant turn policy"):
+            expand_conversation_by_assistant_turn([], policy="random")
+
     def test_compact_target_window_keeps_latest_exchange_and_rehomes_image(self):
         conversations = [
             {"from": "human", "value": "<image>\nQ1"},

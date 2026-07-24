@@ -82,12 +82,17 @@ def normalize_conversation_role(raw_role: Any) -> str:
     raise ValueError(f"Unsupported conversation role: {raw_role!r}")
 
 
-def expand_conversation_by_assistant_turn(conversations):
-    """Create one causal prefix per assistant response."""
+def expand_conversation_by_assistant_turn(conversations, policy="all"):
+    """Create causal assistant prefixes under the requested sampling policy."""
+    if policy not in {"all", "first"}:
+        raise ValueError(f"Unsupported assistant turn policy: {policy!r}")
+
     prefixes = []
     for turn_idx, turn in enumerate(conversations):
         if normalize_conversation_role(turn.get("from")) == "assistant":
             prefixes.append((turn_idx, conversations[:turn_idx + 1]))
+            if policy == "first":
+                break
     return prefixes
 
 
@@ -244,6 +249,7 @@ class FourViewMMRLDataset(Dataset):
         ce_enabled=False,
         seed=42,
         deterministic_sampling=False,
+        assistant_turn_policy="all",
     ):
         self.processor = processor
         self.total_limit = total_limit
@@ -254,6 +260,11 @@ class FourViewMMRLDataset(Dataset):
         self.resample_round = 0
         self.ce_enabled = ce_enabled
         self.max_length = 1024
+        if assistant_turn_policy not in {"all", "first"}:
+            raise ValueError(
+                f"Unsupported assistant_turn_policy={assistant_turn_policy!r}"
+            )
+        self.assistant_turn_policy = assistant_turn_policy
 
         tokenizer = self.processor.tokenizer
         self.assistant_header_ids = tokenizer.encode(
@@ -368,7 +379,10 @@ class FourViewMMRLDataset(Dataset):
         text_key = f"{task_type}-text"
 
         if self.ce_enabled:
-            conversation_variants = expand_conversation_by_assistant_turn(conv)
+            conversation_variants = expand_conversation_by_assistant_turn(
+                conv,
+                policy=self.assistant_turn_policy,
+            )
             if not conversation_variants:
                 raise ValueError(
                     "CE sample contains no assistant turn: "
@@ -479,6 +493,7 @@ class FourViewMMRLDataset(Dataset):
         print(
             "[FourViewMMRLDataset] "
             f"mode={self.mode} expert_selected={len(e_samples)} general_selected={len(g_samples)} "
+            f"assistant_turn_policy={self.assistant_turn_policy} "
             f"total view samples={len(self.data)}"
         )
         if self.ce_enabled:

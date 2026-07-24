@@ -1,6 +1,7 @@
 # train_stages.py
 import os
 import csv
+import math
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
@@ -224,12 +225,14 @@ class StageScheduleCallback(TrainerCallback):
         init_temp=1.0,
         final_temp=0.1,
         resample_on_first_epoch=True,
+        total_steps=None,
     ):
         self.dataset = dataset
         self.total_epochs = total_epochs
         self.init_temp = init_temp
         self.final_temp = final_temp
         self.resample_on_first_epoch = bool(resample_on_first_epoch)
+        self.total_steps = int(total_steps) if total_steps is not None else None
 
     def on_epoch_begin(self, args, state, control, **kwargs):
         if not self.resample_on_first_epoch and float(state.epoch or 0.0) == 0.0:
@@ -238,11 +241,13 @@ class StageScheduleCallback(TrainerCallback):
 
     def on_step_begin(self, args, state, control, **kwargs):
         model = kwargs["model"]
-        ep = state.epoch if state.epoch is not None else 0.0
 
-        # temp anneal
-        total_epochs = max(float(self.total_epochs), 1e-8)
-        prog = min(float(ep) / total_epochs, 1.0)
+        if self.total_steps is not None:
+            prog = min(float(state.global_step) / max(float(self.total_steps), 1.0), 1.0)
+        else:
+            ep = state.epoch if state.epoch is not None else 0.0
+            total_epochs = max(float(self.total_epochs), 1e-8)
+            prog = min(float(ep) / total_epochs, 1.0)
         model.temperature_override = self.init_temp - (self.init_temp - self.final_temp) * prog
         model.current_stage_progress = float(prog)
         model.current_stage_step = int(state.global_step) + 1
@@ -1319,6 +1324,54 @@ def _build_stage3_grouped_optimizer(model, train_cfg):
     return torch.optim.AdamW(parameter_groups, betas=(0.9, 0.999), eps=1e-8)
 
 
+def _warmup_hold_cosine_factor(step, warmup_steps, hold_until_step, total_steps):
+    step = int(step)
+    warmup_steps = int(warmup_steps)
+    hold_until_step = int(hold_until_step)
+    total_steps = int(total_steps)
+    if not 0 < warmup_steps <= hold_until_step < total_steps:
+        raise ValueError(
+            "Stage3 step schedule requires "
+            f"0 < warmup_steps <= hold_until_step < total_steps, got "
+            f"{warmup_steps}, {hold_until_step}, {total_steps}"
+        )
+    if step < warmup_steps:
+        return float(step) / float(warmup_steps)
+    if step <= hold_until_step:
+        return 1.0
+    if step >= total_steps:
+        return 0.0
+    progress = float(step - hold_until_step) / float(total_steps - hold_until_step)
+    return 0.5 * (1.0 + math.cos(math.pi * progress))
+
+
+def _build_stage3_step_scheduler(optimizer, experiment_cfg):
+    total_steps = int(experiment_cfg["stage3_max_steps"])
+    warmup_steps = int(experiment_cfg["stage3_warmup_steps"])
+    hold_until_step = int(experiment_cfg["stage3_hold_until_step"])
+
+    def lr_lambda(current_step):
+        return _warmup_hold_cosine_factor(
+            current_step,
+            warmup_steps=warmup_steps,
+            hold_until_step=hold_until_step,
+            total_steps=total_steps,
+        )
+
+    audit_steps = (0, warmup_steps, hold_until_step, 625, total_steps)
+    audit = {
+        step: round(lr_lambda(step), 8)
+        for step in dict.fromkeys(audit_steps)
+    }
+    print(
+        "[STAGE3_STEP_SCHEDULE] "
+        f"max_steps={total_steps} warmup_steps={warmup_steps} "
+        f"hold_until_step={hold_until_step} decay=cosine final_factor=0 "
+        f"factor_audit={audit}"
+    )
+    return torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lr_lambda)
+
+
 # =========================
 #  Stage1 lightweight classifier pretraining
 # =========================
@@ -1482,10 +1535,13 @@ def run_stage1_light(model, processor, data_cfg, train_cfg, output_dir):
 def run_stage3_full(model, processor, data_cfg, train_cfg, output_dir):
     stage_id = 3
     set_trainable_stage(model, stage_id)
+    experiment_cfg = train_cfg.get("experiment_cfg", {}) or {}
     actual_epochs = int(train_cfg["epochs"][stage_id])
     schedule_epochs = int(
         train_cfg.get("schedule_epochs", {}).get(stage_id, actual_epochs)
     )
+    stage3_max_steps = int(experiment_cfg.get("stage3_max_steps", -1))
+    use_step_schedule = stage3_max_steps > 0
     if actual_epochs < 1 or schedule_epochs < actual_epochs:
         raise ValueError(
             "Stage3 requires 1 <= actual epochs <= schedule epochs, got "
@@ -1494,9 +1550,11 @@ def run_stage3_full(model, processor, data_cfg, train_cfg, output_dir):
     print(
         f"[Stage3] actual_epochs={actual_epochs} "
         f"schedule_epochs={schedule_epochs} "
+        f"max_steps={stage3_max_steps} "
         f"peak_lr={train_cfg['learning_rate'][stage_id]} "
-        f"warmup_ratio={train_cfg.get('stage3_warmup_ratio', 0.05)} "
-        f"scheduler={train_cfg.get('stage3_lr_scheduler_type', 'cosine')} "
+        f"warmup={experiment_cfg.get('stage3_warmup_steps') if use_step_schedule else train_cfg.get('stage3_warmup_ratio', 0.05)}"
+        f"{'_steps' if use_step_schedule else '_ratio'} "
+        f"scheduler={'warmup_hold_cosine' if use_step_schedule else train_cfg.get('stage3_lr_scheduler_type', 'cosine')} "
         f"temperature={train_cfg.get('initial_temp', 1.0)}"
         f"->{train_cfg.get('final_temp', 0.1)}"
     )
@@ -1511,7 +1569,6 @@ def run_stage3_full(model, processor, data_cfg, train_cfg, output_dir):
     model.adapter_usage_balance_loss_weight = float(train_cfg.get("adapter_usage_balance_loss_weight", 0.0))
     model.adapter_sample_entropy_loss_weight = float(train_cfg.get("adapter_sample_entropy_loss_weight", 0.0))
     model.adapter_common_mode_loss_weight = float(train_cfg.get("adapter_common_mode_loss_weight", 0.0))
-    experiment_cfg = train_cfg.get("experiment_cfg", {}) or {}
     model.adapter_effective_delta_loss_weight = float(train_cfg.get(
         "adapter_effective_delta_loss_weight",
         experiment_cfg.get("adapter_effective_delta_loss_weight", 0.0),
@@ -1566,6 +1623,24 @@ def run_stage3_full(model, processor, data_cfg, train_cfg, output_dir):
         seed=stage3_data_seed,
         deterministic_sampling=train_cfg.get("deterministic_sampling", False),
     )
+    if use_step_schedule:
+        micro_batches = math.ceil(
+            len(ds) / int(train_cfg["per_device_train_batch_size"])
+        )
+        available_optimizer_steps = math.ceil(
+            micro_batches / int(train_cfg["gradient_accumulation_steps"])
+        )
+        print(
+            "[STAGE3_DATA_BUDGET] "
+            f"view_samples={len(ds)} micro_batches={micro_batches} "
+            f"available_optimizer_steps={available_optimizer_steps} "
+            f"requested_max_steps={stage3_max_steps}"
+        )
+        if stage3_max_steps > available_optimizer_steps:
+            raise RuntimeError(
+                "Stage3 max_steps would cross the first dataset pass: "
+                f"requested={stage3_max_steps} available={available_optimizer_steps}"
+            )
     collator = MMRLDataCollator(processor)
     cb = StageScheduleCallback(
         dataset=ds,
@@ -1573,15 +1648,25 @@ def run_stage3_full(model, processor, data_cfg, train_cfg, output_dir):
         init_temp=train_cfg.get("initial_temp", 1.0),
         final_temp=train_cfg.get("final_temp", 0.1),
         resample_on_first_epoch=False,
+        total_steps=stage3_max_steps if use_step_schedule else None,
     )
     args = TrainingArguments(
         output_dir=f"{output_dir}/stage{stage_id}",
         num_train_epochs=schedule_epochs,
+        max_steps=stage3_max_steps,
         per_device_train_batch_size=train_cfg["per_device_train_batch_size"],
         gradient_accumulation_steps=train_cfg["gradient_accumulation_steps"],
         learning_rate=train_cfg["learning_rate"][stage_id],
-        lr_scheduler_type=train_cfg.get("stage3_lr_scheduler_type", "cosine"),
-        warmup_ratio=train_cfg.get("stage3_warmup_ratio", 0.05),
+        lr_scheduler_type=(
+            "constant"
+            if use_step_schedule
+            else train_cfg.get("stage3_lr_scheduler_type", "cosine")
+        ),
+        warmup_ratio=(
+            0.0
+            if use_step_schedule
+            else train_cfg.get("stage3_warmup_ratio", 0.05)
+        ),
         logging_steps=10,
         save_strategy="no",
         remove_unused_columns=False,
@@ -1640,7 +1725,17 @@ def run_stage3_full(model, processor, data_cfg, train_cfg, output_dir):
     grouped_optimizer = _build_stage3_grouped_optimizer(model, train_cfg)
     trainer_kwargs = {}
     if grouped_optimizer is not None:
-        trainer_kwargs["optimizers"] = (grouped_optimizer, None)
+        grouped_scheduler = None
+        if use_step_schedule:
+            grouped_scheduler = _build_stage3_step_scheduler(
+                grouped_optimizer,
+                experiment_cfg,
+            )
+        trainer_kwargs["optimizers"] = (grouped_optimizer, grouped_scheduler)
+    elif use_step_schedule:
+        raise RuntimeError(
+            "Stage3 fixed-step schedule requires the grouped optimizer configuration"
+        )
     trainer = Trainer(
         model=model,
         args=args,

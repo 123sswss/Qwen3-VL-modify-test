@@ -468,19 +468,20 @@ CFG = {
     "data": {
         "expert_json": [
             "/root/autodl-tmp/dataset/1json.json",
-            "/root/autodl-tmp/dataset/2conv_c.json",
+            # "/root/autodl-tmp/dataset/2conv_c.json",
             "/root/autodl-tmp/dataset/1conv_c.json",
-            "/root/autodl-tmp/dataset/4conv_c.json",
+            # "/root/autodl-tmp/dataset/4conv_c.json",
             "/root/autodl-tmp/dataset/14json.json",
-            "/root/autodl-tmp/dataset/prof_test.json",
-            "/root/autodl-tmp/dataset/test2_train.json",
+            # "/root/autodl-tmp/dataset/prof_test.json",
+            # "/root/autodl-tmp/dataset/test2_train.json",
             "/root/autodl-tmp/dataset/test7_train.json",
         ],
         "expert_img_dir": [
             "/root/autodl-tmp/dataset/1/train",
-            "/root/autodl-tmp/dataset/2/train",
-            "/root/autodl-tmp/dataset/4/train",
+            # "/root/autodl-tmp/dataset/2/train",
+            # "/root/autodl-tmp/dataset/4/train",
             "/root/autodl-tmp/dataset/14",
+            /root/autodl-tmp/dataset/7
         ],
         "general_json": [
             "/root/autodl-tmp/dataset/llava_instruct_150k.json",
@@ -491,7 +492,7 @@ CFG = {
             "/root/autodl-tmp/dataset/gen/train2017",
             "/root/autodl-tmp/dataset/gen/val2017",
         ],
-        "total_limit": 20000,  # Stage1: expert/general 各 20000；Stage3: expert-only 20000
+        "total_limit": 999999,  # Stage1: expert/general 各 20000；Stage3: expert-only 20000
     },
     "train": {
         "experiment_name": SELECTED_EXPERIMENT,

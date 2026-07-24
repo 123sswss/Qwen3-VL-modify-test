@@ -63,6 +63,21 @@ def load_jsons(json_input):
     return data
 
 
+def normalize_json_paths(json_input):
+    if not json_input:
+        return []
+    if isinstance(json_input, list):
+        return [os.fspath(path) for path in json_input]
+    return [os.fspath(json_input)]
+
+
+def count_items_by_source(items):
+    return Counter(
+        os.fspath(item.get("__source_json_path") or "unknown")
+        for item in items
+    )
+
+
 TASK_TYPE_TO_ID = {
     "report": 0,
     "vqa": 1,
@@ -330,6 +345,8 @@ class FourViewMMRLDataset(Dataset):
                 f"Unsupported assistant_turn_policy={assistant_turn_policy!r}"
             )
         self.assistant_turn_policy = assistant_turn_policy
+        self.expert_json_paths = normalize_json_paths(expert_json)
+        self.general_json_paths = normalize_json_paths(general_json)
 
         tokenizer = self.processor.tokenizer
         self.assistant_header_ids = tokenizer.encode(
@@ -570,12 +587,36 @@ class FourViewMMRLDataset(Dataset):
         e_samples = rng.sample(expert_pool, min(expert_quota, len(expert_pool))) if expert_quota > 0 else []
         g_samples = rng.sample(general_pool, min(general_quota, len(general_pool))) if general_quota > 0 else []
 
+        expert_view_counts = Counter()
+        general_view_counts = Counter()
         for item in e_samples:
-            self.data.extend(self._build_views_from_item(item, "expert"))
+            views = self._build_views_from_item(item, "expert")
+            self.data.extend(views)
+            source_path = os.fspath(item.get("__source_json_path") or "unknown")
+            expert_view_counts[source_path] += len(views)
         for item in g_samples:
-            self.data.extend(self._build_views_from_item(item, "general"))
+            views = self._build_views_from_item(item, "general")
+            self.data.extend(views)
+            source_path = os.fspath(item.get("__source_json_path") or "unknown")
+            general_view_counts[source_path] += len(views)
 
         rng.shuffle(self.data)
+        self._print_source_contributions(
+            side="expert",
+            configured_paths=self.expert_json_paths,
+            raw_items=self.expert_raw,
+            valid_items=expert_pool,
+            selected_items=e_samples,
+            view_counts=expert_view_counts,
+        )
+        self._print_source_contributions(
+            side="general",
+            configured_paths=self.general_json_paths,
+            raw_items=self.general_raw,
+            valid_items=general_pool,
+            selected_items=g_samples,
+            view_counts=general_view_counts,
+        )
         print(
             "[FourViewMMRLDataset] "
             f"mode={self.mode} expert_selected={len(e_samples)} general_selected={len(g_samples)} "
@@ -591,6 +632,35 @@ class FourViewMMRLDataset(Dataset):
             )
             for example in self.skipped_overlong_target_examples[:5]:
                 print(f"[TARGET_LENGTH_FILTER_EXAMPLE] {example}")
+
+    @staticmethod
+    def _print_source_contributions(
+        side,
+        configured_paths,
+        raw_items,
+        valid_items,
+        selected_items,
+        view_counts,
+    ):
+        raw_counts = count_items_by_source(raw_items)
+        valid_counts = count_items_by_source(valid_items)
+        selected_counts = count_items_by_source(selected_items)
+        source_paths = list(dict.fromkeys([
+            *configured_paths,
+            *raw_counts.keys(),
+            *valid_counts.keys(),
+            *selected_counts.keys(),
+            *view_counts.keys(),
+        ]))
+        for source_path in source_paths:
+            print(
+                "[DATASET_SOURCE] "
+                f"side={side} source={os.path.basename(source_path)} "
+                f"raw={raw_counts[source_path]} "
+                f"valid={valid_counts[source_path]} "
+                f"selected={selected_counts[source_path]} "
+                f"view_samples={view_counts[source_path]}"
+            )
 
     def __len__(self):
         return len(self.data)

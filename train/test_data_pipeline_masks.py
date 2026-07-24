@@ -3,7 +3,9 @@ import unittest
 import torch
 
 from data_pipeline import (
+    FourViewMMRLDataset,
     build_compact_target_window,
+    build_joint_assistant_supervision_masks,
     build_target_supervision_masks,
     expand_conversation_by_assistant_turn,
 )
@@ -56,6 +58,97 @@ class TargetSupervisionMaskTests(unittest.TestCase):
         self.assertTrue(torch.all(pooling_mask[:10]))
         self.assertTrue(torch.all(~pooling_mask[10:]))
         self.assertFalse(bool(((labels != -100) & pooling_mask).any()))
+
+    def test_joint_multiturn_supervises_assistants_but_not_users(self):
+        input_ids = torch.tensor([
+            1, 2, 100, 101, 102, 20, 21, 103, 3, 4,
+            100, 101, 102, 30, 103, 11, 0,
+        ])
+        attention_mask = torch.tensor([1] * 16 + [0])
+
+        labels, pooling_mask = build_joint_assistant_supervision_masks(
+            input_ids,
+            attention_mask,
+            self.HEADER,
+            self.LABEL_PREFIX,
+            self.IM_END,
+        )
+
+        expected = [-100] * 17
+        expected[4:8] = [102, 20, 21, 103]
+        expected[12:15] = [102, 30, 103]
+        self.assertEqual(labels.tolist(), expected)
+        self.assertEqual(
+            pooling_mask.tolist(),
+            [True, True, True, True] + [False] * 13,
+        )
+        self.assertFalse(bool(((labels != -100) & pooling_mask).any()))
+
+    def test_joint_multiturn_keeps_visible_truncated_assistant_prefix(self):
+        input_ids = torch.tensor([1, 100, 101, 102, 20, 21])
+        attention_mask = torch.tensor([1] * 6)
+
+        labels, pooling_mask = build_joint_assistant_supervision_masks(
+            input_ids,
+            attention_mask,
+            self.HEADER,
+            self.LABEL_PREFIX,
+            self.IM_END,
+        )
+
+        self.assertEqual(
+            labels.tolist(),
+            [-100, -100, -100, 102, 20, 21],
+        )
+        self.assertEqual(
+            pooling_mask.tolist(),
+            [True, True, True, False, False, False],
+        )
+
+    def test_joint_multiturn_does_not_label_truncated_user_tail(self):
+        input_ids = torch.tensor([
+            1, 100, 101, 102, 20, 103, 2, 3, 4,
+        ])
+        attention_mask = torch.tensor([1] * 9)
+
+        labels, _ = build_joint_assistant_supervision_masks(
+            input_ids,
+            attention_mask,
+            self.HEADER,
+            self.LABEL_PREFIX,
+            self.IM_END,
+        )
+
+        self.assertEqual(
+            labels.tolist(),
+            [-100, -100, -100, 102, 20, 103, -100, -100, -100],
+        )
+
+    def test_joint_policy_keeps_one_full_conversation_sample(self):
+        conversations = [
+            {"from": "human", "value": "<image>\nQ1"},
+            {"from": "gpt", "value": "A1"},
+            {"from": "human", "value": "Q2"},
+            {"from": "gpt", "value": "A2"},
+        ]
+        dataset = object.__new__(FourViewMMRLDataset)
+        dataset.ce_enabled = True
+        dataset.assistant_turn_policy = "joint"
+        dataset.enable_views = {"expert-mm"}
+        dataset._resolve_img = lambda item, is_expert: "/tmp/image.jpg"
+
+        samples = dataset._build_views_from_item(
+            {
+                "image": "image.jpg",
+                "conversations": conversations,
+                "__source_json_path": "/tmp/1conv_c.json",
+            },
+            "expert",
+        )
+
+        self.assertEqual(len(samples), 1)
+        self.assertEqual(samples[0]["conversations"], conversations)
+        self.assertEqual(samples[0]["raw_turn_count"], 4)
 
     def test_missing_target_header_fails(self):
         with self.assertRaisesRegex(ValueError, "header is missing"):

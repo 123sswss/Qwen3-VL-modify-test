@@ -1612,9 +1612,13 @@ def run_stage3_full(model, processor, data_cfg, train_cfg, output_dir):
 
     stage3_data_seed = train_cfg.get("data_sampling_seed", 42)
     if train_cfg.get("deterministic_sampling", False):
-        # Stage3 historically resampled once before training and therefore
-        # trained on seed+1. Build that same sample set directly.
-        stage3_data_seed = int(stage3_data_seed) + 1
+        data_seed_offset = int(experiment_cfg.get("stage3_data_seed_offset", 1))
+        stage3_data_seed = int(stage3_data_seed) + data_seed_offset
+        print(
+            f"[Stage{stage_id}] data_sampling_seed="
+            f"{train_cfg.get('data_sampling_seed', 42)} "
+            f"offset={data_seed_offset} effective={stage3_data_seed}"
+        )
 
     ds = FourViewMMRLDataset(
         processor=processor,

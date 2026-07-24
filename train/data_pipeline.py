@@ -193,6 +193,71 @@ def build_target_supervision_masks(
     return labels, mmrl_gating_mask
 
 
+def build_joint_assistant_supervision_masks(
+    input_ids,
+    attention_mask,
+    assistant_header_ids,
+    assistant_label_prefix_ids,
+    im_end_token_id,
+):
+    """Supervise every visible assistant span in one full conversation."""
+    active_positions = (attention_mask != 0).nonzero(as_tuple=True)[0]
+    if active_positions.numel() == 0:
+        raise ValueError("tokenized sample has no active tokens")
+
+    valid_length = int(active_positions[-1].item()) + 1
+    expected_active = torch.arange(valid_length, device=active_positions.device)
+    if not torch.equal(active_positions, expected_active):
+        raise ValueError("only right-padded attention masks are supported")
+
+    if (
+        not assistant_label_prefix_ids
+        or assistant_header_ids[:len(assistant_label_prefix_ids)]
+        != list(assistant_label_prefix_ids)
+    ):
+        raise ValueError("assistant label prefix must match the assistant header")
+
+    header_positions = _find_subsequence_positions(
+        input_ids,
+        assistant_header_ids,
+        valid_length,
+    )
+    if not header_positions:
+        raise ValueError("no complete assistant header is visible after truncation")
+
+    labels = torch.full_like(input_ids, -100)
+    for header_index, header_start in enumerate(header_positions):
+        target_start = header_start + len(assistant_label_prefix_ids)
+        next_header = (
+            header_positions[header_index + 1]
+            if header_index + 1 < len(header_positions)
+            else valid_length
+        )
+        candidate_end_tokens = (
+            input_ids[target_start:next_header] == int(im_end_token_id)
+        ).nonzero(as_tuple=True)[0]
+        if candidate_end_tokens.numel() > 0:
+            target_end = target_start + int(candidate_end_tokens[0].item()) + 1
+        elif header_index + 1 < len(header_positions):
+            raise ValueError(
+                "assistant response has no terminator before the next assistant header"
+            )
+        else:
+            # Standard causal-LM truncation: retain the visible prefix only when
+            # the sequence ends inside an assistant response.
+            target_end = next_header
+        if target_end > target_start:
+            labels[target_start:target_end] = input_ids[target_start:target_end]
+
+    if not bool((labels != -100).any()):
+        raise ValueError("no assistant response tokens are visible after truncation")
+
+    first_target_start = header_positions[0] + len(assistant_label_prefix_ids)
+    mmrl_gating_mask = torch.zeros_like(attention_mask, dtype=torch.bool)
+    mmrl_gating_mask[:first_target_start] = attention_mask[:first_target_start].bool()
+    return labels, mmrl_gating_mask
+
+
 def infer_task_type_from_source(source_json_path: Optional[str]) -> str:
     if not source_json_path:
         return "unknown"
@@ -260,7 +325,7 @@ class FourViewMMRLDataset(Dataset):
         self.resample_round = 0
         self.ce_enabled = ce_enabled
         self.max_length = 1024
-        if assistant_turn_policy not in {"all", "first"}:
+        if assistant_turn_policy not in {"all", "first", "joint"}:
             raise ValueError(
                 f"Unsupported assistant_turn_policy={assistant_turn_policy!r}"
             )
@@ -378,7 +443,18 @@ class FourViewMMRLDataset(Dataset):
         mm_key = f"{task_type}-mm"
         text_key = f"{task_type}-text"
 
-        if self.ce_enabled:
+        if self.ce_enabled and self.assistant_turn_policy == "joint":
+            assistant_count = sum(
+                normalize_conversation_role(turn.get("from")) == "assistant"
+                for turn in conv
+            )
+            if assistant_count == 0:
+                raise ValueError(
+                    "CE sample contains no assistant turn: "
+                    f"source={source_name} image={item.get('image', '')!r}"
+                )
+            conversation_variants = [(None, conv)]
+        elif self.ce_enabled:
             conversation_variants = expand_conversation_by_assistant_turn(
                 conv,
                 policy=self.assistant_turn_policy,
@@ -414,20 +490,27 @@ class FourViewMMRLDataset(Dataset):
                     "image_path": img_path,
                     "conversations": target_conv,
                 }
-                fits, reason = self._target_fits_after_compaction(sample, "mm", img_path)
-                if fits:
+                if self.assistant_turn_policy == "joint":
                     out.append(sample)
                 else:
-                    self.skipped_overlong_targets += 1
-                    self.skipped_overlong_target_sources[source_name] += 1
-                    self.skipped_overlong_target_examples.append({
-                        "source": source_name,
-                        "image": img_path,
-                        "target_turn_index": target_turn_index,
-                        "target_assistant_ordinal": target_assistant_ordinal,
-                        "raw_turn_count": len(conv),
-                        "reason": reason,
-                    })
+                    fits, reason = self._target_fits_after_compaction(
+                        sample,
+                        "mm",
+                        img_path,
+                    )
+                    if fits:
+                        out.append(sample)
+                    else:
+                        self.skipped_overlong_targets += 1
+                        self.skipped_overlong_target_sources[source_name] += 1
+                        self.skipped_overlong_target_examples.append({
+                            "source": source_name,
+                            "image": img_path,
+                            "target_turn_index": target_turn_index,
+                            "target_assistant_ordinal": target_assistant_ordinal,
+                            "raw_turn_count": len(conv),
+                            "reason": reason,
+                        })
 
             if text_key in self.enable_views:
                 cleaned_conv = []
@@ -445,20 +528,23 @@ class FourViewMMRLDataset(Dataset):
                         "image_path": None,
                         "conversations": cleaned_conv,
                     }
-                    fits, reason = self._target_fits_after_compaction(sample, "text", None)
-                    if fits:
+                    if self.assistant_turn_policy == "joint":
                         out.append(sample)
                     else:
-                        self.skipped_overlong_targets += 1
-                        self.skipped_overlong_target_sources[source_name] += 1
-                        self.skipped_overlong_target_examples.append({
-                            "source": source_name,
-                            "image": None,
-                            "target_turn_index": target_turn_index,
-                            "target_assistant_ordinal": target_assistant_ordinal,
-                            "raw_turn_count": len(conv),
-                            "reason": reason,
-                        })
+                        fits, reason = self._target_fits_after_compaction(sample, "text", None)
+                        if fits:
+                            out.append(sample)
+                        else:
+                            self.skipped_overlong_targets += 1
+                            self.skipped_overlong_target_sources[source_name] += 1
+                            self.skipped_overlong_target_examples.append({
+                                "source": source_name,
+                                "image": None,
+                                "target_turn_index": target_turn_index,
+                                "target_assistant_ordinal": target_assistant_ordinal,
+                                "raw_turn_count": len(conv),
+                                "reason": reason,
+                            })
         return out
 
     def _build(self):
@@ -496,7 +582,7 @@ class FourViewMMRLDataset(Dataset):
             f"assistant_turn_policy={self.assistant_turn_policy} "
             f"total view samples={len(self.data)}"
         )
-        if self.ce_enabled:
+        if self.ce_enabled and self.assistant_turn_policy != "joint":
             print(
                 "[TARGET_LENGTH_FILTER] "
                 f"max_length={self.max_length} "
@@ -570,7 +656,23 @@ class FourViewMMRLDataset(Dataset):
         target_assistant_ordinal = s.get("target_assistant_ordinal", 1)
         inputs, input_ids, attention_mask = encode_conversation(s["conversations"])
 
-        if self.ce_enabled:
+        if self.ce_enabled and self.assistant_turn_policy == "joint":
+            try:
+                labels, mmrl_gating_mask = build_joint_assistant_supervision_masks(
+                    input_ids=input_ids,
+                    attention_mask=attention_mask,
+                    assistant_header_ids=self.assistant_header_ids,
+                    assistant_label_prefix_ids=self.assistant_label_prefix_ids,
+                    im_end_token_id=self.im_end_token_id,
+                )
+            except ValueError as exc:
+                raise RuntimeError(
+                    "[JOINT_TARGET_MASK_ERROR] "
+                    f"idx={idx} source={s.get('source_name')} "
+                    f"image={s.get('image_path')} "
+                    f"raw_turn_count={s.get('raw_turn_count')}: {exc}"
+                ) from exc
+        elif self.ce_enabled:
             try:
                 labels, mmrl_gating_mask = build_target_supervision_masks(
                     input_ids=input_ids,

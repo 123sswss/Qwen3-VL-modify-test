@@ -481,7 +481,7 @@ CFG = {
             # "/root/autodl-tmp/dataset/2/train",
             # "/root/autodl-tmp/dataset/4/train",
             "/root/autodl-tmp/dataset/14",
-            /root/autodl-tmp/dataset/7
+            "/root/autodl-tmp/dataset/7"
         ],
         "general_json": [
             "/root/autodl-tmp/dataset/llava_instruct_150k.json",

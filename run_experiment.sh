@@ -274,6 +274,13 @@ case "$RUN_TARGET" in
       "visual_router_relation_joint_multiturn_cosine_clean_1_14" \
       44 45 46
     ;;
+  joint_cosine_no_usage_seed44)
+    AUTO_INCREMENT_SEED=0
+    FIXED_SEED=44
+    run_one \
+      "visual_router_relation_joint_multiturn_cosine_no_usage_v3" \
+      "visual_router_relation_joint_multiturn_cosine_no_usage_v3_seed44"
+    ;;
   heterogeneous_no_relation_100_102)
     run_fixed_seed_sequence \
       "visual_router_no_relation_heterogeneous_adapter_lr_v1" \

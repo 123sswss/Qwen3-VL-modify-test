@@ -213,6 +213,7 @@ run_fixed_seed_sequence() {
 #   bash run_experiment.sh joint_cosine_44_46
 #   bash run_experiment.sh ce_only_seed44
 #   bash run_experiment.sh usage_only_seed44
+#   bash run_experiment.sh overnight_route_loss_3plus1
 #   bash run_experiment.sh tune_mmrl_lr4e5_seed44
 #   bash run_experiment.sh tune_mmrl_lr3e5_seed44
 #   bash run_experiment.sh heterogeneous_no_relation_100_102
@@ -291,6 +292,22 @@ case "$RUN_TARGET" in
     run_one \
       "visual_router_joint_multiturn_cosine_usage_only_v1" \
       "visual_router_joint_multiturn_cosine_usage_only_v1_seed44"
+    ;;
+  overnight_route_loss_3plus1)
+    AUTO_INCREMENT_SEED=0
+    FIXED_SEED=44
+    run_one \
+      "visual_router_joint_multiturn_cosine_usage_1e2_v1" \
+      "visual_router_joint_multiturn_cosine_usage_1e2_v1_seed44"
+    run_one \
+      "visual_router_joint_multiturn_cosine_entropy_only_v1" \
+      "visual_router_joint_multiturn_cosine_entropy_only_v1_seed44"
+    run_one \
+      "visual_router_joint_multiturn_cosine_route_pair_v1" \
+      "visual_router_joint_multiturn_cosine_route_pair_v1_seed44_repeat_a"
+    run_one \
+      "visual_router_joint_multiturn_cosine_route_pair_v1" \
+      "visual_router_joint_multiturn_cosine_route_pair_v1_seed44_repeat_b"
     ;;
   tune_mmrl_lr4e5_seed44)
     AUTO_INCREMENT_SEED=0

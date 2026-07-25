@@ -53,7 +53,7 @@ def ensure_list(value):
 
 def format_gate_value(value):
     if value is None:
-        return "N/A"
+        raise RuntimeError("Evaluation model did not expose a G value")
     if isinstance(value, (list, tuple)):
         return "[" + ",".join(f"{float(item):.4f}" for item in value) + "]"
     return f"{float(value):.4f}"
@@ -239,6 +239,8 @@ def run_evaluation(json_paths, model, image_dirs=None, max_new_tokens=64, temper
         try:
             output = model.infer(image, human_text, max_new_tokens=max_new_tokens, temperature=temperature)
         except Exception as e:
+            if getattr(e, "fatal_evaluation_error", False):
+                raise
             inference_errors += 1
             if first_inference_error is None:
                 first_inference_error = str(e)
@@ -290,7 +292,7 @@ def run_evaluation(json_paths, model, image_dirs=None, max_new_tokens=64, temper
         acc_so_far = correct / done * 100 if done > 0 else 0
         status_icon = "✓" if log_entry["status"] == "CORRECT" else ("✗" if log_entry["status"] == "WRONG" else "⚠")
         display_name = image_file or item_id
-        gate_value = format_gate_value(getattr(model, "last_gate_value", None))
+        gate_value = format_gate_value(model.last_gate_value)
         print(
             f"[{done}/{total}] {status_icon} GT={gt_answer} "
             f"Pred={pred_answer} Acc={acc_so_far:.1f}% | "

@@ -15,6 +15,10 @@ import QWen3WithMMRL
 import processingWithMMRL
 
 
+class MissingGateError(RuntimeError):
+    fatal_evaluation_error = True
+
+
 class Qwen3VLMMRLForGen(Qwen3VLForConditionalGeneration):
     def __init__(self, config, tokenizer):
         import torch.nn as nn
@@ -42,6 +46,7 @@ class ModelInterface:
     """统一模型推理接口，方便对比实验"""
 
     def __init__(self, trained_model_path, base_model_path):
+        self.last_gate_value = None
         print("[1/3] 加载配置与构建模型架构...")
         self.tokenizer = AutoTokenizer.from_pretrained(base_model_path, trust_remote_code=True)
         print(f"    -> Tokenizer 词表大小: {len(self.tokenizer)}")
@@ -81,6 +86,7 @@ class ModelInterface:
 
     def infer(self, image: Image.Image, prompt_text: str, max_new_tokens=256, temperature=0.0, do_sample=False) -> str:
         """单次推理，返回生成文本"""
+        self.last_gate_value = None
         messages = [
             {
                 "role": "user",
@@ -116,6 +122,15 @@ class ModelInterface:
                 pad_token_id=self.tokenizer.pad_token_id,
                 eos_token_id=self.tokenizer.eos_token_id,
                 use_cache=True
+            )
+            gate = getattr(self.model.model.visual, "G_list", None)
+            if not torch.is_tensor(gate) or gate.numel() == 0:
+                raise MissingGateError(
+                    "Checkpoint evaluation did not produce a valid visual G_list"
+                )
+            gate_values = gate.detach().float().reshape(-1).cpu().tolist()
+            self.last_gate_value = (
+                gate_values[0] if len(gate_values) == 1 else gate_values
             )
             input_len = inputs.input_ids.shape[1]
             output_ids = generated_ids[:, input_len:]

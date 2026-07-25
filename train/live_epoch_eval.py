@@ -12,6 +12,10 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 TEST_SCRIPT = PROJECT_ROOT / "test" / "test.py"
 
 
+class MissingGateError(RuntimeError):
+    fatal_evaluation_error = True
+
+
 class _Tee:
     def __init__(self, *streams):
         self.streams = streams
@@ -91,11 +95,14 @@ class _LiveModelInterface:
                 use_cache=True,
             )
         gate = getattr(self.model.model.visual, "G_list", None)
-        if torch.is_tensor(gate) and gate.numel() > 0:
-            gate_values = gate.detach().float().reshape(-1).cpu().tolist()
-            self.last_gate_value = (
-                gate_values[0] if len(gate_values) == 1 else gate_values
+        if not torch.is_tensor(gate) or gate.numel() == 0:
+            raise MissingGateError(
+                "Live evaluation did not produce a valid visual G_list"
             )
+        gate_values = gate.detach().float().reshape(-1).cpu().tolist()
+        self.last_gate_value = (
+            gate_values[0] if len(gate_values) == 1 else gate_values
+        )
         input_len = inputs.input_ids.shape[1]
         return self.processor.tokenizer.decode(
             generated_ids[0, input_len:],

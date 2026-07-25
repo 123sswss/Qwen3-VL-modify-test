@@ -175,7 +175,7 @@ run_one() {
   fi
 
   # 在线测评后只保留全局并列最高/最低，清理已经失去极值资格的 final。
-  prune_middle_final_dirs
+  # prune_middle_final_dirs
 }
 
 # 重复跑 N 次同一实验；目录命名由 find_available_tag 自动处理，不会覆写
@@ -211,6 +211,8 @@ run_fixed_seed_sequence() {
 #   bash run_experiment.sh multiturn_relation_100_102
 #   bash run_experiment.sh joint_cosine_seed100
 #   bash run_experiment.sh joint_cosine_44_46
+#   bash run_experiment.sh tune_mmrl_lr4e5_seed44
+#   bash run_experiment.sh tune_mmrl_lr3e5_seed44
 #   bash run_experiment.sh heterogeneous_no_relation_100_102
 #   bash run_experiment.sh raw_adapter47
 # 当前激进消融默认固定 seed 44：
@@ -273,6 +275,20 @@ case "$RUN_TARGET" in
       "visual_router_relation_joint_multiturn_cosine_v2" \
       "visual_router_relation_joint_multiturn_cosine_clean_1_14" \
       44 45 46
+    ;;
+  tune_mmrl_lr4e5_seed44)
+    AUTO_INCREMENT_SEED=0
+    FIXED_SEED=44
+    run_one \
+      "visual_router_relation_joint_multiturn_cosine_mmrl_lr4e5_v1" \
+      "visual_router_relation_joint_multiturn_cosine_mmrl_lr4e5_v1_seed44"
+    ;;
+  tune_mmrl_lr3e5_seed44)
+    AUTO_INCREMENT_SEED=0
+    FIXED_SEED=44
+    run_one \
+      "visual_router_relation_joint_multiturn_cosine_mmrl_lr3e5_v1" \
+      "visual_router_relation_joint_multiturn_cosine_mmrl_lr3e5_v1_seed44"
     ;;
   joint_cosine_no_usage_seed44)
     AUTO_INCREMENT_SEED=0

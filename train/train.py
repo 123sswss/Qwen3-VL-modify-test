@@ -14,6 +14,7 @@ from train_stages import build_model_and_processor, run_stage
 from live_epoch_eval import (
     preflight_live_epoch_evaluation,
     run_live_epoch_evaluation,
+    run_professional_gate_preflight,
 )
 
 
@@ -176,6 +177,30 @@ EXPERIMENTS = {
         "mmrl_relation_max_tokens": 64,
         "mmrl_variance_floor_ratio": 0.50,
         "mmrl_variance_floor_weight": 0.10,
+        "stage3_learning_rate": 6e-5,
+        "stage3_schedule_epochs": 1,
+        "stage3_warmup_ratio": 0.10,
+        "stage3_lr_scheduler_type": "cosine",
+        "stage3_initial_temp": 1.0,
+        "stage3_final_temp": 0.775,
+        "stage3_mmrl_learning_rate": 6e-5,
+        "stage3_router_learning_rate": 8e-5,
+        "stage3_adapter_learning_rates": [4e-5, 6e-5, 8e-5, 1e-4],
+        "stage3_assistant_turn_policy": "joint",
+        "stage3_data_seed_offset": 0,
+    },
+    "visual_router_joint_multiturn_cosine_ce_only_v1": {
+        **V4_RECOVER_BASE,
+        "random_init_adapter_output_count": 0,
+        "adapter_usage_balance_loss_weight": 0.0,
+        "adapter_sample_entropy_loss_weight": 0.0,
+        "adapter_common_mode_loss_weight": 0.0,
+        "adapter_effective_delta_loss_weight": 0.0,
+        "mmrl_relation_loss_weight": 0.0,
+        "mmrl_relation_max_tokens": 64,
+        "mmrl_variance_floor_ratio": 0.50,
+        "mmrl_variance_floor_weight": 0.0,
+        "adapter_diversity_loss_weight": 0.0,
         "stage3_learning_rate": 6e-5,
         "stage3_schedule_epochs": 1,
         "stage3_warmup_ratio": 0.10,
@@ -568,20 +593,8 @@ def main():
             train_cfg=CFG["train"],
             output_dir=CFG["output_dir"]
         )
-        if sid == 1:
-            stage1_log_path = Path(CFG["output_dir"]) / "eval" / "test.log"
-            print("[STAGE1-ONLY-EVAL] online evaluation begin")
-            stage1_summary = run_live_epoch_evaluation(
-                model,
-                processor,
-                stage1_log_path,
-            )
-            print(
-                "[STAGE1-ONLY-EVAL] "
-                f"score={float(stage1_summary['score'])} completed"
-            )
-            print("[STAGE1-ONLY-EVAL] diagnostic run completed; Stage 3 skipped")
-            return
+        if sid == 1 and CFG["train"].get("stage1_gate_preflight", True):
+            run_professional_gate_preflight(model, processor)
     final_dir = Path(CFG["output_dir"]) / "final"
     if live_final_eval:
         log_path = Path(CFG["output_dir"]) / "eval" / "test.log"

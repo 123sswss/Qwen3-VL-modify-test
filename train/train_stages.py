@@ -1408,10 +1408,23 @@ def run_stage1_light(model, processor, data_cfg, train_cfg, output_dir):
         save_debug_figure=train_cfg.get("save_debug_figure", False),
     )
 
+    stage1_expert_json = [
+        *data_cfg["expert_json"],
+        *data_cfg.get("stage1_only_expert_json", []),
+    ]
+    stage1_expert_img_dir = [
+        *data_cfg["expert_img_dir"],
+        *data_cfg.get("stage1_only_expert_img_dir", []),
+    ]
+    print(
+        "[STAGE1_ONLY_EXPERT_DATA] "
+        f"json={data_cfg.get('stage1_only_expert_json', [])} "
+        f"image_dirs={data_cfg.get('stage1_only_expert_img_dir', [])}"
+    )
     ds = FourViewMMRLDataset(
         processor=processor,
-        expert_json=data_cfg["expert_json"],
-        expert_img_dir=data_cfg["expert_img_dir"],
+        expert_json=stage1_expert_json,
+        expert_img_dir=stage1_expert_img_dir,
         general_json=data_cfg["general_json"],
         general_img_dir=data_cfg["general_img_dir"],
         total_limit=data_cfg["total_limit"],

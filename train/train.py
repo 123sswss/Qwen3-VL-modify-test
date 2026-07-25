@@ -312,6 +312,12 @@ CFG = {
             "/root/autodl-tmp/dataset/14",
             # "/root/autodl-tmp/dataset/7"
         ],
+        "stage1_only_expert_json": [
+            "/root/autodl-tmp/dataset/test2_train.json",
+        ],
+        "stage1_only_expert_img_dir": [
+            "/root/autodl-tmp/dataset/2/train",
+        ],
         "general_json": [
             "/root/autodl-tmp/dataset/llava_instruct_150k.json",
             "/root/autodl-tmp/dataset/gen_test.json",

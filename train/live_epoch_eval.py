@@ -5,6 +5,7 @@ from pathlib import Path
 from types import MethodType
 
 import torch
+from PIL import Image
 from transformers import Qwen3VLForConditionalGeneration
 
 
@@ -48,6 +49,133 @@ def preflight_live_epoch_evaluation():
     if counts.get("valid", 0) == 0:
         raise RuntimeError("逐 epoch 测评数据预检失败：没有任何可评测样本")
     return counts
+
+
+def run_professional_gate_preflight(model, processor):
+    evaluator = _load_test_module()
+    dataset = evaluator.load_combined_dataset(evaluator.DEFAULT_JSON_PATHS)
+    if not dataset:
+        raise RuntimeError("Stage 1 gate preflight has no evaluation samples")
+
+    was_training = model.training
+    model.eval()
+    visual = model.model.visual
+    device = next(model.parameters()).device
+    alpha_logits = []
+
+    print(
+        "[STAGE1_GATE_PREFLIGHT] begin "
+        f"total={len(dataset)} expected_gate=1"
+    )
+    try:
+        for index, item in enumerate(dataset, start=1):
+            item_id = item.get("id", f"unknown_{index - 1}")
+            image_file = item.get("image", "")
+            source_json = item.get("_source_json")
+
+            prompt_text = None
+            for turn in item.get("conversations", []):
+                if str(turn.get("from", "")).lower() in {"human", "user"}:
+                    prompt_text = str(turn.get("value", ""))
+            if prompt_text is None:
+                raise RuntimeError(
+                    f"Gate preflight sample has no user prompt: id={item_id}"
+                )
+            prompt_text = prompt_text.replace("<image>\n", "").replace("<image>", "")
+
+            image_path = evaluator.resolve_image_path(
+                image_file,
+                evaluator.DEFAULT_IMAGE_DIRS,
+                source_json_path=source_json,
+            )
+            if image_path is None:
+                raise RuntimeError(
+                    "Gate preflight image is missing: "
+                    f"id={item_id} image={image_file}"
+                )
+
+            with Image.open(image_path) as source_image:
+                image = source_image.convert("RGB")
+            messages = [{
+                "role": "user",
+                "content": [
+                    {"type": "image", "image": image},
+                    {"type": "text", "text": prompt_text},
+                ],
+            }]
+            text_prompt = processor.apply_chat_template(
+                messages,
+                tokenize=False,
+                add_generation_prompt=True,
+            )
+            inputs = processor(
+                text=[text_prompt],
+                images=image,
+                padding=False,
+                max_length=False,
+                truncation=False,
+                return_tensors="pt",
+            ).to(device)
+
+            pixel_values = inputs["pixel_values"]
+            if pixel_values.dim() == 3:
+                pixel_values = pixel_values.squeeze(0)
+            image_grid_thw = inputs["image_grid_thw"]
+            if image_grid_thw.dim() == 1:
+                image_grid_thw = image_grid_thw.unsqueeze(0)
+
+            with torch.no_grad():
+                text_embedding = model.model.get_input_embeddings()(
+                    inputs["input_ids"]
+                ).to(dtype=visual.dtype)
+                text_pooled = visual.embedding_pooling(
+                    text_embedding,
+                    mask=inputs["attention_mask"].bool(),
+                )
+                vision_pooled = visual.extract_gate_pooled_vision(
+                    pixel_values,
+                    image_grid_thw,
+                )
+                alpha = visual.Task_classifier(vision_pooled, text_pooled)
+                raw_gate = visual.visionGating(alpha)
+                hard_gate = raw_gate > 0.5
+
+            alpha_logit = float(alpha.detach().float().reshape(-1)[0].item())
+            alpha_prob = float(
+                torch.sigmoid(alpha.detach().float()).reshape(-1)[0].item()
+            )
+            alpha_logits.append(alpha_logit)
+            gate_value = int(hard_gate.detach().reshape(-1)[0].item())
+
+            if gate_value != 1:
+                print(
+                    "[STAGE1_GATE_PREFLIGHT_FAIL] "
+                    f"index={index}/{len(dataset)} id={item_id} "
+                    f"G={gate_value} alpha_logit={alpha_logit:.6f} "
+                    f"alpha_prob={alpha_prob:.6f} image={image_file}"
+                )
+                raise RuntimeError(
+                    "Stage 1 professional gate preflight failed; "
+                    "Stage 3 was not started"
+                )
+            if index == 1 or index % 100 == 0 or index == len(dataset):
+                print(
+                    "[STAGE1_GATE_PREFLIGHT] "
+                    f"checked={index}/{len(dataset)} G=1 "
+                    f"alpha_logit={alpha_logit:.6f} "
+                    f"alpha_prob={alpha_prob:.6f} image={image_file}"
+                )
+
+        print(
+            "[STAGE1_GATE_PREFLIGHT_PASS] "
+            f"checked={len(alpha_logits)} gate_ones={len(alpha_logits)} "
+            f"alpha_logit_min={min(alpha_logits):.6f} "
+            f"alpha_logit_max={max(alpha_logits):.6f}"
+        )
+    finally:
+        if was_training:
+            model.train()
+        torch.cuda.empty_cache()
 
 
 class _LiveModelInterface:

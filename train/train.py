@@ -11,7 +11,11 @@ import numpy as np
 import torch
 
 from train_stages import build_model_and_processor, run_stage
-from live_epoch_eval import preflight_live_epoch_evaluation, run_live_epoch_evaluation
+from live_epoch_eval import (
+    preflight_live_epoch_evaluation,
+    run_live_epoch_evaluation,
+    run_professional_gate_preflight,
+)
 
 
 SCORE_PATTERN = re.compile(r"百分制分数\s*[:：]\s*(-?\d+(?:\.\d+)?)")
@@ -329,6 +333,10 @@ CFG = {
         "eval_each_epoch": os.getenv("MMRL_EVAL_EACH_EPOCH", "0") == "1",
         "live_final_eval": os.getenv("MMRL_LIVE_FINAL_EVAL", "0") == "1",
         "save_extrema_checkpoints": os.getenv("MMRL_SAVE_EXTREMA_CHECKPOINTS", "1") == "1",
+        "stage1_gate_preflight": os.getenv(
+            "MMRL_STAGE1_GATE_PREFLIGHT",
+            "1",
+        ) == "1",
         "visual_residual_adapter_count": int(os.getenv(
             "MMRL_VISUAL_RESIDUAL_ADAPTER_COUNT",
             str(EXP_CFG.get("visual_residual_adapter_count", 4)),
@@ -517,6 +525,8 @@ def main():
             train_cfg=CFG["train"],
             output_dir=CFG["output_dir"]
         )
+        if sid == 1 and CFG["train"].get("stage1_gate_preflight", True):
+            run_professional_gate_preflight(model, processor)
     final_dir = Path(CFG["output_dir"]) / "final"
     if live_final_eval:
         log_path = Path(CFG["output_dir"]) / "eval" / "test.log"

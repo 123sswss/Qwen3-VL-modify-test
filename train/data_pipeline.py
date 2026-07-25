@@ -97,6 +97,22 @@ def normalize_conversation_role(raw_role: Any) -> str:
     raise ValueError(f"Unsupported conversation role: {raw_role!r}")
 
 
+def build_classifier_prompt_conversation(conversations):
+    """Keep optional system context and the first user turn only."""
+    prompt_turns = []
+    for turn in conversations:
+        role = normalize_conversation_role(turn.get("from"))
+        if role == "system":
+            if prompt_turns:
+                raise ValueError("system turn must precede the first user turn")
+            prompt_turns.append(dict(turn))
+            continue
+        if role == "user":
+            prompt_turns.append(dict(turn))
+            return prompt_turns
+    raise ValueError("classifier sample contains no user turn")
+
+
 def expand_conversation_by_assistant_turn(conversations, policy="all"):
     """Create causal assistant prefixes under the requested sampling policy."""
     if policy not in {"all", "first"}:
@@ -330,6 +346,7 @@ class FourViewMMRLDataset(Dataset):
         seed=42,
         deterministic_sampling=False,
         assistant_turn_policy="all",
+        classifier_prompt_only=False,
     ):
         self.processor = processor
         self.total_limit = total_limit
@@ -345,6 +362,7 @@ class FourViewMMRLDataset(Dataset):
                 f"Unsupported assistant_turn_policy={assistant_turn_policy!r}"
             )
         self.assistant_turn_policy = assistant_turn_policy
+        self.classifier_prompt_only = bool(classifier_prompt_only)
         self.expert_json_paths = normalize_json_paths(expert_json)
         self.general_json_paths = normalize_json_paths(general_json)
 
@@ -703,9 +721,13 @@ class FourViewMMRLDataset(Dataset):
             image = Image.open(s["image_path"]).convert("RGB")
 
         def encode_conversation(conversations):
+            if self.classifier_prompt_only:
+                conversations = build_classifier_prompt_conversation(conversations)
             qwen_conv = self._build_qwen_conv(conversations, image)
             text_inputs = self.processor.apply_chat_template(
-                qwen_conv, tokenize=False, add_generation_prompt=False
+                qwen_conv,
+                tokenize=False,
+                add_generation_prompt=self.classifier_prompt_only,
             )
             processor_kwargs = {
                 "text": text_inputs,

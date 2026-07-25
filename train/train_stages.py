@@ -1238,7 +1238,8 @@ def set_trainable_stage(model, stage, train_cfg=None):
     if stage == 1:
         mods = [v.hidden_state_pooling, v.embedding_pooling, v.Task_classifier]
     elif stage == 3:
-        mods = [v.hidden_state_pooling, v.embedding_pooling]
+        # Keep the Stage 1 classifier coordinate system fixed.
+        mods = []
         if not v.raw_visual_adapter:
             mods.insert(0, model.model.MMRL)
             # v.blocks_with_rep stay frozen while the rep-token branch remains active.
@@ -1379,29 +1380,21 @@ def _build_text_pool_mask(attention_mask):
     return attention_mask.bool()
 
 
-@torch.no_grad()
 def _extract_mm_pooled_vision(v, pixel_values, image_grid_thw):
-    # 只跑视觉patch + pooling，不跑全主干
-    hs = v.patch_embed(pixel_values.type(v.dtype))
-    pos = v.fast_pos_embed_interpolate(image_grid_thw)
-    hs = hs + pos
-    seq_len, _ = hs.size()
-    hs = hs.reshape(seq_len, -1)
-
-    # 按图切分
-    img_token_lens = (image_grid_thw[:, 0] * image_grid_thw[:, 1] * image_grid_thw[:, 2]).to(torch.long)
-    batch_indices = torch.repeat_interleave(
-        torch.arange(image_grid_thw.shape[0], device=hs.device),
-        img_token_lens
-    )
-    pooled = v.hidden_state_pooling.forward_vectorized(hs, batch_indices, image_grid_thw.shape[0])
-    return pooled
+    return v.extract_gate_pooled_vision(pixel_values, image_grid_thw)
 
 
 def run_stage1_light(model, processor, data_cfg, train_cfg, output_dir):
     stage_id = 1
     set_trainable_stage(model, stage_id)
     model.train()
+    first_insert_layer = min(model.model.visual.insert_layers)
+    print(
+        "[STAGE1_CLASSIFIER_INPUT] "
+        "prompt_only=True add_generation_prompt=True "
+        f"gate_input_after_blocks_0based=0..{first_insert_layer - 1} "
+        f"gate_input_before_block_0based={first_insert_layer}"
+    )
 
     experiment_context = _build_experiment_context(train_cfg, output_dir, stage_id)
     metric_logger = StageMetricLogger(
@@ -1427,6 +1420,7 @@ def run_stage1_light(model, processor, data_cfg, train_cfg, output_dir):
         ce_enabled=False,
         seed=train_cfg.get("data_sampling_seed", 42),
         deterministic_sampling=train_cfg.get("deterministic_sampling", False),
+        classifier_prompt_only=True,
     )
     collator = MMRLDataCollator(processor)
     data_generator = torch.Generator()
@@ -1535,6 +1529,25 @@ def run_stage1_light(model, processor, data_cfg, train_cfg, output_dir):
 def run_stage3_full(model, processor, data_cfg, train_cfg, output_dir):
     stage_id = 3
     set_trainable_stage(model, stage_id)
+    gate_modules = {
+        "hidden_state_pooling": model.model.visual.hidden_state_pooling,
+        "embedding_pooling": model.model.visual.embedding_pooling,
+        "task_classifier": model.model.visual.Task_classifier,
+    }
+    unexpectedly_trainable = [
+        name
+        for name, module in gate_modules.items()
+        if any(parameter.requires_grad for parameter in module.parameters())
+    ]
+    if unexpectedly_trainable:
+        raise RuntimeError(
+            "Stage 3 must keep the Stage 1 gate coordinate system frozen: "
+            f"{unexpectedly_trainable}"
+        )
+    print(
+        "[STAGE3_GATE_FREEZE] "
+        "hidden_state_pooling=True embedding_pooling=True task_classifier=True"
+    )
     experiment_cfg = train_cfg.get("experiment_cfg", {}) or {}
     actual_epochs = int(train_cfg["epochs"][stage_id])
     schedule_epochs = int(

@@ -838,6 +838,66 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
         release_progress = float(step - hold_steps) / float(release_steps)
         return capped_scale + (one - capped_scale) * release_progress
 
+    def _prepare_base_visual_tokens(self, hidden_states, grid_thw):
+        hidden_states = self.patch_embed(hidden_states)
+        hidden_states = hidden_states + self.fast_pos_embed_interpolate(grid_thw)
+
+        rotary_pos_emb = self.rot_pos_emb(grid_thw)
+        seq_len, _ = hidden_states.size()
+        hidden_states = hidden_states.reshape(seq_len, -1)
+        rotary_pos_emb = rotary_pos_emb.reshape(seq_len, -1)
+        emb = torch.cat((rotary_pos_emb, rotary_pos_emb), dim=-1)
+        position_embeddings = (emb.cos(), emb.sin())
+
+        cu_seqlens = torch.repeat_interleave(
+            grid_thw[:, 1] * grid_thw[:, 2],
+            grid_thw[:, 0],
+        ).cumsum(
+            dim=0,
+            dtype=grid_thw.dtype if torch.jit.is_tracing() else torch.int32,
+        )
+        cu_seqlens = F.pad(cu_seqlens, (1, 0), value=0)
+        return hidden_states, cu_seqlens, position_embeddings, rotary_pos_emb
+
+    def extract_gate_pooled_vision(self, pixel_values, grid_thw):
+        """Reproduce the exact main-branch features seen by Task_classifier."""
+        if not self.insert_layers:
+            raise RuntimeError("Task classifier requires at least one MMRL insertion layer")
+        first_insert_layer = min(self.insert_layers)
+
+        # The backbone is frozen in Stage 1; keep only the pooler differentiable.
+        with torch.no_grad():
+            (
+                hidden_states,
+                cu_seqlens,
+                position_embeddings,
+                rotary_pos_emb,
+            ) = self._prepare_base_visual_tokens(
+                pixel_values.type(self.dtype),
+                grid_thw,
+            )
+            for layer_num in range(first_insert_layer):
+                hidden_states = self.blocks[layer_num](
+                    hidden_states,
+                    cu_seqlens=cu_seqlens,
+                    position_embeddings=position_embeddings,
+                    rotary_pos_emb=rotary_pos_emb,
+                )
+
+        image_token_lengths = cu_seqlens[1:] - cu_seqlens[:-1]
+        image_indices = torch.repeat_interleave(
+            torch.arange(
+                image_token_lengths.numel(),
+                device=hidden_states.device,
+            ),
+            image_token_lengths,
+        )
+        return self.hidden_state_pooling.forward_vectorized(
+            hidden_states.detach(),
+            image_indices,
+            image_token_lengths.numel(),
+        )
+
     def forward(self,
                 hidden_states: torch.Tensor,
                 grid_thw: torch.Tensor,
@@ -861,24 +921,14 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
 
         rotary_pos_emb_with_rep = None
         embedding_after_pooling = self.embedding_pooling(embedding, mask=text_pooling_mask)
-        hidden_states = self.patch_embed(hidden_states)
-        pos_embeds = self.fast_pos_embed_interpolate(grid_thw)
-        hidden_states = hidden_states + pos_embeds
-
-        rotary_pos_emb = self.rot_pos_emb(grid_thw)
-        seq_len, _ = hidden_states.size()
-        hidden_states = hidden_states.reshape(seq_len, -1)
-        rotary_pos_emb = rotary_pos_emb.reshape(seq_len, -1)
-        emb = torch.cat((rotary_pos_emb, rotary_pos_emb), dim=-1)
-        position_embeddings = (emb.cos(), emb.sin())
+        (
+            hidden_states,
+            cu_seqlens,
+            position_embeddings,
+            rotary_pos_emb,
+        ) = self._prepare_base_visual_tokens(hidden_states, grid_thw)
 
         original_seq_lens_list = (grid_thw[:, 1] * grid_thw[:, 2] * grid_thw[:, 0]).tolist()
-
-        cu_seqlens = torch.repeat_interleave(grid_thw[:, 1] * grid_thw[:, 2], grid_thw[:, 0]).cumsum(
-            dim=0,
-            dtype=grid_thw.dtype if torch.jit.is_tracing() else torch.int32,
-        )
-        cu_seqlens = F.pad(cu_seqlens, (1, 0), value=0)
 
         first_insert = True
         current_num_r_token = self.cfg.RP_SPACE_LENGTH

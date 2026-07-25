@@ -212,6 +212,7 @@ run_fixed_seed_sequence() {
 #   bash run_experiment.sh joint_cosine_seed100
 #   bash run_experiment.sh joint_cosine_44_46
 #   bash run_experiment.sh ce_only_seed44
+#   bash run_experiment.sh usage_only_seed44
 #   bash run_experiment.sh tune_mmrl_lr4e5_seed44
 #   bash run_experiment.sh tune_mmrl_lr3e5_seed44
 #   bash run_experiment.sh heterogeneous_no_relation_100_102
@@ -283,6 +284,13 @@ case "$RUN_TARGET" in
     run_one \
       "visual_router_joint_multiturn_cosine_ce_only_v1" \
       "visual_router_joint_multiturn_cosine_ce_only_v1_seed44"
+    ;;
+  usage_only_seed44)
+    AUTO_INCREMENT_SEED=0
+    FIXED_SEED=44
+    run_one \
+      "visual_router_joint_multiturn_cosine_usage_only_v1" \
+      "visual_router_joint_multiturn_cosine_usage_only_v1_seed44"
     ;;
   tune_mmrl_lr4e5_seed44)
     AUTO_INCREMENT_SEED=0

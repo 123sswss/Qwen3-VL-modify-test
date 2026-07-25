@@ -149,7 +149,7 @@ def validate_evaluation_data(json_paths, image_dirs=None):
     return counts
 
 
-def run_evaluation(json_paths, model, image_dirs=None, max_new_tokens=256, temperature=0.2):
+def run_evaluation(json_paths, model, image_dirs=None, max_new_tokens=64, temperature=0.2):
     """
     Args:
         json_paths: 数据集 json 路径列表或单个路径
@@ -264,6 +264,10 @@ def run_evaluation(json_paths, model, image_dirs=None, max_new_tokens=256, tempe
             regex_fail += 1
             wrong += 1
             log_entry["status"] = "REGEX_FAIL"
+            print(
+                f"[REGEX_FAIL_OUTPUT] image={image_file} id={item_id}\n"
+                f"{output}\n"
+            )
         elif pred_answer == gt_answer:
             correct += 1
             log_entry["status"] = "CORRECT"
@@ -277,7 +281,11 @@ def run_evaluation(json_paths, model, image_dirs=None, max_new_tokens=256, tempe
         done = idx + 1
         acc_so_far = correct / done * 100 if done > 0 else 0
         status_icon = "✓" if log_entry["status"] == "CORRECT" else ("✗" if log_entry["status"] == "WRONG" else "⚠")
-        print(f"[{done}/{total}] {status_icon} GT={gt_answer} Pred={pred_answer} Acc={acc_so_far:.1f}% | {item_id}")
+        display_name = image_file or item_id
+        print(
+            f"[{done}/{total}] {status_icon} GT={gt_answer} "
+            f"Pred={pred_answer} Acc={acc_so_far:.1f}% | {display_name}"
+        )
 
     elapsed = time.time() - start_time
     evaluated = correct + wrong

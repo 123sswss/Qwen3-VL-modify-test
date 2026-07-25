@@ -51,6 +51,14 @@ def ensure_list(value):
     return [str(value)]
 
 
+def format_gate_value(value):
+    if value is None:
+        return "N/A"
+    if isinstance(value, (list, tuple)):
+        return "[" + ",".join(f"{float(item):.4f}" for item in value) + "]"
+    return f"{float(value):.4f}"
+
+
 def parse_cli_or_default(arg_value, default_values):
     """支持单个路径或 JSON 数组字符串；为空时返回默认配置。"""
     if arg_value is None:
@@ -282,9 +290,11 @@ def run_evaluation(json_paths, model, image_dirs=None, max_new_tokens=64, temper
         acc_so_far = correct / done * 100 if done > 0 else 0
         status_icon = "✓" if log_entry["status"] == "CORRECT" else ("✗" if log_entry["status"] == "WRONG" else "⚠")
         display_name = image_file or item_id
+        gate_value = format_gate_value(getattr(model, "last_gate_value", None))
         print(
             f"[{done}/{total}] {status_icon} GT={gt_answer} "
-            f"Pred={pred_answer} Acc={acc_so_far:.1f}% | {display_name}"
+            f"Pred={pred_answer} Acc={acc_so_far:.1f}% | "
+            f"G={gate_value} {display_name}"
         )
 
     elapsed = time.time() - start_time
@@ -368,30 +378,10 @@ def run_evaluation(json_paths, model, image_dirs=None, max_new_tokens=64, temper
 
 
 if __name__ == "__main__":
-    #################### ours ###########################
     from inferEngine import ModelInterface
+
     TRAINED_MODEL_PATH = os.getenv("MMRL_TRAINED_MODEL_PATH", "/root/autodl-tmp/Qwen3-VL-modify-test/experiment_outputs/output/visual_router_v1_3/final")
     BASE_MODEL_PATH = os.getenv("MMRL_BASE_MODEL_PATH", "/root/autodl-tmp/model")
 
-    DEFAULT_JSON_PATHS = [
-        "/root/autodl-tmp/dataset/test2_val.json",
-        "/root/autodl-tmp/dataset/seen_simple/llava_test.json",
-        # "/root/autodl-tmp/dataset/never_seen_simple/llava_test.json"
-    ]
-    
-    DEFAULT_IMAGE_DIRS = [
-        "/root/autodl-tmp/dataset/2/train",
-        "/root/autodl-tmp/dataset/seen_simple/image",
-        # "/root/autodl-tmp/dataset/never_seen_simple/image"
-    ]
-
     model = ModelInterface(TRAINED_MODEL_PATH, BASE_MODEL_PATH)
     run_evaluation(DEFAULT_JSON_PATHS, model, DEFAULT_IMAGE_DIRS)
-    #################### qwen3vl 4B ###########################
-    # from inferQWen3vl import BaselineModelInterface
-    # MODEL_PATH = sys.argv[1] if len(sys.argv) > 1 else "/root/autodl-tmp/model"
-    # JSON_PATH = sys.argv[2] if len(sys.argv) > 2 else "/root/autodl-tmp/dataset/test2_val.json"
-    # IMAGE_DIR = sys.argv[3] if len(sys.argv) > 3 else "/root/autodl-tmp/dataset/2/train"
-
-    # model = BaselineModelInterface(MODEL_PATH)
-    # run_evaluation(JSON_PATH, model, image_dir=IMAGE_DIR)

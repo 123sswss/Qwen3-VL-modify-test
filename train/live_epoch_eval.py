@@ -50,8 +50,10 @@ class _LiveModelInterface:
     def __init__(self, model, processor):
         self.model = model
         self.processor = processor
+        self.last_gate_value = None
 
     def infer(self, image, prompt_text, max_new_tokens=256, temperature=0.0):
+        self.last_gate_value = None
         messages = [{
             "role": "user",
             "content": [
@@ -87,6 +89,12 @@ class _LiveModelInterface:
                 pad_token_id=self.processor.tokenizer.pad_token_id,
                 eos_token_id=self.processor.tokenizer.eos_token_id,
                 use_cache=True,
+            )
+        gate = getattr(self.model.model.visual, "G_list", None)
+        if torch.is_tensor(gate) and gate.numel() > 0:
+            gate_values = gate.detach().float().reshape(-1).cpu().tolist()
+            self.last_gate_value = (
+                gate_values[0] if len(gate_values) == 1 else gate_values
             )
         input_len = inputs.input_ids.shape[1]
         return self.processor.tokenizer.decode(

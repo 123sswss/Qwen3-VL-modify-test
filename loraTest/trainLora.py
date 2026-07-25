@@ -26,6 +26,8 @@ from transformers import (
 )
 from peft import LoraConfig, TaskType, get_peft_model
 
+from data_protocol import build_training_data_config
+
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 TRAIN_DIR = PROJECT_ROOT / "train"
 if str(TRAIN_DIR) not in sys.path:
@@ -48,38 +50,7 @@ CFG = {
     "work_dir": "./runs/lora",
     "seed": 42,
     "max_length": 1024,
-    "data": {
-        "expert_json": [
-            "/root/autodl-tmp/dataset/1json.json",
-            "/root/autodl-tmp/dataset/2conv_c.json",
-            "/root/autodl-tmp/dataset/1conv_c.json",
-            "/root/autodl-tmp/dataset/4conv_c.json",
-            "/root/autodl-tmp/dataset/14json.json",
-            "/root/autodl-tmp/dataset/prof_test.json",
-            "/root/autodl-tmp/dataset/test2_train.json",
-            "/root/autodl-tmp/dataset/test7_train.json",
-        ],
-        "expert_img_dir": [
-            "/root/autodl-tmp/dataset/1/train",
-            "/root/autodl-tmp/dataset/2/train",
-            "/root/autodl-tmp/dataset/4/train",
-            "/root/autodl-tmp/dataset/14",
-        ],
-        "general_json": [
-            "/root/autodl-tmp/dataset/llava_instruct_150k.json",
-            "/root/autodl-tmp/dataset/gen_test.json",
-            "/root/autodl-tmp/dataset/conversation_58k.json",
-        ],
-        "general_img_dir": [
-            "/root/autodl-tmp/dataset/gen/train2017",
-            "/root/autodl-tmp/dataset/gen/val2017",
-        ],
-        "total_limit": 20000,
-        "enable_views": ("expert-mm",),
-        "mode": "peft_ce",
-        "ce_enabled": True,
-        "deterministic_sampling": False,
-    },
+    "data": build_training_data_config(),
     "train": {
         "num_train_epochs": 1,
         "per_device_train_batch_size": 1,
@@ -119,6 +90,7 @@ def build_fair_dataset(processor: Any, data_cfg: Dict[str, Any]) -> FourViewMMRL
         ce_enabled=data_cfg["ce_enabled"],
         seed=CFG["seed"],
         deterministic_sampling=data_cfg.get("deterministic_sampling", False),
+        assistant_turn_policy=data_cfg.get("assistant_turn_policy", "joint"),
     )
 
 

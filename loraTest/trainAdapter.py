@@ -17,6 +17,7 @@ from torch import nn
 from torch.utils.data import Dataset
 from transformers import Trainer, TrainingArguments
 
+from data_protocol import build_training_data_config
 from trainLora import (
     build_fair_collator,
     build_fair_dataset,
@@ -31,38 +32,7 @@ CFG = {
     "model_path": "/root/autodl-tmp/model",
     "work_dir": "./runs/adapter",
     "seed": 42,
-    "data": {
-        "expert_json": [
-            "/root/autodl-tmp/dataset/1json.json",
-            "/root/autodl-tmp/dataset/2conv_c.json",
-            "/root/autodl-tmp/dataset/1conv_c.json",
-            "/root/autodl-tmp/dataset/4conv_c.json",
-            "/root/autodl-tmp/dataset/14json.json",
-            "/root/autodl-tmp/dataset/prof_test.json",
-            "/root/autodl-tmp/dataset/test2_train.json",
-            "/root/autodl-tmp/dataset/test7_train.json",
-        ],
-        "expert_img_dir": [
-            "/root/autodl-tmp/dataset/1/train",
-            "/root/autodl-tmp/dataset/2/train",
-            "/root/autodl-tmp/dataset/4/train",
-            "/root/autodl-tmp/dataset/14",
-        ],
-        "general_json": [
-            "/root/autodl-tmp/dataset/llava_instruct_150k.json",
-            "/root/autodl-tmp/dataset/gen_test.json",
-            "/root/autodl-tmp/dataset/conversation_58k.json",
-        ],
-        "general_img_dir": [
-            "/root/autodl-tmp/dataset/gen/train2017",
-            "/root/autodl-tmp/dataset/gen/val2017",
-        ],
-        "total_limit": 20000,
-        "enable_views": ("expert-mm",),
-        "mode": "peft_ce",
-        "ce_enabled": True,
-        "deterministic_sampling": False,
-    },
+    "data": build_training_data_config(),
     "train": {
         "num_train_epochs": 1,
         "per_device_train_batch_size": 1,

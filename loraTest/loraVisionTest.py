@@ -17,6 +17,7 @@ from peft import PeftModel
 from PIL import Image
 from transformers import AutoModelForCausalLM, AutoProcessor
 
+from data_protocol import EVAL_IMAGE_DIRS, EVAL_JSON_PATHS, EVAL_MAX_NEW_TOKENS
 from generation_timing import generate_with_timing
 
 try:
@@ -35,16 +36,10 @@ CFG = {
     "lora_root": "./runs/lora_vision_attn",
     "ranks": [8, 16, 32],
     "test_script_path": "../test/test.py",
-    "json_paths": [
-        "/root/autodl-tmp/dataset/test2_val.json",
-        "/root/autodl-tmp/dataset/seen_simple/llava_test.json",
-    ],
-    "image_dirs": [
-        "/root/autodl-tmp/dataset/2/train",
-        "/root/autodl-tmp/dataset/seen_simple/image",
-    ],
+    "json_paths": list(EVAL_JSON_PATHS),
+    "image_dirs": list(EVAL_IMAGE_DIRS),
     "generation": {
-        "max_new_tokens": 256,
+        "max_new_tokens": EVAL_MAX_NEW_TOKENS,
         "temperature": 0.2,
         "do_sample": False,
     },
@@ -112,7 +107,13 @@ class LoraModelInterface:
         self.device = next(self.model.parameters()).device
         print(f"[lora] loaded adapter: {adapter_dir}")
 
-    def infer(self, image: Image.Image, prompt: str, max_new_tokens: int = 256, temperature: float = 0.2) -> str:
+    def infer(
+        self,
+        image: Image.Image,
+        prompt: str,
+        max_new_tokens: int = EVAL_MAX_NEW_TOKENS,
+        temperature: float = 0.2,
+    ) -> str:
         messages = [
             {
                 "role": "user",

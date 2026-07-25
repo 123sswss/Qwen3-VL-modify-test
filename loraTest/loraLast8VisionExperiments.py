@@ -24,6 +24,12 @@ from torch import nn
 from torch.utils.data import Dataset
 from transformers import AutoModelForCausalLM, AutoProcessor, Trainer, TrainingArguments
 
+from data_protocol import (
+    EVAL_IMAGE_DIRS,
+    EVAL_JSON_PATHS,
+    EVAL_MAX_NEW_TOKENS,
+    build_training_data_config,
+)
 from generation_timing import generate_with_timing
 
 from trainLora import (
@@ -57,38 +63,7 @@ CFG = {
         "dropout": 0.05,
         "bias": "none",
     },
-    "data": {
-        "expert_json": [
-            "/root/autodl-tmp/dataset/1json.json",
-            "/root/autodl-tmp/dataset/2conv_c.json",
-            "/root/autodl-tmp/dataset/1conv_c.json",
-            "/root/autodl-tmp/dataset/4conv_c.json",
-            "/root/autodl-tmp/dataset/14json.json",
-            "/root/autodl-tmp/dataset/prof_test.json",
-            "/root/autodl-tmp/dataset/test2_train.json",
-            "/root/autodl-tmp/dataset/test7_train.json",
-        ],
-        "expert_img_dir": [
-            "/root/autodl-tmp/dataset/1/train",
-            "/root/autodl-tmp/dataset/2/train",
-            "/root/autodl-tmp/dataset/4/train",
-            "/root/autodl-tmp/dataset/14",
-        ],
-        "general_json": [
-            "/root/autodl-tmp/dataset/llava_instruct_150k.json",
-            "/root/autodl-tmp/dataset/gen_test.json",
-            "/root/autodl-tmp/dataset/conversation_58k.json",
-        ],
-        "general_img_dir": [
-            "/root/autodl-tmp/dataset/gen/train2017",
-            "/root/autodl-tmp/dataset/gen/val2017",
-        ],
-        "total_limit": 20000,
-        "enable_views": ("expert-mm",),
-        "mode": "peft_ce",
-        "ce_enabled": True,
-        "deterministic_sampling": False,
-    },
+    "data": build_training_data_config(),
     "train": {
         "num_train_epochs": 1,
         "per_device_train_batch_size": 1,
@@ -109,15 +84,9 @@ CFG = {
     "eval": {
         "enabled": True,
         "test_script_path": "../test/test.py",
-        "json_paths": [
-            "/root/autodl-tmp/dataset/test2_val.json",
-            "/root/autodl-tmp/dataset/seen_simple/llava_test.json",
-        ],
-        "image_dirs": [
-            "/root/autodl-tmp/dataset/2/train",
-            "/root/autodl-tmp/dataset/seen_simple/image",
-        ],
-        "max_new_tokens": 256,
+        "json_paths": list(EVAL_JSON_PATHS),
+        "image_dirs": list(EVAL_IMAGE_DIRS),
+        "max_new_tokens": EVAL_MAX_NEW_TOKENS,
         "temperature": 0.2,
         "do_sample": False,
     },
@@ -311,7 +280,13 @@ class LoraModelInterface:
         self.device = next(self.model.parameters()).device
         print(f"[lora-last8] loaded adapter: {adapter_path}")
 
-    def infer(self, image: Image.Image, prompt: str, max_new_tokens: int = 256, temperature: float = 0.2) -> str:
+    def infer(
+        self,
+        image: Image.Image,
+        prompt: str,
+        max_new_tokens: int = EVAL_MAX_NEW_TOKENS,
+        temperature: float = 0.2,
+    ) -> str:
         messages = [{"role": "user", "content": [{"type": "image", "image": image}, {"type": "text", "text": prompt}]}]
         text = self.processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
         inputs = self.processor(images=image, text=text, return_tensors="pt")

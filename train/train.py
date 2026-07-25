@@ -14,7 +14,6 @@ from train_stages import build_model_and_processor, run_stage
 from live_epoch_eval import (
     preflight_live_epoch_evaluation,
     run_live_epoch_evaluation,
-    run_professional_gate_preflight,
 )
 
 
@@ -569,8 +568,20 @@ def main():
             train_cfg=CFG["train"],
             output_dir=CFG["output_dir"]
         )
-        if sid == 1 and CFG["train"].get("stage1_gate_preflight", True):
-            run_professional_gate_preflight(model, processor)
+        if sid == 1:
+            stage1_log_path = Path(CFG["output_dir"]) / "eval" / "test.log"
+            print("[STAGE1-ONLY-EVAL] online evaluation begin")
+            stage1_summary = run_live_epoch_evaluation(
+                model,
+                processor,
+                stage1_log_path,
+            )
+            print(
+                "[STAGE1-ONLY-EVAL] "
+                f"score={float(stage1_summary['score'])} completed"
+            )
+            print("[STAGE1-ONLY-EVAL] diagnostic run completed; Stage 3 skipped")
+            return
     final_dir = Path(CFG["output_dir"]) / "final"
     if live_final_eval:
         log_path = Path(CFG["output_dir"]) / "eval" / "test.log"

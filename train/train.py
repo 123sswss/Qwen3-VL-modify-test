@@ -492,16 +492,6 @@ EXPERIMENTS = {
 }
 EXPERIMENTS["visual_router_spatial_grounding_v1"] = {
     **EXPERIMENTS["visual_router_relation_joint_multiturn_cosine_v2"],
-    "expert_json": [
-        "/root/autodl-tmp/dataset/spatial_grounding_1.json",
-        "/root/autodl-tmp/dataset/spatial_grounding_14.json",
-    ],
-    "expert_img_dir": [
-        "/root/autodl-tmp/dataset/1/train",
-        "/root/autodl-tmp/dataset/14",
-    ],
-    "stage1_only_expert_json": [],
-    "stage1_only_expert_img_dir": [],
     "stage3_expert_json": [
         "/root/autodl-tmp/dataset/spatial_grounding_1.json",
         "/root/autodl-tmp/dataset/spatial_grounding_14.json",

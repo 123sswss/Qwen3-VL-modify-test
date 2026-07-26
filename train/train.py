@@ -490,6 +490,28 @@ EXPERIMENTS = {
         "deepstack_mmrl_residual_scale": 0.0,
     },
 }
+EXPERIMENTS["visual_router_spatial_grounding_v1"] = {
+    **EXPERIMENTS["visual_router_relation_joint_multiturn_cosine_v2"],
+    "expert_json": [
+        "/root/autodl-tmp/dataset/spatial_grounding_1.json",
+        "/root/autodl-tmp/dataset/spatial_grounding_14.json",
+    ],
+    "expert_img_dir": [
+        "/root/autodl-tmp/dataset/1/train",
+        "/root/autodl-tmp/dataset/14",
+    ],
+    "stage1_only_expert_json": [],
+    "stage1_only_expert_img_dir": [],
+    "stage3_expert_json": [
+        "/root/autodl-tmp/dataset/spatial_grounding_1.json",
+        "/root/autodl-tmp/dataset/spatial_grounding_14.json",
+    ],
+    "stage3_expert_img_dir": [
+        "/root/autodl-tmp/dataset/1/train",
+        "/root/autodl-tmp/dataset/14",
+    ],
+    "stage3_total_limit": 20000,
+}
 SELECTED_EXPERIMENT = os.getenv(
     "MMRL_EXPERIMENT",
     "visual_router_layer_fixed_v4_diversity_recover",
@@ -505,7 +527,7 @@ CFG = {
     "experiment_name": SELECTED_EXPERIMENT,
     "experiment": EXP_CFG,
     "data": {
-        "expert_json": [
+        "expert_json": EXP_CFG.get("expert_json", [
             "/root/autodl-tmp/dataset/1json.json",
             # "/root/autodl-tmp/dataset/2conv_c.json",
             "/root/autodl-tmp/dataset/1conv_c.json",
@@ -514,20 +536,20 @@ CFG = {
             # "/root/autodl-tmp/dataset/prof_test.json",
             # "/root/autodl-tmp/dataset/test2_train.json",
             # "/root/autodl-tmp/dataset/test7_train.json",
-        ],
-        "expert_img_dir": [
+        ]),
+        "expert_img_dir": EXP_CFG.get("expert_img_dir", [
             "/root/autodl-tmp/dataset/1/train",
             # "/root/autodl-tmp/dataset/2/train",
             # "/root/autodl-tmp/dataset/4/train",
             "/root/autodl-tmp/dataset/14",
             # "/root/autodl-tmp/dataset/7"
-        ],
-        "stage1_only_expert_json": [
+        ]),
+        "stage1_only_expert_json": EXP_CFG.get("stage1_only_expert_json", [
             "/root/autodl-tmp/dataset/test2_train.json",
-        ],
-        "stage1_only_expert_img_dir": [
+        ]),
+        "stage1_only_expert_img_dir": EXP_CFG.get("stage1_only_expert_img_dir", [
             "/root/autodl-tmp/dataset/2/train",
-        ],
+        ]),
         "general_json": [
             "/root/autodl-tmp/dataset/llava_instruct_150k.json",
             "/root/autodl-tmp/dataset/gen_test.json",

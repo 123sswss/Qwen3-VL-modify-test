@@ -1646,13 +1646,32 @@ def run_stage3_full(model, processor, data_cfg, train_cfg, output_dir):
             f"offset={data_seed_offset} effective={stage3_data_seed}"
         )
 
+    stage3_expert_json = experiment_cfg.get(
+        "stage3_expert_json",
+        data_cfg["expert_json"],
+    )
+    stage3_expert_img_dir = experiment_cfg.get(
+        "stage3_expert_img_dir",
+        data_cfg["expert_img_dir"],
+    )
+    stage3_total_limit = int(
+        experiment_cfg.get("stage3_total_limit", data_cfg["total_limit"])
+    )
+    if "stage3_expert_json" in experiment_cfg:
+        print(
+            "[STAGE3_DATA_OVERRIDE] "
+            f"json={stage3_expert_json} "
+            f"image_dirs={stage3_expert_img_dir} "
+            f"total_limit={stage3_total_limit}"
+        )
+
     ds = FourViewMMRLDataset(
         processor=processor,
-        expert_json=data_cfg["expert_json"],
-        expert_img_dir=data_cfg["expert_img_dir"],
+        expert_json=stage3_expert_json,
+        expert_img_dir=stage3_expert_img_dir,
         general_json=data_cfg["general_json"],
         general_img_dir=data_cfg["general_img_dir"],
-        total_limit=data_cfg["total_limit"],
+        total_limit=stage3_total_limit,
         enable_views=stage3_views,
         mode=f"stage{stage_id}",
         ce_enabled=True,

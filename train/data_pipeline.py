@@ -295,6 +295,8 @@ def infer_task_type_from_source(source_json_path: Optional[str]) -> str:
     base = os.path.basename(source_json_path).lower()
     stem = os.path.splitext(base)[0]
 
+    if "spatial_grounding" in stem:
+        return "vqa"
     if "conversation" in stem or "llava" in stem:
         return "vqa"
     if "conv_c" in stem:

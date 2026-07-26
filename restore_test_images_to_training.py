@@ -220,9 +220,13 @@ def main() -> int:
                 )
             copied.append(item)
 
-    referenced_test_record_count = sum(
-        len(training_references[name])
-        for name in restorable_names
+    referenced_test_record_count = (
+        sum(
+            len(training_references[name])
+            for name in restorable_names
+        )
+        if args.training_json
+        else 0
     )
     report = {
         "created_at": datetime.now().astimezone().isoformat(),

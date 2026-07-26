@@ -53,7 +53,7 @@ def ensure_list(value):
 
 def format_gate_value(value):
     if value is None:
-        raise RuntimeError("Evaluation model did not expose a G value")
+        return None
     if isinstance(value, (list, tuple)):
         return "[" + ",".join(f"{float(item):.4f}" for item in value) + "]"
     return f"{float(value):.4f}"
@@ -292,11 +292,12 @@ def run_evaluation(json_paths, model, image_dirs=None, max_new_tokens=64, temper
         acc_so_far = correct / done * 100 if done > 0 else 0
         status_icon = "✓" if log_entry["status"] == "CORRECT" else ("✗" if log_entry["status"] == "WRONG" else "⚠")
         display_name = image_file or item_id
-        gate_value = format_gate_value(model.last_gate_value)
+        gate_value = format_gate_value(getattr(model, "last_gate_value", None))
+        gate_display = f"G={gate_value} " if gate_value is not None else ""
         print(
             f"[{done}/{total}] {status_icon} GT={gt_answer} "
             f"Pred={pred_answer} Acc={acc_so_far:.1f}% | "
-            f"G={gate_value} {display_name}"
+            f"{gate_display}{display_name}"
         )
 
     elapsed = time.time() - start_time

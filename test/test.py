@@ -28,8 +28,8 @@ def extract_answer(text: str):
     m = re.search(r'最终答案[：:]\s*\[?\[?([A-Da-d])', text)
     if m:
         return m.group(1).upper(), True
-    # 再回退：找第一个独立的选项字母
-    m = re.search(r'\b([A-Da-d])\b', text)
+    # 最后仅接受输出开头的显式大写选项，避免把英文正文里的冠词 "a" 误判为 A。
+    m = re.match(r'^\s*(?:选项\s*)?([A-D])(?:\s|[.。:：、)\]]|$)', text)
     if m:
         return m.group(1).upper(), True
     return None, False

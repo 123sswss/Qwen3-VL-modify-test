@@ -24,8 +24,11 @@ def extract_answer(text: str):
     m = re.search(r'\[\[([A-Da-d])\]\]', text)
     if m:
         return m.group(1).upper(), True
-    # 回退：匹配 "最终答案"后面的字母
-    m = re.search(r'最终答案[：:]\s*\[?\[?([A-Da-d])', text)
+    # 回退：兼容 "最终答案：D" 与 Markdown 加粗的 "**最终答案**：D"。
+    m = re.search(
+        r'(?:\*{0,2})最终答案(?:\*{0,2})\s*[：:]\s*\[?\[?\s*([A-Da-d])',
+        text,
+    )
     if m:
         return m.group(1).upper(), True
     # 最后仅接受输出开头的显式大写选项，避免把英文正文里的冠词 "a" 误判为 A。
@@ -157,7 +160,7 @@ def validate_evaluation_data(json_paths, image_dirs=None):
     return counts
 
 
-def run_evaluation(json_paths, model, image_dirs=None, max_new_tokens=64, temperature=0.2):
+def run_evaluation(json_paths, model, image_dirs=None, max_new_tokens=256, temperature=0.2):
     """
     Args:
         json_paths: 数据集 json 路径列表或单个路径

@@ -8,12 +8,12 @@ from PIL import Image
 
 
 DEFAULT_JSON_PATHS = [
-    "/root/autodl-tmp/dataset/test/1_test.json",
+    "/root/autodl-tmp/dataset/seen_simple/llava_test.json",
     "/root/autodl-tmp/dataset/test/14_test.json",
 ]
 
 DEFAULT_IMAGE_DIRS = [
-    "/root/autodl-tmp/dataset/test/1",
+    "/root/autodl-tmp/dataset/seen_simple/image",
     "/root/autodl-tmp/dataset/test/14",
 ]
 

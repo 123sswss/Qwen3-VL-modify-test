@@ -54,7 +54,7 @@ CFG = {
     "train": {
         "num_train_epochs": 1,
         "per_device_train_batch_size": 1,
-        "gradient_accumulation_steps": 16,
+        "gradient_accumulation_steps": 32,
         "learning_rate": 1e-4,
         "weight_decay": 0.0,
         "warmup_ratio": 0.03,
@@ -88,7 +88,7 @@ def build_fair_dataset(processor: Any, data_cfg: Dict[str, Any]) -> FourViewMMRL
         enable_views=tuple(data_cfg["enable_views"]),
         mode=data_cfg["mode"],
         ce_enabled=data_cfg["ce_enabled"],
-        seed=CFG["seed"],
+        seed=int(data_cfg.get("sampling_seed", 42)),
         deterministic_sampling=data_cfg.get("deterministic_sampling", False),
         assistant_turn_policy=data_cfg.get("assistant_turn_policy", "joint"),
     )

@@ -287,8 +287,8 @@ case "$RUN_TARGET" in
     ;;
   joint_cosine_1_4)
     run_fixed_seed_sequence \
-      "visual_router_legacy_3cdf58d_joint_cosine_v2" \
-      "visual_router_legacy_3cdf58d_joint_cosine" \
+      "visual_router_relation_joint_multiturn_cosine_v2" \
+      "visual_router_relation_joint_multiturn_cosine" \
       1 2 3 4
     ;;
   joint_cosine_44_46)

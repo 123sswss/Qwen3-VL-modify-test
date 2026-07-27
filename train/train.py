@@ -525,6 +525,14 @@ EXPERIMENTS["visual_router_legacy_3cdf58d_joint_cosine_v2"].update({
     "stage1_only_expert_json": [],
     "stage1_only_expert_img_dir": [],
 })
+EXPERIMENTS["visual_router_fixed_stage1_constant_v1"] = {
+    **EXPERIMENTS["visual_router_legacy_3cdf58d_joint_cosine_v2"],
+    "stage3_lr_scheduler_type": "constant_with_warmup",
+}
+EXPERIMENTS["visual_router_fixed_stage1_lr5e5_v1"] = {
+    **EXPERIMENTS["visual_router_legacy_3cdf58d_joint_cosine_v2"],
+    "stage1_learning_rate": 5e-5,
+}
 SELECTED_EXPERIMENT = os.getenv(
     "MMRL_EXPERIMENT",
     "visual_router_layer_fixed_v4_diversity_recover",
@@ -735,7 +743,7 @@ CFG = {
         ],
 
         "learning_rate": {
-            1: 1e-4,  # 仅分类器
+            1: float(EXP_CFG.get("stage1_learning_rate", 1e-4)),
             3: float(EXP_CFG.get("stage3_learning_rate", 8e-5)),
         },
         "epochs": {

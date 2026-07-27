@@ -211,6 +211,8 @@ run_fixed_seed_sequence() {
 #   bash run_experiment.sh multiturn_relation_100_102
 #   bash run_experiment.sh joint_cosine_seed100
 #   bash run_experiment.sh legacy_3cdf58d_seed100
+#   bash run_experiment.sh fixed_stage1_constant_seed100
+#   bash run_experiment.sh fixed_stage1_lr5e5_seed100
 #   bash run_experiment.sh joint_cosine_1_4
 #   bash run_experiment.sh joint_cosine_44_46
 #   bash run_experiment.sh spatial_grounding_seed44
@@ -284,6 +286,20 @@ case "$RUN_TARGET" in
     run_one \
       "visual_router_legacy_3cdf58d_joint_cosine_v2" \
       "visual_router_legacy_3cdf58d_joint_cosine_seed100"
+    ;;
+  fixed_stage1_constant_seed100)
+    AUTO_INCREMENT_SEED=0
+    FIXED_SEED=100
+    run_one \
+      "visual_router_fixed_stage1_constant_v1" \
+      "visual_router_fixed_stage1_constant_v1_seed100"
+    ;;
+  fixed_stage1_lr5e5_seed100)
+    AUTO_INCREMENT_SEED=0
+    FIXED_SEED=100
+    run_one \
+      "visual_router_fixed_stage1_lr5e5_v1" \
+      "visual_router_fixed_stage1_lr5e5_v1_seed100"
     ;;
   joint_cosine_1_4)
     run_fixed_seed_sequence \
@@ -402,7 +418,7 @@ case "$RUN_TARGET" in
     run_one "visual_router_raw_adapter_v1" "visual_router_raw_adapter_v1_seed47"
     ;;
   *)
-    echo "[ERR] 未知实验目标: $RUN_TARGET（可选: relation44, relation47, heterogeneous_lr_pair, heterogeneous_relation_100_102, multiturn_relation_seed100, multiturn_relation_seed101, multiturn_relation_100_102, joint_cosine_seed100, legacy_3cdf58d_seed100, joint_cosine_1_4, joint_cosine_44_46, spatial_grounding_seed44, heterogeneous_no_relation_100_102, raw_adapter47, direct_mmrl, two_adapter, single_adapter, all）" >&2
+    echo "[ERR] 未知实验目标: $RUN_TARGET（可选: relation44, relation47, heterogeneous_lr_pair, heterogeneous_relation_100_102, multiturn_relation_seed100, multiturn_relation_seed101, multiturn_relation_100_102, joint_cosine_seed100, legacy_3cdf58d_seed100, fixed_stage1_constant_seed100, fixed_stage1_lr5e5_seed100, joint_cosine_1_4, joint_cosine_44_46, spatial_grounding_seed44, heterogeneous_no_relation_100_102, raw_adapter47, direct_mmrl, two_adapter, single_adapter, all）" >&2
     exit 2
     ;;
 esac

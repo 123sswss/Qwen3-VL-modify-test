@@ -31,13 +31,13 @@ TRAIN_GENERAL_IMAGE_DIRS = (
 )
 
 EVAL_JSON_PATHS = (
+    "/root/autodl-tmp/dataset/test2_val.json",
     "/root/autodl-tmp/dataset/seen_simple/llava_test.json",
-    "/root/autodl-tmp/dataset/test/14_test.json",
 )
 
 EVAL_IMAGE_DIRS = (
+    "/root/autodl-tmp/dataset/2/train",
     "/root/autodl-tmp/dataset/seen_simple/image",
-    "/root/autodl-tmp/dataset/test/14",
 )
 
 EVAL_MAX_NEW_TOKENS = 256

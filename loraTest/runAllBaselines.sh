@@ -61,8 +61,8 @@ run_step() {
     fi
 }
 
-# run_step "LoRA full-attention train: rank8/rank16/rank32" "lora" "train" python trainLora.py
-# run_step "LoRA full-attention eval: rank8/rank16/rank32" "lora" "eval" python loraTest.py
+run_step "LoRA full-attention train: rank8/rank16/rank32" "lora" "train" python trainLora.py
+run_step "LoRA full-attention eval: rank8/rank16/rank32" "lora" "eval" python loraTest.py
 
 run_step "LoRA vision-attention train: rank8/rank16/rank32" "lora_vision_attn" "train" python trainLoraVision.py
 run_step "LoRA vision-attention eval: rank8/rank16/rank32" "lora_vision_attn" "eval" python loraVisionTest.py
@@ -75,11 +75,11 @@ run_step "DoRA full-attention eval: rank8/rank16" "dora" "eval" python doraTest.
 run_step "DoRA vision-attention train: rank8/rank16" "dora_vision_attn" "train" python trainDoraVision.py
 run_step "DoRA vision-attention eval: rank8/rank16" "dora_vision_attn" "eval" python doraVisionTest.py
 
-# run_step "IA3 train" "ia3" "train" python trainIA3.py
-# run_step "IA3 eval" "ia3" "eval" python ia3Test.py
+run_step "IA3 train" "ia3" "train" python trainIA3.py
+run_step "IA3 eval" "ia3" "eval" python ia3Test.py
 
-# run_step "Adapter train" "adapter" "train" python trainAdapter.py
-# run_step "Adapter eval" "adapter" "eval" python adapterTest.py
+run_step "Adapter train" "adapter" "train" python trainAdapter.py
+run_step "Adapter eval" "adapter" "eval" python adapterTest.py
 
 echo "========== All PEFT experiments attempted =========="
 if [ "${#FAILED_STEPS[@]}" -gt 0 ]; then

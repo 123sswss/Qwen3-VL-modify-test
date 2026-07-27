@@ -8,11 +8,21 @@ from pathlib import Path
 
 from PIL import Image
 
+from slake_model_interfaces import BACKEND_SPECS
 from slake_official_eval import ImageResolver, audit_samples, select_records
 from slake_vqa_metric import evaluate_slake_predictions, normalize_vqa_answer
 
 
 class SlakeMetricTest(unittest.TestCase):
+    def test_last8_vision_lora_backend_is_explicit(self):
+        self.assertEqual(
+            BACKEND_SPECS["lora-vision-last8"],
+            (
+                "loraTest/loraLast8VisionExperiments.py",
+                "LoraModelInterface",
+            ),
+        )
+
     def test_vqa_normalization(self):
         self.assertEqual(normalize_vqa_answer("The LEFT lung."), "left lung")
         self.assertEqual(normalize_vqa_answer("Two"), "2")

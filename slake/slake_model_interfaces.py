@@ -15,6 +15,10 @@ BACKEND_SPECS = {
     "mmrl": ("test/inferEngine.py", "ModelInterface"),
     "lora": ("loraTest/loraTest.py", "LoraModelInterface"),
     "lora-vision": ("loraTest/loraVisionTest.py", "LoraModelInterface"),
+    "lora-vision-last8": (
+        "loraTest/loraLast8VisionExperiments.py",
+        "LoraModelInterface",
+    ),
     "dora": ("loraTest/doraTest.py", "DoraModelInterface"),
     "dora-vision": ("loraTest/doraVisionTest.py", "DoraModelInterface"),
     "ia3": ("loraTest/ia3Test.py", "IA3ModelInterface"),
@@ -62,4 +66,6 @@ def load_slake_model_interface(
         raise ValueError(f"--checkpoint is required for backend={backend}")
     if backend == "mmrl":
         return interface_class(checkpoint_path, base_model_path)
+    if backend == "lora-vision-last8":
+        return interface_class(Path(checkpoint_path).resolve(), base_model_path)
     return interface_class(checkpoint_path, base_model_path)

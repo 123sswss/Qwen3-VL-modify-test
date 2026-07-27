@@ -70,7 +70,40 @@ python slake/slake_official_eval.py \
   --overwrite
 ```
 
-## LoRA checkpoint
+## Fair vision-only LoRA checkpoints
+
+The primary matched-scope baseline is LoRA on the last eight vision-encoder
+layers. Two rank-32 checkpoints are produced by the existing training script:
+
+- `last8_full_linear_rank32`: attention and MLP linear layers in vision blocks
+  16 through 23
+- `last8_attention_rank32`: attention `qkv` and `proj` layers in vision blocks
+  16 through 23
+
+Evaluate the full-linear variant with:
+
+```bash
+python slake/slake_official_eval.py \
+  --backend lora-vision-last8 \
+  --base-model /root/autodl-tmp/model \
+  --checkpoint ./loraTest/runs/lora_vision_last8/last8_full_linear_rank32/final \
+  --questions /root/autodl-tmp/dataset/slake/test.json \
+  --image-root /root/autodl-tmp/dataset/slake/imgs \
+  --output-dir ./slake_outputs/lora_vision_last8_full_linear_r32_en \
+  --language en \
+  --overwrite
+```
+
+Use the same backend with
+`./loraTest/runs/lora_vision_last8/last8_attention_rank32/final` for the
+attention-only variant. The existing `lora-vision` backend evaluates LoRA over
+all vision-attention layers and is a useful larger-scope comparison.
+
+## Full-VLM LoRA checkpoint
+
+Full-VLM LoRA also adapts language-model attention layers. It is supported for
+completeness, but it is not the primary parameter-scope-matched comparison for
+a method that trains only the final eight vision layers.
 
 ```bash
 python slake/slake_official_eval.py \

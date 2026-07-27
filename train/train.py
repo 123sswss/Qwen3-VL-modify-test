@@ -508,18 +508,18 @@ EXPERIMENTS["visual_router_legacy_3cdf58d_joint_cosine_v2"] = (
 EXPERIMENTS["visual_router_legacy_3cdf58d_joint_cosine_v2"].update({
     "expert_json": [
         "/root/autodl-tmp/dataset/1json.json",
-        # "/root/autodl-tmp/dataset/2conv_c.json",
+        "/root/autodl-tmp/dataset/2conv_c.json",
         "/root/autodl-tmp/dataset/1conv_c.json",
-        # "/root/autodl-tmp/dataset/4conv_c.json",
+        "/root/autodl-tmp/dataset/4conv_c.json",
         "/root/autodl-tmp/dataset/14json.json",
         "/root/autodl-tmp/dataset/prof_test.json",
         "/root/autodl-tmp/dataset/test2_train.json",
-        # "/root/autodl-tmp/dataset/test7_train.json",
+        "/root/autodl-tmp/dataset/test7_train.json",
     ],
     "expert_img_dir": [
         "/root/autodl-tmp/dataset/1/train",
         "/root/autodl-tmp/dataset/2/train",
-        # "/root/autodl-tmp/dataset/4/train",
+        "/root/autodl-tmp/dataset/4/train",
         "/root/autodl-tmp/dataset/14",
     ],
     "stage1_only_expert_json": [],

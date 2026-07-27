@@ -1238,8 +1238,9 @@ def set_trainable_stage(model, stage, train_cfg=None):
     if stage == 1:
         mods = [v.hidden_state_pooling, v.embedding_pooling, v.Task_classifier]
     elif stage == 3:
-        # Keep the Stage 1 classifier coordinate system fixed.
-        mods = []
+        # Match the historical Stage 3 policy: adapt both pooling coordinate
+        # systems while keeping the Stage 1 task classifier fixed.
+        mods = [v.hidden_state_pooling, v.embedding_pooling]
         if not v.raw_visual_adapter:
             mods.insert(0, model.model.MMRL)
             # v.blocks_with_rep stay frozen while the rep-token branch remains active.
@@ -1542,24 +1543,29 @@ def run_stage1_light(model, processor, data_cfg, train_cfg, output_dir):
 def run_stage3_full(model, processor, data_cfg, train_cfg, output_dir):
     stage_id = 3
     set_trainable_stage(model, stage_id)
-    gate_modules = {
+    pooling_modules = {
         "hidden_state_pooling": model.model.visual.hidden_state_pooling,
         "embedding_pooling": model.model.visual.embedding_pooling,
-        "task_classifier": model.model.visual.Task_classifier,
     }
-    unexpectedly_trainable = [
+    unexpectedly_frozen = [
         name
-        for name, module in gate_modules.items()
-        if any(parameter.requires_grad for parameter in module.parameters())
+        for name, module in pooling_modules.items()
+        if not all(parameter.requires_grad for parameter in module.parameters())
     ]
-    if unexpectedly_trainable:
+    if unexpectedly_frozen:
         raise RuntimeError(
-            "Stage 3 must keep the Stage 1 gate coordinate system frozen: "
-            f"{unexpectedly_trainable}"
+            "Stage 3 must train the historical pooling coordinate systems: "
+            f"{unexpectedly_frozen}"
         )
+    classifier_trainable = any(
+        parameter.requires_grad
+        for parameter in model.model.visual.Task_classifier.parameters()
+    )
+    if classifier_trainable:
+        raise RuntimeError("Stage 3 must keep the Stage 1 task classifier frozen")
     print(
-        "[STAGE3_GATE_FREEZE] "
-        "hidden_state_pooling=True embedding_pooling=True task_classifier=True"
+        "[STAGE3_TRAINABILITY] "
+        "hidden_state_pooling=True embedding_pooling=True task_classifier=False"
     )
     experiment_cfg = train_cfg.get("experiment_cfg", {}) or {}
     actual_epochs = int(train_cfg["epochs"][stage_id])

@@ -200,7 +200,7 @@ class SLAKEDataset(Dataset):
             base_types=tuple(self.base_types or ()),
             expected_split=None,
         )
-        resolver = ImageResolver(self.image_root)
+        resolver = ImageResolver(Path(self.image_root))
 
         samples = []
         skipped_by_filter = 0

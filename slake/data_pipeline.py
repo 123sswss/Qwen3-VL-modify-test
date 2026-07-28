@@ -9,6 +9,7 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence, Set
 import torch
 from PIL import Image
 from torch.utils.data import Dataset
+from torch.nn.utils.rnn import pad_sequence
 
 TRAIN_DIR = Path(__file__).resolve().parents[1] / "train"
 if str(TRAIN_DIR) not in sys.path:
@@ -55,7 +56,7 @@ class SLAKEDataset(Dataset):
         ce_enabled: bool = True,
         seed: int = 42,
         deterministic_sampling: bool = True,
-        max_length: int = 1024,
+        max_length: int = 2048,
     ):
         self.processor = processor
         self.image_root = os.path.abspath(os.fspath(image_root))
@@ -326,14 +327,19 @@ class SLAKEDataset(Dataset):
         inputs = self.processor(
             images=image,
             text=text_inputs,
-            padding="max_length",
-            max_length=self.max_length,
-            truncation=True,
+            padding=False,
+            truncation=False,
             return_tensors="pt",
         )
 
         input_ids = inputs["input_ids"].squeeze(0)
         attention_mask = inputs["attention_mask"].squeeze(0)
+        if input_ids.numel() > self.max_length:
+            raise ValueError(
+                "SLAKE sample exceeds the configured complete-sequence limit; "
+                f"tokens={input_ids.numel()} max_length={self.max_length} "
+                f"question_id={sample.get('question_id')}"
+            )
         pixel_values = inputs["pixel_values"]
         if pixel_values.dim() == 3:
             pixel_values = pixel_values.squeeze(0)
@@ -377,8 +383,7 @@ class SLAKEStage1Dataset(Dataset):
     def __init__(self, dataset: SLAKEDataset):
         self.dataset = dataset
         self.processor = dataset.processor
-        # The legacy general-domain Stage 1 views are fixed at 1024 tokens.
-        self.max_length = 1024
+        self.max_length = dataset.max_length
         self.data = [
             (sample_index, view_type)
             for sample_index in range(len(dataset))
@@ -415,9 +420,8 @@ class SLAKEStage1Dataset(Dataset):
         )
         processor_kwargs = {
             "text": text_inputs,
-            "padding": "max_length",
-            "max_length": self.max_length,
-            "truncation": True,
+            "padding": False,
+            "truncation": False,
             "return_tensors": "pt",
         }
         if image is not None:
@@ -425,6 +429,12 @@ class SLAKEStage1Dataset(Dataset):
         inputs = self.processor(**processor_kwargs)
         input_ids = inputs["input_ids"].squeeze(0)
         attention_mask = inputs["attention_mask"].squeeze(0)
+        if input_ids.numel() > self.max_length:
+            raise ValueError(
+                "SLAKE Stage 1 sample exceeds the configured complete-sequence "
+                f"limit; tokens={input_ids.numel()} max_length={self.max_length} "
+                f"question_id={sample.get('question_id')} view={view_type}"
+            )
 
         if view_type == "mm":
             pixel_values = inputs["pixel_values"]
@@ -477,13 +487,36 @@ class SLAKEDataCollator:
         pixel_values = [feature.pop("pixel_values") for feature in features]
         image_grids = [feature.pop("image_grid_thw") for feature in features]
 
+        sequence_padding = {
+            "input_ids": int(self.processor.tokenizer.pad_token_id),
+            "attention_mask": 0,
+            "labels": -100,
+            "mmrl_gating_mask": False,
+        }
         batch = {}
         for key in features[0]:
             values = [feature[key] for feature in features]
-            batch[key] = torch.stack(values, dim=0) if torch.is_tensor(values[0]) else values
+            if key in sequence_padding:
+                batch[key] = pad_sequence(
+                    values,
+                    batch_first=True,
+                    padding_value=sequence_padding[key],
+                )
+            else:
+                batch[key] = (
+                    torch.stack(values, dim=0)
+                    if torch.is_tensor(values[0])
+                    else values
+                )
 
-        batch["pixel_values"] = torch.cat(pixel_values, dim=0)
-        batch["image_grid_thw"] = torch.cat(image_grids, dim=0)
+        mm_pixels = [value for value in pixel_values if value is not None]
+        mm_grids = [value for value in image_grids if value is not None]
+        batch["pixel_values"] = (
+            torch.cat(mm_pixels, dim=0) if mm_pixels else None
+        )
+        batch["image_grid_thw"] = (
+            torch.cat(mm_grids, dim=0) if mm_grids else None
+        )
         batch["alpha_labels"] = torch.tensor(alpha_labels, dtype=torch.float32)
         batch["task_type_ids"] = torch.tensor(task_type_ids, dtype=torch.long)
         batch["task_type_names"] = task_type_names

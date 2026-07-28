@@ -122,6 +122,10 @@ Before training, the smoke test checks:
 - actual updates to both Stage 1 pooling modules;
 - one finite full MMRL forward loss.
 
+SLAKE visual placeholders are never truncated. Samples are tokenized in full,
+then right-padded to the longest sequence in each batch. The default 2048-token
+limit is only a safety ceiling for a complete sample.
+
 After training, it performs two real autoregressive generations and records
 the output, gate value, token count, and timing in
 `slake_train_report.json`.

@@ -29,7 +29,7 @@ for import_root in (REPO_ROOT, TRAIN_DIR):
         sys.path.insert(0, import_text)
 
 from live_epoch_eval import _LiveModelInterface
-from data_pipeline import FourViewMMRLDataset, MMRLDataCollator
+from data_pipeline import FourViewMMRLDataset
 from slake.data_pipeline import (
     SLAKEDataCollator,
     SLAKEDataset,
@@ -238,7 +238,7 @@ def build_stage1_dataset(
     args: argparse.Namespace,
     processor: Any,
     slake_dataset: SLAKEDataset,
-) -> tuple[ConcatDataset, MMRLDataCollator, Dict[str, int]]:
+) -> tuple[ConcatDataset, SLAKEDataCollator, Dict[str, int]]:
     slake_positive = SLAKEStage1Dataset(slake_dataset)
     general_json = args.stage1_general_json or list(DEFAULT_GENERAL_JSON)
     general_image_roots = (
@@ -274,7 +274,7 @@ def build_stage1_dataset(
         "[SLAKE_STAGE1_DATA] "
         + " ".join(f"{key}={value}" for key, value in counts.items())
     )
-    return dataset, MMRLDataCollator(processor), counts
+    return dataset, SLAKEDataCollator(processor), counts
 
 
 def audit_template_and_collator(
@@ -319,18 +319,24 @@ def audit_template_and_collator(
         features.append(feature)
 
     batch = collator(features[:2])
-    expected_shapes = {
-        "input_ids": (2, dataset.max_length),
-        "attention_mask": (2, dataset.max_length),
-        "labels": (2, dataset.max_length),
-        "mmrl_gating_mask": (2, dataset.max_length),
-    }
-    for key, expected_shape in expected_shapes.items():
-        if tuple(batch[key].shape) != expected_shape:
+    sequence_keys = (
+        "input_ids",
+        "attention_mask",
+        "labels",
+        "mmrl_gating_mask",
+    )
+    sequence_shape = tuple(batch["input_ids"].shape)
+    for key in sequence_keys:
+        if tuple(batch[key].shape) != sequence_shape:
             raise RuntimeError(
                 f"SLAKE collator shape mismatch for {key}: "
-                f"expected={expected_shape} actual={tuple(batch[key].shape)}"
+                f"expected={sequence_shape} actual={tuple(batch[key].shape)}"
             )
+    if sequence_shape[0] != 2 or sequence_shape[1] > dataset.max_length:
+        raise RuntimeError(
+            "SLAKE dynamic padding produced an invalid batch shape: "
+            f"shape={sequence_shape} max_length={dataset.max_length}"
+        )
 
     report = {
         "dataset_size": len(dataset),
@@ -548,7 +554,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--base-type", action="append", default=[])
     parser.add_argument("--split", default="train")
     parser.add_argument("--sample-limit", type=int)
-    parser.add_argument("--max-length", type=int, default=1024)
+    parser.add_argument("--max-length", type=int, default=2048)
     parser.add_argument("--seed", type=int, default=44)
     parser.add_argument("--data-seed", type=int, default=42)
     parser.add_argument("--stage1-epochs", type=int, default=1)

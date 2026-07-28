@@ -1406,10 +1406,6 @@ def _build_stage3_step_scheduler(optimizer, experiment_cfg):
 # =========================
 #  Stage1 lightweight classifier pretraining
 # =========================
-def _build_text_pool_mask(attention_mask):
-    return attention_mask.bool()
-
-
 def _extract_mm_pooled_vision(v, pixel_values, image_grid_thw):
     return v.extract_gate_pooled_vision(pixel_values, image_grid_thw)
 
@@ -1512,7 +1508,11 @@ def run_stage1_light(model, processor, data_cfg, train_cfg, output_dir):
 
             # text embedding + pooling
             text_emb = model.model.get_input_embeddings()(input_ids).to(dtype=v.dtype)
-            text_pool_mask = _build_text_pool_mask(attention_mask)
+            text_pool_mask = model.model.build_mmrl_text_pooling_mask(
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                audit_context="stage1_train",
+            )
             text_pooled = v.embedding_pooling(text_emb, mask=text_pool_mask)
 
             # vision pooled（仅mm样本有意义）

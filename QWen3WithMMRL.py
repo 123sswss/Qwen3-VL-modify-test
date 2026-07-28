@@ -87,11 +87,24 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
 
         super().__init__(config)
         if tokenizer is not None:
-            self.vision_end_token_id = (
-                tokenizer.vision_end_token_id
-                if getattr(tokenizer, "vision_end_token_id", None)
-                else tokenizer.convert_tokens_to_ids("<|vision_end|>")
-            )
+            self.mmrl_visual_template_token_ids = {
+                "image_pad": tokenizer.convert_tokens_to_ids("<|image_pad|>"),
+                "vision_start": tokenizer.convert_tokens_to_ids("<|vision_start|>"),
+                "vision_end": tokenizer.convert_tokens_to_ids("<|vision_end|>"),
+            }
+            invalid_visual_tokens = {
+                name: token_id
+                for name, token_id in self.mmrl_visual_template_token_ids.items()
+                if token_id is None
+                or token_id < 0
+                or token_id == getattr(tokenizer, "unk_token_id", None)
+            }
+            if invalid_visual_tokens:
+                raise RuntimeError(
+                    "Failed to resolve visual template token IDs for MMRL text pooling: "
+                    f"{invalid_visual_tokens}"
+                )
+            self.vision_end_token_id = self.mmrl_visual_template_token_ids["vision_end"]
         else:
             raise ValueError("tokenizer must be specified")
         ###################
@@ -117,7 +130,74 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
         self.temperature_override = None
         self.k_results = None
         self.debug_context = {}
+        self._text_pooling_audit_contexts = set()
         ###################
+
+    def build_mmrl_text_pooling_mask(
+            self,
+            input_ids: torch.Tensor,
+            attention_mask: torch.Tensor,
+            mmrl_gating_mask: Optional[torch.Tensor] = None,
+            audit_context: str = "model_forward",
+    ) -> torch.Tensor:
+        """Keep textual context only; visual placeholders carry no text semantics."""
+        if input_ids is None or input_ids.ndim != 2:
+            raise ValueError("MMRL text pooling requires input_ids with shape [B, S]")
+        if attention_mask is None or attention_mask.shape != input_ids.shape:
+            raise ValueError(
+                "MMRL text pooling requires attention_mask to match input_ids, "
+                f"got input_ids={tuple(input_ids.shape)} "
+                f"attention_mask={None if attention_mask is None else tuple(attention_mask.shape)}"
+            )
+
+        pooling_mask = attention_mask.to(device=input_ids.device, dtype=torch.bool)
+        if mmrl_gating_mask is not None:
+            if mmrl_gating_mask.dim() == 3 and mmrl_gating_mask.size(-1) == 1:
+                mmrl_gating_mask = mmrl_gating_mask.squeeze(-1)
+            if mmrl_gating_mask.shape != input_ids.shape:
+                raise ValueError(
+                    "mmrl_gating_mask must match input_ids, "
+                    f"got input_ids={tuple(input_ids.shape)} "
+                    f"mmrl_gating_mask={tuple(mmrl_gating_mask.shape)}"
+                )
+            pooling_mask = pooling_mask & mmrl_gating_mask.to(
+                device=input_ids.device,
+                dtype=torch.bool,
+            )
+
+        eligible_before_exclusion = pooling_mask.sum(dim=1)
+        removed_counts = {}
+        for name, token_id in self.mmrl_visual_template_token_ids.items():
+            token_mask = input_ids.eq(token_id)
+            removed_counts[name] = int((pooling_mask & token_mask).sum().item())
+            pooling_mask = pooling_mask & ~token_mask
+
+        remaining_per_sample = pooling_mask.sum(dim=1)
+        if bool((remaining_per_sample == 0).any()):
+            empty_indices = (remaining_per_sample == 0).nonzero(as_tuple=True)[0].tolist()
+            raise RuntimeError(
+                "MMRL text pooling has no textual tokens after excluding visual "
+                f"template tokens; empty sample indices={empty_indices}"
+            )
+
+        audit_kind = "visual" if sum(removed_counts.values()) > 0 else "text_only"
+        audit_key = f"{audit_context}:{audit_kind}"
+        if audit_key not in self._text_pooling_audit_contexts:
+            print(
+                "[MMRL_TEXT_POOLING_AUDIT] "
+                f"context={audit_context} kind={audit_kind} batch={input_ids.shape[0]} "
+                f"eligible_before={int(eligible_before_exclusion.sum().item())} "
+                f"removed_image_pad={removed_counts['image_pad']} "
+                f"removed_vision_start={removed_counts['vision_start']} "
+                f"removed_vision_end={removed_counts['vision_end']} "
+                f"text_after={int(remaining_per_sample.sum().item())} "
+                f"text_per_sample_min={int(remaining_per_sample.min().item())} "
+                f"text_per_sample_max={int(remaining_per_sample.max().item())}"
+            )
+            self._text_pooling_audit_contexts.add(audit_key)
+
+        return pooling_mask
+
     def get_image_features(self,
                         pixel_values: torch.FloatTensor,
                         image_grid_thw: Optional[torch.LongTensor] = None,
@@ -194,19 +274,16 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
             if torch.is_tensor(full_attention) and full_attention.ndim == 2:
                 base_text_mask = full_attention.bool()
         if base_text_mask is None:
-            text_pooling_mask = torch.ones(
-                inputs_embeds.shape[:2],
-                device=inputs_embeds.device,
-                dtype=torch.bool
+            raise ValueError(
+                "MMRL text pooling requires a 2D attention mask or "
+                "attention_mask['full_attention']"
             )
-        else:
-            text_pooling_mask = base_text_mask.to(inputs_embeds.device)
-        if mmrl_gating_mask is not None:
-            if mmrl_gating_mask.dim() == 3 and mmrl_gating_mask.size(-1) == 1:
-                mmrl_gating_mask = mmrl_gating_mask.squeeze(-1)
-            if mmrl_gating_mask.dim() != 2:
-                raise ValueError("mmrl_gating_mask must be [B, S] or [B, S, 1]")
-            text_pooling_mask = text_pooling_mask & mmrl_gating_mask.to(inputs_embeds.device).bool()
+        text_pooling_mask = self.build_mmrl_text_pooling_mask(
+            input_ids=input_ids,
+            attention_mask=base_text_mask.to(inputs_embeds.device),
+            mmrl_gating_mask=mmrl_gating_mask,
+            audit_context="model_forward",
+        )
         embedding_for_gating = inputs_embeds
         
         v_r_token_list = None

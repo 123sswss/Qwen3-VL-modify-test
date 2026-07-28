@@ -113,16 +113,18 @@ class ModelInterface:
             return_tensors="pt"
         ).to(self.model.device)
 
+        generate_kwargs = {
+            "max_new_tokens": max_new_tokens,
+            "do_sample": do_sample,
+            "pad_token_id": self.tokenizer.pad_token_id,
+            "eos_token_id": self.tokenizer.eos_token_id,
+            "use_cache": True,
+        }
+        if do_sample:
+            generate_kwargs["temperature"] = temperature
+
         with torch.no_grad():
-            generated_ids = self.model.generate(
-                **inputs,
-                max_new_tokens=max_new_tokens,
-                do_sample=do_sample,
-                temperature=temperature,
-                pad_token_id=self.tokenizer.pad_token_id,
-                eos_token_id=self.tokenizer.eos_token_id,
-                use_cache=True
-            )
+            generated_ids = self.model.generate(**inputs, **generate_kwargs)
             gate = getattr(self.model.model.visual, "G_list", None)
             if not torch.is_tensor(gate) or gate.numel() == 0:
                 raise MissingGateError(

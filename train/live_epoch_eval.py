@@ -128,9 +128,14 @@ def run_professional_gate_preflight(model, processor):
                 text_embedding = model.model.get_input_embeddings()(
                     inputs["input_ids"]
                 ).to(dtype=visual.dtype)
+                text_pooling_mask = model.model.build_mmrl_text_pooling_mask(
+                    input_ids=inputs["input_ids"],
+                    attention_mask=inputs["attention_mask"],
+                    audit_context="stage1_preflight",
+                )
                 text_pooled = visual.embedding_pooling(
                     text_embedding,
-                    mask=inputs["attention_mask"].bool(),
+                    mask=text_pooling_mask,
                 )
                 vision_pooled = visual.extract_gate_pooled_vision(
                     pixel_values,
@@ -217,7 +222,6 @@ class _LiveModelInterface:
                 **inputs,
                 max_new_tokens=max_new_tokens,
                 do_sample=False,
-                temperature=temperature,
                 pad_token_id=self.processor.tokenizer.pad_token_id,
                 eos_token_id=self.processor.tokenizer.eos_token_id,
                 use_cache=True,

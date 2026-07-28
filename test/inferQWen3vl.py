@@ -27,10 +27,13 @@ class BaselineModelInterface:
             return_dict=True, return_tensors="pt"
         ).to(self.model.device)
 
-        generated_ids = self.model.generate(
-            **inputs, max_new_tokens=max_new_tokens,
-            do_sample=do_sample, temperature=temperature
-        )
+        generate_kwargs = {
+            "max_new_tokens": max_new_tokens,
+            "do_sample": do_sample,
+        }
+        if do_sample:
+            generate_kwargs["temperature"] = temperature
+        generated_ids = self.model.generate(**inputs, **generate_kwargs)
         output_ids = generated_ids[:, inputs.input_ids.shape[1]:]
         return self.processor.batch_decode(output_ids, skip_special_tokens=True)[0]
 

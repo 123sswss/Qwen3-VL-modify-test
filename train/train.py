@@ -544,6 +544,13 @@ EXPERIMENTS["visual_router_fixed_stage1_global_lr_half_v1"] = {
     "stage3_router_learning_rate": 4e-5,
     "stage3_adapter_learning_rates": [2e-5, 3e-5, 4e-5, 5e-5],
 }
+EXPERIMENTS["visual_router_fixed_stage1_mmrl_only_lr3e5_v1"] = {
+    **EXPERIMENTS["visual_router_legacy_3cdf58d_joint_cosine_v2"],
+    "stage3_pooling_learning_rate": 6e-5,
+    "stage3_mmrl_learning_rate": 3e-5,
+    "stage3_router_learning_rate": 8e-5,
+    "stage3_adapter_learning_rates": [4e-5, 6e-5, 8e-5, 1e-4],
+}
 SELECTED_EXPERIMENT = os.getenv(
     "MMRL_EXPERIMENT",
     "visual_router_layer_fixed_v4_diversity_recover",

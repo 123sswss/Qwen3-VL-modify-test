@@ -44,7 +44,11 @@ from config import (
 )
 
 
-def parse_args(description: str, default_run_id: str) -> argparse.Namespace:
+def parse_args(
+    description: str,
+    default_run_id: str,
+    include_checkpoint: bool = False,
+) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=description)
     parser.add_argument("--run-id", default=default_run_id)
     parser.add_argument("--output-root", default=DEFAULT_OUTPUT_ROOT)
@@ -53,6 +57,15 @@ def parse_args(description: str, default_run_id: str) -> argparse.Namespace:
     parser.add_argument("--dataset-json", default=DATASET_JSON)
     parser.add_argument("--image-dir", default=IMAGE_DIR)
     parser.add_argument("--seed", type=int, default=DEFAULT_SEED)
+    if include_checkpoint:
+        parser.add_argument(
+            "--checkpoint",
+            default=os.getenv("MMRL_CONSISTENCY_CHECKPOINT"),
+            help=(
+                "MMRL final checkpoint directory. Defaults to the "
+                "MMRL_CONSISTENCY_CHECKPOINT environment variable."
+            ),
+        )
     return parser.parse_args()
 
 

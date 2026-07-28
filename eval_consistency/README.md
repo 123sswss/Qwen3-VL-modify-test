@@ -49,7 +49,7 @@
 
 ### 3. 我们的方法
 
-`eval_ours.py` 已预留，但目前处于禁用状态。`run_all.py` 中对应的批量运行项也已注释，训练完成前不会运行。
+`eval_ours.py` 会按训练时的自定义结构恢复完整 MMRL checkpoint，并使用与所有基线完全相同的输入、生成和原始证据保存流程。checkpoint 必须通过命令行或环境变量显式指定。
 
 ## 二、文件说明
 
@@ -78,7 +78,7 @@ eval_consistency/
 - `eval_*.py`：每个实验的独立运行入口。
 - `run_all.py`：按照固定顺序批量运行所有实验。
 - `run_all.sh`：Linux Shell 批量入口。
-- `eval_ours.py`：我们的方法的预留入口，目前禁用。
+- `eval_ours.py`：严格恢复并评测完整 MMRL checkpoint；支持单文件及 Transformers 分片权重。
 
 ## 三、默认配置
 
@@ -604,32 +604,34 @@ Baseline disruption ratio > 1
 
 自回归生成会累积微小差异。后续 token 的一个细微变化可能导致完整答案不同，因此应以首 token 分布指标作为主要数值证据，以完整生成一致率作为辅助证据。
 
-## 十六、启用我们的方法
+## 十六、运行我们的方法
 
-训练完成后：
+单独运行：
 
-1. 在 `eval_ours.py` 中导入你们现有的模型加载逻辑。
-2. 将 `CHECKPOINT` 设置为最终 checkpoint。
-3. 返回 `model` 和 `processor`。
-4. 在 `run_all.py` 中取消以下代码的注释：
-
-```python
-# ("eval_ours.py", "ours"),
+```bash
+python eval_consistency/eval_ours.py \
+    --checkpoint /path/to/experiment/final \
+    --output-root ./eval_consistency/results
 ```
 
-改为：
+也可以设置环境变量：
 
-```python
-("eval_ours.py", "ours"),
+```bash
+export MMRL_CONSISTENCY_CHECKPOINT=/path/to/experiment/final
+python eval_consistency/eval_ours.py
 ```
 
 如果其他实验已经完成，可以运行：
 
 ```bash
-python eval_consistency/run_all.py --skip-existing
+python eval_consistency/run_all.py \
+    --ours-checkpoint /path/to/experiment/final \
+    --skip-existing
 ```
 
 程序会跳过已有的两次 Base 和七个基线，只运行我们的方法，然后重新生成全部统计报告。
+
+加载器要求 checkpoint 自带完整 MMRL config，并对所有参数执行严格加载；任何 missing key、unexpected key 或 adapter 数量不一致都会终止实验，避免将错误恢复的模型写入论文结果。
 
 ## 十七、实验数据保存注意事项
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -24,7 +25,7 @@ ACTIVE_RUNS = [
         "eval_last8_lora_attention_rank32.py",
         "last8_lora_attention_rank32",
     ),
-    # ("eval_ours.py", "ours"),  # Enable after our checkpoint finishes training.
+    ("eval_ours.py", "ours"),
 ]
 
 
@@ -33,6 +34,14 @@ def main() -> None:
     parser.add_argument("--output-root", default="./eval_consistency/results")
     parser.add_argument("--num-samples", type=int, default=500)
     parser.add_argument("--max-new-tokens", type=int, default=64)
+    parser.add_argument(
+        "--ours-checkpoint",
+        default=os.getenv("MMRL_CONSISTENCY_CHECKPOINT"),
+        help=(
+            "MMRL final checkpoint directory. Defaults to the "
+            "MMRL_CONSISTENCY_CHECKPOINT environment variable."
+        ),
+    )
     parser.add_argument("--skip-existing", action="store_true")
     args = parser.parse_args()
 
@@ -59,6 +68,13 @@ def main() -> None:
             "--max-new-tokens",
             str(args.max_new_tokens),
         ]
+        if script == "eval_ours.py":
+            if not args.ours_checkpoint:
+                parser.error(
+                    "--ours-checkpoint is required when the ours result does "
+                    "not already exist (or set MMRL_CONSISTENCY_CHECKPOINT)"
+                )
+            command.extend(["--checkpoint", args.ours_checkpoint])
         print(f"[run] {' '.join(command)}", flush=True)
         subprocess.run(command, cwd=repo_root, check=True)
 

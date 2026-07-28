@@ -533,28 +533,9 @@ EXPERIMENTS["visual_router_fixed_stage1_lr5e5_v1"] = {
     **EXPERIMENTS["visual_router_legacy_3cdf58d_joint_cosine_v2"],
     "stage1_learning_rate": 5e-5,
 }
-DECOUPLED_ROUTER_BASE = {
+EXPERIMENTS["visual_router_fixed_stage1_pooling_lr1e5_v1"] = {
     **EXPERIMENTS["visual_router_legacy_3cdf58d_joint_cosine_v2"],
-    "adapter_usage_balance_loss_weight": 0.0026,
-    "adapter_common_mode_loss_weight": 0.0,
-    "adapter_effective_delta_loss_weight": 0.0003,
-    "mmrl_relation_loss_weight": 0.010,
-    "adapter_diversity_loss_weight": 0.0,
-}
-EXPERIMENTS["visual_router_decoupled_entropy72_v1"] = {
-    **DECOUPLED_ROUTER_BASE,
-    "adapter_sample_entropy_loss_weight": 0.020,
-    "adapter_sample_entropy_target": 0.72,
-}
-EXPERIMENTS["visual_router_decoupled_entropy55_v1"] = {
-    **DECOUPLED_ROUTER_BASE,
-    "adapter_sample_entropy_loss_weight": 0.020,
-    "adapter_sample_entropy_target": 0.55,
-}
-EXPERIMENTS["visual_router_decoupled_entropy_free_v1"] = {
-    **DECOUPLED_ROUTER_BASE,
-    "adapter_sample_entropy_loss_weight": 0.0,
-    "adapter_sample_entropy_target": 0.55,
+    "stage3_pooling_learning_rate": 1e-5,
 }
 SELECTED_EXPERIMENT = os.getenv(
     "MMRL_EXPERIMENT",

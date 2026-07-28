@@ -1,4 +1,3 @@
-import copy
 from multiprocessing import pool
 from typing import Optional
 
@@ -181,10 +180,6 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
                                                             self.cfg.POOLING_DIM)
         self.embedding_pooling = utils.attention_pooling(self.cfg.text_token_dim,
                                                          self.cfg.POOLING_DIM)
-        # Registered after post_init so adding the decoupled poolers cannot
-        # consume RNG or perturb the initialization of existing modules.
-        self.router_hidden_state_pooling = None
-        self.router_embedding_pooling = None
         self.Task_classifier = MMRLGating.Task_classifier(self.cfg)
         self.visionGating = MMRLGating.HardConcreteGate(self.cfg.gating_temperature)
         # self.text_gating = MMRLGating.textGating(self.cfg,
@@ -903,11 +898,6 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
             image_token_lengths.numel(),
         )
 
-    def reset_router_pooling_from_gate(self):
-        """Start the router coordinate system from an exact gate-pooler copy."""
-        self.router_hidden_state_pooling = copy.deepcopy(self.hidden_state_pooling)
-        self.router_embedding_pooling = copy.deepcopy(self.embedding_pooling)
-
     def forward(self,
                 hidden_states: torch.Tensor,
                 grid_thw: torch.Tensor,
@@ -926,23 +916,11 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
         self.alpha_list = None 
         self.G_list = []
         self.route_probs = None
-        gate_pooled_vision_states = None
+        pooled_vision_states = None
 
 
         rotary_pos_emb_with_rep = None
-        if self.router_hidden_state_pooling is None or self.router_embedding_pooling is None:
-            raise RuntimeError(
-                "Router pooling is not initialized; call reset_router_pooling_from_gate() "
-                "after model post_init"
-            )
-        gate_embedding_after_pooling = self.embedding_pooling(
-            embedding,
-            mask=text_pooling_mask,
-        )
-        router_embedding_after_pooling = self.router_embedding_pooling(
-            embedding,
-            mask=text_pooling_mask,
-        )
+        embedding_after_pooling = self.embedding_pooling(embedding, mask=text_pooling_mask)
         (
             hidden_states,
             cu_seqlens,
@@ -995,26 +973,14 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
                         torch.arange(total_pic_num, device=hidden_states.device),
                         img_seqlens
                     )
-                    gate_pooled_vision_states = self.hidden_state_pooling.forward_vectorized(
+                    pooled_vision_states = self.hidden_state_pooling.forward_vectorized(
                         hidden_states,
                         img_indices,
                         total_pic_num
                     )  # [Total_Images, Dim]
-                    router_pooled_vision_states = (
-                        self.router_hidden_state_pooling.forward_vectorized(
-                            hidden_states,
-                            img_indices,
-                            total_pic_num,
-                        )
-                    )
                     images_per_sample_tensor = torch.tensor(images_per_sample, device=hidden_states.device)
-                    expanded_gate_text_embedding = torch.repeat_interleave(
-                        gate_embedding_after_pooling,
-                        images_per_sample_tensor,
-                        dim=0
-                    )
-                    expanded_router_text_embedding = torch.repeat_interleave(
-                        router_embedding_after_pooling,
+                    expanded_text_embedding = torch.repeat_interleave(
+                        embedding_after_pooling,
                         images_per_sample_tensor,
                         dim=0
                     )
@@ -1031,16 +997,13 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
                         )
                         run_mmrl_branch = not self.raw_visual_adapter
                     else:
-                        self.alpha_list = self.Task_classifier(
-                            gate_pooled_vision_states,
-                            expanded_gate_text_embedding,
-                        )
+                        self.alpha_list = self.Task_classifier(pooled_vision_states, expanded_text_embedding)
                         if self.direct_mmrl_output:
                             self.route_probs = None
                         else:
                             self.route_probs = self.adapter_router(
-                                router_pooled_vision_states,
-                                expanded_router_text_embedding,
+                                pooled_vision_states,
+                                expanded_text_embedding,
                                 self.alpha_list,
                             ).to(dtype=hidden_states.dtype)
                         # G_list: [Total_Images, 1]

@@ -1192,11 +1192,6 @@ def build_model_and_processor(model_path, experiment_cfg=None):
                 model.model.visual.blocks[layer_num].state_dict(),
                 strict=False
             )
-    visual.reset_router_pooling_from_gate()
-    print(
-        "[ROUTER_POOLING_INIT] "
-        "registered_after_post_init=True source=gate_pooling rng_consumed=False"
-    )
     processor = processingWithMMRL.Qwen3ProcessorWithMMRL(
         image_processor=image_processor, tokenizer=tokenizer, cfg=cfg
     )
@@ -1243,7 +1238,9 @@ def set_trainable_stage(model, stage, train_cfg=None):
     if stage == 1:
         mods = [v.hidden_state_pooling, v.embedding_pooling, v.Task_classifier]
     elif stage == 3:
-        mods = [v.router_hidden_state_pooling, v.router_embedding_pooling]
+        # Match the historical Stage 3 policy: adapt both pooling coordinate
+        # systems while keeping the Stage 1 task classifier fixed.
+        mods = [v.hidden_state_pooling, v.embedding_pooling]
         if not v.raw_visual_adapter:
             mods.insert(0, model.model.MMRL)
             # v.blocks_with_rep stay frozen while the rep-token branch remains active.
@@ -1287,10 +1284,20 @@ def _build_stage3_grouped_optimizer(model, train_cfg):
     mmrl_lr = float(experiment_cfg["stage3_mmrl_learning_rate"])
     router_lr = float(experiment_cfg["stage3_router_learning_rate"])
     grouped = {"mmrl": [] , "router": []}
+    pooling_lr = experiment_cfg.get("stage3_pooling_learning_rate")
+    if pooling_lr is not None:
+        pooling_lr = float(pooling_lr)
+        grouped["pooling"] = []
     grouped.update({f"adapter_{idx}": [] for idx in range(adapter_count)})
 
     for name, param in model.named_parameters():
         if not param.requires_grad:
+            continue
+        if pooling_lr is not None and (
+            ".hidden_state_pooling." in name
+            or ".embedding_pooling." in name
+        ):
+            grouped["pooling"].append(param)
             continue
         if ".adapter_router." in name:
             grouped["router"].append(param)
@@ -1304,32 +1311,26 @@ def _build_stage3_grouped_optimizer(model, train_cfg):
         if not matched_adapter:
             grouped["mmrl"].append(param)
 
-    visual = model.model.visual
-    router_pool_param_ids = {
-        id(parameter)
-        for module in (
-            visual.router_hidden_state_pooling,
-            visual.router_embedding_pooling,
-        )
-        for parameter in module.parameters()
-    }
-    mmrl_group_param_ids = {id(parameter) for parameter in grouped["mmrl"]}
-    if not router_pool_param_ids.issubset(mmrl_group_param_ids):
-        raise RuntimeError("Decoupled router pooling must use the Stage 3 MMRL LR group")
-    gate_pool_param_ids = {
-        id(parameter)
-        for module in (visual.hidden_state_pooling, visual.embedding_pooling)
-        for parameter in module.parameters()
-    }
-    grouped_param_ids = {
-        id(parameter)
-        for parameters in grouped.values()
-        for parameter in parameters
-    }
-    if gate_pool_param_ids & grouped_param_ids:
-        raise RuntimeError("Frozen gate pooling parameters entered the Stage 3 optimizer")
+    if pooling_lr is not None:
+        visual = model.model.visual
+        expected_pooling_param_ids = {
+            id(parameter)
+            for module in (visual.hidden_state_pooling, visual.embedding_pooling)
+            for parameter in module.parameters()
+        }
+        actual_pooling_param_ids = {
+            id(parameter)
+            for parameter in grouped["pooling"]
+        }
+        if actual_pooling_param_ids != expected_pooling_param_ids:
+            raise RuntimeError(
+                "Stage 3 pooling LR group does not exactly match the shared "
+                "hidden/text pooling parameters"
+            )
 
     learning_rates = {"mmrl": mmrl_lr, "router": router_lr}
+    if pooling_lr is not None:
+        learning_rates["pooling"] = pooling_lr
     learning_rates.update({f"adapter_{idx}": lr for idx, lr in enumerate(adapter_lrs)})
     empty_groups = [name for name, params in grouped.items() if not params]
     if empty_groups:
@@ -1570,68 +1571,30 @@ def run_stage1_light(model, processor, data_cfg, train_cfg, output_dir):
 # =========================
 def run_stage3_full(model, processor, data_cfg, train_cfg, output_dir):
     stage_id = 3
-    visual = model.model.visual
-    visual.reset_router_pooling_from_gate()
-    pooling_pairs = (
-        (visual.hidden_state_pooling, visual.router_hidden_state_pooling),
-        (visual.embedding_pooling, visual.router_embedding_pooling),
-    )
-    for gate_pooling, router_pooling in pooling_pairs:
-        gate_state = gate_pooling.state_dict()
-        router_state = router_pooling.state_dict()
-        if list(gate_state) != list(router_state) or any(
-            not torch.equal(gate_state[key], router_state[key])
-            for key in gate_state
-        ):
-            raise RuntimeError("Router pooling initialization is not an exact gate copy")
-        if any(
-            gate_parameter.data_ptr() == router_parameter.data_ptr()
-            for gate_parameter, router_parameter in zip(
-                gate_pooling.parameters(),
-                router_pooling.parameters(),
-            )
-        ):
-            raise RuntimeError("Gate and router pooling unexpectedly share parameter storage")
     set_trainable_stage(model, stage_id)
-    router_pooling_modules = {
-        "router_hidden_state_pooling": visual.router_hidden_state_pooling,
-        "router_embedding_pooling": visual.router_embedding_pooling,
+    pooling_modules = {
+        "hidden_state_pooling": model.model.visual.hidden_state_pooling,
+        "embedding_pooling": model.model.visual.embedding_pooling,
     }
     unexpectedly_frozen = [
         name
-        for name, module in router_pooling_modules.items()
+        for name, module in pooling_modules.items()
         if not all(parameter.requires_grad for parameter in module.parameters())
     ]
     if unexpectedly_frozen:
         raise RuntimeError(
-            "Stage 3 must train the decoupled router pooling modules: "
+            "Stage 3 must train the historical pooling coordinate systems: "
             f"{unexpectedly_frozen}"
-        )
-    gate_pooling_modules = {
-        "hidden_state_pooling": visual.hidden_state_pooling,
-        "embedding_pooling": visual.embedding_pooling,
-    }
-    unexpectedly_trainable = [
-        name
-        for name, module in gate_pooling_modules.items()
-        if any(parameter.requires_grad for parameter in module.parameters())
-    ]
-    if unexpectedly_trainable:
-        raise RuntimeError(
-            "Stage 3 must freeze the Stage 1 gate pooling modules: "
-            f"{unexpectedly_trainable}"
         )
     classifier_trainable = any(
         parameter.requires_grad
-        for parameter in visual.Task_classifier.parameters()
+        for parameter in model.model.visual.Task_classifier.parameters()
     )
     if classifier_trainable:
         raise RuntimeError("Stage 3 must keep the Stage 1 task classifier frozen")
     print(
         "[STAGE3_TRAINABILITY] "
-        "gate_hidden_pooling=False gate_text_pooling=False "
-        "router_hidden_pooling=True router_text_pooling=True "
-        "task_classifier=False router_pooling_init=exact_gate_copy"
+        "hidden_state_pooling=True embedding_pooling=True task_classifier=False"
     )
     experiment_cfg = train_cfg.get("experiment_cfg", {}) or {}
     actual_epochs = int(train_cfg["epochs"][stage_id])

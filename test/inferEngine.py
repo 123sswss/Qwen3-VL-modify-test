@@ -63,8 +63,6 @@ class ModelInterface:
         with torch.device("cuda"):
             self.model = Qwen3VLMMRLForGen(config, self.tokenizer)
             self.model.to(torch.bfloat16)
-        visual = self.model.model.visual
-        visual.reset_router_pooling_from_gate()
 
         print(f"[2/3] 加载训练权重: {trained_model_path} ...")
         safetensors_path = os.path.join(trained_model_path, "model.safetensors")
@@ -76,21 +74,7 @@ class ModelInterface:
         else:
             raise FileNotFoundError(f"在 {trained_model_path} 中未找到权重文件")
 
-        expected_router_pooling_keys = {
-            key
-            for key in self.model.state_dict()
-            if "router_hidden_state_pooling" in key
-            or "router_embedding_pooling" in key
-        }
         msg = self.model.load_state_dict(state_dict, strict=False)
-        missing_router_pooling_keys = expected_router_pooling_keys.intersection(
-            msg.missing_keys
-        )
-        if missing_router_pooling_keys:
-            raise RuntimeError(
-                "Checkpoint does not contain the required decoupled router pooling weights: "
-                f"{sorted(missing_router_pooling_keys)}"
-            )
         print(f"    Missing keys: {msg.missing_keys}")
         print(f"    Unexpected keys: {msg.unexpected_keys}")
         self.model.eval()

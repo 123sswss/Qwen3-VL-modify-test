@@ -80,8 +80,6 @@ def inference():
     with torch.device("cuda"):
         model = Qwen3VLMMRLForGen(config, tokenizer)
         model.to(torch.bfloat16)
-    visual = model.model.visual
-    visual.reset_router_pooling_from_gate()
 
     print(f"[2/3] 加载训练权重: {TRAINED_MODEL_PATH} ...")
     
@@ -95,21 +93,7 @@ def inference():
     else:
         raise FileNotFoundError(f"在 {TRAINED_MODEL_PATH} 中未找到权重文件")
 
-    expected_router_pooling_keys = {
-        key
-        for key in model.state_dict()
-        if "router_hidden_state_pooling" in key
-        or "router_embedding_pooling" in key
-    }
     msg = model.load_state_dict(state_dict, strict=False)
-    missing_router_pooling_keys = expected_router_pooling_keys.intersection(
-        msg.missing_keys
-    )
-    if missing_router_pooling_keys:
-        raise RuntimeError(
-            "Checkpoint does not contain the required decoupled router pooling weights: "
-            f"{sorted(missing_router_pooling_keys)}"
-        )
     print(f"Missing keys: {msg.missing_keys}")
     print(f"Unexpected keys: {msg.unexpected_keys}")
     print(f"    -> 权重加载完成。")

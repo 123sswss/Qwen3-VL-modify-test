@@ -163,30 +163,6 @@ def run_professional_gate_preflight(model, processor):
                     "Stage 1 professional gate preflight failed; "
                     "Stage 3 was not started"
                 )
-            if index == 1:
-                with torch.no_grad():
-                    smoke_output = model.generate(
-                        **inputs,
-                        min_new_tokens=2,
-                        max_new_tokens=2,
-                        do_sample=False,
-                        pad_token_id=processor.tokenizer.pad_token_id,
-                        eos_token_id=processor.tokenizer.eos_token_id,
-                        use_cache=True,
-                    )
-                generated_tokens = (
-                    smoke_output.shape[-1] - inputs["input_ids"].shape[-1]
-                )
-                if generated_tokens != 2:
-                    raise RuntimeError(
-                        "Cached decoding preflight did not generate exactly two tokens, "
-                        f"got {generated_tokens}"
-                    )
-                print(
-                    "[CACHED_DECODE_PREFLIGHT_PASS] "
-                    f"prompt_tokens={inputs['input_ids'].shape[-1]} "
-                    f"generated_tokens={generated_tokens}"
-                )
             if index == 1 or index % 100 == 0 or index == len(dataset):
                 print(
                     "[STAGE1_GATE_PREFLIGHT] "

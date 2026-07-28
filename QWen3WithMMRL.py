@@ -40,6 +40,9 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
             "insert_method": _cfg_attr(config, "INSERT_METHOD", cfg.INSERT_METHOD),
             "ABLATE_VISUAL_GATE": _cfg_attr(config, "ABLATE_VISUAL_GATE", False),
             "ABLATE_DIRECT_LEARNABLE_REP": _cfg_attr(config, "ABLATE_DIRECT_LEARNABLE_REP", False),
+            "DECOUPLE_STAGE_POOLING": _cfg_attr(
+                config, "DECOUPLE_STAGE_POOLING", False
+            ),
             "VISUAL_RESIDUAL_ADAPTER_COUNT": _cfg_attr(config, "VISUAL_RESIDUAL_ADAPTER_COUNT", 4),
             "RANDOM_INIT_ADAPTER_OUTPUT_COUNT": _cfg_attr(
                 config, "RANDOM_INIT_ADAPTER_OUTPUT_COUNT", 4

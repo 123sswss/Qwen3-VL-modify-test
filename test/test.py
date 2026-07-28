@@ -318,7 +318,36 @@ def run_evaluation(json_paths, model, image_dirs=None, max_new_tokens=256, tempe
         return sum(values) / len(values) if values else None
 
     first_token_latency = timing_mean("first_token_latency_seconds")
-    subsequent_token_time = timing_mean("subsequent_token_mean_seconds")
+    generation_total_time = timing_mean("generation_total_seconds")
+    timed_generated_tokens = sum(
+        int(row.get("generated_token_count", 0))
+        for row in generation_timings
+    )
+    timed_subsequent_tokens = sum(
+        max(int(row.get("measured_token_steps", 0)) - 1, 0)
+        for row in generation_timings
+    )
+    total_subsequent_seconds = sum(
+        float(row["subsequent_token_mean_seconds"])
+        * max(int(row.get("measured_token_steps", 0)) - 1, 0)
+        for row in generation_timings
+        if row.get("subsequent_token_mean_seconds") is not None
+    )
+    subsequent_token_time = (
+        total_subsequent_seconds / timed_subsequent_tokens
+        if timed_subsequent_tokens > 0
+        else None
+    )
+    total_generation_seconds = sum(
+        float(row["generation_total_seconds"])
+        for row in generation_timings
+        if row.get("generation_total_seconds") is not None
+    )
+    overall_seconds_per_token = (
+        total_generation_seconds / timed_generated_tokens
+        if timed_generated_tokens > 0
+        else None
+    )
 
     # 汇总
     summary = {
@@ -337,8 +366,13 @@ def run_evaluation(json_paths, model, image_dirs=None, max_new_tokens=256, tempe
         "elapsed_seconds": round(elapsed, 1),
         "avg_seconds_per_question": round(elapsed / max(evaluated, 1), 2),
         "timed_generations": len(generation_timings),
+        "timed_generated_tokens": timed_generated_tokens,
+        "timed_subsequent_tokens": timed_subsequent_tokens,
         "first_token_latency_seconds": (
             round(first_token_latency, 4) if first_token_latency is not None else None
+        ),
+        "generation_mean_seconds": (
+            round(generation_total_time, 4) if generation_total_time is not None else None
         ),
         "subsequent_token_mean_seconds": (
             round(subsequent_token_time, 4) if subsequent_token_time is not None else None
@@ -346,6 +380,16 @@ def run_evaluation(json_paths, model, image_dirs=None, max_new_tokens=256, tempe
         "subsequent_tokens_per_second": (
             round(1.0 / subsequent_token_time, 2)
             if subsequent_token_time is not None and subsequent_token_time > 0
+            else None
+        ),
+        "overall_seconds_per_generated_token": (
+            round(overall_seconds_per_token, 4)
+            if overall_seconds_per_token is not None
+            else None
+        ),
+        "overall_generated_tokens_per_second": (
+            round(1.0 / overall_seconds_per_token, 2)
+            if overall_seconds_per_token is not None and overall_seconds_per_token > 0
             else None
         ),
     }
@@ -367,9 +411,17 @@ def run_evaluation(json_paths, model, image_dirs=None, max_new_tokens=256, tempe
     print(f"  平均每题:     {summary['avg_seconds_per_question']}s")
     if summary["timed_generations"]:
         print(f"  计时样本数:   {summary['timed_generations']}")
+        print(f"  生成Token数:  {summary['timed_generated_tokens']}")
+        print(f"  后续Token数:  {summary['timed_subsequent_tokens']}")
         print(f"  首Token延迟:  {summary['first_token_latency_seconds']}s")
+        print(f"  平均生成耗时: {summary['generation_mean_seconds']}s/题")
         print(f"  后续Token耗时: {summary['subsequent_token_mean_seconds']}s/token")
         print(f"  后续生成速度: {summary['subsequent_tokens_per_second']} token/s")
+        print(
+            "  含首Token速度: "
+            f"{summary['overall_seconds_per_generated_token']}s/token "
+            f"({summary['overall_generated_tokens_per_second']} token/s)"
+        )
     else:
         print("  Token生成速度: 未采集（当前模型推理接口未接入逐Token计时）")
     print(f"{'='*60}")

@@ -578,6 +578,8 @@ class Qwen3VLMMRLForStages(Qwen3VLForConditionalGeneration):
         hidden_size = config.text_config.hidden_size
         self.lm_head = nn.Linear(hidden_size, len(tokenizer), bias=False)
         self.post_init()
+        if self.model.visual.decouple_stage_pooling:
+            self.model.visual.reset_router_pooling_from_gate()
 
         # 补充 generation_config，避免 save_pretrained 时报错
         from transformers import GenerationConfig
@@ -923,6 +925,10 @@ def build_model_and_processor(model_path, experiment_cfg=None):
         "ablate_visual_gate",
         os.getenv("MMRL_ABLATE_VISUAL_GATE", "0") == "1"
     ))
+    config.DECOUPLE_STAGE_POOLING = bool(experiment_cfg.get(
+        "decouple_stage_pooling",
+        os.getenv("MMRL_DECOUPLE_STAGE_POOLING", "0") == "1",
+    ))
     config.ABLATE_DIRECT_LEARNABLE_REP = bool(experiment_cfg.get(
         "ablate_direct_learnable_rep",
         os.getenv("MMRL_ABLATE_DIRECT_LEARNABLE_REP", "0") == "1"
@@ -1060,6 +1066,12 @@ def build_model_and_processor(model_path, experiment_cfg=None):
             "RAW_VISUAL_ADAPTER config propagation failed: "
             f"requested={config.RAW_VISUAL_ADAPTER} actual={visual.raw_visual_adapter}"
         )
+    if visual.decouple_stage_pooling != config.DECOUPLE_STAGE_POOLING:
+        raise RuntimeError(
+            "DECOUPLE_STAGE_POOLING config propagation failed: "
+            f"requested={config.DECOUPLE_STAGE_POOLING} "
+            f"actual={visual.decouple_stage_pooling}"
+        )
     if visual.enable_early_mmrl_guard != config.ENABLE_EARLY_MMRL_GUARD:
         raise RuntimeError(
             "ENABLE_EARLY_MMRL_GUARD config propagation failed: "
@@ -1104,6 +1116,7 @@ def build_model_and_processor(model_path, experiment_cfg=None):
         "[MMRL_STRUCTURE_AUDIT] "
         f"direct_mmrl_output={visual.direct_mmrl_output} "
         f"raw_visual_adapter={visual.raw_visual_adapter} "
+        f"decouple_stage_pooling={visual.decouple_stage_pooling} "
         f"visual_residual_adapter_count={visual.visual_residual_adapter_count} "
         f"random_init_adapter_output_count={visual.random_init_adapter_output_count}"
     )
@@ -1197,6 +1210,7 @@ def build_model_and_processor(model_path, experiment_cfg=None):
     )
     print(
         f"ablate_visual_gate={config.ABLATE_VISUAL_GATE} "
+        f"decouple_stage_pooling={config.DECOUPLE_STAGE_POOLING} "
         f"ablate_direct_learnable_rep={config.ABLATE_DIRECT_LEARNABLE_REP} "
         f"visual_residual_adapter_count={config.VISUAL_RESIDUAL_ADAPTER_COUNT} "
         f"random_init_adapter_output_count={config.RANDOM_INIT_ADAPTER_OUTPUT_COUNT} "
@@ -1238,9 +1252,11 @@ def set_trainable_stage(model, stage, train_cfg=None):
     if stage == 1:
         mods = [v.hidden_state_pooling, v.embedding_pooling, v.Task_classifier]
     elif stage == 3:
-        # Match the historical Stage 3 policy: adapt both pooling coordinate
-        # systems while keeping the Stage 1 task classifier fixed.
-        mods = [v.hidden_state_pooling, v.embedding_pooling]
+        if v.decouple_stage_pooling:
+            mods = [v.router_hidden_state_pooling, v.router_embedding_pooling]
+        else:
+            # Historical Stage 3 adapts the same pooling modules used by Stage 1.
+            mods = [v.hidden_state_pooling, v.embedding_pooling]
         if not v.raw_visual_adapter:
             mods.insert(0, model.model.MMRL)
             # v.blocks_with_rep stay frozen while the rep-token branch remains active.
@@ -1289,14 +1305,25 @@ def _build_stage3_grouped_optimizer(model, train_cfg):
         pooling_lr = float(pooling_lr)
         grouped["pooling"] = []
     grouped.update({f"adapter_{idx}": [] for idx in range(adapter_count)})
+    visual = model.model.visual
+    active_pooling_modules = (
+        (
+            visual.router_hidden_state_pooling,
+            visual.router_embedding_pooling,
+        )
+        if visual.decouple_stage_pooling
+        else (visual.hidden_state_pooling, visual.embedding_pooling)
+    )
+    active_pooling_param_ids = {
+        id(parameter)
+        for module in active_pooling_modules
+        for parameter in module.parameters()
+    }
 
     for name, param in model.named_parameters():
         if not param.requires_grad:
             continue
-        if pooling_lr is not None and (
-            ".hidden_state_pooling." in name
-            or ".embedding_pooling." in name
-        ):
+        if pooling_lr is not None and id(param) in active_pooling_param_ids:
             grouped["pooling"].append(param)
             continue
         if ".adapter_router." in name:
@@ -1312,19 +1339,13 @@ def _build_stage3_grouped_optimizer(model, train_cfg):
             grouped["mmrl"].append(param)
 
     if pooling_lr is not None:
-        visual = model.model.visual
-        expected_pooling_param_ids = {
-            id(parameter)
-            for module in (visual.hidden_state_pooling, visual.embedding_pooling)
-            for parameter in module.parameters()
-        }
         actual_pooling_param_ids = {
             id(parameter)
             for parameter in grouped["pooling"]
         }
-        if actual_pooling_param_ids != expected_pooling_param_ids:
+        if actual_pooling_param_ids != active_pooling_param_ids:
             raise RuntimeError(
-                "Stage 3 pooling LR group does not exactly match the shared "
+                "Stage 3 pooling LR group does not exactly match the active "
                 "hidden/text pooling parameters"
             )
 
@@ -1434,34 +1455,44 @@ def run_stage1_light(model, processor, data_cfg, train_cfg, output_dir):
         save_debug_figure=train_cfg.get("save_debug_figure", False),
     )
 
-    stage1_expert_json = [
-        *data_cfg["expert_json"],
-        *data_cfg.get("stage1_only_expert_json", []),
-    ]
-    stage1_expert_img_dir = [
-        *data_cfg["expert_img_dir"],
-        *data_cfg.get("stage1_only_expert_img_dir", []),
-    ]
-    print(
-        "[STAGE1_ONLY_EXPERT_DATA] "
-        f"json={data_cfg.get('stage1_only_expert_json', [])} "
-        f"image_dirs={data_cfg.get('stage1_only_expert_img_dir', [])}"
-    )
-    ds = FourViewMMRLDataset(
-        processor=processor,
-        expert_json=stage1_expert_json,
-        expert_img_dir=stage1_expert_img_dir,
-        general_json=data_cfg["general_json"],
-        general_img_dir=data_cfg["general_img_dir"],
-        total_limit=data_cfg["total_limit"],
-        enable_views=("expert-mm", "expert-text", "general-mm", "general-text"),
-        mode=f"stage{stage_id}",
-        ce_enabled=False,
-        seed=train_cfg.get("data_sampling_seed", 42),
-        deterministic_sampling=train_cfg.get("deterministic_sampling", False),
-        classifier_prompt_only=True,
-    )
-    collator = MMRLDataCollator(processor)
+    ds = data_cfg.get("stage1_dataset")
+    if ds is not None:
+        collator = data_cfg.get("stage1_data_collator")
+        if collator is None:
+            raise ValueError("stage1_dataset requires stage1_data_collator")
+        print(
+            "[STAGE1_EXTERNAL_DATASET] "
+            f"type={type(ds).__name__} samples={len(ds)}"
+        )
+    else:
+        stage1_expert_json = [
+            *data_cfg["expert_json"],
+            *data_cfg.get("stage1_only_expert_json", []),
+        ]
+        stage1_expert_img_dir = [
+            *data_cfg["expert_img_dir"],
+            *data_cfg.get("stage1_only_expert_img_dir", []),
+        ]
+        print(
+            "[STAGE1_ONLY_EXPERT_DATA] "
+            f"json={data_cfg.get('stage1_only_expert_json', [])} "
+            f"image_dirs={data_cfg.get('stage1_only_expert_img_dir', [])}"
+        )
+        ds = FourViewMMRLDataset(
+            processor=processor,
+            expert_json=stage1_expert_json,
+            expert_img_dir=stage1_expert_img_dir,
+            general_json=data_cfg["general_json"],
+            general_img_dir=data_cfg["general_img_dir"],
+            total_limit=data_cfg["total_limit"],
+            enable_views=("expert-mm", "expert-text", "general-mm", "general-text"),
+            mode=f"stage{stage_id}",
+            ce_enabled=False,
+            seed=train_cfg.get("data_sampling_seed", 42),
+            deterministic_sampling=train_cfg.get("deterministic_sampling", False),
+            classifier_prompt_only=True,
+        )
+        collator = MMRLDataCollator(processor)
     data_generator = torch.Generator()
     data_generator.manual_seed(int(train_cfg.get("data_order_seed", 42)) + int(stage_id))
 
@@ -1571,11 +1602,34 @@ def run_stage1_light(model, processor, data_cfg, train_cfg, output_dir):
 # =========================
 def run_stage3_full(model, processor, data_cfg, train_cfg, output_dir):
     stage_id = 3
+    visual = model.model.visual
+    if visual.decouple_stage_pooling:
+        visual.reset_router_pooling_from_gate()
+        pooling_pairs = (
+            (visual.hidden_state_pooling, visual.router_hidden_state_pooling),
+            (visual.embedding_pooling, visual.router_embedding_pooling),
+        )
+        for gate_pooling, router_pooling in pooling_pairs:
+            gate_state = gate_pooling.state_dict()
+            router_state = router_pooling.state_dict()
+            if list(gate_state) != list(router_state) or any(
+                not torch.equal(gate_state[key], router_state[key])
+                for key in gate_state
+            ):
+                raise RuntimeError(
+                    "Stage 3 router pooling is not an exact Stage 1 copy"
+                )
     set_trainable_stage(model, stage_id)
-    pooling_modules = {
-        "hidden_state_pooling": model.model.visual.hidden_state_pooling,
-        "embedding_pooling": model.model.visual.embedding_pooling,
-    }
+    if visual.decouple_stage_pooling:
+        pooling_modules = {
+            "router_hidden_state_pooling": visual.router_hidden_state_pooling,
+            "router_embedding_pooling": visual.router_embedding_pooling,
+        }
+    else:
+        pooling_modules = {
+            "hidden_state_pooling": visual.hidden_state_pooling,
+            "embedding_pooling": visual.embedding_pooling,
+        }
     unexpectedly_frozen = [
         name
         for name, module in pooling_modules.items()
@@ -1583,18 +1637,25 @@ def run_stage3_full(model, processor, data_cfg, train_cfg, output_dir):
     ]
     if unexpectedly_frozen:
         raise RuntimeError(
-            "Stage 3 must train the historical pooling coordinate systems: "
+            "Stage 3 must train its active pooling coordinate systems: "
             f"{unexpectedly_frozen}"
         )
+    if visual.decouple_stage_pooling and any(
+        parameter.requires_grad
+        for module in (visual.hidden_state_pooling, visual.embedding_pooling)
+        for parameter in module.parameters()
+    ):
+        raise RuntimeError("Stage 3 must freeze the Stage 1 gate pooling modules")
     classifier_trainable = any(
         parameter.requires_grad
-        for parameter in model.model.visual.Task_classifier.parameters()
+        for parameter in visual.Task_classifier.parameters()
     )
     if classifier_trainable:
         raise RuntimeError("Stage 3 must keep the Stage 1 task classifier frozen")
     print(
         "[STAGE3_TRAINABILITY] "
-        "hidden_state_pooling=True embedding_pooling=True task_classifier=False"
+        f"decouple_stage_pooling={visual.decouple_stage_pooling} "
+        f"active_pooling={tuple(pooling_modules)} task_classifier=False"
     )
     experiment_cfg = train_cfg.get("experiment_cfg", {}) or {}
     actual_epochs = int(train_cfg["epochs"][stage_id])
@@ -1681,39 +1742,50 @@ def run_stage3_full(model, processor, data_cfg, train_cfg, output_dir):
             f"offset={data_seed_offset} effective={stage3_data_seed}"
         )
 
-    stage3_expert_json = experiment_cfg.get(
-        "stage3_expert_json",
-        data_cfg["expert_json"],
-    )
-    stage3_expert_img_dir = experiment_cfg.get(
-        "stage3_expert_img_dir",
-        data_cfg["expert_img_dir"],
-    )
-    stage3_total_limit = int(
-        experiment_cfg.get("stage3_total_limit", data_cfg["total_limit"])
-    )
-    if "stage3_expert_json" in experiment_cfg:
+    ds = data_cfg.get("stage3_dataset")
+    if ds is not None:
+        collator = data_cfg.get("data_collator")
+        if collator is None:
+            raise ValueError("stage3_dataset requires data_collator")
         print(
-            "[STAGE3_DATA_OVERRIDE] "
-            f"json={stage3_expert_json} "
-            f"image_dirs={stage3_expert_img_dir} "
-            f"total_limit={stage3_total_limit}"
+            "[STAGE3_EXTERNAL_DATASET] "
+            f"type={type(ds).__name__} samples={len(ds)}"
         )
+    else:
+        stage3_expert_json = experiment_cfg.get(
+            "stage3_expert_json",
+            data_cfg["expert_json"],
+        )
+        stage3_expert_img_dir = experiment_cfg.get(
+            "stage3_expert_img_dir",
+            data_cfg["expert_img_dir"],
+        )
+        stage3_total_limit = int(
+            experiment_cfg.get("stage3_total_limit", data_cfg["total_limit"])
+        )
+        if "stage3_expert_json" in experiment_cfg:
+            print(
+                "[STAGE3_DATA_OVERRIDE] "
+                f"json={stage3_expert_json} "
+                f"image_dirs={stage3_expert_img_dir} "
+                f"total_limit={stage3_total_limit}"
+            )
 
-    ds = FourViewMMRLDataset(
-        processor=processor,
-        expert_json=stage3_expert_json,
-        expert_img_dir=stage3_expert_img_dir,
-        general_json=data_cfg["general_json"],
-        general_img_dir=data_cfg["general_img_dir"],
-        total_limit=stage3_total_limit,
-        enable_views=stage3_views,
-        mode=f"stage{stage_id}",
-        ce_enabled=True,
-        seed=stage3_data_seed,
-        deterministic_sampling=train_cfg.get("deterministic_sampling", False),
-        assistant_turn_policy=assistant_turn_policy,
-    )
+        ds = FourViewMMRLDataset(
+            processor=processor,
+            expert_json=stage3_expert_json,
+            expert_img_dir=stage3_expert_img_dir,
+            general_json=data_cfg["general_json"],
+            general_img_dir=data_cfg["general_img_dir"],
+            total_limit=stage3_total_limit,
+            enable_views=stage3_views,
+            mode=f"stage{stage_id}",
+            ce_enabled=True,
+            seed=stage3_data_seed,
+            deterministic_sampling=train_cfg.get("deterministic_sampling", False),
+            assistant_turn_policy=assistant_turn_policy,
+        )
+        collator = MMRLDataCollator(processor)
     if use_step_schedule:
         micro_batches = math.ceil(
             len(ds) / int(train_cfg["per_device_train_batch_size"])
@@ -1732,7 +1804,6 @@ def run_stage3_full(model, processor, data_cfg, train_cfg, output_dir):
                 "Stage3 max_steps would cross the first dataset pass: "
                 f"requested={stage3_max_steps} available={available_optimizer_steps}"
             )
-    collator = MMRLDataCollator(processor)
     cb = StageScheduleCallback(
         dataset=ds,
         total_epochs=schedule_epochs,

@@ -11,6 +11,11 @@ from transformers import Qwen3VLForConditionalGeneration
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 TEST_SCRIPT = PROJECT_ROOT / "test" / "test.py"
+LORATEST_DIR = PROJECT_ROOT / "loraTest"
+if str(LORATEST_DIR) not in os.sys.path:
+    os.sys.path.insert(0, str(LORATEST_DIR))
+
+from generation_timing import generate_with_timing
 
 
 class MissingGateError(RuntimeError):
@@ -188,9 +193,11 @@ class _LiveModelInterface:
         self.model = model
         self.processor = processor
         self.last_gate_value = None
+        self.last_generation_timing = None
 
     def infer(self, image, prompt_text, max_new_tokens=256, temperature=0.0):
         self.last_gate_value = None
+        self.last_generation_timing = None
         messages = [{
             "role": "user",
             "content": [
@@ -218,13 +225,16 @@ class _LiveModelInterface:
         ).to(device)
 
         with torch.no_grad():
-            generated_ids = self.model.generate(
-                **inputs,
-                max_new_tokens=max_new_tokens,
-                do_sample=False,
-                pad_token_id=self.processor.tokenizer.pad_token_id,
-                eos_token_id=self.processor.tokenizer.eos_token_id,
-                use_cache=True,
+            generated_ids, self.last_generation_timing = generate_with_timing(
+                self.model,
+                inputs,
+                {
+                    "max_new_tokens": max_new_tokens,
+                    "do_sample": False,
+                    "pad_token_id": self.processor.tokenizer.pad_token_id,
+                    "eos_token_id": self.processor.tokenizer.eos_token_id,
+                    "use_cache": True,
+                },
             )
         gate = getattr(self.model.model.visual, "G_list", None)
         if not torch.is_tensor(gate) or gate.numel() == 0:

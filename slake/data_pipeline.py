@@ -2,11 +2,19 @@ import json
 import os
 import random
 import re
+import sys
+from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Set
 
 import torch
 from PIL import Image
 from torch.utils.data import Dataset
+
+TRAIN_DIR = Path(__file__).resolve().parents[1] / "train"
+if str(TRAIN_DIR) not in sys.path:
+    sys.path.insert(0, str(TRAIN_DIR))
+
+from data_pipeline import build_target_supervision_masks
 
 
 TASK_TYPE_VQA_ID = 1
@@ -39,9 +47,11 @@ class SLAKEDataset(Dataset):
         self,
         processor,
         image_root: str,
+        questions_path: Optional[str] = None,
         total_limit: Optional[int] = None,
         languages: Optional[Sequence[str]] = None,
         base_types: Optional[Sequence[str]] = None,
+        splits: Optional[Sequence[str]] = None,
         ce_enabled: bool = True,
         seed: int = 42,
         deterministic_sampling: bool = True,
@@ -49,9 +59,15 @@ class SLAKEDataset(Dataset):
     ):
         self.processor = processor
         self.image_root = os.path.abspath(os.fspath(image_root))
+        self.questions_path = (
+            os.path.abspath(os.fspath(questions_path))
+            if questions_path is not None
+            else None
+        )
         self.total_limit = total_limit
         self.languages = _normalize_filter(languages)
         self.base_types = _normalize_filter(base_types)
+        self.splits = _normalize_filter(splits)
         self.ce_enabled = ce_enabled
         self.seed = seed
         self.deterministic_sampling = deterministic_sampling
@@ -60,14 +76,39 @@ class SLAKEDataset(Dataset):
 
         if not os.path.isdir(self.image_root):
             raise FileNotFoundError(f"SLAKE image root does not exist: {self.image_root}")
+        if self.questions_path is not None and not os.path.isfile(self.questions_path):
+            raise FileNotFoundError(
+                f"SLAKE question manifest does not exist: {self.questions_path}"
+            )
         if total_limit is not None and total_limit < 0:
             raise ValueError("total_limit must be non-negative or None")
 
-        self.raw_samples = self._scan_samples()
+        tokenizer = self.processor.tokenizer
+        self.assistant_header_ids = tokenizer.encode(
+            "<|im_start|>assistant\n",
+            add_special_tokens=False,
+        )
+        self.assistant_label_prefix_ids = tokenizer.encode(
+            "<|im_start|>assistant",
+            add_special_tokens=False,
+        )
+        self.im_end_token_id = tokenizer.convert_tokens_to_ids("<|im_end|>")
+        if (
+            not self.assistant_header_ids
+            or not self.assistant_label_prefix_ids
+            or self.im_end_token_id is None
+        ):
+            raise RuntimeError("Failed to resolve Qwen assistant boundary tokens")
+
+        self.raw_samples = (
+            self._load_manifest_samples()
+            if self.questions_path is not None
+            else self._scan_samples()
+        )
         if not self.raw_samples:
             raise ValueError(
-                "No valid SLAKE conversations were found. Expected "
-                "image_root/xmlabN/{source.jpg,question.json}."
+                "No valid SLAKE conversations were found after applying the "
+                "manifest, language, base-type, and split filters."
             )
 
         self.data: List[Dict[str, Any]] = []
@@ -139,6 +180,81 @@ class SLAKEDataset(Dataset):
             f"skipped_by_filter={skipped_by_filter} "
             f"skipped_missing_files={skipped_missing_files} "
             f"skipped_invalid_records={skipped_invalid_records}"
+        )
+        return samples
+
+    def _load_manifest_samples(self) -> List[Dict[str, Any]]:
+        from .slake_official_eval import (
+            ImageResolver,
+            load_json,
+            normalized_language,
+            normalized_split,
+            select_records,
+            unwrap_question_records,
+        )
+
+        records = unwrap_question_records(load_json(Path(self.questions_path)))
+        selected = select_records(
+            records,
+            language="all",
+            base_types=tuple(self.base_types or ()),
+            expected_split=None,
+        )
+        resolver = ImageResolver(self.image_root)
+
+        samples = []
+        skipped_by_filter = 0
+        skipped_missing_images = 0
+        missing_split_metadata = 0
+        for record in selected:
+            language = normalized_language(record)
+            split = normalized_split(record)
+            if self.languages is not None and language not in self.languages:
+                skipped_by_filter += 1
+                continue
+            if split:
+                if self.splits is not None and split not in self.splits:
+                    skipped_by_filter += 1
+                    continue
+            else:
+                missing_split_metadata += 1
+
+            image_path = resolver.resolve(record["_slake_image_name"])
+            if image_path is None:
+                skipped_missing_images += 1
+                continue
+
+            raw_answer = record.get("answer", record.get("answers"))
+            if isinstance(raw_answer, list):
+                raw_answer = next(
+                    (value for value in raw_answer if str(value).strip()),
+                    "",
+                )
+            answer = str(raw_answer or "").strip()
+            if not answer:
+                skipped_by_filter += 1
+                continue
+
+            samples.append(
+                {
+                    "image_path": str(image_path),
+                    "question_path": self.questions_path,
+                    "record_index": len(samples),
+                    "question_id": record["question_id"],
+                    "question": record["_slake_question"],
+                    "answer": answer,
+                    "language": language,
+                    "base_type": str(record.get("base_type", "")).strip().lower(),
+                    "split": split,
+                }
+            )
+
+        print(
+            "[SLAKEDatasetManifest] "
+            f"path={self.questions_path} records={len(records)} "
+            f"selected={len(samples)} skipped_by_filter={skipped_by_filter} "
+            f"missing_images={skipped_missing_images} "
+            f"missing_split_metadata={missing_split_metadata}"
         )
         return samples
 
@@ -226,13 +342,26 @@ class SLAKEDataset(Dataset):
         if image_grid_thw.dim() == 1:
             image_grid_thw = image_grid_thw.unsqueeze(0)
 
-        labels = self._build_labels(input_ids, attention_mask)
+        if self.ce_enabled:
+            labels, mmrl_gating_mask = build_target_supervision_masks(
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                assistant_header_ids=self.assistant_header_ids,
+                assistant_label_prefix_ids=self.assistant_label_prefix_ids,
+                im_end_token_id=self.im_end_token_id,
+                target_assistant_ordinal=1,
+            )
+        else:
+            labels = torch.full_like(input_ids, -100)
+            mmrl_gating_mask = attention_mask.bool()
+
         return {
             "input_ids": input_ids,
             "attention_mask": attention_mask,
             "pixel_values": pixel_values,
             "image_grid_thw": image_grid_thw,
             "labels": labels,
+            "mmrl_gating_mask": mmrl_gating_mask,
             "alpha_labels": 1.0,
             "task_type_id": TASK_TYPE_VQA_ID,
             "task_type_name": "vqa",
@@ -241,22 +370,91 @@ class SLAKEDataset(Dataset):
             "is_mm": 1,
         }
 
-    def _build_labels(self, input_ids: torch.Tensor, attention_mask: torch.Tensor):
-        labels = input_ids.clone()
-        im_start_id = self.processor.tokenizer.convert_tokens_to_ids("<|im_start|>")
-        im_start_positions = (input_ids == im_start_id).nonzero(as_tuple=True)[0]
-        if len(im_start_positions) < 2:
-            raise ValueError(
-                "The rendered SLAKE conversation has no assistant turn marker. "
-                "Check the processor chat template."
-            )
 
-        assistant_start = im_start_positions[1].item() + 2
-        labels[:assistant_start] = -100
-        labels[attention_mask == 0] = -100
-        if not self.ce_enabled:
-            labels[:] = -100
-        return labels
+class SLAKEStage1Dataset(Dataset):
+    """Expose SLAKE questions as positive multimodal and text-only gate views."""
+
+    def __init__(self, dataset: SLAKEDataset):
+        self.dataset = dataset
+        self.processor = dataset.processor
+        # The legacy general-domain Stage 1 views are fixed at 1024 tokens.
+        self.max_length = 1024
+        self.data = [
+            (sample_index, view_type)
+            for sample_index in range(len(dataset))
+            for view_type in ("mm", "text")
+        ]
+        rng = random.Random(dataset.seed)
+        rng.shuffle(self.data)
+        print(
+            "[SLAKEStage1Dataset] "
+            f"raw_samples={len(dataset)} positive_views={len(self.data)} "
+            "views=('mm', 'text') prompt_only=True"
+        )
+
+    def __len__(self):
+        return len(self.data)
+
+    def __getitem__(self, idx):
+        sample_index, view_type = self.data[idx]
+        sample = self.dataset.data[sample_index]
+        image = None
+        if view_type == "mm":
+            with Image.open(sample["image_path"]) as source_image:
+                image = source_image.convert("RGB")
+
+        content = []
+        if image is not None:
+            content.append({"type": "image", "image": image})
+        content.append({"type": "text", "text": sample["question"]})
+        conversation = [{"role": "user", "content": content}]
+        text_inputs = self.processor.apply_chat_template(
+            conversation,
+            tokenize=False,
+            add_generation_prompt=True,
+        )
+        processor_kwargs = {
+            "text": text_inputs,
+            "padding": "max_length",
+            "max_length": self.max_length,
+            "truncation": True,
+            "return_tensors": "pt",
+        }
+        if image is not None:
+            processor_kwargs["images"] = image
+        inputs = self.processor(**processor_kwargs)
+        input_ids = inputs["input_ids"].squeeze(0)
+        attention_mask = inputs["attention_mask"].squeeze(0)
+
+        if view_type == "mm":
+            pixel_values = inputs["pixel_values"]
+            if pixel_values.dim() == 3:
+                pixel_values = pixel_values.squeeze(0)
+            image_grid_thw = inputs["image_grid_thw"]
+            if image_grid_thw.dim() == 1:
+                image_grid_thw = image_grid_thw.unsqueeze(0)
+            images_per_sample = 1
+            is_mm = 1
+        else:
+            pixel_values = None
+            image_grid_thw = None
+            images_per_sample = 0
+            is_mm = 0
+
+        return {
+            "input_ids": input_ids,
+            "attention_mask": attention_mask,
+            "pixel_values": pixel_values,
+            "image_grid_thw": image_grid_thw,
+            "labels": torch.full_like(input_ids, -100),
+            "mmrl_gating_mask": attention_mask.bool(),
+            "alpha_labels": 1.0,
+            "task_type_id": TASK_TYPE_VQA_ID,
+            "task_type_name": "vqa",
+            "source_name": "slake",
+            "images_per_sample": images_per_sample,
+            "is_mm": is_mm,
+        }
 
 
 class SLAKEDataCollator:

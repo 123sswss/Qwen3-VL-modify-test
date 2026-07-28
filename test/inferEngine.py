@@ -1,6 +1,13 @@
 import os
-import sys 
-sys.path.append("..") 
+import sys
+from pathlib import Path
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+LORATEST_DIR = PROJECT_ROOT / "loraTest"
+for module_path in (PROJECT_ROOT, LORATEST_DIR):
+    if str(module_path) not in sys.path:
+        sys.path.insert(0, str(module_path))
+
 import torch
 from PIL import Image
 from transformers import (
@@ -13,6 +20,7 @@ from transformers import (
 from safetensors.torch import load_file
 import QWen3WithMMRL
 import processingWithMMRL
+from generation_timing import generate_with_timing
 
 
 class MissingGateError(RuntimeError):
@@ -34,6 +42,8 @@ class Qwen3VLMMRLForGen(Qwen3VLForConditionalGeneration):
         if tokenizer.eos_token_id is not None:
             self.generation_config.eos_token_id = tokenizer.eos_token_id
         self.post_init()
+        if self.model.visual.decouple_stage_pooling:
+            self.model.visual.reset_router_pooling_from_gate()
 
     def get_output_embeddings(self):
         return self.lm_head
@@ -47,6 +57,7 @@ class ModelInterface:
 
     def __init__(self, trained_model_path, base_model_path):
         self.last_gate_value = None
+        self.last_generation_timing = None
         print("[1/3] 加载配置与构建模型架构...")
         self.tokenizer = AutoTokenizer.from_pretrained(base_model_path, trust_remote_code=True)
         print(f"    -> Tokenizer 词表大小: {len(self.tokenizer)}")
@@ -87,6 +98,7 @@ class ModelInterface:
     def infer(self, image: Image.Image, prompt_text: str, max_new_tokens=256, temperature=0.0, do_sample=False) -> str:
         """单次推理，返回生成文本"""
         self.last_gate_value = None
+        self.last_generation_timing = None
         messages = [
             {
                 "role": "user",
@@ -124,7 +136,11 @@ class ModelInterface:
             generate_kwargs["temperature"] = temperature
 
         with torch.no_grad():
-            generated_ids = self.model.generate(**inputs, **generate_kwargs)
+            generated_ids, self.last_generation_timing = generate_with_timing(
+                self.model,
+                inputs,
+                generate_kwargs,
+            )
             gate = getattr(self.model.model.visual, "G_list", None)
             if not torch.is_tensor(gate) or gate.numel() == 0:
                 raise MissingGateError(

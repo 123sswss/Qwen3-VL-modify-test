@@ -103,6 +103,10 @@ BASE_VISUAL_ROUTER_MODEL = {
     "adapter_effective_delta_target_high": 1.10,
     "ablate_visual_gate": False,
     "ablate_direct_learnable_rep": False,
+    # When enabled, Stage 3 trains an exact copy of the Stage 1 gate poolers.
+    "decouple_stage_pooling": os.getenv(
+        "MMRL_DECOUPLE_STAGE_POOLING", "0"
+    ) == "1",
     "diag_every_steps": 250,
 }
 

@@ -266,25 +266,6 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
         self.capacity_prior_loss = torch.tensor(0.0, device=inputs_embeds.device)
         self.top4_group_balance_loss = torch.tensor(0.0, device=inputs_embeds.device, dtype=inputs_embeds.dtype)
         self.debug_context = {}
-        base_text_mask = None
-        if torch.is_tensor(attention_mask) and attention_mask.ndim == 2:
-            base_text_mask = attention_mask.bool()
-        elif isinstance(attention_mask, dict):
-            full_attention = attention_mask.get("full_attention", None)
-            if torch.is_tensor(full_attention) and full_attention.ndim == 2:
-                base_text_mask = full_attention.bool()
-        if base_text_mask is None:
-            raise ValueError(
-                "MMRL text pooling requires a 2D attention mask or "
-                "attention_mask['full_attention']"
-            )
-        text_pooling_mask = self.build_mmrl_text_pooling_mask(
-            input_ids=input_ids,
-            attention_mask=base_text_mask.to(inputs_embeds.device),
-            mmrl_gating_mask=mmrl_gating_mask,
-            audit_context="model_forward",
-        )
-        embedding_for_gating = inputs_embeds
         
         v_r_token_list = None
         if self.use_mmrl and not self.visual.raw_visual_adapter:
@@ -292,9 +273,50 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
         visual_pos_masks = None
         deepstack_visual_embeds = None
         k_results = None
-        has_images = pixel_values is not None and image_grid_thw is not None and image_grid_thw.numel() > 0
+        is_prefill = True
+        if cache_position is not None and cache_position.numel() > 0:
+            is_prefill = bool(cache_position[0].item() == 0)
+        elif past_key_values is not None:
+            is_prefill = past_key_values.get_seq_length() == 0
+        decode_attention_mask = (
+            attention_mask.get("full_attention", None)
+            if isinstance(attention_mask, dict)
+            else attention_mask
+        )
+        if (
+            input_ids is not None
+            and torch.is_tensor(decode_attention_mask)
+            and decode_attention_mask.ndim == 2
+            and decode_attention_mask.shape != input_ids.shape
+        ):
+            is_prefill = False
+        has_images = (
+            is_prefill
+            and pixel_values is not None
+            and image_grid_thw is not None
+            and image_grid_thw.numel() > 0
+        )
         
         if has_images:
+            base_text_mask = None
+            if torch.is_tensor(attention_mask) and attention_mask.ndim == 2:
+                base_text_mask = attention_mask.bool()
+            elif isinstance(attention_mask, dict):
+                full_attention = attention_mask.get("full_attention", None)
+                if torch.is_tensor(full_attention) and full_attention.ndim == 2:
+                    base_text_mask = full_attention.bool()
+            if base_text_mask is None:
+                raise ValueError(
+                    "MMRL text pooling requires a 2D attention mask or "
+                    "attention_mask['full_attention'] during image prefill"
+                )
+            text_pooling_mask = self.build_mmrl_text_pooling_mask(
+                input_ids=input_ids,
+                attention_mask=base_text_mask.to(inputs_embeds.device),
+                mmrl_gating_mask=mmrl_gating_mask,
+                audit_context="model_forward",
+            )
+
             # 仅在有图像时计算 images_per_sample
             if images_per_sample is None:
                 images_per_sample = []
@@ -309,7 +331,7 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
                     pixel_values=pixel_values,
                     image_grid_thw=image_grid_thw,
                     v_r_token_list=v_r_token_list,
-                    embedding=embedding_for_gating,
+                    embedding=inputs_embeds,
                     images_per_sample=images_per_sample,
                     text_pooling_mask=text_pooling_mask,
                 )

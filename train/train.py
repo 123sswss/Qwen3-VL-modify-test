@@ -803,7 +803,17 @@ def main():
     if live_final_eval:
         log_path = Path(CFG["output_dir"]) / "eval" / "test.log"
         print("[FINAL-EVAL] online evaluation begin")
-        summary = run_live_epoch_evaluation(model, processor, log_path)
+        try:
+            summary = run_live_epoch_evaluation(model, processor, log_path)
+        except Exception:
+            recovery_dir = Path(CFG["output_dir"]) / "eval_failed_recovery"
+            model.save_pretrained(recovery_dir)
+            processor.save_pretrained(recovery_dir)
+            print(
+                "[FINAL-EVAL-RECOVERY] evaluation failed; trained weights saved to "
+                f"{recovery_dir}"
+            )
+            raise
         score = float(summary["score"])
         print(f"[FINAL-EVAL] score={score} completed")
 

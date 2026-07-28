@@ -130,6 +130,11 @@ prune_middle_final_dirs() {
 run_one() {
   local experiment_name="$1"
   local raw_tag="$2"
+  local decouple_stage_pooling="${MMRL_DECOUPLE_STAGE_POOLING:-0}"
+  if [ "$decouple_stage_pooling" != "0" ] && [ "$decouple_stage_pooling" != "1" ]; then
+    echo "[ERR] MMRL_DECOUPLE_STAGE_POOLING 必须为 0 或 1，当前为 '$decouple_stage_pooling'" >&2
+    return 1
+  fi
   local base_tag
   base_tag="$(with_run_suffix "$raw_tag")"
   local tag
@@ -150,12 +155,13 @@ run_one() {
   fi
   echo "[EXP] data_sampling_seed=42"
   echo "[EXP] data_order_seed=42"
+  echo "[EXP] decouple_stage_pooling=$decouple_stage_pooling"
   echo "[EXP] checkpoint目录: $output_dir"
   echo "============================================================"
 
   mkdir -p "$output_dir" "$eval_dir"
 
-  (
+  if ! (
     cd "$TRAIN_DIR"
     MMRL_OUTPUT_DIR="$output_dir" \
     MMRL_EXPERIMENT="$experiment_name" \
@@ -163,19 +169,89 @@ run_one() {
     MMRL_DATA_SAMPLING_SEED="42" \
     MMRL_DATA_ORDER_SEED="42" \
     MMRL_DETERMINISTIC_SAMPLING="1" \
+    MMRL_DECOUPLE_STAGE_POOLING="$decouple_stage_pooling" \
     MMRL_EVAL_EACH_EPOCH="0" \
     MMRL_LIVE_FINAL_EVAL="1" \
     MMRL_SAVE_EXTREMA_CHECKPOINTS="1" \
     python train.py 2>&1 | tee "$output_dir/train.log"
-  )
+  ); then
+    echo "[ERR] 实验训练或在线测评失败: $tag" >&2
+    return 1
+  fi
 
   if [ ! -f "$eval_dir/test.log" ]; then
     echo "[ERR] 训练完成后未找到在线测评日志: $eval_dir/test.log"
-    exit 1
+    return 1
   fi
 
   # 在线测评后只保留全局并列最高/最低，清理已经失去极值资格的 final。
   # prune_middle_final_dirs
+}
+
+run_slake_full_all() {
+  local data_root="${SLAKE_DATA_ROOT:-/root/autodl-tmp/dataset/slake}"
+  local model_path="${MMRL_MODEL_PATH:-/root/autodl-tmp/model}"
+  local slake_output_root="$OUTPUT_ROOT/slake"
+  local base_tag
+  base_tag="$(with_run_suffix "slake_mmrl_full_all_seed44")"
+  local tag="$base_tag"
+  local i=1
+  while [ -d "$slake_output_root/$tag" ]; do
+    tag="${base_tag}_${i}"
+    i=$((i + 1))
+  done
+  local output_dir="$slake_output_root/$tag"
+  local eval_dir="$output_dir/eval"
+
+  mkdir -p "$output_dir" "$eval_dir"
+  echo "============================================================"
+  echo "[SLAKE] 开始全量训练与官方测评: $tag"
+  echo "[SLAKE] data_root=$data_root"
+  echo "[SLAKE] language=all"
+  echo "[SLAKE] seed=44 data_seed=42"
+  echo "[SLAKE] decouple_stage_pooling=0"
+  echo "[SLAKE] output_dir=$output_dir"
+  echo "============================================================"
+
+  if ! (
+    cd "$ROOT_DIR"
+    python slake/train_mmrl.py \
+      --data-root "$data_root" \
+      --model-path "$model_path" \
+      --output-dir "$output_dir" \
+      --experiment-name "slake_mmrl_full_all_seed44" \
+      --language all \
+      --seed 44 \
+      --data-seed 42 \
+      2>&1 | tee "$output_dir/train.log"
+  ); then
+    echo "[ERR] SLAKE 全量训练失败: $tag" >&2
+    return 1
+  fi
+
+  if [ ! -d "$output_dir/final" ]; then
+    echo "[ERR] SLAKE 训练完成后未找到 checkpoint: $output_dir/final" >&2
+    return 1
+  fi
+
+  if ! (
+    cd "$ROOT_DIR"
+    python slake/slake_official_eval.py \
+      --backend mmrl \
+      --base-model "$model_path" \
+      --checkpoint "$output_dir/final" \
+      --questions "$data_root/test.json" \
+      --image-root "$data_root/imgs" \
+      --output-dir "$eval_dir" \
+      --language all \
+      --overwrite \
+      2>&1 | tee "$output_dir/eval.log"
+  ); then
+    echo "[ERR] SLAKE 官方测评失败: $tag" >&2
+    return 1
+  fi
+
+  echo "[SLAKE] 全量训练与官方测评完成: $output_dir"
 }
 
 # 重复跑 N 次同一实验；目录命名由 find_available_tag 自动处理，不会覆写
@@ -216,6 +292,7 @@ run_fixed_seed_sequence() {
 #   bash run_experiment.sh fixed_stage1_pooling_lr1e5_seed44
 #   bash run_experiment.sh fixed_stage1_global_lr_half_seed44
 #   bash run_experiment.sh fixed_stage1_mmrl_only_lr3e5_seed44
+#   bash run_experiment.sh overnight_slake_pooling_pair_seed44
 #   bash run_experiment.sh joint_cosine_1_4
 #   bash run_experiment.sh joint_cosine_44_46
 #   bash run_experiment.sh spatial_grounding_seed44
@@ -324,6 +401,34 @@ case "$RUN_TARGET" in
     run_one \
       "visual_router_fixed_stage1_mmrl_only_lr3e5_v1" \
       "visual_router_fixed_stage1_mmrl_only_lr3e5_v1_seed44"
+    ;;
+  overnight_slake_pooling_pair_seed44)
+    overnight_failures=0
+    if ! run_slake_full_all; then
+      echo "[OVERNIGHT-WARN] SLAKE 全量实验失败，继续共享 pooling 实验。" >&2
+      overnight_failures=$((overnight_failures + 1))
+    fi
+    AUTO_INCREMENT_SEED=0
+    FIXED_SEED=44
+    MMRL_DECOUPLE_STAGE_POOLING=0
+    if ! run_one \
+      "visual_router_fixed_stage1_constant_v1" \
+      "visual_router_fixed_stage1_constant_shared_pooling_seed44"; then
+      echo "[OVERNIGHT-WARN] 共享 pooling 实验失败，继续解耦 pooling 实验。" >&2
+      overnight_failures=$((overnight_failures + 1))
+    fi
+    MMRL_DECOUPLE_STAGE_POOLING=1
+    if ! run_one \
+      "visual_router_fixed_stage1_constant_v1" \
+      "visual_router_fixed_stage1_constant_decoupled_pooling_seed44"; then
+      echo "[OVERNIGHT-WARN] 解耦 pooling 实验失败。" >&2
+      overnight_failures=$((overnight_failures + 1))
+    fi
+    if [ "$overnight_failures" -ne 0 ]; then
+      echo "[OVERNIGHT-SUMMARY] 三轮均已尝试，失败数=$overnight_failures；即将按原计划自动关机。" >&2
+      exit 1
+    fi
+    echo "[OVERNIGHT-SUMMARY] 三轮实验全部成功；即将按原计划自动关机。"
     ;;
   joint_cosine_1_4)
     run_fixed_seed_sequence \
@@ -442,7 +547,7 @@ case "$RUN_TARGET" in
     run_one "visual_router_raw_adapter_v1" "visual_router_raw_adapter_v1_seed47"
     ;;
   *)
-    echo "[ERR] 未知实验目标: $RUN_TARGET（可选: relation44, relation47, heterogeneous_lr_pair, heterogeneous_relation_100_102, multiturn_relation_seed100, multiturn_relation_seed101, multiturn_relation_100_102, joint_cosine_seed100, legacy_3cdf58d_seed100, fixed_stage1_constant_seed100, fixed_stage1_lr5e5_seed100, fixed_stage1_pooling_lr1e5_seed44, fixed_stage1_global_lr_half_seed44, fixed_stage1_mmrl_only_lr3e5_seed44, joint_cosine_1_4, joint_cosine_44_46, spatial_grounding_seed44, heterogeneous_no_relation_100_102, raw_adapter47, direct_mmrl, two_adapter, single_adapter, all）" >&2
+    echo "[ERR] 未知实验目标: $RUN_TARGET（可选: relation44, relation47, heterogeneous_lr_pair, heterogeneous_relation_100_102, multiturn_relation_seed100, multiturn_relation_seed101, multiturn_relation_100_102, joint_cosine_seed100, legacy_3cdf58d_seed100, fixed_stage1_constant_seed100, fixed_stage1_lr5e5_seed100, fixed_stage1_pooling_lr1e5_seed44, fixed_stage1_global_lr_half_seed44, fixed_stage1_mmrl_only_lr3e5_seed44, overnight_slake_pooling_pair_seed44, joint_cosine_1_4, joint_cosine_44_46, spatial_grounding_seed44, heterogeneous_no_relation_100_102, raw_adapter47, direct_mmrl, two_adapter, single_adapter, all）" >&2
     exit 2
     ;;
 esac

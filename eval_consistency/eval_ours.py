@@ -77,6 +77,7 @@ REQUIRED_MMRL_CONFIG_KEYS = (
     "VISUAL_RESIDUAL_ADAPTER_COUNT",
     "RANDOM_INIT_ADAPTER_OUTPUT_COUNT",
 )
+ALLOWED_MISSING_CHECKPOINT_KEYS = {"lm_head.weight"}
 
 
 def _hydrate_nested_mmrl_config(config: Any) -> None:
@@ -162,7 +163,9 @@ def _load_sharded_checkpoint_strict(
 
     model_keys = set(model.state_dict())
     checkpoint_keys = set(weight_map)
-    missing_keys = sorted(model_keys - checkpoint_keys)
+    missing_keys = sorted(
+        model_keys - checkpoint_keys - ALLOWED_MISSING_CHECKPOINT_KEYS
+    )
     unexpected_keys = sorted(checkpoint_keys - model_keys)
     if missing_keys or unexpected_keys:
         raise RuntimeError(
@@ -227,13 +230,45 @@ def _load_sharded_checkpoint_strict(
             f"file={shard_name} tensors={len(actual_shard_keys)}"
         )
 
-    if loaded_keys != model_keys:
+    missing_after_load = (
+        model_keys - loaded_keys - ALLOWED_MISSING_CHECKPOINT_KEYS
+    )
+    unexpected_after_load = loaded_keys - model_keys
+    if missing_after_load or unexpected_after_load:
         raise RuntimeError(
             "Sharded checkpoint load did not cover the complete model: "
-            f"missing={sorted(model_keys - loaded_keys)} "
-            f"unexpected={sorted(loaded_keys - model_keys)}"
+            f"missing={sorted(missing_after_load)} "
+            f"unexpected={sorted(unexpected_after_load)}"
         )
+    allowed_missing = sorted(
+        (model_keys - loaded_keys) & ALLOWED_MISSING_CHECKPOINT_KEYS
+    )
+    print(
+        "[MMRL_CHECKPOINT_COMPAT] "
+        f"allowed_missing={allowed_missing} unexpected=[]"
+    )
     return tensor_count
+
+
+def _load_state_dict_compatible(
+    model: Qwen3VLMMRLForConsistency,
+    state_dict: Dict[str, torch.Tensor],
+) -> None:
+    result = model.load_state_dict(state_dict, strict=False)
+    disallowed_missing = sorted(
+        set(result.missing_keys) - ALLOWED_MISSING_CHECKPOINT_KEYS
+    )
+    if disallowed_missing or result.unexpected_keys:
+        raise RuntimeError(
+            "Checkpoint key mismatch: "
+            f"missing={disallowed_missing} "
+            f"unexpected={result.unexpected_keys}"
+        )
+    print(
+        "[MMRL_CHECKPOINT_COMPAT] "
+        f"allowed_missing={result.missing_keys} "
+        f"unexpected={result.unexpected_keys}"
+    )
 
 
 def _load_full_checkpoint(
@@ -247,21 +282,21 @@ def _load_full_checkpoint(
 
     if safetensors_path.is_file():
         state_dict = load_file(str(safetensors_path), device="cpu")
-        model.load_state_dict(state_dict, strict=True)
+        _load_state_dict_compatible(model, state_dict)
         tensor_count = len(state_dict)
         del state_dict
         print(
             "[MMRL_CHECKPOINT_AUDIT] "
-            f"format=safetensors tensors={tensor_count} strict=True"
+            f"format=safetensors tensors={tensor_count} strict=False"
         )
     elif pytorch_path.is_file():
         state_dict = _load_pytorch_state_dict(pytorch_path)
-        model.load_state_dict(state_dict, strict=True)
+        _load_state_dict_compatible(model, state_dict)
         tensor_count = len(state_dict)
         del state_dict
         print(
             "[MMRL_CHECKPOINT_AUDIT] "
-            f"format=pytorch tensors={tensor_count} strict=True"
+            f"format=pytorch tensors={tensor_count} strict=False"
         )
     elif safe_index.is_file() or pytorch_index.is_file():
         use_safetensors = safe_index.is_file()
@@ -276,7 +311,7 @@ def _load_full_checkpoint(
             "[MMRL_CHECKPOINT_AUDIT] "
             f"format={'sharded_safetensors' if use_safetensors else 'sharded_pytorch'} "
             f"shards={len(set(json.loads(index_path.read_text(encoding='utf-8'))['weight_map'].values()))} "
-            f"tensors={tensor_count} strict=True"
+            f"tensors={tensor_count} strict=False"
         )
     else:
         raise FileNotFoundError(

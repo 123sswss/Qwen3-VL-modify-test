@@ -533,6 +533,18 @@ EXPERIMENTS["visual_router_fixed_stage1_constant_v1"] = {
     **EXPERIMENTS["visual_router_legacy_3cdf58d_joint_cosine_v2"],
     "stage3_lr_scheduler_type": "constant_with_warmup",
 }
+EXPERIMENTS["visual_router_fixed_stage1_late_decay_v1"] = {
+    **EXPERIMENTS["visual_router_fixed_stage1_constant_v1"],
+    "stage3_max_steps": 625,
+    "stage3_warmup_steps": 63,
+    "stage3_hold_until_step": 500,
+}
+EXPERIMENTS["visual_router_fixed_stage1_late_decay_balanced_loss_v1"] = {
+    **EXPERIMENTS["visual_router_fixed_stage1_late_decay_v1"],
+    "mmrl_relation_loss_weight": 0.0125,
+    "adapter_effective_delta_loss_weight": 0.0004,
+    "adapter_effective_delta_target_low": 0.58,
+}
 EXPERIMENTS["visual_router_fixed_stage1_lr5e5_v1"] = {
     **EXPERIMENTS["visual_router_legacy_3cdf58d_joint_cosine_v2"],
     "stage1_learning_rate": 5e-5,

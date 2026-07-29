@@ -132,6 +132,7 @@ run_one() {
   local experiment_name="$1"
   local raw_tag="$2"
   local decouple_stage_pooling="${MMRL_DECOUPLE_STAGE_POOLING:-0}"
+  local intermediate_eval_steps="${MMRL_INTERMEDIATE_EVAL_STEPS:-}"
   if [ "$decouple_stage_pooling" != "0" ] && [ "$decouple_stage_pooling" != "1" ]; then
     echo "[ERR] MMRL_DECOUPLE_STAGE_POOLING 必须为 0 或 1，当前为 '$decouple_stage_pooling'" >&2
     return 1
@@ -157,6 +158,7 @@ run_one() {
   echo "[EXP] data_sampling_seed=42"
   echo "[EXP] data_order_seed=42"
   echo "[EXP] decouple_stage_pooling=$decouple_stage_pooling"
+  echo "[EXP] intermediate_eval_steps=${intermediate_eval_steps:-disabled}"
   echo "[EXP] checkpoint目录: $output_dir"
   echo "============================================================"
 
@@ -171,6 +173,7 @@ run_one() {
     MMRL_DATA_ORDER_SEED="42" \
     MMRL_DETERMINISTIC_SAMPLING="1" \
     MMRL_DECOUPLE_STAGE_POOLING="$decouple_stage_pooling" \
+    MMRL_INTERMEDIATE_EVAL_STEPS="$intermediate_eval_steps" \
     MMRL_EVAL_EACH_EPOCH="0" \
     MMRL_LIVE_FINAL_EVAL="1" \
     MMRL_SAVE_EXTREMA_CHECKPOINTS="1" \
@@ -346,6 +349,9 @@ run_fixed_seed_sequence() {
 #   bash run_experiment.sh fixed_stage1_pooling_lr1e5_seed44
 #   bash run_experiment.sh fixed_stage1_global_lr_half_seed44
 #   bash run_experiment.sh fixed_stage1_mmrl_only_lr3e5_seed44
+#   bash run_experiment.sh stage3_control_seed44
+#   bash run_experiment.sh stage3_late_decay_seed44
+#   bash run_experiment.sh stage3_late_decay_balanced_loss_seed44
 #   bash run_experiment.sh overnight_slake_pooling_pair_seed44
 #   bash run_experiment.sh joint_cosine_1_4
 #   bash run_experiment.sh joint_cosine_44_46
@@ -455,6 +461,33 @@ case "$RUN_TARGET" in
     run_one \
       "visual_router_fixed_stage1_mmrl_only_lr3e5_v1" \
       "visual_router_fixed_stage1_mmrl_only_lr3e5_v1_seed44"
+    ;;
+  stage3_control_seed44)
+    AUTO_INCREMENT_SEED=0
+    FIXED_SEED=44
+    MMRL_DECOUPLE_STAGE_POOLING=0
+    MMRL_INTERMEDIATE_EVAL_STEPS="${MMRL_INTERMEDIATE_EVAL_STEPS:-250,500}"
+    run_one \
+      "visual_router_fixed_stage1_constant_v1" \
+      "visual_router_fixed_stage1_constant_control_seed44"
+    ;;
+  stage3_late_decay_seed44)
+    AUTO_INCREMENT_SEED=0
+    FIXED_SEED=44
+    MMRL_DECOUPLE_STAGE_POOLING=0
+    MMRL_INTERMEDIATE_EVAL_STEPS="${MMRL_INTERMEDIATE_EVAL_STEPS:-250,500}"
+    run_one \
+      "visual_router_fixed_stage1_late_decay_v1" \
+      "visual_router_fixed_stage1_late_decay_seed44"
+    ;;
+  stage3_late_decay_balanced_loss_seed44)
+    AUTO_INCREMENT_SEED=0
+    FIXED_SEED=44
+    MMRL_DECOUPLE_STAGE_POOLING=0
+    MMRL_INTERMEDIATE_EVAL_STEPS="${MMRL_INTERMEDIATE_EVAL_STEPS:-250,500}"
+    run_one \
+      "visual_router_fixed_stage1_late_decay_balanced_loss_v1" \
+      "visual_router_fixed_stage1_late_decay_balanced_loss_seed44"
     ;;
   overnight_slake_pooling_pair_seed44)
     echo "[OVERNIGHT] target=$RUN_TARGET"
@@ -604,7 +637,7 @@ case "$RUN_TARGET" in
     run_one "visual_router_raw_adapter_v1" "visual_router_raw_adapter_v1_seed47"
     ;;
   *)
-    echo "[ERR] 未知实验目标: $RUN_TARGET（可选: relation44, relation47, heterogeneous_lr_pair, heterogeneous_relation_100_102, multiturn_relation_seed100, multiturn_relation_seed101, multiturn_relation_100_102, joint_cosine_seed100, legacy_3cdf58d_seed100, fixed_stage1_constant_seed100, fixed_stage1_lr5e5_seed100, fixed_stage1_pooling_lr1e5_seed44, fixed_stage1_global_lr_half_seed44, fixed_stage1_mmrl_only_lr3e5_seed44, overnight_slake_pooling_pair_seed44, joint_cosine_1_4, joint_cosine_44_46, spatial_grounding_seed44, heterogeneous_no_relation_100_102, raw_adapter47, direct_mmrl, two_adapter, single_adapter, all）" >&2
+    echo "[ERR] 未知实验目标: $RUN_TARGET（可选: relation44, relation47, heterogeneous_lr_pair, heterogeneous_relation_100_102, multiturn_relation_seed100, multiturn_relation_seed101, multiturn_relation_100_102, joint_cosine_seed100, legacy_3cdf58d_seed100, fixed_stage1_constant_seed100, fixed_stage1_lr5e5_seed100, fixed_stage1_pooling_lr1e5_seed44, fixed_stage1_global_lr_half_seed44, fixed_stage1_mmrl_only_lr3e5_seed44, stage3_control_seed44, stage3_late_decay_seed44, stage3_late_decay_balanced_loss_seed44, overnight_slake_pooling_pair_seed44, joint_cosine_1_4, joint_cosine_44_46, spatial_grounding_seed44, heterogeneous_no_relation_100_102, raw_adapter47, direct_mmrl, two_adapter, single_adapter, all）" >&2
     exit 2
     ;;
 esac

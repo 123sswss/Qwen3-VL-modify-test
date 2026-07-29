@@ -562,6 +562,47 @@ for relation_tag, relation_weight in (
             "adapter_effective_delta_target_high": 0.98,
         }
 
+FINAL_TUNING_BASE = EXPERIMENTS[
+    "visual_router_loss_matrix_r0250_d058_v1"
+]
+EXPERIMENTS["visual_router_final_mmrl_lr8e5_v1"] = {
+    **FINAL_TUNING_BASE,
+    "stage3_pooling_learning_rate": 6e-5,
+    "stage3_mmrl_learning_rate": 8e-5,
+}
+EXPERIMENTS["visual_router_final_entropy_target080_v1"] = {
+    **FINAL_TUNING_BASE,
+    "stage3_pooling_learning_rate": 6e-5,
+    "adapter_sample_entropy_target": 0.80,
+}
+
+FINAL_TUNING_EXPECTED = {
+    "visual_router_final_mmrl_lr8e5_v1": {
+        "adapter_sample_entropy_target": 0.72,
+        "stage3_mmrl_learning_rate": 8e-5,
+    },
+    "visual_router_final_entropy_target080_v1": {
+        "adapter_sample_entropy_target": 0.80,
+        "stage3_mmrl_learning_rate": 6e-5,
+    },
+}
+for expected_values in FINAL_TUNING_EXPECTED.values():
+    expected_values.update({
+        "adapter_usage_balance_loss_weight": 0.0026,
+        "adapter_sample_entropy_loss_weight": 0.020,
+        "adapter_effective_delta_loss_weight": 0.0004,
+        "adapter_effective_delta_target_low": 0.58,
+        "adapter_effective_delta_target_high": 0.98,
+        "mmrl_relation_loss_weight": 0.0250,
+        "stage3_pooling_learning_rate": 6e-5,
+        "stage3_router_learning_rate": 8e-5,
+        "stage3_adapter_learning_rates": [4e-5, 6e-5, 8e-5, 1e-4],
+        "stage3_lr_scheduler_type": "constant_with_warmup",
+        "stage3_max_steps": 625,
+        "stage3_warmup_steps": 63,
+        "stage3_hold_until_step": 500,
+    })
+
 LOSS_TUNING_3X1_BASE = EXPERIMENTS[
     "visual_router_loss_matrix_r0125_d058_v1"
 ]
@@ -860,6 +901,10 @@ CFG = {
 
 def audit_loss_tuning_config():
     expected = LOSS_TUNING_3X1_EXPECTED.get(SELECTED_EXPERIMENT)
+    audit_label = "LOSS_TUNING_3X1_AUDIT"
+    if expected is None:
+        expected = FINAL_TUNING_EXPECTED.get(SELECTED_EXPERIMENT)
+        audit_label = "FINAL_TUNING_AUDIT"
     if expected is None:
         return
 
@@ -905,7 +950,7 @@ def audit_loss_tuning_config():
     audited = " ".join(
         f"{key}={effective[key]}" for key in expected
     )
-    print(f"[LOSS_TUNING_3X1_AUDIT] {SELECTED_EXPERIMENT} {audited}")
+    print(f"[{audit_label}] {SELECTED_EXPERIMENT} {audited}")
 
 
 def main():

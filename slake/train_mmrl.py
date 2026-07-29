@@ -107,8 +107,8 @@ def build_experiment_config(args: argparse.Namespace) -> Dict[str, Any]:
         "adapter_diversity_loss_weight": 0.0,
         "adapter_sample_entropy_target": args.entropy_target,
         "adapter_common_mode_target": 0.94,
-        "adapter_effective_delta_target_low": 0.52,
-        "adapter_effective_delta_target_high": 0.98,
+        "adapter_effective_delta_target_low": args.effective_delta_target_low,
+        "adapter_effective_delta_target_high": args.effective_delta_target_high,
         "mmrl_relation_loss_weight": args.relation_weight,
         "mmrl_relation_max_tokens": 64,
         "mmrl_variance_floor_ratio": 0.50,
@@ -578,6 +578,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--entropy-weight", type=float, default=0.020)
     parser.add_argument("--entropy-target", type=float, default=0.72)
     parser.add_argument("--effective-delta-weight", type=float, default=0.0003)
+    parser.add_argument("--effective-delta-target-low", type=float, default=0.52)
+    parser.add_argument("--effective-delta-target-high", type=float, default=0.98)
     parser.add_argument("--relation-weight", type=float, default=0.010)
     parser.add_argument(
         "--scheduler",
@@ -624,6 +626,13 @@ def parse_args() -> argparse.Namespace:
         parser.error("batch size and gradient accumulation must be positive")
     if args.generation_checks < 0:
         parser.error("--generation-checks must be non-negative")
+    if args.effective_delta_target_low < 0:
+        parser.error("--effective-delta-target-low must be non-negative")
+    if args.effective_delta_target_high < args.effective_delta_target_low:
+        parser.error(
+            "--effective-delta-target-high must be greater than or equal to "
+            "--effective-delta-target-low"
+        )
     return args
 
 

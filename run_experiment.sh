@@ -193,11 +193,16 @@ run_one() {
 }
 
 run_slake_full_all() {
+  local experiment_name="${1:-slake_mmrl_full_all_seed44}"
+  local relation_weight="${2:-0.010}"
+  local effective_delta_weight="${3:-0.0003}"
+  local effective_delta_floor="${4:-0.52}"
+  local run_target_label="${5:-overnight_slake_pooling_pair_seed44}"
   local data_root="${SLAKE_DATA_ROOT:-/root/autodl-tmp/dataset/slake}"
   local model_path="${MMRL_MODEL_PATH:-/root/autodl-tmp/model}"
   local slake_output_root="$SLAKE_OUTPUT_ROOT/mmrl"
   local base_tag
-  base_tag="$(with_run_suffix "slake_mmrl_full_all_seed44")"
+  base_tag="$(with_run_suffix "$experiment_name")"
   local tag="$base_tag"
   local i=1
   while [ -d "$slake_output_root/$tag" ]; do
@@ -212,13 +217,15 @@ run_slake_full_all() {
   mkdir -p "$output_dir" "$eval_dir"
   {
     echo "status=STARTED"
-    echo "target=overnight_slake_pooling_pair_seed44"
+    echo "target=$run_target_label"
+    echo "experiment=$experiment_name"
     echo "tag=$tag"
     echo "output_dir=$output_dir"
     echo "started_at=$(date --iso-8601=seconds)"
   } > "$status_file"
   {
-    echo "target=overnight_slake_pooling_pair_seed44"
+    echo "target=$run_target_label"
+    echo "experiment=$experiment_name"
     echo "tag=$tag"
     echo "output_dir=$output_dir"
     echo "status_file=$status_file"
@@ -231,6 +238,7 @@ run_slake_full_all() {
   echo "[SLAKE] language=all"
   echo "[SLAKE] seed=44 data_seed=42"
   echo "[SLAKE] decouple_stage_pooling=0"
+  echo "[SLAKE] relation_weight=$relation_weight effective_delta_weight=$effective_delta_weight effective_delta_floor=$effective_delta_floor"
   echo "[SLAKE] output_dir=$output_dir"
   echo "============================================================"
 
@@ -240,15 +248,29 @@ run_slake_full_all() {
       --data-root "$data_root" \
       --model-path "$model_path" \
       --output-dir "$output_dir" \
-      --experiment-name "slake_mmrl_full_all_seed44" \
+      --experiment-name "$experiment_name" \
       --language all \
       --seed 44 \
       --data-seed 42 \
+      --pooling-lr 6e-5 \
+      --mmrl-lr 6e-5 \
+      --router-lr 8e-5 \
+      --adapter-lrs 4e-5 6e-5 8e-5 1e-4 \
+      --usage-weight 0.0026 \
+      --entropy-weight 0.020 \
+      --entropy-target 0.72 \
+      --effective-delta-weight "$effective_delta_weight" \
+      --effective-delta-target-low "$effective_delta_floor" \
+      --effective-delta-target-high 0.98 \
+      --relation-weight "$relation_weight" \
+      --scheduler constant_with_warmup \
+      --warmup-ratio 0.10 \
       2>&1 | tee "$output_dir/train.log"
   ); then
     {
       echo "status=TRAIN_FAILED"
-      echo "target=overnight_slake_pooling_pair_seed44"
+      echo "target=$run_target_label"
+      echo "experiment=$experiment_name"
       echo "tag=$tag"
       echo "output_dir=$output_dir"
       echo "failed_at=$(date --iso-8601=seconds)"
@@ -260,7 +282,8 @@ run_slake_full_all() {
   if [ ! -d "$output_dir/final" ]; then
     {
       echo "status=CHECKPOINT_MISSING"
-      echo "target=overnight_slake_pooling_pair_seed44"
+      echo "target=$run_target_label"
+      echo "experiment=$experiment_name"
       echo "tag=$tag"
       echo "output_dir=$output_dir"
       echo "failed_at=$(date --iso-8601=seconds)"
@@ -271,7 +294,8 @@ run_slake_full_all() {
 
   {
     echo "status=EVALUATING"
-    echo "target=overnight_slake_pooling_pair_seed44"
+    echo "target=$run_target_label"
+    echo "experiment=$experiment_name"
     echo "tag=$tag"
     echo "output_dir=$output_dir"
     echo "evaluation_started_at=$(date --iso-8601=seconds)"
@@ -292,7 +316,8 @@ run_slake_full_all() {
   ); then
     {
       echo "status=EVAL_FAILED"
-      echo "target=overnight_slake_pooling_pair_seed44"
+      echo "target=$run_target_label"
+      echo "experiment=$experiment_name"
       echo "tag=$tag"
       echo "output_dir=$output_dir"
       echo "failed_at=$(date --iso-8601=seconds)"
@@ -303,12 +328,40 @@ run_slake_full_all() {
 
   {
     echo "status=COMPLETED"
-    echo "target=overnight_slake_pooling_pair_seed44"
+    echo "target=$run_target_label"
+    echo "experiment=$experiment_name"
     echo "tag=$tag"
     echo "output_dir=$output_dir"
     echo "completed_at=$(date --iso-8601=seconds)"
   } > "$status_file"
   echo "[SLAKE] 全量训练与官方测评完成: $output_dir"
+}
+
+run_slake_r025_delta_pair() {
+  local failures=0
+  if ! run_slake_full_all \
+    "slake_mmrl_r025_d058_seed44" \
+    "0.025" \
+    "0.0004" \
+    "0.58" \
+    "slake_r025_delta_pair_seed44"; then
+    echo "[SLAKE-PAIR-WARN] r025/d058 失败，继续运行 r025/d070。" >&2
+    failures=$((failures + 1))
+  fi
+  if ! run_slake_full_all \
+    "slake_mmrl_r025_d070_seed44" \
+    "0.025" \
+    "0.0004" \
+    "0.70" \
+    "slake_r025_delta_pair_seed44"; then
+    echo "[SLAKE-PAIR-WARN] r025/d070 失败。" >&2
+    failures=$((failures + 1))
+  fi
+
+  if [ "$failures" -ne 0 ]; then
+    echo "[SLAKE-PAIR-ERR] 共 $failures 个 SLAKE 实验失败。" >&2
+    return 1
+  fi
 }
 
 # 重复跑 N 次同一实验；目录命名由 find_available_tag 自动处理，不会覆写
@@ -395,6 +448,40 @@ run_loss_tuning_3x1() {
   fi
 }
 
+run_final_three_experiments() {
+  local failures=0
+  AUTO_INCREMENT_SEED=0
+  FIXED_SEED=44
+  MMRL_INTERMEDIATE_EVAL_STEPS=""
+
+  MMRL_DECOUPLE_STAGE_POOLING=1
+  if ! run_one \
+    "visual_router_loss_matrix_r0250_d058_v1" \
+    "visual_router_final_r025_d058_decoupled_pooling_seed44"; then
+    echo "[FINAL-WARN] 解耦 pooling 实验失败，继续 MMRL LR 实验。" >&2
+    failures=$((failures + 1))
+  fi
+
+  MMRL_DECOUPLE_STAGE_POOLING=0
+  if ! run_one \
+    "visual_router_final_mmrl_lr8e5_v1" \
+    "visual_router_final_r025_d058_mmrl_lr8e5_seed44"; then
+    echo "[FINAL-WARN] MMRL LR=8e-5 实验失败，继续 entropy 实验。" >&2
+    failures=$((failures + 1))
+  fi
+  if ! run_one \
+    "visual_router_final_entropy_target080_v1" \
+    "visual_router_final_r025_d058_entropy_target080_seed44"; then
+    echo "[FINAL-WARN] entropy target=0.80 实验失败。" >&2
+    failures=$((failures + 1))
+  fi
+
+  if [ "$failures" -ne 0 ]; then
+    echo "[FINAL-ERR] 三轮收尾实验共 $failures 个失败。" >&2
+    return 1
+  fi
+}
+
 # 常用实验入口。
 #   bash run_experiment.sh relation44
 #   bash run_experiment.sh relation47
@@ -418,6 +505,8 @@ run_loss_tuning_3x1() {
 #   bash run_experiment.sh loss_tuning_half_usage_seed44
 #   bash run_experiment.sh loss_tuning_relation_r0100_seed44
 #   bash run_experiment.sh loss_tuning_3x1_seed44
+#   bash run_experiment.sh slake_r025_delta_pair_seed44
+#   bash run_experiment.sh final_three_experiments_seed44
 #   bash run_experiment.sh overnight_slake_pooling_pair_seed44
 #   bash run_experiment.sh joint_cosine_1_4
 #   bash run_experiment.sh joint_cosine_44_46
@@ -594,6 +683,12 @@ case "$RUN_TARGET" in
   loss_tuning_3x1_seed44)
     run_loss_tuning_3x1
     ;;
+  slake_r025_delta_pair_seed44)
+    run_slake_r025_delta_pair
+    ;;
+  final_three_experiments_seed44)
+    run_final_three_experiments
+    ;;
   overnight_slake_pooling_pair_seed44)
     echo "[OVERNIGHT] target=$RUN_TARGET"
     echo "[OVERNIGHT] SLAKE output root=$SLAKE_OUTPUT_ROOT/mmrl"
@@ -742,7 +837,7 @@ case "$RUN_TARGET" in
     run_one "visual_router_raw_adapter_v1" "visual_router_raw_adapter_v1_seed47"
     ;;
   *)
-    echo "[ERR] 未知实验目标: $RUN_TARGET（可选: relation44, relation47, heterogeneous_lr_pair, heterogeneous_relation_100_102, multiturn_relation_seed100, multiturn_relation_seed101, multiturn_relation_100_102, joint_cosine_seed100, legacy_3cdf58d_seed100, fixed_stage1_constant_seed100, fixed_stage1_lr5e5_seed100, fixed_stage1_pooling_lr1e5_seed44, fixed_stage1_global_lr_half_seed44, fixed_stage1_mmrl_only_lr3e5_seed44, stage3_control_seed44, stage3_late_decay_seed44, stage3_late_decay_balanced_loss_seed44, loss_matrix_r0125_seed44, loss_matrix_r0250_seed44, loss_matrix_r0500_seed44, loss_tuning_no_effective_seed44, loss_tuning_half_usage_seed44, loss_tuning_relation_r0100_seed44, loss_tuning_3x1_seed44, overnight_slake_pooling_pair_seed44, joint_cosine_1_4, joint_cosine_44_46, spatial_grounding_seed44, heterogeneous_no_relation_100_102, raw_adapter47, direct_mmrl, two_adapter, single_adapter, all）" >&2
+    echo "[ERR] 未知实验目标: $RUN_TARGET（可选: relation44, relation47, heterogeneous_lr_pair, heterogeneous_relation_100_102, multiturn_relation_seed100, multiturn_relation_seed101, multiturn_relation_100_102, joint_cosine_seed100, legacy_3cdf58d_seed100, fixed_stage1_constant_seed100, fixed_stage1_lr5e5_seed100, fixed_stage1_pooling_lr1e5_seed44, fixed_stage1_global_lr_half_seed44, fixed_stage1_mmrl_only_lr3e5_seed44, stage3_control_seed44, stage3_late_decay_seed44, stage3_late_decay_balanced_loss_seed44, loss_matrix_r0125_seed44, loss_matrix_r0250_seed44, loss_matrix_r0500_seed44, loss_tuning_no_effective_seed44, loss_tuning_half_usage_seed44, loss_tuning_relation_r0100_seed44, loss_tuning_3x1_seed44, slake_r025_delta_pair_seed44, final_three_experiments_seed44, overnight_slake_pooling_pair_seed44, joint_cosine_1_4, joint_cosine_44_46, spatial_grounding_seed44, heterogeneous_no_relation_100_102, raw_adapter47, direct_mmrl, two_adapter, single_adapter, all）" >&2
     exit 2
     ;;
 esac

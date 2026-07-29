@@ -303,6 +303,71 @@ class EpochEvaluationCallback(TrainerCallback):
         )
 
 
+def _parse_step_evaluation_steps(value):
+    if value is None:
+        return ()
+    if isinstance(value, str):
+        value = value.strip()
+        if not value:
+            return ()
+        value = value.replace(";", ",").split(",")
+    steps = []
+    for item in value:
+        step = int(str(item).strip())
+        if step <= 0:
+            raise ValueError(
+                f"intermediate evaluation steps must be positive, got {step}"
+            )
+        steps.append(step)
+    return tuple(sorted(set(steps)))
+
+
+class StepEvaluationCallback(TrainerCallback):
+    def __init__(self, processor, output_dir, stage_id, steps):
+        self.processor = processor
+        self.output_dir = output_dir
+        self.stage_id = int(stage_id)
+        self.steps = tuple(steps)
+        self.completed_steps = set()
+
+    def on_train_begin(self, args, state, control, **kwargs):
+        print(
+            f"[STEP-EVAL] stage={self.stage_id} scheduled_steps={self.steps}"
+        )
+
+    def on_step_end(self, args, state, control, **kwargs):
+        if not getattr(state, "is_world_process_zero", True):
+            return control
+        step = int(state.global_step)
+        if step not in self.steps or step in self.completed_steps:
+            return control
+
+        self.completed_steps.add(step)
+        eval_dir = os.path.join(
+            self.output_dir,
+            "eval_steps",
+            f"stage{self.stage_id}_step{step}",
+        )
+        log_path = os.path.join(eval_dir, "test.log")
+        print(
+            f"[STEP-EVAL] stage={self.stage_id} step={step} begin "
+            f"log_path={log_path}"
+        )
+        summary = run_live_epoch_evaluation(
+            kwargs["model"],
+            self.processor,
+            log_path,
+        )
+        summary_path = os.path.join(eval_dir, "summary.json")
+        with open(summary_path, "w", encoding="utf-8") as handle:
+            json.dump(summary, handle, ensure_ascii=False, indent=2, default=str)
+        print(
+            f"[STEP-EVAL] stage={self.stage_id} step={step} "
+            f"score={summary.get('score')} completed summary={summary_path}"
+        )
+        return control
+
+
 class MMRLDiagnosticsCallback(TrainerCallback):
     DEFAULT_KEEP_KEYS = {
         "ce_loss",
@@ -1876,6 +1941,21 @@ def run_stage3_full(model, processor, data_cfg, train_cfg, output_dir):
         metrics_cb,
         diag_cb,
     ]
+    intermediate_eval_steps = _parse_step_evaluation_steps(
+        experiment_cfg.get(
+            "intermediate_eval_steps",
+            os.getenv("MMRL_INTERMEDIATE_EVAL_STEPS", ""),
+        )
+    )
+    if intermediate_eval_steps:
+        callbacks.append(
+            StepEvaluationCallback(
+                processor,
+                output_dir,
+                stage_id,
+                intermediate_eval_steps,
+            )
+        )
     if train_cfg.get("eval_each_epoch", False):
         callbacks.append(EpochEvaluationCallback(
             processor,

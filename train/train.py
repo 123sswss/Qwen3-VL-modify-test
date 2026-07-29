@@ -545,6 +545,22 @@ EXPERIMENTS["visual_router_fixed_stage1_late_decay_balanced_loss_v1"] = {
     "adapter_effective_delta_loss_weight": 0.0004,
     "adapter_effective_delta_target_low": 0.58,
 }
+for relation_tag, relation_weight in (
+    ("r0125", 0.0125),
+    ("r0250", 0.0250),
+    ("r0500", 0.0500),
+):
+    for delta_tag, delta_floor in (
+        ("d058", 0.58),
+        ("d070", 0.70),
+    ):
+        EXPERIMENTS[f"visual_router_loss_matrix_{relation_tag}_{delta_tag}_v1"] = {
+            **EXPERIMENTS["visual_router_fixed_stage1_late_decay_v1"],
+            "mmrl_relation_loss_weight": relation_weight,
+            "adapter_effective_delta_loss_weight": 0.0004,
+            "adapter_effective_delta_target_low": delta_floor,
+            "adapter_effective_delta_target_high": 0.98,
+        }
 EXPERIMENTS["visual_router_fixed_stage1_lr5e5_v1"] = {
     **EXPERIMENTS["visual_router_legacy_3cdf58d_joint_cosine_v2"],
     "stage1_learning_rate": 5e-5,

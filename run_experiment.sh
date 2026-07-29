@@ -336,6 +336,33 @@ run_fixed_seed_sequence() {
   done
 }
 
+run_loss_matrix_pair() {
+  local relation_tag="$1"
+  local failures=0
+  AUTO_INCREMENT_SEED=0
+  FIXED_SEED=44
+  MMRL_DECOUPLE_STAGE_POOLING=0
+  MMRL_INTERMEDIATE_EVAL_STEPS=""
+
+  if ! run_one \
+    "visual_router_loss_matrix_${relation_tag}_d058_v1" \
+    "visual_router_loss_matrix_${relation_tag}_d058_seed44"; then
+    echo "[MATRIX-WARN] ${relation_tag}/d058 失败，继续运行 d070。" >&2
+    failures=$((failures + 1))
+  fi
+  if ! run_one \
+    "visual_router_loss_matrix_${relation_tag}_d070_v1" \
+    "visual_router_loss_matrix_${relation_tag}_d070_seed44"; then
+    echo "[MATRIX-WARN] ${relation_tag}/d070 失败。" >&2
+    failures=$((failures + 1))
+  fi
+
+  if [ "$failures" -ne 0 ]; then
+    echo "[MATRIX-ERR] ${relation_tag} 共 $failures 个实验失败。" >&2
+    return 1
+  fi
+}
+
 # 常用实验入口。
 #   bash run_experiment.sh relation44
 #   bash run_experiment.sh relation47
@@ -352,6 +379,9 @@ run_fixed_seed_sequence() {
 #   bash run_experiment.sh stage3_control_seed44
 #   bash run_experiment.sh stage3_late_decay_seed44
 #   bash run_experiment.sh stage3_late_decay_balanced_loss_seed44
+#   bash run_experiment.sh loss_matrix_r0125_seed44
+#   bash run_experiment.sh loss_matrix_r0250_seed44
+#   bash run_experiment.sh loss_matrix_r0500_seed44
 #   bash run_experiment.sh overnight_slake_pooling_pair_seed44
 #   bash run_experiment.sh joint_cosine_1_4
 #   bash run_experiment.sh joint_cosine_44_46
@@ -488,6 +518,15 @@ case "$RUN_TARGET" in
     run_one \
       "visual_router_fixed_stage1_late_decay_balanced_loss_v1" \
       "visual_router_fixed_stage1_late_decay_balanced_loss_seed44"
+    ;;
+  loss_matrix_r0125_seed44)
+    run_loss_matrix_pair "r0125"
+    ;;
+  loss_matrix_r0250_seed44)
+    run_loss_matrix_pair "r0250"
+    ;;
+  loss_matrix_r0500_seed44)
+    run_loss_matrix_pair "r0500"
     ;;
   overnight_slake_pooling_pair_seed44)
     echo "[OVERNIGHT] target=$RUN_TARGET"
@@ -637,7 +676,7 @@ case "$RUN_TARGET" in
     run_one "visual_router_raw_adapter_v1" "visual_router_raw_adapter_v1_seed47"
     ;;
   *)
-    echo "[ERR] 未知实验目标: $RUN_TARGET（可选: relation44, relation47, heterogeneous_lr_pair, heterogeneous_relation_100_102, multiturn_relation_seed100, multiturn_relation_seed101, multiturn_relation_100_102, joint_cosine_seed100, legacy_3cdf58d_seed100, fixed_stage1_constant_seed100, fixed_stage1_lr5e5_seed100, fixed_stage1_pooling_lr1e5_seed44, fixed_stage1_global_lr_half_seed44, fixed_stage1_mmrl_only_lr3e5_seed44, stage3_control_seed44, stage3_late_decay_seed44, stage3_late_decay_balanced_loss_seed44, overnight_slake_pooling_pair_seed44, joint_cosine_1_4, joint_cosine_44_46, spatial_grounding_seed44, heterogeneous_no_relation_100_102, raw_adapter47, direct_mmrl, two_adapter, single_adapter, all）" >&2
+    echo "[ERR] 未知实验目标: $RUN_TARGET（可选: relation44, relation47, heterogeneous_lr_pair, heterogeneous_relation_100_102, multiturn_relation_seed100, multiturn_relation_seed101, multiturn_relation_100_102, joint_cosine_seed100, legacy_3cdf58d_seed100, fixed_stage1_constant_seed100, fixed_stage1_lr5e5_seed100, fixed_stage1_pooling_lr1e5_seed44, fixed_stage1_global_lr_half_seed44, fixed_stage1_mmrl_only_lr3e5_seed44, stage3_control_seed44, stage3_late_decay_seed44, stage3_late_decay_balanced_loss_seed44, loss_matrix_r0125_seed44, loss_matrix_r0250_seed44, loss_matrix_r0500_seed44, overnight_slake_pooling_pair_seed44, joint_cosine_1_4, joint_cosine_44_46, spatial_grounding_seed44, heterogeneous_no_relation_100_102, raw_adapter47, direct_mmrl, two_adapter, single_adapter, all）" >&2
     exit 2
     ;;
 esac

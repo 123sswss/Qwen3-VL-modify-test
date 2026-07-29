@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import gc
+import json
 import sys
 from pathlib import Path
-from typing import Any, Tuple
+from typing import Any, Dict, Tuple
 
 import torch
 import torch.nn as nn
@@ -16,7 +17,6 @@ from transformers import (
     GenerationConfig,
     Qwen3VLForConditionalGeneration,
 )
-from transformers.modeling_utils import load_sharded_checkpoint
 
 from common import BASE_MODEL_PATH, MODEL_KWARGS, parse_args, run_experiment
 
@@ -123,6 +123,119 @@ def _apply_shared_attention_backend(config: Any) -> None:
     print(f"[MMRL_BACKEND_AUDIT] attn_implementation={implementation}")
 
 
+def _load_pytorch_state_dict(path: Path) -> Dict[str, torch.Tensor]:
+    try:
+        state_dict = torch.load(
+            path,
+            map_location="cpu",
+            weights_only=True,
+        )
+    except TypeError:
+        state_dict = torch.load(path, map_location="cpu")
+    if not isinstance(state_dict, dict):
+        raise TypeError(
+            f"PyTorch checkpoint shard must contain a state dict: {path}"
+        )
+    return state_dict
+
+
+def _load_sharded_checkpoint_strict(
+    model: Qwen3VLMMRLForConsistency,
+    checkpoint: Path,
+    index_path: Path,
+    use_safetensors: bool,
+) -> int:
+    with index_path.open("r", encoding="utf-8") as handle:
+        index = json.load(handle)
+    weight_map = index.get("weight_map")
+    if not isinstance(weight_map, dict) or not weight_map:
+        raise RuntimeError(
+            f"Checkpoint shard index has no non-empty weight_map: {index_path}"
+        )
+    if not all(
+        isinstance(key, str) and isinstance(value, str)
+        for key, value in weight_map.items()
+    ):
+        raise RuntimeError(
+            f"Checkpoint shard index contains invalid weight_map entries: {index_path}"
+        )
+
+    model_keys = set(model.state_dict())
+    checkpoint_keys = set(weight_map)
+    missing_keys = sorted(model_keys - checkpoint_keys)
+    unexpected_keys = sorted(checkpoint_keys - model_keys)
+    if missing_keys or unexpected_keys:
+        raise RuntimeError(
+            "Strict sharded checkpoint index does not match the model: "
+            f"missing={missing_keys} unexpected={unexpected_keys}"
+        )
+
+    checkpoint_root = checkpoint.resolve()
+    shard_names = sorted(set(weight_map.values()))
+    if not shard_names:
+        raise RuntimeError(f"Checkpoint shard index names no shard files: {index_path}")
+
+    tensor_count = 0
+    loaded_keys = set()
+    for shard_number, shard_name in enumerate(shard_names, start=1):
+        shard_path = (checkpoint / shard_name).resolve()
+        if shard_path.parent != checkpoint_root:
+            raise RuntimeError(
+                f"Checkpoint shard must be directly inside {checkpoint}: {shard_name}"
+            )
+        if not shard_path.is_file():
+            raise FileNotFoundError(
+                f"Checkpoint shard listed by {index_path.name} is missing: {shard_path}"
+            )
+
+        expected_shard_keys = {
+            key for key, mapped_shard in weight_map.items()
+            if mapped_shard == shard_name
+        }
+        state_dict = (
+            load_file(str(shard_path), device="cpu")
+            if use_safetensors
+            else _load_pytorch_state_dict(shard_path)
+        )
+        actual_shard_keys = set(state_dict)
+        if actual_shard_keys != expected_shard_keys:
+            raise RuntimeError(
+                f"Checkpoint shard keys do not match {index_path.name}: "
+                f"shard={shard_name} "
+                f"missing={sorted(expected_shard_keys - actual_shard_keys)} "
+                f"unexpected={sorted(actual_shard_keys - expected_shard_keys)}"
+            )
+        duplicate_keys = loaded_keys & actual_shard_keys
+        if duplicate_keys:
+            raise RuntimeError(
+                f"Checkpoint keys appear in multiple shards: {sorted(duplicate_keys)}"
+            )
+
+        incompatible = model.load_state_dict(state_dict, strict=False)
+        if incompatible.unexpected_keys:
+            raise RuntimeError(
+                "Shard load returned unexpected model keys: "
+                f"shard={shard_name} unexpected={incompatible.unexpected_keys}"
+            )
+        loaded_keys.update(actual_shard_keys)
+        tensor_count += len(state_dict)
+        del state_dict
+        gc.collect()
+        print(
+            "[MMRL_CHECKPOINT_SHARD] "
+            f"loaded={shard_number}/{len(shard_names)} "
+            f"file={shard_name} tensors={len(actual_shard_keys)}"
+        )
+
+    if loaded_keys != model_keys:
+        raise RuntimeError(
+            "Sharded checkpoint load did not cover the complete model: "
+            f"missing={sorted(model_keys - loaded_keys)} "
+            f"unexpected={sorted(loaded_keys - model_keys)}"
+        )
+    return tensor_count
+
+
 def _load_full_checkpoint(
     model: Qwen3VLMMRLForConsistency,
     checkpoint: Path,
@@ -142,14 +255,7 @@ def _load_full_checkpoint(
             f"format=safetensors tensors={tensor_count} strict=True"
         )
     elif pytorch_path.is_file():
-        try:
-            state_dict = torch.load(
-                pytorch_path,
-                map_location="cpu",
-                weights_only=True,
-            )
-        except TypeError:
-            state_dict = torch.load(pytorch_path, map_location="cpu")
+        state_dict = _load_pytorch_state_dict(pytorch_path)
         model.load_state_dict(state_dict, strict=True)
         tensor_count = len(state_dict)
         del state_dict
@@ -158,23 +264,19 @@ def _load_full_checkpoint(
             f"format=pytorch tensors={tensor_count} strict=True"
         )
     elif safe_index.is_file() or pytorch_index.is_file():
-        prefer_safe = safe_index.is_file()
-        result = load_sharded_checkpoint(
+        use_safetensors = safe_index.is_file()
+        index_path = safe_index if use_safetensors else pytorch_index
+        tensor_count = _load_sharded_checkpoint_strict(
             model,
-            str(checkpoint),
-            strict=True,
-            prefer_safe=prefer_safe,
+            checkpoint,
+            index_path,
+            use_safetensors=use_safetensors,
         )
-        if result.missing_keys or result.unexpected_keys:
-            raise RuntimeError(
-                "Strict sharded checkpoint load returned key mismatches: "
-                f"missing={result.missing_keys} "
-                f"unexpected={result.unexpected_keys}"
-            )
         print(
             "[MMRL_CHECKPOINT_AUDIT] "
-            f"format={'sharded_safetensors' if prefer_safe else 'sharded_pytorch'} "
-            "strict=True"
+            f"format={'sharded_safetensors' if use_safetensors else 'sharded_pytorch'} "
+            f"shards={len(set(json.loads(index_path.read_text(encoding='utf-8'))['weight_map'].values()))} "
+            f"tensors={tensor_count} strict=True"
         )
     else:
         raise FileNotFoundError(

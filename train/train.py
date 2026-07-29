@@ -561,6 +561,52 @@ for relation_tag, relation_weight in (
             "adapter_effective_delta_target_low": delta_floor,
             "adapter_effective_delta_target_high": 0.98,
         }
+
+LOSS_TUNING_3X1_BASE = EXPERIMENTS[
+    "visual_router_loss_matrix_r0125_d058_v1"
+]
+EXPERIMENTS["visual_router_loss_tuning_no_effective_delta_v1"] = {
+    **LOSS_TUNING_3X1_BASE,
+    "adapter_effective_delta_loss_weight": 0.0,
+}
+EXPERIMENTS["visual_router_loss_tuning_half_usage_v1"] = {
+    **LOSS_TUNING_3X1_BASE,
+    "adapter_usage_balance_loss_weight": 0.0013,
+}
+EXPERIMENTS["visual_router_loss_tuning_relation_r0100_v1"] = {
+    **LOSS_TUNING_3X1_BASE,
+    "mmrl_relation_loss_weight": 0.0100,
+}
+
+LOSS_TUNING_3X1_EXPECTED = {
+    "visual_router_loss_tuning_no_effective_delta_v1": {
+        "adapter_usage_balance_loss_weight": 0.0026,
+        "adapter_effective_delta_loss_weight": 0.0,
+        "mmrl_relation_loss_weight": 0.0125,
+    },
+    "visual_router_loss_tuning_half_usage_v1": {
+        "adapter_usage_balance_loss_weight": 0.0013,
+        "adapter_effective_delta_loss_weight": 0.0004,
+        "mmrl_relation_loss_weight": 0.0125,
+    },
+    "visual_router_loss_tuning_relation_r0100_v1": {
+        "adapter_usage_balance_loss_weight": 0.0026,
+        "adapter_effective_delta_loss_weight": 0.0004,
+        "mmrl_relation_loss_weight": 0.0100,
+    },
+}
+for expected_values in LOSS_TUNING_3X1_EXPECTED.values():
+    expected_values.update({
+        "adapter_sample_entropy_loss_weight": 0.020,
+        "adapter_sample_entropy_target": 0.72,
+        "adapter_effective_delta_target_low": 0.58,
+        "adapter_effective_delta_target_high": 0.98,
+        "stage3_lr_scheduler_type": "constant_with_warmup",
+        "stage3_max_steps": 625,
+        "stage3_warmup_steps": 63,
+        "stage3_hold_until_step": 500,
+    })
+
 EXPERIMENTS["visual_router_fixed_stage1_lr5e5_v1"] = {
     **EXPERIMENTS["visual_router_legacy_3cdf58d_joint_cosine_v2"],
     "stage1_learning_rate": 5e-5,
@@ -812,7 +858,58 @@ CFG = {
 }
 
 
+def audit_loss_tuning_config():
+    expected = LOSS_TUNING_3X1_EXPECTED.get(SELECTED_EXPERIMENT)
+    if expected is None:
+        return
+
+    effective = dict(CFG["experiment"])
+    for key in (
+        "adapter_usage_balance_loss_weight",
+        "adapter_sample_entropy_loss_weight",
+        "adapter_sample_entropy_target",
+        "adapter_effective_delta_loss_weight",
+        "adapter_effective_delta_target_low",
+        "adapter_effective_delta_target_high",
+        "mmrl_relation_loss_weight",
+    ):
+        effective[key] = CFG["train"][key]
+
+    mismatches = {}
+    for key, expected_value in expected.items():
+        actual_value = effective.get(key)
+        if isinstance(expected_value, float):
+            matches = (
+                isinstance(actual_value, (int, float))
+                and math.isclose(
+                    float(actual_value),
+                    expected_value,
+                    rel_tol=0.0,
+                    abs_tol=1e-12,
+                )
+            )
+        else:
+            matches = actual_value == expected_value
+        if not matches:
+            mismatches[key] = {
+                "expected": expected_value,
+                "actual": actual_value,
+            }
+
+    if mismatches:
+        raise RuntimeError(
+            f"Loss-tuning config audit failed for {SELECTED_EXPERIMENT}: "
+            f"{mismatches}"
+        )
+
+    audited = " ".join(
+        f"{key}={effective[key]}" for key in expected
+    )
+    print(f"[LOSS_TUNING_3X1_AUDIT] {SELECTED_EXPERIMENT} {audited}")
+
+
 def main():
+    audit_loss_tuning_config()
     seed_before_model_init(CFG["train"]["seed"])
     live_final_eval = CFG["train"].get("live_final_eval", False)
     if CFG["train"].get("eval_each_epoch", False) or live_final_eval:

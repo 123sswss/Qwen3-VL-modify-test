@@ -28,13 +28,14 @@ ROOT_DIR="/root/autodl-tmp/Qwen3-VL-modify-test"
 TRAIN_DIR="$ROOT_DIR/train"
 OUTPUT_ROOT="$ROOT_DIR/experiment_outputs"
 CHECKPOINT_ROOT="$OUTPUT_ROOT/output"
+SLAKE_OUTPUT_ROOT="${SLAKE_OUTPUT_ROOT:-$ROOT_DIR/slake/outputs}"
 SEED_STATE_FILE="${MMRL_SEED_STATE_FILE:-$OUTPUT_ROOT/next_seed.txt}"
 INITIAL_SEED="${MMRL_INITIAL_SEED:-42}"
 AUTO_INCREMENT_SEED="${MMRL_AUTO_INCREMENT_SEED:-0}"
 FIXED_SEED="${MMRL_FIXED_SEED:-44}"
 RUN_TARGET="${1:-${MMRL_RUN_TARGET:-all}}"
 
-mkdir -p "$OUTPUT_ROOT" "$CHECKPOINT_ROOT"
+mkdir -p "$OUTPUT_ROOT" "$CHECKPOINT_ROOT" "$SLAKE_OUTPUT_ROOT"
 
 RUN_SUFFIX="${MMRL_RUN_SUFFIX:-}"
 RUN_DATE="${MMRL_RUN_DATE:-$(date +%Y%m%d)}"
@@ -191,7 +192,7 @@ run_one() {
 run_slake_full_all() {
   local data_root="${SLAKE_DATA_ROOT:-/root/autodl-tmp/dataset/slake}"
   local model_path="${MMRL_MODEL_PATH:-/root/autodl-tmp/model}"
-  local slake_output_root="$OUTPUT_ROOT/slake"
+  local slake_output_root="$SLAKE_OUTPUT_ROOT/mmrl"
   local base_tag
   base_tag="$(with_run_suffix "slake_mmrl_full_all_seed44")"
   local tag="$base_tag"
@@ -202,8 +203,25 @@ run_slake_full_all() {
   done
   local output_dir="$slake_output_root/$tag"
   local eval_dir="$output_dir/eval"
+  local status_file="$output_dir/run_status.txt"
+  local latest_pointer="$SLAKE_OUTPUT_ROOT/last_overnight_run.txt"
 
   mkdir -p "$output_dir" "$eval_dir"
+  {
+    echo "status=STARTED"
+    echo "target=overnight_slake_pooling_pair_seed44"
+    echo "tag=$tag"
+    echo "output_dir=$output_dir"
+    echo "started_at=$(date --iso-8601=seconds)"
+  } > "$status_file"
+  {
+    echo "target=overnight_slake_pooling_pair_seed44"
+    echo "tag=$tag"
+    echo "output_dir=$output_dir"
+    echo "status_file=$status_file"
+    echo "train_log=$output_dir/train.log"
+    echo "eval_log=$output_dir/eval.log"
+  } > "$latest_pointer"
   echo "============================================================"
   echo "[SLAKE] 开始全量训练与官方测评: $tag"
   echo "[SLAKE] data_root=$data_root"
@@ -225,14 +243,36 @@ run_slake_full_all() {
       --data-seed 42 \
       2>&1 | tee "$output_dir/train.log"
   ); then
+    {
+      echo "status=TRAIN_FAILED"
+      echo "target=overnight_slake_pooling_pair_seed44"
+      echo "tag=$tag"
+      echo "output_dir=$output_dir"
+      echo "failed_at=$(date --iso-8601=seconds)"
+    } > "$status_file"
     echo "[ERR] SLAKE 全量训练失败: $tag" >&2
     return 1
   fi
 
   if [ ! -d "$output_dir/final" ]; then
+    {
+      echo "status=CHECKPOINT_MISSING"
+      echo "target=overnight_slake_pooling_pair_seed44"
+      echo "tag=$tag"
+      echo "output_dir=$output_dir"
+      echo "failed_at=$(date --iso-8601=seconds)"
+    } > "$status_file"
     echo "[ERR] SLAKE 训练完成后未找到 checkpoint: $output_dir/final" >&2
     return 1
   fi
+
+  {
+    echo "status=EVALUATING"
+    echo "target=overnight_slake_pooling_pair_seed44"
+    echo "tag=$tag"
+    echo "output_dir=$output_dir"
+    echo "evaluation_started_at=$(date --iso-8601=seconds)"
+  } > "$status_file"
 
   if ! (
     cd "$ROOT_DIR"
@@ -247,10 +287,24 @@ run_slake_full_all() {
       --overwrite \
       2>&1 | tee "$output_dir/eval.log"
   ); then
+    {
+      echo "status=EVAL_FAILED"
+      echo "target=overnight_slake_pooling_pair_seed44"
+      echo "tag=$tag"
+      echo "output_dir=$output_dir"
+      echo "failed_at=$(date --iso-8601=seconds)"
+    } > "$status_file"
     echo "[ERR] SLAKE 官方测评失败: $tag" >&2
     return 1
   fi
 
+  {
+    echo "status=COMPLETED"
+    echo "target=overnight_slake_pooling_pair_seed44"
+    echo "tag=$tag"
+    echo "output_dir=$output_dir"
+    echo "completed_at=$(date --iso-8601=seconds)"
+  } > "$status_file"
   echo "[SLAKE] 全量训练与官方测评完成: $output_dir"
 }
 
@@ -403,6 +457,9 @@ case "$RUN_TARGET" in
       "visual_router_fixed_stage1_mmrl_only_lr3e5_v1_seed44"
     ;;
   overnight_slake_pooling_pair_seed44)
+    echo "[OVERNIGHT] target=$RUN_TARGET"
+    echo "[OVERNIGHT] SLAKE output root=$SLAKE_OUTPUT_ROOT/mmrl"
+    echo "[OVERNIGHT] latest run pointer=$SLAKE_OUTPUT_ROOT/last_overnight_run.txt"
     overnight_failures=0
     if ! run_slake_full_all; then
       echo "[OVERNIGHT-WARN] SLAKE 全量实验失败，继续共享 pooling 实验。" >&2

@@ -55,26 +55,45 @@ SEED = 44
 DATA_SEED = 42
 MAX_LENGTH = 2048
 VISION_LAYER_COUNT = 24
+LANGUAGE_LAYER_COUNT = 36
 LAST_LAYER_COUNT = 8
-RANK = 32
-LORA_ALPHA = 64
 LORA_DROPOUT = 0.05
 
 EXPERIMENTS: Dict[str, Dict[str, Any]] = {
     "lora_visual_all_attention_r32": {
         "method": "lora",
+        "target_scope": "visual",
         "last_n_layers": None,
+        "rank": 32,
         "use_dora": False,
     },
     "lora_visual_last8_attention_r32": {
         "method": "lora",
+        "target_scope": "visual",
         "last_n_layers": LAST_LAYER_COUNT,
+        "rank": 32,
         "use_dora": False,
     },
     "dora_visual_all_attention_r32": {
         "method": "dora",
+        "target_scope": "visual",
         "last_n_layers": None,
+        "rank": 32,
         "use_dora": True,
+    },
+    "lora_visual_all_attention_r64": {
+        "method": "lora",
+        "target_scope": "visual",
+        "last_n_layers": None,
+        "rank": 64,
+        "use_dora": False,
+    },
+    "lora_full_model_attention_r16": {
+        "method": "lora",
+        "target_scope": "full_model",
+        "last_n_layers": None,
+        "rank": 16,
+        "use_dora": False,
     },
 }
 
@@ -239,6 +258,62 @@ def find_visual_attention_targets(
     return targets, selected_layers
 
 
+def extract_language_layer_index(module_name: str) -> int | None:
+    match = re.search(
+        r"(?:^|\.)language_model\.layers\.(\d+)(?:\.|$)",
+        module_name.lower(),
+    )
+    return int(match.group(1)) if match else None
+
+
+def find_language_attention_targets(
+    model: nn.Module,
+) -> tuple[List[str], List[int]]:
+    targets = []
+    target_layer_counts: Counter[int] = Counter()
+    for name, module in model.named_modules():
+        if not isinstance(module, nn.Linear):
+            continue
+        layer_index = extract_language_layer_index(name)
+        if layer_index is None:
+            continue
+        lowered = name.lower()
+        if "self_attn" not in lowered:
+            continue
+        if not lowered.endswith(("q_proj", "k_proj", "v_proj", "o_proj")):
+            continue
+        targets.append(name)
+        target_layer_counts[layer_index] += 1
+
+    layer_indexes = sorted(target_layer_counts)
+    expected_layers = list(range(LANGUAGE_LAYER_COUNT))
+    if layer_indexes != expected_layers:
+        raise RuntimeError(
+            "Unexpected Qwen3-VL language layer layout: "
+            f"expected={expected_layers} actual={layer_indexes}"
+        )
+    expected_target_count = LANGUAGE_LAYER_COUNT * 4
+    if len(targets) != expected_target_count:
+        raise RuntimeError(
+            "Language attention target audit failed: "
+            f"expected_targets={expected_target_count} actual_targets={len(targets)} "
+            f"per_layer={dict(target_layer_counts)}"
+        )
+    if any(target_layer_counts[index] != 4 for index in expected_layers):
+        raise RuntimeError(
+            "Each language layer must expose exactly q/k/v/o attention targets; "
+            f"per_layer={dict(target_layer_counts)}"
+        )
+
+    print(
+        "[SLAKE_PEFT_LANGUAGE_TARGET_AUDIT] "
+        f"selected_layers_0based={layer_indexes} target_count={len(targets)}"
+    )
+    for name in targets:
+        print(f"  - {name}")
+    return targets, layer_indexes
+
+
 def build_dataset(processor: Any) -> SLAKEDataset:
     dataset = SLAKEDataset(
         processor=processor,
@@ -289,19 +364,44 @@ def main() -> int:
 
     seed_everything(SEED)
     model, processor = load_model_and_processor()
-    target_modules, selected_layers = find_visual_attention_targets(
+    visual_targets, selected_vision_layers = find_visual_attention_targets(
         model,
         experiment["last_n_layers"],
     )
+    language_targets: List[str] = []
+    selected_language_layers: List[int] = []
+    if experiment["target_scope"] == "full_model":
+        language_targets, selected_language_layers = (
+            find_language_attention_targets(model)
+        )
+    target_modules = visual_targets + language_targets
+    if len(target_modules) != len(set(target_modules)):
+        raise RuntimeError("Duplicate PEFT target modules detected")
+    expected_total = (
+        192 if experiment["target_scope"] == "full_model" else len(visual_targets)
+    )
+    if len(target_modules) != expected_total:
+        raise RuntimeError(
+            "Combined PEFT target audit failed: "
+            f"scope={experiment['target_scope']} expected={expected_total} "
+            f"actual={len(target_modules)}"
+        )
+    print(
+        "[SLAKE_PEFT_COMBINED_TARGET_AUDIT] "
+        f"scope={experiment['target_scope']} visual={len(visual_targets)} "
+        f"language={len(language_targets)} total={len(target_modules)}"
+    )
     dataset = build_dataset(processor)
 
+    rank = int(experiment["rank"])
+    lora_alpha = rank * 2
     for parameter in model.parameters():
         parameter.requires_grad = False
     model.config.use_cache = False
     peft_config = LoraConfig(
         task_type=TaskType.CAUSAL_LM,
-        r=RANK,
-        lora_alpha=LORA_ALPHA,
+        r=rank,
+        lora_alpha=lora_alpha,
         lora_dropout=LORA_DROPOUT,
         bias="none",
         target_modules=target_modules,
@@ -316,7 +416,8 @@ def main() -> int:
     print(
         "[SLAKE_PEFT_CONFIG] "
         f"experiment={args.experiment} method={experiment['method']} "
-        f"rank={RANK} alpha={LORA_ALPHA} dropout={LORA_DROPOUT} "
+        f"target_scope={experiment['target_scope']} "
+        f"rank={rank} alpha={lora_alpha} dropout={LORA_DROPOUT} "
         f"use_dora={experiment['use_dora']} trainable={parameter_counts['trainable']} "
         f"total={parameter_counts['total']} "
         f"ratio={parameter_counts['trainable_ratio']:.6%}"
@@ -361,11 +462,13 @@ def main() -> int:
         "status": "pass",
         "experiment": args.experiment,
         "method": experiment["method"],
+        "target_scope": experiment["target_scope"],
         "use_dora": experiment["use_dora"],
-        "rank": RANK,
-        "alpha": LORA_ALPHA,
+        "rank": rank,
+        "alpha": lora_alpha,
         "dropout": LORA_DROPOUT,
-        "selected_layers_0based": selected_layers,
+        "selected_vision_layers_0based": selected_vision_layers,
+        "selected_language_layers_0based": selected_language_layers,
         "target_modules": target_modules,
         "parameter_counts": parameter_counts,
         "dataset_samples": len(dataset),

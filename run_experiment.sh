@@ -712,6 +712,72 @@ run_paper_ablation_222_part_seed44() {
   fi
 }
 
+run_stability_r0125_d058_cross_part() {
+  local part="$1"
+  local failures=0
+  AUTO_INCREMENT_SEED=0
+  MMRL_DECOUPLE_STAGE_POOLING=0
+  MMRL_INTERMEDIATE_EVAL_STEPS=""
+
+  case "$part" in
+    1)
+      FIXED_SEED=44
+      if ! run_one \
+        "visual_router_stability_r0125_d058_heterogeneous_v1" \
+        "visual_router_stability_r0125_d058_heterogeneous_seed44_repeat_a"; then
+        echo "[STABILITY-PART1-WARN] 异构 LR seed44-A 失败，继续同质 LR seed44-B。" >&2
+        failures=$((failures + 1))
+      fi
+      FIXED_SEED=44
+      if ! run_one \
+        "visual_router_stability_r0125_d058_homogeneous_v1" \
+        "visual_router_stability_r0125_d058_homogeneous_seed44_repeat_b"; then
+        echo "[STABILITY-PART1-WARN] 同质 LR seed44-B 失败，继续异构 LR seed45。" >&2
+        failures=$((failures + 1))
+      fi
+      FIXED_SEED=45
+      if ! run_one \
+        "visual_router_stability_r0125_d058_heterogeneous_v1" \
+        "visual_router_stability_r0125_d058_heterogeneous_seed45"; then
+        echo "[STABILITY-PART1-WARN] 异构 LR seed45 失败。" >&2
+        failures=$((failures + 1))
+      fi
+      ;;
+    2)
+      FIXED_SEED=44
+      if ! run_one \
+        "visual_router_stability_r0125_d058_homogeneous_v1" \
+        "visual_router_stability_r0125_d058_homogeneous_seed44_repeat_a"; then
+        echo "[STABILITY-PART2-WARN] 同质 LR seed44-A 失败，继续异构 LR seed44-B。" >&2
+        failures=$((failures + 1))
+      fi
+      FIXED_SEED=44
+      if ! run_one \
+        "visual_router_stability_r0125_d058_heterogeneous_v1" \
+        "visual_router_stability_r0125_d058_heterogeneous_seed44_repeat_b"; then
+        echo "[STABILITY-PART2-WARN] 异构 LR seed44-B 失败，继续同质 LR seed45。" >&2
+        failures=$((failures + 1))
+      fi
+      FIXED_SEED=45
+      if ! run_one \
+        "visual_router_stability_r0125_d058_homogeneous_v1" \
+        "visual_router_stability_r0125_d058_homogeneous_seed45"; then
+        echo "[STABILITY-PART2-WARN] 同质 LR seed45 失败。" >&2
+        failures=$((failures + 1))
+      fi
+      ;;
+    *)
+      echo "[STABILITY-ERR] 未知分组: $part" >&2
+      return 2
+      ;;
+  esac
+
+  echo "[STABILITY-PART${part}-SUMMARY] 三轮均已尝试，失败数=$failures。"
+  if [ "$failures" -ne 0 ]; then
+    return 1
+  fi
+}
+
 # 常用实验入口。
 #   bash run_experiment.sh relation44
 #   bash run_experiment.sh relation47
@@ -747,6 +813,8 @@ run_paper_ablation_222_part_seed44() {
 #   bash run_experiment.sh paper_ablation_222_seed44_part1
 #   bash run_experiment.sh paper_ablation_222_seed44_part2
 #   bash run_experiment.sh paper_ablation_222_seed44_part3
+#   bash run_experiment.sh stability_r0125_d058_cross_part1
+#   bash run_experiment.sh stability_r0125_d058_cross_part2
 #   bash run_experiment.sh overnight_slake_pooling_pair_seed44
 #   bash run_experiment.sh joint_cosine_1_4
 #   bash run_experiment.sh joint_cosine_44_46
@@ -958,6 +1026,12 @@ case "$RUN_TARGET" in
     ;;
   paper_ablation_222_seed44_part3)
     run_paper_ablation_222_part_seed44 3
+    ;;
+  stability_r0125_d058_cross_part1)
+    run_stability_r0125_d058_cross_part 1
+    ;;
+  stability_r0125_d058_cross_part2)
+    run_stability_r0125_d058_cross_part 2
     ;;
   overnight_slake_pooling_pair_seed44)
     echo "[OVERNIGHT] target=$RUN_TARGET"

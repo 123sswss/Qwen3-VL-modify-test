@@ -545,8 +545,8 @@ run_paper_ablation_seed44() {
   MMRL_INTERMEDIATE_EVAL_STEPS=""
 
   if ! run_one \
-    "visual_router_ablation_full_r025_d058_v1" \
-    "visual_router_ablation_full_r025_d058_seed44"; then
+    "visual_router_ablation_full_r0125_d070_v1" \
+    "visual_router_ablation_full_r0125_d070_seed44"; then
     echo "[ABLATION-WARN] Full FROST-VL 复现失败，继续 w/o Rep-Token Branch。" >&2
     failures=$((failures + 1))
   fi
@@ -590,10 +590,18 @@ run_paper_ablation_part_seed44() {
   MMRL_INTERMEDIATE_EVAL_STEPS=""
 
   case "$part" in
+    1-fast)
+      if ! run_one \
+        "visual_router_ablation_wo_rep_token_v1" \
+        "visual_router_ablation_wo_rep_token_seed44"; then
+        echo "[ABLATION-PART1-FAST-WARN] w/o Rep-Token Branch 失败。" >&2
+        failures=$((failures + 1))
+      fi
+      ;;
     1)
       if ! run_one \
-        "visual_router_ablation_full_r025_d058_v1" \
-        "visual_router_ablation_full_r025_d058_seed44"; then
+        "visual_router_ablation_full_r0125_d070_v1" \
+        "visual_router_ablation_full_r0125_d070_seed44"; then
         echo "[ABLATION-PART1-WARN] Full FROST-VL 复现失败，继续 w/o Rep-Token Branch。" >&2
         failures=$((failures + 1))
       fi
@@ -638,6 +646,72 @@ run_paper_ablation_part_seed44() {
   fi
 }
 
+run_paper_ablation_222_part_seed44() {
+  local part="$1"
+  local failures=0
+  AUTO_INCREMENT_SEED=0
+  FIXED_SEED=44
+  MMRL_DECOUPLE_STAGE_POOLING=0
+  MMRL_INTERMEDIATE_EVAL_STEPS=""
+
+  case "$part" in
+    1)
+      if ! run_one \
+        "visual_router_ablation_wo_rep_token_v1" \
+        "visual_router_ablation_wo_rep_token_r0125_d070_seed44"; then
+        echo "[ABLATION-222-PART1-WARN] w/o Rep-Token Branch 失败，继续 Single Adapter。" >&2
+        failures=$((failures + 1))
+      fi
+      if ! run_one \
+        "visual_router_ablation_single_adapter_v1" \
+        "visual_router_ablation_single_adapter_r0125_d070_seed44"; then
+        echo "[ABLATION-222-PART1-WARN] Single Adapter 失败。" >&2
+        failures=$((failures + 1))
+      fi
+      ;;
+    2)
+      if ! run_one \
+        "visual_router_ablation_homogeneous_adapter_lr_v1" \
+        "visual_router_ablation_homogeneous_adapter_lr_r0125_d070_seed44"; then
+        echo "[ABLATION-222-PART2-WARN] Homogeneous Adapter LR 失败，继续 w/o Relation Loss。" >&2
+        failures=$((failures + 1))
+      fi
+      if ! run_one \
+        "visual_router_ablation_no_relation_v1" \
+        "visual_router_ablation_no_relation_r0125_d070_seed44"; then
+        echo "[ABLATION-222-PART2-WARN] w/o Relation Loss 失败。" >&2
+        failures=$((failures + 1))
+      fi
+      ;;
+    3)
+      if ! run_one \
+        "visual_router_ablation_full_r0125_d070_v1" \
+        "visual_router_ablation_full_r0125_d070_seed44_repro"; then
+        echo "[ABLATION-222-PART3-WARN] 自有数据集63分配置复现失败，继续SLAKE 65分配置复现。" >&2
+        failures=$((failures + 1))
+      fi
+      if ! run_slake_full_all \
+        "slake_mmrl_r025_d058_seed44_paper_repro" \
+        "0.025" \
+        "0.0004" \
+        "0.58" \
+        "paper_ablation_222_part3_seed44"; then
+        echo "[ABLATION-222-PART3-WARN] SLAKE r025/d058复现失败。" >&2
+        failures=$((failures + 1))
+      fi
+      ;;
+    *)
+      echo "[ABLATION-222-ERR] 未知分组: $part" >&2
+      return 2
+      ;;
+  esac
+
+  echo "[ABLATION-222-PART${part}-SUMMARY] 本组两轮均已尝试，失败数=$failures。"
+  if [ "$failures" -ne 0 ]; then
+    return 1
+  fi
+}
+
 # 常用实验入口。
 #   bash run_experiment.sh relation44
 #   bash run_experiment.sh relation47
@@ -667,8 +741,12 @@ run_paper_ablation_part_seed44() {
 #   bash run_experiment.sh custom_optimizer_adapter_sweep_seed44
 #   bash run_experiment.sh paper_ablation_seed44
 #   bash run_experiment.sh paper_ablation_seed44_part1
+#   bash run_experiment.sh paper_ablation_seed44_wo_rep_only
 #   bash run_experiment.sh paper_ablation_seed44_part2
 #   bash run_experiment.sh paper_ablation_seed44_part3
+#   bash run_experiment.sh paper_ablation_222_seed44_part1
+#   bash run_experiment.sh paper_ablation_222_seed44_part2
+#   bash run_experiment.sh paper_ablation_222_seed44_part3
 #   bash run_experiment.sh overnight_slake_pooling_pair_seed44
 #   bash run_experiment.sh joint_cosine_1_4
 #   bash run_experiment.sh joint_cosine_44_46
@@ -863,11 +941,23 @@ case "$RUN_TARGET" in
   paper_ablation_seed44_part1)
     run_paper_ablation_part_seed44 1
     ;;
+  paper_ablation_seed44_wo_rep_only)
+    run_paper_ablation_part_seed44 1-fast
+    ;;
   paper_ablation_seed44_part2)
     run_paper_ablation_part_seed44 2
     ;;
   paper_ablation_seed44_part3)
     run_paper_ablation_part_seed44 3
+    ;;
+  paper_ablation_222_seed44_part1)
+    run_paper_ablation_222_part_seed44 1
+    ;;
+  paper_ablation_222_seed44_part2)
+    run_paper_ablation_222_part_seed44 2
+    ;;
+  paper_ablation_222_seed44_part3)
+    run_paper_ablation_222_part_seed44 3
     ;;
   overnight_slake_pooling_pair_seed44)
     echo "[OVERNIGHT] target=$RUN_TARGET"
@@ -1017,7 +1107,7 @@ case "$RUN_TARGET" in
     run_one "visual_router_raw_adapter_v1" "visual_router_raw_adapter_v1_seed47"
     ;;
   *)
-    echo "[ERR] 未知实验目标: $RUN_TARGET（可选: relation44, relation47, heterogeneous_lr_pair, heterogeneous_relation_100_102, multiturn_relation_seed100, multiturn_relation_seed101, multiturn_relation_100_102, joint_cosine_seed100, legacy_3cdf58d_seed100, fixed_stage1_constant_seed100, fixed_stage1_lr5e5_seed100, fixed_stage1_pooling_lr1e5_seed44, fixed_stage1_global_lr_half_seed44, fixed_stage1_mmrl_only_lr3e5_seed44, stage3_control_seed44, stage3_late_decay_seed44, stage3_late_decay_balanced_loss_seed44, loss_matrix_r0125_seed44, loss_matrix_r0250_seed44, loss_matrix_r0500_seed44, loss_tuning_no_effective_seed44, loss_tuning_half_usage_seed44, loss_tuning_relation_r0100_seed44, loss_tuning_3x1_seed44, slake_r025_delta_pair_seed44, final_three_experiments_seed44, custom_r025_d058_multiseed_45_47, custom_optimizer_adapter_sweep_seed44, paper_ablation_seed44, paper_ablation_seed44_part1, paper_ablation_seed44_part2, paper_ablation_seed44_part3, overnight_slake_pooling_pair_seed44, joint_cosine_1_4, joint_cosine_44_46, spatial_grounding_seed44, heterogeneous_no_relation_100_102, raw_adapter47, direct_mmrl, two_adapter, single_adapter, all）" >&2
+    echo "[ERR] 未知实验目标: $RUN_TARGET（可选: relation44, relation47, heterogeneous_lr_pair, heterogeneous_relation_100_102, multiturn_relation_seed100, multiturn_relation_seed101, multiturn_relation_100_102, joint_cosine_seed100, legacy_3cdf58d_seed100, fixed_stage1_constant_seed100, fixed_stage1_lr5e5_seed100, fixed_stage1_pooling_lr1e5_seed44, fixed_stage1_global_lr_half_seed44, fixed_stage1_mmrl_only_lr3e5_seed44, stage3_control_seed44, stage3_late_decay_seed44, stage3_late_decay_balanced_loss_seed44, loss_matrix_r0125_seed44, loss_matrix_r0250_seed44, loss_matrix_r0500_seed44, loss_tuning_no_effective_seed44, loss_tuning_half_usage_seed44, loss_tuning_relation_r0100_seed44, loss_tuning_3x1_seed44, slake_r025_delta_pair_seed44, final_three_experiments_seed44, custom_r025_d058_multiseed_45_47, custom_optimizer_adapter_sweep_seed44, paper_ablation_seed44, paper_ablation_seed44_part1, paper_ablation_seed44_wo_rep_only, paper_ablation_seed44_part2, paper_ablation_seed44_part3, overnight_slake_pooling_pair_seed44, joint_cosine_1_4, joint_cosine_44_46, spatial_grounding_seed44, heterogeneous_no_relation_100_102, raw_adapter47, direct_mmrl, two_adapter, single_adapter, all）" >&2
     exit 2
     ;;
 esac

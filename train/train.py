@@ -659,6 +659,82 @@ FINAL_TUNING_EXPECTED[
     "visual_router_custom_adapter_lr_expanded_v1"
 ]["stage3_adapter_learning_rates"] = [2.5e-5, 5.5e-5, 8.5e-5, 11.5e-5]
 
+EXPERIMENTS["visual_router_ablation_full_r025_d058_v1"] = {
+    **FINAL_TUNING_BASE,
+}
+EXPERIMENTS["visual_router_ablation_wo_rep_token_v1"] = {
+    **FINAL_TUNING_BASE,
+    "raw_visual_adapter": True,
+    "mmrl_relation_loss_weight": 0.0,
+}
+EXPERIMENTS["visual_router_ablation_single_adapter_v1"] = {
+    **FINAL_TUNING_BASE,
+    "visual_residual_adapter_count": 1,
+    "stage3_adapter_learning_rates": [7e-5],
+}
+EXPERIMENTS["visual_router_ablation_homogeneous_adapter_lr_v1"] = {
+    **FINAL_TUNING_BASE,
+    "stage3_adapter_learning_rates": [7e-5, 7e-5, 7e-5, 7e-5],
+}
+EXPERIMENTS["visual_router_ablation_no_relation_v1"] = {
+    **FINAL_TUNING_BASE,
+    "mmrl_relation_loss_weight": 0.0,
+}
+
+ABLATION_COMMON_EXPECTED = {
+    "random_init_adapter_output_count": 0,
+    "adapter_usage_balance_loss_weight": 0.0026,
+    "adapter_sample_entropy_loss_weight": 0.020,
+    "adapter_sample_entropy_target": 0.72,
+    "adapter_effective_delta_loss_weight": 0.0004,
+    "adapter_effective_delta_target_low": 0.58,
+    "adapter_effective_delta_target_high": 0.98,
+    "direct_mmrl_output": False,
+    "stage3_mmrl_learning_rate": 6e-5,
+    "stage3_router_learning_rate": 8e-5,
+    "stage3_lr_scheduler_type": "constant_with_warmup",
+    "stage3_max_steps": 625,
+    "stage3_warmup_steps": 63,
+    "stage3_hold_until_step": 500,
+}
+ABLATION_EXPECTED = {
+    "visual_router_ablation_full_r025_d058_v1": {
+        **ABLATION_COMMON_EXPECTED,
+        "raw_visual_adapter": False,
+        "visual_residual_adapter_count": 4,
+        "stage3_adapter_learning_rates": [4e-5, 6e-5, 8e-5, 1e-4],
+        "mmrl_relation_loss_weight": 0.025,
+    },
+    "visual_router_ablation_wo_rep_token_v1": {
+        **ABLATION_COMMON_EXPECTED,
+        "raw_visual_adapter": True,
+        "visual_residual_adapter_count": 4,
+        "stage3_adapter_learning_rates": [4e-5, 6e-5, 8e-5, 1e-4],
+        "mmrl_relation_loss_weight": 0.0,
+    },
+    "visual_router_ablation_single_adapter_v1": {
+        **ABLATION_COMMON_EXPECTED,
+        "raw_visual_adapter": False,
+        "visual_residual_adapter_count": 1,
+        "stage3_adapter_learning_rates": [7e-5],
+        "mmrl_relation_loss_weight": 0.025,
+    },
+    "visual_router_ablation_homogeneous_adapter_lr_v1": {
+        **ABLATION_COMMON_EXPECTED,
+        "raw_visual_adapter": False,
+        "visual_residual_adapter_count": 4,
+        "stage3_adapter_learning_rates": [7e-5, 7e-5, 7e-5, 7e-5],
+        "mmrl_relation_loss_weight": 0.025,
+    },
+    "visual_router_ablation_no_relation_v1": {
+        **ABLATION_COMMON_EXPECTED,
+        "raw_visual_adapter": False,
+        "visual_residual_adapter_count": 4,
+        "stage3_adapter_learning_rates": [4e-5, 6e-5, 8e-5, 1e-4],
+        "mmrl_relation_loss_weight": 0.0,
+    },
+}
+
 LOSS_TUNING_3X1_BASE = EXPERIMENTS[
     "visual_router_loss_matrix_r0125_d058_v1"
 ]
@@ -961,6 +1037,9 @@ def audit_loss_tuning_config():
     if expected is None:
         expected = FINAL_TUNING_EXPECTED.get(SELECTED_EXPERIMENT)
         audit_label = "FINAL_TUNING_AUDIT"
+    if expected is None:
+        expected = ABLATION_EXPECTED.get(SELECTED_EXPERIMENT)
+        audit_label = "ABLATION_CONFIG_AUDIT"
     if expected is None:
         return
 

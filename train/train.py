@@ -575,6 +575,32 @@ EXPERIMENTS["visual_router_final_entropy_target080_v1"] = {
     "stage3_pooling_learning_rate": 6e-5,
     "adapter_sample_entropy_target": 0.80,
 }
+EXPERIMENTS["visual_router_custom_optimizer_beta2_098_v1"] = {
+    **FINAL_TUNING_BASE,
+    "stage3_pooling_learning_rate": 6e-5,
+    "stage3_adam_beta1": 0.9,
+    "stage3_adam_beta2": 0.98,
+    "stage3_adam_epsilon": 1e-8,
+    "stage3_weight_decay": 0.0,
+}
+EXPERIMENTS["visual_router_custom_adapter_lr_compressed_v1"] = {
+    **FINAL_TUNING_BASE,
+    "stage3_pooling_learning_rate": 6e-5,
+    "stage3_adapter_learning_rates": [5.5e-5, 6.5e-5, 7.5e-5, 8.5e-5],
+    "stage3_adam_beta1": 0.9,
+    "stage3_adam_beta2": 0.999,
+    "stage3_adam_epsilon": 1e-8,
+    "stage3_weight_decay": 0.0,
+}
+EXPERIMENTS["visual_router_custom_adapter_lr_expanded_v1"] = {
+    **FINAL_TUNING_BASE,
+    "stage3_pooling_learning_rate": 6e-5,
+    "stage3_adapter_learning_rates": [2.5e-5, 5.5e-5, 8.5e-5, 11.5e-5],
+    "stage3_adam_beta1": 0.9,
+    "stage3_adam_beta2": 0.999,
+    "stage3_adam_epsilon": 1e-8,
+    "stage3_weight_decay": 0.0,
+}
 
 FINAL_TUNING_EXPECTED = {
     "visual_router_final_mmrl_lr8e5_v1": {
@@ -584,6 +610,30 @@ FINAL_TUNING_EXPECTED = {
     "visual_router_final_entropy_target080_v1": {
         "adapter_sample_entropy_target": 0.80,
         "stage3_mmrl_learning_rate": 6e-5,
+    },
+    "visual_router_custom_optimizer_beta2_098_v1": {
+        "adapter_sample_entropy_target": 0.72,
+        "stage3_mmrl_learning_rate": 6e-5,
+        "stage3_adam_beta1": 0.9,
+        "stage3_adam_beta2": 0.98,
+        "stage3_adam_epsilon": 1e-8,
+        "stage3_weight_decay": 0.0,
+    },
+    "visual_router_custom_adapter_lr_compressed_v1": {
+        "adapter_sample_entropy_target": 0.72,
+        "stage3_mmrl_learning_rate": 6e-5,
+        "stage3_adam_beta1": 0.9,
+        "stage3_adam_beta2": 0.999,
+        "stage3_adam_epsilon": 1e-8,
+        "stage3_weight_decay": 0.0,
+    },
+    "visual_router_custom_adapter_lr_expanded_v1": {
+        "adapter_sample_entropy_target": 0.72,
+        "stage3_mmrl_learning_rate": 6e-5,
+        "stage3_adam_beta1": 0.9,
+        "stage3_adam_beta2": 0.999,
+        "stage3_adam_epsilon": 1e-8,
+        "stage3_weight_decay": 0.0,
     },
 }
 for expected_values in FINAL_TUNING_EXPECTED.values():
@@ -602,6 +652,12 @@ for expected_values in FINAL_TUNING_EXPECTED.values():
         "stage3_warmup_steps": 63,
         "stage3_hold_until_step": 500,
     })
+FINAL_TUNING_EXPECTED[
+    "visual_router_custom_adapter_lr_compressed_v1"
+]["stage3_adapter_learning_rates"] = [5.5e-5, 6.5e-5, 7.5e-5, 8.5e-5]
+FINAL_TUNING_EXPECTED[
+    "visual_router_custom_adapter_lr_expanded_v1"
+]["stage3_adapter_learning_rates"] = [2.5e-5, 5.5e-5, 8.5e-5, 11.5e-5]
 
 LOSS_TUNING_3X1_BASE = EXPERIMENTS[
     "visual_router_loss_matrix_r0125_d058_v1"

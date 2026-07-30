@@ -1364,6 +1364,21 @@ def _build_stage3_grouped_optimizer(model, train_cfg):
 
     mmrl_lr = float(experiment_cfg["stage3_mmrl_learning_rate"])
     router_lr = float(experiment_cfg["stage3_router_learning_rate"])
+    adam_beta1 = float(experiment_cfg.get("stage3_adam_beta1", 0.9))
+    adam_beta2 = float(experiment_cfg.get("stage3_adam_beta2", 0.999))
+    adam_epsilon = float(experiment_cfg.get("stage3_adam_epsilon", 1e-8))
+    weight_decay = float(experiment_cfg.get("stage3_weight_decay", 0.0))
+    if not 0.0 <= adam_beta1 < 1.0 or not 0.0 <= adam_beta2 < 1.0:
+        raise ValueError(
+            "Stage 3 Adam betas must be in [0, 1), got "
+            f"beta1={adam_beta1} beta2={adam_beta2}"
+        )
+    if adam_epsilon <= 0.0:
+        raise ValueError(f"Stage 3 Adam epsilon must be positive, got {adam_epsilon}")
+    if weight_decay < 0.0:
+        raise ValueError(
+            f"Stage 3 weight decay must be non-negative, got {weight_decay}"
+        )
     grouped = {"mmrl": [] , "router": []}
     pooling_lr = experiment_cfg.get("stage3_pooling_learning_rate")
     if pooling_lr is not None:
@@ -1426,7 +1441,7 @@ def _build_stage3_grouped_optimizer(model, train_cfg):
         {
             "params": params,
             "lr": learning_rates[name],
-            "weight_decay": 0.0,
+            "weight_decay": weight_decay,
             "group_name": name,
         }
         for name, params in grouped.items()
@@ -1438,7 +1453,16 @@ def _build_stage3_grouped_optimizer(model, train_cfg):
             for group in parameter_groups
         )
     )
-    return torch.optim.AdamW(parameter_groups, betas=(0.9, 0.999), eps=1e-8)
+    print(
+        "[STAGE3_OPTIMIZER] "
+        f"AdamW beta1={adam_beta1} beta2={adam_beta2} "
+        f"eps={adam_epsilon} weight_decay={weight_decay}"
+    )
+    return torch.optim.AdamW(
+        parameter_groups,
+        betas=(adam_beta1, adam_beta2),
+        eps=adam_epsilon,
+    )
 
 
 def _warmup_hold_cosine_factor(step, warmup_steps, hold_until_step, total_steps):

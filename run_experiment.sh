@@ -482,6 +482,61 @@ run_final_three_experiments() {
   fi
 }
 
+run_custom_r025_d058_multiseed() {
+  local failures=0
+  local seed
+  AUTO_INCREMENT_SEED=0
+  MMRL_DECOUPLE_STAGE_POOLING=0
+  MMRL_INTERMEDIATE_EVAL_STEPS=""
+
+  for seed in 45 46 47; do
+    FIXED_SEED="$seed"
+    if ! run_one \
+      "visual_router_loss_matrix_r0250_d058_v1" \
+      "visual_router_custom_r025_d058_seed${seed}"; then
+      echo "[CUSTOM-MULTISEED-WARN] seed=$seed 失败，继续下一 seed。" >&2
+      failures=$((failures + 1))
+    fi
+  done
+
+  if [ "$failures" -ne 0 ]; then
+    echo "[CUSTOM-MULTISEED-ERR] 三个 seed 中有 $failures 个失败。" >&2
+    return 1
+  fi
+}
+
+run_custom_optimizer_adapter_sweep() {
+  local failures=0
+  AUTO_INCREMENT_SEED=0
+  FIXED_SEED=44
+  MMRL_DECOUPLE_STAGE_POOLING=0
+  MMRL_INTERMEDIATE_EVAL_STEPS=""
+
+  if ! run_one \
+    "visual_router_custom_optimizer_beta2_098_v1" \
+    "visual_router_custom_r025_d058_adam_beta2_098_seed44"; then
+    echo "[CUSTOM-SWEEP-WARN] Adam beta2=0.98 失败，继续 adapter LR 压缩实验。" >&2
+    failures=$((failures + 1))
+  fi
+  if ! run_one \
+    "visual_router_custom_adapter_lr_compressed_v1" \
+    "visual_router_custom_r025_d058_adapter_lr_compressed_seed44"; then
+    echo "[CUSTOM-SWEEP-WARN] adapter LR 压缩实验失败，继续扩张实验。" >&2
+    failures=$((failures + 1))
+  fi
+  if ! run_one \
+    "visual_router_custom_adapter_lr_expanded_v1" \
+    "visual_router_custom_r025_d058_adapter_lr_expanded_seed44"; then
+    echo "[CUSTOM-SWEEP-WARN] adapter LR 扩张实验失败。" >&2
+    failures=$((failures + 1))
+  fi
+
+  if [ "$failures" -ne 0 ]; then
+    echo "[CUSTOM-SWEEP-ERR] 三项实验中有 $failures 个失败。" >&2
+    return 1
+  fi
+}
+
 # 常用实验入口。
 #   bash run_experiment.sh relation44
 #   bash run_experiment.sh relation47
@@ -507,6 +562,8 @@ run_final_three_experiments() {
 #   bash run_experiment.sh loss_tuning_3x1_seed44
 #   bash run_experiment.sh slake_r025_delta_pair_seed44
 #   bash run_experiment.sh final_three_experiments_seed44
+#   bash run_experiment.sh custom_r025_d058_multiseed_45_47
+#   bash run_experiment.sh custom_optimizer_adapter_sweep_seed44
 #   bash run_experiment.sh overnight_slake_pooling_pair_seed44
 #   bash run_experiment.sh joint_cosine_1_4
 #   bash run_experiment.sh joint_cosine_44_46
@@ -689,6 +746,12 @@ case "$RUN_TARGET" in
   final_three_experiments_seed44)
     run_final_three_experiments
     ;;
+  custom_r025_d058_multiseed_45_47)
+    run_custom_r025_d058_multiseed
+    ;;
+  custom_optimizer_adapter_sweep_seed44)
+    run_custom_optimizer_adapter_sweep
+    ;;
   overnight_slake_pooling_pair_seed44)
     echo "[OVERNIGHT] target=$RUN_TARGET"
     echo "[OVERNIGHT] SLAKE output root=$SLAKE_OUTPUT_ROOT/mmrl"
@@ -837,7 +900,7 @@ case "$RUN_TARGET" in
     run_one "visual_router_raw_adapter_v1" "visual_router_raw_adapter_v1_seed47"
     ;;
   *)
-    echo "[ERR] 未知实验目标: $RUN_TARGET（可选: relation44, relation47, heterogeneous_lr_pair, heterogeneous_relation_100_102, multiturn_relation_seed100, multiturn_relation_seed101, multiturn_relation_100_102, joint_cosine_seed100, legacy_3cdf58d_seed100, fixed_stage1_constant_seed100, fixed_stage1_lr5e5_seed100, fixed_stage1_pooling_lr1e5_seed44, fixed_stage1_global_lr_half_seed44, fixed_stage1_mmrl_only_lr3e5_seed44, stage3_control_seed44, stage3_late_decay_seed44, stage3_late_decay_balanced_loss_seed44, loss_matrix_r0125_seed44, loss_matrix_r0250_seed44, loss_matrix_r0500_seed44, loss_tuning_no_effective_seed44, loss_tuning_half_usage_seed44, loss_tuning_relation_r0100_seed44, loss_tuning_3x1_seed44, slake_r025_delta_pair_seed44, final_three_experiments_seed44, overnight_slake_pooling_pair_seed44, joint_cosine_1_4, joint_cosine_44_46, spatial_grounding_seed44, heterogeneous_no_relation_100_102, raw_adapter47, direct_mmrl, two_adapter, single_adapter, all）" >&2
+    echo "[ERR] 未知实验目标: $RUN_TARGET（可选: relation44, relation47, heterogeneous_lr_pair, heterogeneous_relation_100_102, multiturn_relation_seed100, multiturn_relation_seed101, multiturn_relation_100_102, joint_cosine_seed100, legacy_3cdf58d_seed100, fixed_stage1_constant_seed100, fixed_stage1_lr5e5_seed100, fixed_stage1_pooling_lr1e5_seed44, fixed_stage1_global_lr_half_seed44, fixed_stage1_mmrl_only_lr3e5_seed44, stage3_control_seed44, stage3_late_decay_seed44, stage3_late_decay_balanced_loss_seed44, loss_matrix_r0125_seed44, loss_matrix_r0250_seed44, loss_matrix_r0500_seed44, loss_tuning_no_effective_seed44, loss_tuning_half_usage_seed44, loss_tuning_relation_r0100_seed44, loss_tuning_3x1_seed44, slake_r025_delta_pair_seed44, final_three_experiments_seed44, custom_r025_d058_multiseed_45_47, custom_optimizer_adapter_sweep_seed44, overnight_slake_pooling_pair_seed44, joint_cosine_1_4, joint_cosine_44_46, spatial_grounding_seed44, heterogeneous_no_relation_100_102, raw_adapter47, direct_mmrl, two_adapter, single_adapter, all）" >&2
     exit 2
     ;;
 esac

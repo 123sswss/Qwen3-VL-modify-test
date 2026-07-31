@@ -364,6 +364,57 @@ run_slake_r025_delta_pair() {
   fi
 }
 
+run_slake_constraint_matrix_3x2_part() {
+  local part="$1"
+  local relation_tag
+  local relation_weight
+  local failures=0
+
+  case "$part" in
+    1)
+      relation_tag="r0250"
+      relation_weight="0.0250"
+      ;;
+    2)
+      relation_tag="r0375"
+      relation_weight="0.0375"
+      ;;
+    3)
+      relation_tag="r0500"
+      relation_weight="0.0500"
+      ;;
+    *)
+      echo "[SLAKE-MATRIX-ERR] 未知分组: $part" >&2
+      return 2
+      ;;
+  esac
+
+  if ! run_slake_full_all \
+    "slake_mmrl_constraint_matrix_${relation_tag}_w0004_d058_seed44" \
+    "$relation_weight" \
+    "0.0004" \
+    "0.58" \
+    "slake_constraint_matrix_3x2_part${part}"; then
+    echo "[SLAKE-MATRIX-PART${part}-WARN] ${relation_tag}/w0004 失败，继续 w0008。" >&2
+    failures=$((failures + 1))
+  fi
+
+  if ! run_slake_full_all \
+    "slake_mmrl_constraint_matrix_${relation_tag}_w0008_d058_seed44" \
+    "$relation_weight" \
+    "0.0008" \
+    "0.58" \
+    "slake_constraint_matrix_3x2_part${part}"; then
+    echo "[SLAKE-MATRIX-PART${part}-WARN] ${relation_tag}/w0008 失败。" >&2
+    failures=$((failures + 1))
+  fi
+
+  echo "[SLAKE-MATRIX-PART${part}-SUMMARY] 两轮均已尝试，失败数=$failures。"
+  if [ "$failures" -ne 0 ]; then
+    return 1
+  fi
+}
+
 # 重复跑 N 次同一实验；目录命名由 find_available_tag 自动处理，不会覆写
 # 用法: run_N <experiment_name> <raw_tag> <N>
 run_N() {
@@ -883,6 +934,9 @@ run_final_constraint_matrix_3x3_part() {
 #   bash run_experiment.sh loss_tuning_relation_r0100_seed44
 #   bash run_experiment.sh loss_tuning_3x1_seed44
 #   bash run_experiment.sh slake_r025_delta_pair_seed44
+#   bash run_experiment.sh slake_constraint_matrix_3x2_part1
+#   bash run_experiment.sh slake_constraint_matrix_3x2_part2
+#   bash run_experiment.sh slake_constraint_matrix_3x2_part3
 #   bash run_experiment.sh final_three_experiments_seed44
 #   bash run_experiment.sh custom_r025_d058_multiseed_45_47
 #   bash run_experiment.sh custom_optimizer_adapter_sweep_seed44
@@ -1077,6 +1131,15 @@ case "$RUN_TARGET" in
     ;;
   slake_r025_delta_pair_seed44)
     run_slake_r025_delta_pair
+    ;;
+  slake_constraint_matrix_3x2_part1)
+    run_slake_constraint_matrix_3x2_part 1
+    ;;
+  slake_constraint_matrix_3x2_part2)
+    run_slake_constraint_matrix_3x2_part 2
+    ;;
+  slake_constraint_matrix_3x2_part3)
+    run_slake_constraint_matrix_3x2_part 3
     ;;
   final_three_experiments_seed44)
     run_final_three_experiments

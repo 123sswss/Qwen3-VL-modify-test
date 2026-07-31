@@ -603,6 +603,52 @@ STABILITY_R0125_D058_EXPECTED = {
     },
 }
 
+FINAL_CONSTRAINT_MATRIX_3X3_COMMON_EXPECTED = {
+    "random_init_adapter_output_count": 0,
+    "adapter_usage_balance_loss_weight": 0.0026,
+    "adapter_sample_entropy_loss_weight": 0.020,
+    "adapter_sample_entropy_target": 0.72,
+    "adapter_effective_delta_target_low": 0.70,
+    "adapter_effective_delta_target_high": 0.98,
+    "direct_mmrl_output": False,
+    "raw_visual_adapter": False,
+    "visual_residual_adapter_count": 4,
+    "stage3_mmrl_learning_rate": 6e-5,
+    "stage3_router_learning_rate": 8e-5,
+    "stage3_adapter_learning_rates": [4e-5, 6e-5, 8e-5, 1e-4],
+    "stage3_lr_scheduler_type": "constant_with_warmup",
+    "stage3_max_steps": 625,
+    "stage3_warmup_steps": 63,
+    "stage3_hold_until_step": 500,
+}
+FINAL_CONSTRAINT_MATRIX_3X3_EXPECTED = {}
+for relation_tag, relation_weight in (
+    ("r0125", 0.0125),
+    ("r0250", 0.0250),
+    ("r0375", 0.0375),
+):
+    for effective_tag, effective_weight in (
+        ("w0004", 0.0004),
+        ("w0008", 0.0008),
+        ("w0016", 0.0016),
+    ):
+        experiment_name = (
+            "visual_router_final_constraint_matrix_"
+            f"{relation_tag}_{effective_tag}_d070_v1"
+        )
+        EXPERIMENTS[experiment_name] = {
+            **EXPERIMENTS["visual_router_fixed_stage1_late_decay_v1"],
+            "mmrl_relation_loss_weight": relation_weight,
+            "adapter_effective_delta_loss_weight": effective_weight,
+            "adapter_effective_delta_target_low": 0.70,
+            "adapter_effective_delta_target_high": 0.98,
+        }
+        FINAL_CONSTRAINT_MATRIX_3X3_EXPECTED[experiment_name] = {
+            **FINAL_CONSTRAINT_MATRIX_3X3_COMMON_EXPECTED,
+            "mmrl_relation_loss_weight": relation_weight,
+            "adapter_effective_delta_loss_weight": effective_weight,
+        }
+
 FINAL_TUNING_BASE = EXPERIMENTS[
     "visual_router_loss_matrix_r0250_d058_v1"
 ]
@@ -1087,6 +1133,9 @@ def audit_loss_tuning_config():
     if expected is None:
         expected = STABILITY_R0125_D058_EXPECTED.get(SELECTED_EXPERIMENT)
         audit_label = "STABILITY_CONFIG_AUDIT"
+    if expected is None:
+        expected = FINAL_CONSTRAINT_MATRIX_3X3_EXPECTED.get(SELECTED_EXPERIMENT)
+        audit_label = "FINAL_CONSTRAINT_MATRIX_3X3_AUDIT"
     if expected is None:
         return
 

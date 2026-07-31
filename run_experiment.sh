@@ -778,6 +778,87 @@ run_stability_r0125_d058_cross_part() {
   fi
 }
 
+run_final_constraint_matrix_3x3_part() {
+  local part="$1"
+  local failures=0
+  AUTO_INCREMENT_SEED=0
+  FIXED_SEED=44
+  MMRL_DECOUPLE_STAGE_POOLING=0
+  MMRL_INTERMEDIATE_EVAL_STEPS=""
+
+  case "$part" in
+    1)
+      if ! run_one \
+        "visual_router_final_constraint_matrix_r0125_w0004_d070_v1" \
+        "visual_router_final_constraint_matrix_r0125_w0004_d070_seed44"; then
+        echo "[FINAL-MATRIX-PART1-WARN] r0125/w0004 失败，继续 r0250/w0008。" >&2
+        failures=$((failures + 1))
+      fi
+      if ! run_one \
+        "visual_router_final_constraint_matrix_r0250_w0008_d070_v1" \
+        "visual_router_final_constraint_matrix_r0250_w0008_d070_seed44"; then
+        echo "[FINAL-MATRIX-PART1-WARN] r0250/w0008 失败，继续 r0375/w0016。" >&2
+        failures=$((failures + 1))
+      fi
+      if ! run_one \
+        "visual_router_final_constraint_matrix_r0375_w0016_d070_v1" \
+        "visual_router_final_constraint_matrix_r0375_w0016_d070_seed44"; then
+        echo "[FINAL-MATRIX-PART1-WARN] r0375/w0016 失败。" >&2
+        failures=$((failures + 1))
+      fi
+      ;;
+    2)
+      if ! run_one \
+        "visual_router_final_constraint_matrix_r0250_w0004_d070_v1" \
+        "visual_router_final_constraint_matrix_r0250_w0004_d070_seed44"; then
+        echo "[FINAL-MATRIX-PART2-WARN] r0250/w0004 失败，继续 r0375/w0008。" >&2
+        failures=$((failures + 1))
+      fi
+      if ! run_one \
+        "visual_router_final_constraint_matrix_r0375_w0008_d070_v1" \
+        "visual_router_final_constraint_matrix_r0375_w0008_d070_seed44"; then
+        echo "[FINAL-MATRIX-PART2-WARN] r0375/w0008 失败，继续 r0125/w0016。" >&2
+        failures=$((failures + 1))
+      fi
+      if ! run_one \
+        "visual_router_final_constraint_matrix_r0125_w0016_d070_v1" \
+        "visual_router_final_constraint_matrix_r0125_w0016_d070_seed44"; then
+        echo "[FINAL-MATRIX-PART2-WARN] r0125/w0016 失败。" >&2
+        failures=$((failures + 1))
+      fi
+      ;;
+    3)
+      if ! run_one \
+        "visual_router_final_constraint_matrix_r0375_w0004_d070_v1" \
+        "visual_router_final_constraint_matrix_r0375_w0004_d070_seed44"; then
+        echo "[FINAL-MATRIX-PART3-WARN] r0375/w0004 失败，继续 r0125/w0008。" >&2
+        failures=$((failures + 1))
+      fi
+      if ! run_one \
+        "visual_router_final_constraint_matrix_r0125_w0008_d070_v1" \
+        "visual_router_final_constraint_matrix_r0125_w0008_d070_seed44"; then
+        echo "[FINAL-MATRIX-PART3-WARN] r0125/w0008 失败，继续 r0250/w0016。" >&2
+        failures=$((failures + 1))
+      fi
+      if ! run_one \
+        "visual_router_final_constraint_matrix_r0250_w0016_d070_v1" \
+        "visual_router_final_constraint_matrix_r0250_w0016_d070_seed44"; then
+        echo "[FINAL-MATRIX-PART3-WARN] r0250/w0016 失败。" >&2
+        failures=$((failures + 1))
+      fi
+      ;;
+    *)
+      echo "[FINAL-MATRIX-ERR] 未知分组: $part" >&2
+      return 2
+      ;;
+  esac
+
+  echo "[FINAL-MATRIX-PART${part}-SUMMARY] 三轮均已尝试，失败数=$failures。"
+  if [ "$failures" -ne 0 ]; then
+    return 1
+  fi
+}
+
 # 常用实验入口。
 #   bash run_experiment.sh relation44
 #   bash run_experiment.sh relation47
@@ -815,6 +896,9 @@ run_stability_r0125_d058_cross_part() {
 #   bash run_experiment.sh paper_ablation_222_seed44_part3
 #   bash run_experiment.sh stability_r0125_d058_cross_part1
 #   bash run_experiment.sh stability_r0125_d058_cross_part2
+#   bash run_experiment.sh final_constraint_matrix_3x3_part1
+#   bash run_experiment.sh final_constraint_matrix_3x3_part2
+#   bash run_experiment.sh final_constraint_matrix_3x3_part3
 #   bash run_experiment.sh overnight_slake_pooling_pair_seed44
 #   bash run_experiment.sh joint_cosine_1_4
 #   bash run_experiment.sh joint_cosine_44_46
@@ -1032,6 +1116,15 @@ case "$RUN_TARGET" in
     ;;
   stability_r0125_d058_cross_part2)
     run_stability_r0125_d058_cross_part 2
+    ;;
+  final_constraint_matrix_3x3_part1)
+    run_final_constraint_matrix_3x3_part 1
+    ;;
+  final_constraint_matrix_3x3_part2)
+    run_final_constraint_matrix_3x3_part 2
+    ;;
+  final_constraint_matrix_3x3_part3)
+    run_final_constraint_matrix_3x3_part 3
     ;;
   overnight_slake_pooling_pair_seed44)
     echo "[OVERNIGHT] target=$RUN_TARGET"

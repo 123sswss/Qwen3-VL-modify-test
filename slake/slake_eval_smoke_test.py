@@ -4,13 +4,20 @@ from __future__ import annotations
 
 import tempfile
 import unittest
+import json
 from pathlib import Path
 
 from PIL import Image
 
 from slake_model_interfaces import BACKEND_SPECS
-from slake_official_eval import ImageResolver, audit_samples, select_records
+from slake_official_eval import (
+    ImageResolver,
+    audit_samples,
+    select_records,
+    summarize_generation_timings,
+)
 from slake_vqa_metric import evaluate_slake_predictions, normalize_vqa_answer
+from summarize_checkpoint_timing import load_rows, write_outputs
 
 
 class SlakeMetricTest(unittest.TestCase):
@@ -108,6 +115,74 @@ class SlakeDatasetAuditTest(unittest.TestCase):
             )
             self.assertEqual(len(audited), 1)
             self.assertTrue(Path(audited[0]["_slake_image_path"]).is_file())
+
+
+class SlakeTimingSummaryTest(unittest.TestCase):
+    def test_tpot_is_weighted_by_measured_decode_tokens(self):
+        rows = [
+            {
+                "status": "ok",
+                "timing": {
+                    "request_total_seconds": 1.5,
+                    "first_token_latency_seconds": 0.8,
+                    "subsequent_token_mean_seconds": 0.1,
+                    "generation_total_seconds": 1.2,
+                    "generated_token_count": 3,
+                    "measured_token_steps": 3,
+                    "timing_method": "test",
+                },
+            },
+            {
+                "status": "ok",
+                "timing": {
+                    "request_total_seconds": 2.5,
+                    "first_token_latency_seconds": 1.0,
+                    "subsequent_token_mean_seconds": 0.2,
+                    "generation_total_seconds": 2.0,
+                    "generated_token_count": 2,
+                    "measured_token_steps": 2,
+                    "timing_method": "test",
+                },
+            },
+        ]
+
+        summary = summarize_generation_timings(rows, warmup_runs=3)
+
+        self.assertEqual(summary["generated_tokens"], 5)
+        self.assertEqual(summary["subsequent_tokens"], 3)
+        self.assertAlmostEqual(summary["tpot_weighted_seconds"], 0.133333, places=6)
+        self.assertAlmostEqual(summary["decode_tokens_per_second"], 7.5, places=3)
+        self.assertEqual(summary["methodology"]["warmup_runs_excluded"], 3)
+
+    def test_checkpoint_comparison_outputs_are_generated(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            method_dir = root / "frost_vl"
+            method_dir.mkdir()
+            summary = {
+                "overall_accuracy": 66.95,
+                "timing": {
+                    "ttft_seconds": {"mean": 0.8, "p50": 0.7, "p95": 1.1},
+                    "tpot_weighted_seconds": 0.02,
+                    "decode_tokens_per_second": 50.0,
+                    "request_seconds": {"mean": 1.2},
+                    "model_generated_tokens_per_second": 20.0,
+                    "end_to_end_generated_tokens_per_second": 18.0,
+                    "model_timed_requests": 10,
+                    "generated_tokens": 100,
+                },
+            }
+            (method_dir / "slake_summary.json").write_text(
+                json.dumps(summary), encoding="utf-8"
+            )
+
+            rows = load_rows(root)
+            write_outputs(root, rows)
+
+            self.assertEqual(rows[0]["method"], "frost_vl")
+            self.assertTrue((root / "comparison_summary.json").is_file())
+            self.assertTrue((root / "comparison_summary.csv").is_file())
+            self.assertTrue((root / "comparison_summary.md").is_file())
 
 
 if __name__ == "__main__":

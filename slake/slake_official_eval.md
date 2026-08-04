@@ -67,8 +67,64 @@ python slake/slake_official_eval.py \
   --image-root /root/autodl-tmp/dataset/SLAKE/imgs \
   --output-dir ./slake_outputs/mmrl_en \
   --language en \
+  --timing-warmup-runs 3 \
   --overwrite
 ```
+
+The same command evaluates an existing checkpoint and records performance. The
+three warmup requests are excluded. `slake_summary.json` reports TTFT, weighted
+time per output token (TPOT), decode tokens/s, model generation throughput, and
+end-to-end request latency. Per-request timing is preserved in
+`slake_details.json` and `slake_progress.jsonl`. TTFT and TPOT are measured
+separately; the expensive visual prefill is never averaged into TPOT.
+
+For the 66.95 checkpoint created by the matrix runner, the command is:
+
+```bash
+cd /root/autodl-tmp/Qwen3-VL-modify-test
+python slake/slake_official_eval.py \
+  --backend mmrl \
+  --base-model /root/autodl-tmp/model \
+  --checkpoint /root/autodl-tmp/Qwen3-VL-modify-test/slake/outputs/mmrl/slake_mmrl_constraint_matrix_r0500_w0008_d058_seed44_20260731/final \
+  --questions /root/autodl-tmp/dataset/slake/test.json \
+  --image-root /root/autodl-tmp/dataset/slake/imgs \
+  --output-dir /root/autodl-tmp/Qwen3-VL-modify-test/slake/outputs/eval_r0500_w0008_timing \
+  --language all \
+  --max-new-tokens 32 \
+  --timing-warmup-runs 3 \
+  --overwrite
+```
+
+If the checkpoint folder has an automatically appended suffix, replace the
+checkpoint path with the actual directory containing `final/model.safetensors`.
+
+## Evaluate all existing comparison checkpoints
+
+The evaluation-only runner loads the already trained Base, LoRA, and DoRA
+checkpoints. It never calls a training script:
+
+```bash
+cd /root/autodl-tmp/Qwen3-VL-modify-test
+bash slake/eval_existing_checkpoints.sh
+```
+
+Use a two-sample server smoke test before the full run:
+
+```bash
+EVAL_LIMIT=2 bash slake/eval_existing_checkpoints.sh
+```
+
+Checkpoint, dataset, and output roots can be overridden without editing code:
+
+```bash
+CHECKPOINT_ROOT=/path/to/visual_peft_comparison \
+RESULT_ROOT=/path/to/timing_results \
+bash slake/eval_existing_checkpoints.sh
+```
+
+The runner continues after individual failures and writes
+`comparison_summary.json`, `comparison_summary.csv`, and
+`comparison_summary.md` under `timing_results/`.
 
 ## Fair vision-only LoRA checkpoints
 

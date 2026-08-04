@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import sys
 import time
@@ -287,6 +288,183 @@ def append_progress_row(progress_path: Path, row: Mapping[str, Any]) -> None:
         handle.flush()
 
 
+def _percentile(values: Sequence[float], percentile: float) -> float | None:
+    ordered = sorted(float(value) for value in values)
+    if not ordered:
+        return None
+    if len(ordered) == 1:
+        return ordered[0]
+    position = (len(ordered) - 1) * percentile
+    lower = math.floor(position)
+    upper = math.ceil(position)
+    if lower == upper:
+        return ordered[lower]
+    fraction = position - lower
+    return ordered[lower] * (1.0 - fraction) + ordered[upper] * fraction
+
+
+def _timing_distribution(values: Sequence[float]) -> Dict[str, Any]:
+    finite = [float(value) for value in values if math.isfinite(float(value))]
+    if not finite:
+        return {
+            "count": 0,
+            "mean": None,
+            "p50": None,
+            "p95": None,
+            "min": None,
+            "max": None,
+        }
+    return {
+        "count": len(finite),
+        "mean": round(sum(finite) / len(finite), 6),
+        "p50": round(_percentile(finite, 0.50), 6),
+        "p95": round(_percentile(finite, 0.95), 6),
+        "min": round(min(finite), 6),
+        "max": round(max(finite), 6),
+    }
+
+
+def _normalized_timing(raw_timing: Any, request_total_seconds: float) -> Dict[str, Any]:
+    timing = {"request_total_seconds": float(request_total_seconds)}
+    if not isinstance(raw_timing, Mapping):
+        return timing
+    for key in (
+        "first_token_latency_seconds",
+        "subsequent_token_mean_seconds",
+        "generation_total_seconds",
+        "generated_token_count",
+        "measured_token_steps",
+        "timing_method",
+    ):
+        value = raw_timing.get(key)
+        if value is not None:
+            timing[key] = value
+    return timing
+
+
+def summarize_generation_timings(
+    prediction_rows: Sequence[Mapping[str, Any]],
+    warmup_runs: int,
+) -> Dict[str, Any]:
+    timings = [
+        row["timing"]
+        for row in prediction_rows
+        if row.get("status") == "ok" and isinstance(row.get("timing"), Mapping)
+    ]
+    request_times = [
+        float(timing["request_total_seconds"])
+        for timing in timings
+        if timing.get("request_total_seconds") is not None
+    ]
+    model_timings = [
+        timing
+        for timing in timings
+        if timing.get("generated_token_count") is not None
+        and timing.get("generation_total_seconds") is not None
+    ]
+    first_token_times = [
+        float(timing["first_token_latency_seconds"])
+        for timing in model_timings
+        if timing.get("first_token_latency_seconds") is not None
+    ]
+    per_request_tpot = [
+        float(timing["subsequent_token_mean_seconds"])
+        for timing in model_timings
+        if timing.get("subsequent_token_mean_seconds") is not None
+    ]
+
+    subsequent_token_count = 0
+    subsequent_seconds = 0.0
+    generated_token_count = 0
+    generation_seconds = 0.0
+    request_seconds_for_timed_generations = 0.0
+    methods = Counter()
+    for timing in model_timings:
+        generated_tokens = max(int(timing["generated_token_count"]), 0)
+        generated_token_count += generated_tokens
+        generation_seconds += float(timing["generation_total_seconds"])
+        if timing.get("request_total_seconds") is not None:
+            request_seconds_for_timed_generations += float(
+                timing["request_total_seconds"]
+            )
+        method = timing.get("timing_method")
+        if method:
+            methods[str(method)] += 1
+        interval_count = max(int(timing.get("measured_token_steps", 0)) - 1, 0)
+        interval_mean = timing.get("subsequent_token_mean_seconds")
+        if interval_count and interval_mean is not None:
+            subsequent_token_count += interval_count
+            subsequent_seconds += float(interval_mean) * interval_count
+
+    weighted_tpot = (
+        subsequent_seconds / subsequent_token_count
+        if subsequent_token_count > 0
+        else None
+    )
+    return {
+        "methodology": {
+            "warmup_runs_excluded": warmup_runs,
+            "ttft": "generate start to first generated-token logits ready",
+            "tpot": "token-count-weighted interval between later token logits",
+            "request": "model interface call including preprocessing and decoding",
+            "timing_methods": dict(sorted(methods.items())),
+        },
+        "successful_requests": len(timings),
+        "model_timed_requests": len(model_timings),
+        "generated_tokens": generated_token_count,
+        "subsequent_tokens": subsequent_token_count,
+        "ttft_seconds": _timing_distribution(first_token_times),
+        "tpot_per_request_seconds": _timing_distribution(per_request_tpot),
+        "tpot_weighted_seconds": (
+            round(weighted_tpot, 6) if weighted_tpot is not None else None
+        ),
+        "decode_tokens_per_second": (
+            round(1.0 / weighted_tpot, 3)
+            if weighted_tpot is not None and weighted_tpot > 0
+            else None
+        ),
+        "generation_seconds": _timing_distribution([
+            float(timing["generation_total_seconds"])
+            for timing in model_timings
+        ]),
+        "request_seconds": _timing_distribution(request_times),
+        "model_generated_tokens_per_second": (
+            round(generated_token_count / generation_seconds, 3)
+            if generation_seconds > 0
+            else None
+        ),
+        "end_to_end_generated_tokens_per_second": (
+            round(generated_token_count / request_seconds_for_timed_generations, 3)
+            if request_seconds_for_timed_generations > 0
+            else None
+        ),
+    }
+
+
+def run_timing_warmup(
+    records: Sequence[Mapping[str, Any]],
+    model: Any,
+    runs: int,
+    max_new_tokens: int,
+    temperature: float,
+    instruction: str | None,
+) -> None:
+    if runs <= 0:
+        return
+    record = records[0]
+    prompt = build_prompt(record, instruction)
+    for index in range(1, runs + 1):
+        with Image.open(record["_slake_image_path"]) as image_file:
+            image = image_file.convert("RGB")
+        model.infer(
+            image,
+            prompt,
+            max_new_tokens=max_new_tokens,
+            temperature=temperature,
+        )
+        print(f"[SLAKE_TIMING_WARMUP {index}/{runs}] complete")
+
+
 def run_inference(
     records: Sequence[Dict[str, Any]],
     model: Any,
@@ -324,12 +502,16 @@ def run_inference(
         try:
             with Image.open(record["_slake_image_path"]) as image_file:
                 image = image_file.convert("RGB")
+            if hasattr(model, "last_generation_timing"):
+                model.last_generation_timing = None
+            request_started_at = time.perf_counter()
             raw_output = model.infer(
                 image,
                 prompt,
                 max_new_tokens=max_new_tokens,
                 temperature=temperature,
             )
+            request_total_seconds = time.perf_counter() - request_started_at
             answer = extract_generated_answer(raw_output, answer_mode)
             row = {
                 "question_id": qid,
@@ -338,6 +520,10 @@ def run_inference(
                 "question": record["_slake_question"],
                 "image": record["_slake_image_name"],
                 "status": "ok",
+                "timing": _normalized_timing(
+                    getattr(model, "last_generation_timing", None),
+                    request_total_seconds,
+                ),
             }
         except Exception as exc:
             if not continue_on_error:
@@ -399,6 +585,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--continue-on-error", action="store_true")
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--overwrite", action="store_true")
+    parser.add_argument(
+        "--timing-warmup-runs",
+        type=int,
+        default=3,
+        help="Warmup inference requests excluded from accuracy and timing summaries.",
+    )
     return parser.parse_args()
 
 
@@ -410,6 +602,8 @@ def main() -> int:
         raise ValueError("--limit must be positive")
     if args.resume and args.overwrite:
         raise ValueError("--resume and --overwrite are mutually exclusive")
+    if args.timing_warmup_runs < 0:
+        raise ValueError("--timing-warmup-runs must be non-negative")
 
     question_path = args.questions.expanduser().resolve()
     if not question_path.is_file():
@@ -444,6 +638,14 @@ def main() -> int:
         checkpoint_path=args.checkpoint,
     )
     instruction = "" if args.no_instruction else args.instruction
+    run_timing_warmup(
+        records,
+        model,
+        runs=args.timing_warmup_runs,
+        max_new_tokens=args.max_new_tokens,
+        temperature=args.temperature,
+        instruction=instruction,
+    )
     prediction_rows = run_inference(
         records,
         model,
@@ -462,6 +664,10 @@ def main() -> int:
         for row in prediction_rows
     ]
     summary, comparisons = evaluate_slake_predictions(records, official_predictions)
+    timing_summary = summarize_generation_timings(
+        prediction_rows,
+        warmup_runs=args.timing_warmup_runs,
+    )
     summary.update(
         {
             "backend": args.backend,
@@ -481,6 +687,7 @@ def main() -> int:
                 else args.instruction or "language-aware-short-answer"
             ),
             "partial_evaluation": args.limit is not None,
+            "timing": timing_summary,
         }
     )
 
@@ -494,6 +701,13 @@ def main() -> int:
     print(f"Per Answer Type: {summary['per_answer_type_accuracy']}")
     print(f"Per Question Type: {summary['per_question_type_accuracy']}")
     print(f"Per Language: {summary['per_language_accuracy']}")
+    print(f"TTFT: {timing_summary['ttft_seconds']}")
+    print(
+        "TPOT: "
+        f"{timing_summary['tpot_weighted_seconds']} s/token, "
+        f"{timing_summary['decode_tokens_per_second']} token/s"
+    )
+    print(f"Request Latency: {timing_summary['request_seconds']}")
     print(f"Predictions: {output_dir / 'slake_predictions.json'}")
     print(f"Summary: {output_dir / 'slake_summary.json'}")
     return 0

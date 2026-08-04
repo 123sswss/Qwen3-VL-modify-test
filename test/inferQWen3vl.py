@@ -1,5 +1,13 @@
 from transformers import AutoModelForImageTextToText, AutoProcessor
 from PIL import Image
+import sys
+from pathlib import Path
+
+try:
+    from generation_timing import generate_with_timing
+except ModuleNotFoundError:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "loraTest"))
+    from generation_timing import generate_with_timing
 
 
 class BaselineModelInterface:
@@ -10,9 +18,11 @@ class BaselineModelInterface:
             model_path, dtype="auto", device_map="auto"
         )
         self.model.eval()
+        self.last_generation_timing = None
         print("基线模型就绪。")
 
     def infer(self, image: Image.Image, prompt_text: str, max_new_tokens=256, temperature=0.2, do_sample=False) -> str:
+        self.last_generation_timing = None
         messages = [
             {
                 "role": "user",
@@ -30,10 +40,15 @@ class BaselineModelInterface:
         generate_kwargs = {
             "max_new_tokens": max_new_tokens,
             "do_sample": do_sample,
+            "use_cache": True,
         }
         if do_sample:
             generate_kwargs["temperature"] = temperature
-        generated_ids = self.model.generate(**inputs, **generate_kwargs)
+        generated_ids, self.last_generation_timing = generate_with_timing(
+            self.model,
+            inputs,
+            generate_kwargs,
+        )
         output_ids = generated_ids[:, inputs.input_ids.shape[1]:]
         return self.processor.batch_decode(output_ids, skip_special_tokens=True)[0]
 

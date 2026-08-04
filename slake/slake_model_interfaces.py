@@ -31,7 +31,7 @@ def _load_source_module(relative_path: str) -> Any:
     if not source_path.is_file():
         raise FileNotFoundError(f"Model interface script not found: {source_path}")
 
-    for import_root in (REPO_ROOT, source_path.parent):
+    for import_root in (REPO_ROOT, REPO_ROOT / "loraTest", source_path.parent):
         import_root_text = str(import_root)
         if import_root_text not in sys.path:
             sys.path.insert(0, import_root_text)

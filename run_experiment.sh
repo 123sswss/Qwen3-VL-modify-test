@@ -279,7 +279,8 @@ run_slake_full_all() {
     return 1
   fi
 
-  if [ ! -d "$output_dir/final" ]; then
+  if [ ! -f "$output_dir/final/mmrl_manifest.json" ] || \
+     [ ! -f "$output_dir/final/mmrl_delta.safetensors" ]; then
     {
       echo "status=CHECKPOINT_MISSING"
       echo "target=$run_target_label"
@@ -288,7 +289,12 @@ run_slake_full_all() {
       echo "output_dir=$output_dir"
       echo "failed_at=$(date --iso-8601=seconds)"
     } > "$status_file"
-    echo "[ERR] SLAKE 训练完成后未找到 checkpoint: $output_dir/final" >&2
+    echo "[ERR] SLAKE 训练完成后未找到 compact checkpoint: $output_dir/final" >&2
+    return 1
+  fi
+  if [ -f "$output_dir/final/model.safetensors" ] || \
+     [ -f "$output_dir/final/pytorch_model.bin" ]; then
+    echo "[ERR] compact checkpoint 中混入了旧版完整模型权重: $output_dir/final" >&2
     return 1
   fi
 
@@ -413,6 +419,15 @@ run_slake_constraint_matrix_3x2_part() {
   if [ "$failures" -ne 0 ]; then
     return 1
   fi
+}
+
+run_slake_compact_repro_6695() {
+  run_slake_full_all \
+    "slake_mmrl_compact_repro_r0500_w0008_d058_seed44" \
+    "0.0500" \
+    "0.0008" \
+    "0.58" \
+    "slake_compact_repro_6695"
 }
 
 # 重复跑 N 次同一实验；目录命名由 find_available_tag 自动处理，不会覆写
@@ -937,6 +952,7 @@ run_final_constraint_matrix_3x3_part() {
 #   bash run_experiment.sh slake_constraint_matrix_3x2_part1
 #   bash run_experiment.sh slake_constraint_matrix_3x2_part2
 #   bash run_experiment.sh slake_constraint_matrix_3x2_part3
+#   bash run_experiment.sh slake_compact_repro_6695
 #   bash run_experiment.sh final_three_experiments_seed44
 #   bash run_experiment.sh custom_r025_d058_multiseed_45_47
 #   bash run_experiment.sh custom_optimizer_adapter_sweep_seed44
@@ -1141,6 +1157,9 @@ case "$RUN_TARGET" in
   slake_constraint_matrix_3x2_part3)
     run_slake_constraint_matrix_3x2_part 3
     ;;
+  slake_compact_repro_6695)
+    run_slake_compact_repro_6695
+    ;;
   final_three_experiments_seed44)
     run_final_three_experiments
     ;;
@@ -1337,7 +1356,7 @@ case "$RUN_TARGET" in
     run_one "visual_router_raw_adapter_v1" "visual_router_raw_adapter_v1_seed47"
     ;;
   *)
-    echo "[ERR] 未知实验目标: $RUN_TARGET（可选: relation44, relation47, heterogeneous_lr_pair, heterogeneous_relation_100_102, multiturn_relation_seed100, multiturn_relation_seed101, multiturn_relation_100_102, joint_cosine_seed100, legacy_3cdf58d_seed100, fixed_stage1_constant_seed100, fixed_stage1_lr5e5_seed100, fixed_stage1_pooling_lr1e5_seed44, fixed_stage1_global_lr_half_seed44, fixed_stage1_mmrl_only_lr3e5_seed44, stage3_control_seed44, stage3_late_decay_seed44, stage3_late_decay_balanced_loss_seed44, loss_matrix_r0125_seed44, loss_matrix_r0250_seed44, loss_matrix_r0500_seed44, loss_tuning_no_effective_seed44, loss_tuning_half_usage_seed44, loss_tuning_relation_r0100_seed44, loss_tuning_3x1_seed44, slake_r025_delta_pair_seed44, final_three_experiments_seed44, custom_r025_d058_multiseed_45_47, custom_optimizer_adapter_sweep_seed44, paper_ablation_seed44, paper_ablation_seed44_part1, paper_ablation_seed44_wo_rep_only, paper_ablation_seed44_part2, paper_ablation_seed44_part3, overnight_slake_pooling_pair_seed44, joint_cosine_1_4, joint_cosine_44_46, spatial_grounding_seed44, heterogeneous_no_relation_100_102, raw_adapter47, direct_mmrl, two_adapter, single_adapter, all）" >&2
+    echo "[ERR] 未知实验目标: $RUN_TARGET（新增 compact 复现入口: slake_compact_repro_6695）" >&2
     exit 2
     ;;
 esac

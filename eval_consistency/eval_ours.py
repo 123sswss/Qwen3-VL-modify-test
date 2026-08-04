@@ -1,16 +1,14 @@
-"""Evaluate a fully trained MMRL checkpoint with the shared consistency protocol."""
+"""Evaluate a compact FROST-VL checkpoint with the consistency protocol."""
 
 from __future__ import annotations
 
 import gc
-import json
 import sys
 from pathlib import Path
-from typing import Any, Dict, Tuple
+from typing import Any, Tuple
 
 import torch
 import torch.nn as nn
-from safetensors.torch import load_file
 from transformers import (
     AutoConfig,
     AutoProcessor,
@@ -20,14 +18,21 @@ from transformers import (
 
 from common import BASE_MODEL_PATH, MODEL_KWARGS, parse_args, run_experiment
 
+
 HERE = Path(__file__).resolve().parent
 REPO_ROOT = HERE.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-# Both the repository and eval_consistency contain config.py. Root MMRL modules
-# must capture the repository config, while common.py keeps its already-imported
-# evaluation constants.
+from mmrl_checkpoint import (
+    initialize_mmrl_from_base,
+    load_mmrl_delta,
+    load_mmrl_manifest,
+    validate_base_config,
+)
+
+# eval_consistency and the repository both contain config.py. Root MMRL modules
+# must capture the repository config while common.py keeps its own constants.
 _evaluation_config_module = sys.modules.get("config")
 if _evaluation_config_module is None:
     raise RuntimeError("eval_consistency config was not loaded by common.py")
@@ -39,7 +44,7 @@ finally:
 
 
 class Qwen3VLMMRLForConsistency(Qwen3VLForConditionalGeneration):
-    """Inference wrapper matching the parameter layout saved by Stage 3."""
+    """Inference wrapper matching the compact Stage 3 parameter layout."""
 
     def __init__(self, config: Any, tokenizer: Any) -> None:
         nn.Module.__init__(self)
@@ -56,6 +61,8 @@ class Qwen3VLMMRLForConsistency(Qwen3VLForConditionalGeneration):
         if tokenizer.eos_token_id is not None:
             self.generation_config.eos_token_id = tokenizer.eos_token_id
         self.post_init()
+        if self.model.visual.decouple_stage_pooling:
+            self.model.visual.reset_router_pooling_from_gate()
 
     def get_output_embeddings(self) -> nn.Module:
         return self.lm_head
@@ -77,7 +84,6 @@ REQUIRED_MMRL_CONFIG_KEYS = (
     "VISUAL_RESIDUAL_ADAPTER_COUNT",
     "RANDOM_INIT_ADAPTER_OUTPUT_COUNT",
 )
-ALLOWED_MISSING_CHECKPOINT_KEYS = {"lm_head.weight"}
 
 
 def _hydrate_nested_mmrl_config(config: Any) -> None:
@@ -98,10 +104,7 @@ def _hydrate_nested_mmrl_config(config: Any) -> None:
 
 
 def _validate_checkpoint_config(config: Any, checkpoint: Path) -> None:
-    missing = [
-        key for key in REQUIRED_MMRL_CONFIG_KEYS
-        if not hasattr(config, key)
-    ]
+    missing = [key for key in REQUIRED_MMRL_CONFIG_KEYS if not hasattr(config, key)]
     if missing:
         raise RuntimeError(
             f"Checkpoint config is missing MMRL architecture keys {missing}: "
@@ -122,205 +125,6 @@ def _apply_shared_attention_backend(config: Any) -> None:
     config.text_config._attn_implementation = implementation
     config.vision_config._attn_implementation = implementation
     print(f"[MMRL_BACKEND_AUDIT] attn_implementation={implementation}")
-
-
-def _load_pytorch_state_dict(path: Path) -> Dict[str, torch.Tensor]:
-    try:
-        state_dict = torch.load(
-            path,
-            map_location="cpu",
-            weights_only=True,
-        )
-    except TypeError:
-        state_dict = torch.load(path, map_location="cpu")
-    if not isinstance(state_dict, dict):
-        raise TypeError(
-            f"PyTorch checkpoint shard must contain a state dict: {path}"
-        )
-    return state_dict
-
-
-def _load_sharded_checkpoint_strict(
-    model: Qwen3VLMMRLForConsistency,
-    checkpoint: Path,
-    index_path: Path,
-    use_safetensors: bool,
-) -> int:
-    with index_path.open("r", encoding="utf-8") as handle:
-        index = json.load(handle)
-    weight_map = index.get("weight_map")
-    if not isinstance(weight_map, dict) or not weight_map:
-        raise RuntimeError(
-            f"Checkpoint shard index has no non-empty weight_map: {index_path}"
-        )
-    if not all(
-        isinstance(key, str) and isinstance(value, str)
-        for key, value in weight_map.items()
-    ):
-        raise RuntimeError(
-            f"Checkpoint shard index contains invalid weight_map entries: {index_path}"
-        )
-
-    model_keys = set(model.state_dict())
-    checkpoint_keys = set(weight_map)
-    missing_keys = sorted(
-        model_keys - checkpoint_keys - ALLOWED_MISSING_CHECKPOINT_KEYS
-    )
-    unexpected_keys = sorted(checkpoint_keys - model_keys)
-    if missing_keys or unexpected_keys:
-        raise RuntimeError(
-            "Strict sharded checkpoint index does not match the model: "
-            f"missing={missing_keys} unexpected={unexpected_keys}"
-        )
-
-    checkpoint_root = checkpoint.resolve()
-    shard_names = sorted(set(weight_map.values()))
-    if not shard_names:
-        raise RuntimeError(f"Checkpoint shard index names no shard files: {index_path}")
-
-    tensor_count = 0
-    loaded_keys = set()
-    for shard_number, shard_name in enumerate(shard_names, start=1):
-        shard_path = (checkpoint / shard_name).resolve()
-        if shard_path.parent != checkpoint_root:
-            raise RuntimeError(
-                f"Checkpoint shard must be directly inside {checkpoint}: {shard_name}"
-            )
-        if not shard_path.is_file():
-            raise FileNotFoundError(
-                f"Checkpoint shard listed by {index_path.name} is missing: {shard_path}"
-            )
-
-        expected_shard_keys = {
-            key for key, mapped_shard in weight_map.items()
-            if mapped_shard == shard_name
-        }
-        state_dict = (
-            load_file(str(shard_path), device="cpu")
-            if use_safetensors
-            else _load_pytorch_state_dict(shard_path)
-        )
-        actual_shard_keys = set(state_dict)
-        if actual_shard_keys != expected_shard_keys:
-            raise RuntimeError(
-                f"Checkpoint shard keys do not match {index_path.name}: "
-                f"shard={shard_name} "
-                f"missing={sorted(expected_shard_keys - actual_shard_keys)} "
-                f"unexpected={sorted(actual_shard_keys - expected_shard_keys)}"
-            )
-        duplicate_keys = loaded_keys & actual_shard_keys
-        if duplicate_keys:
-            raise RuntimeError(
-                f"Checkpoint keys appear in multiple shards: {sorted(duplicate_keys)}"
-            )
-
-        incompatible = model.load_state_dict(state_dict, strict=False)
-        if incompatible.unexpected_keys:
-            raise RuntimeError(
-                "Shard load returned unexpected model keys: "
-                f"shard={shard_name} unexpected={incompatible.unexpected_keys}"
-            )
-        loaded_keys.update(actual_shard_keys)
-        tensor_count += len(state_dict)
-        del state_dict
-        gc.collect()
-        print(
-            "[MMRL_CHECKPOINT_SHARD] "
-            f"loaded={shard_number}/{len(shard_names)} "
-            f"file={shard_name} tensors={len(actual_shard_keys)}"
-        )
-
-    missing_after_load = (
-        model_keys - loaded_keys - ALLOWED_MISSING_CHECKPOINT_KEYS
-    )
-    unexpected_after_load = loaded_keys - model_keys
-    if missing_after_load or unexpected_after_load:
-        raise RuntimeError(
-            "Sharded checkpoint load did not cover the complete model: "
-            f"missing={sorted(missing_after_load)} "
-            f"unexpected={sorted(unexpected_after_load)}"
-        )
-    allowed_missing = sorted(
-        (model_keys - loaded_keys) & ALLOWED_MISSING_CHECKPOINT_KEYS
-    )
-    print(
-        "[MMRL_CHECKPOINT_COMPAT] "
-        f"allowed_missing={allowed_missing} unexpected=[]"
-    )
-    return tensor_count
-
-
-def _load_state_dict_compatible(
-    model: Qwen3VLMMRLForConsistency,
-    state_dict: Dict[str, torch.Tensor],
-) -> None:
-    result = model.load_state_dict(state_dict, strict=False)
-    disallowed_missing = sorted(
-        set(result.missing_keys) - ALLOWED_MISSING_CHECKPOINT_KEYS
-    )
-    if disallowed_missing or result.unexpected_keys:
-        raise RuntimeError(
-            "Checkpoint key mismatch: "
-            f"missing={disallowed_missing} "
-            f"unexpected={result.unexpected_keys}"
-        )
-    print(
-        "[MMRL_CHECKPOINT_COMPAT] "
-        f"allowed_missing={result.missing_keys} "
-        f"unexpected={result.unexpected_keys}"
-    )
-
-
-def _load_full_checkpoint(
-    model: Qwen3VLMMRLForConsistency,
-    checkpoint: Path,
-) -> None:
-    safetensors_path = checkpoint / "model.safetensors"
-    pytorch_path = checkpoint / "pytorch_model.bin"
-    safe_index = checkpoint / "model.safetensors.index.json"
-    pytorch_index = checkpoint / "pytorch_model.bin.index.json"
-
-    if safetensors_path.is_file():
-        state_dict = load_file(str(safetensors_path), device="cpu")
-        _load_state_dict_compatible(model, state_dict)
-        tensor_count = len(state_dict)
-        del state_dict
-        print(
-            "[MMRL_CHECKPOINT_AUDIT] "
-            f"format=safetensors tensors={tensor_count} strict=False"
-        )
-    elif pytorch_path.is_file():
-        state_dict = _load_pytorch_state_dict(pytorch_path)
-        _load_state_dict_compatible(model, state_dict)
-        tensor_count = len(state_dict)
-        del state_dict
-        print(
-            "[MMRL_CHECKPOINT_AUDIT] "
-            f"format=pytorch tensors={tensor_count} strict=False"
-        )
-    elif safe_index.is_file() or pytorch_index.is_file():
-        use_safetensors = safe_index.is_file()
-        index_path = safe_index if use_safetensors else pytorch_index
-        tensor_count = _load_sharded_checkpoint_strict(
-            model,
-            checkpoint,
-            index_path,
-            use_safetensors=use_safetensors,
-        )
-        print(
-            "[MMRL_CHECKPOINT_AUDIT] "
-            f"format={'sharded_safetensors' if use_safetensors else 'sharded_pytorch'} "
-            f"shards={len(set(json.loads(index_path.read_text(encoding='utf-8'))['weight_map'].values()))} "
-            f"tensors={tensor_count} strict=False"
-        )
-    else:
-        raise FileNotFoundError(
-            "No supported full-model checkpoint found in "
-            f"{checkpoint}; expected model.safetensors, pytorch_model.bin, "
-            "or a Transformers shard index."
-        )
-
-    gc.collect()
 
 
 def _audit_loaded_model(
@@ -353,8 +157,7 @@ def _audit_loaded_model(
     expected_vocab_size = int(model.config.text_config.vocab_size)
     if model.lm_head.weight.shape[0] != expected_vocab_size:
         raise RuntimeError(
-            "MMRL output vocabulary does not match checkpoint config and cannot "
-            "be paired with Base logits: "
+            "MMRL output vocabulary does not match checkpoint config: "
             f"lm_head={model.lm_head.weight.shape[0]} "
             f"config={expected_vocab_size}"
         )
@@ -377,9 +180,12 @@ def load_ours(checkpoint_path: str) -> Tuple[Any, Any]:
     if not torch.cuda.is_available():
         raise RuntimeError("MMRL consistency evaluation requires a CUDA device")
 
+    manifest = load_mmrl_manifest(checkpoint)
     processor = AutoProcessor.from_pretrained(BASE_MODEL_PATH, trust_remote_code=True)
     tokenizer = processor.tokenizer
     config = AutoConfig.from_pretrained(checkpoint, trust_remote_code=True)
+    base_config = AutoConfig.from_pretrained(BASE_MODEL_PATH, trust_remote_code=True)
+    validate_base_config(manifest, base_config)
     _hydrate_nested_mmrl_config(config)
     _validate_checkpoint_config(config, checkpoint)
     _apply_shared_attention_backend(config)
@@ -387,10 +193,20 @@ def load_ours(checkpoint_path: str) -> Tuple[Any, Any]:
     with torch.device("cuda"):
         model = Qwen3VLMMRLForConsistency(config, tokenizer)
     model.to(dtype=torch.bfloat16)
-    _load_full_checkpoint(model, checkpoint)
+
+    base_model = Qwen3VLForConditionalGeneration.from_pretrained(
+        BASE_MODEL_PATH,
+        device_map="cpu",
+        torch_dtype=torch.bfloat16,
+        trust_remote_code=True,
+    )
+    initialize_mmrl_from_base(model, base_model)
+    del base_model
+    gc.collect()
+    torch.cuda.empty_cache()
+    load_mmrl_delta(model, checkpoint)
     model.eval()
     _audit_loaded_model(model, checkpoint)
-
     return model, processor
 
 
@@ -402,8 +218,7 @@ def main() -> None:
     )
     if not args.checkpoint:
         raise SystemExit(
-            "Provide --checkpoint /path/to/final or set "
-            "MMRL_CONSISTENCY_CHECKPOINT."
+            "Provide --checkpoint /path/to/final or set MMRL_CONSISTENCY_CHECKPOINT."
         )
     model, processor = load_ours(args.checkpoint)
     run_experiment(

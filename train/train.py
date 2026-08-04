@@ -5,11 +5,17 @@ os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":4096:8")
 import math
 import random
 import re
+import sys
 from pathlib import Path
 
 import numpy as np
 import torch
 
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from mmrl_checkpoint import save_mmrl_checkpoint
 from train_stages import build_model_and_processor, run_stage
 from live_epoch_eval import (
     preflight_live_epoch_evaluation,
@@ -1212,8 +1218,16 @@ def main():
             summary = run_live_epoch_evaluation(model, processor, log_path)
         except Exception:
             recovery_dir = Path(CFG["output_dir"]) / "eval_failed_recovery"
-            model.save_pretrained(recovery_dir)
-            processor.save_pretrained(recovery_dir)
+            save_mmrl_checkpoint(
+                model,
+                processor,
+                recovery_dir,
+                CFG["model_path"],
+                metadata={
+                    "experiment": SELECTED_EXPERIMENT,
+                    "reason": "final_evaluation_failed_recovery",
+                },
+            )
             print(
                 "[FINAL-EVAL-RECOVERY] evaluation failed; trained weights saved to "
                 f"{recovery_dir}"
@@ -1227,8 +1241,17 @@ def main():
                 CFG["output_dir"], score
             )
             if keep:
-                model.save_pretrained(final_dir)
-                processor.save_pretrained(final_dir)
+                save_mmrl_checkpoint(
+                    model,
+                    processor,
+                    final_dir,
+                    CFG["model_path"],
+                    metadata={
+                        "experiment": SELECTED_EXPERIMENT,
+                        "score": score,
+                        "seed": CFG["train"]["seed"],
+                    },
+                )
                 print(
                     f"[CHECKPOINT] saved extrema candidate to {final_dir}; "
                     f"score={score} prior_min={prior_min} prior_max={prior_max}"
@@ -1241,8 +1264,16 @@ def main():
         else:
             print("[CHECKPOINT] final checkpoint saving disabled")
     else:
-        model.save_pretrained(final_dir)
-        processor.save_pretrained(final_dir)
+        save_mmrl_checkpoint(
+            model,
+            processor,
+            final_dir,
+            CFG["model_path"],
+            metadata={
+                "experiment": SELECTED_EXPERIMENT,
+                "seed": CFG["train"]["seed"],
+            },
+        )
         print(f"final model saved to {final_dir}")
 
     print("All stages done.")

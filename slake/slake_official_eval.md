@@ -96,7 +96,12 @@ python slake/slake_official_eval.py \
 ```
 
 If the checkpoint folder has an automatically appended suffix, replace the
-checkpoint path with the actual directory containing `final/model.safetensors`.
+checkpoint path with the actual directory containing
+`final/mmrl_manifest.json` and `final/mmrl_delta.safetensors`.
+
+The compact format deliberately contains no Base-model weights. The evaluator
+rebuilds frozen weights and Rep blocks from `--base-model`, then strictly loads
+the saved FROST-VL delta.
 
 ## Evaluate all existing comparison checkpoints
 

@@ -90,6 +90,10 @@ python slake/slake_official_eval.py \
   --overwrite
 ```
 
+FROST-VL training writes only `mmrl_manifest.json` and
+`mmrl_delta.safetensors` for model weights. A matching Base model must be
+provided during evaluation; full-model legacy checkpoints are not supported.
+
 Use flags such as `--mmrl-lr`, `--pooling-lr`, `--router-lr`,
 `--adapter-lrs A0 A1 A2 A3`, `--relation-weight`, and `--usage-weight` to
 change one training variable without editing source.

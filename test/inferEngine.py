@@ -1,4 +1,3 @@
-import os
 import sys
 from pathlib import Path
 
@@ -17,10 +16,15 @@ from transformers import (
     AutoImageProcessor,
     GenerationConfig
 )
-from safetensors.torch import load_file
 import QWen3WithMMRL
 import processingWithMMRL
 from generation_timing import generate_with_timing
+from mmrl_checkpoint import (
+    initialize_mmrl_from_base,
+    load_mmrl_delta,
+    load_mmrl_manifest,
+    validate_base_config,
+)
 
 
 class MissingGateError(RuntimeError):
@@ -58,16 +62,18 @@ class ModelInterface:
     def __init__(self, trained_model_path, base_model_path):
         self.last_gate_value = None
         self.last_generation_timing = None
-        print("[1/3] 加载配置与构建模型架构...")
+        checkpoint_path = Path(trained_model_path).expanduser().resolve()
+        print("[1/4] 校验 compact checkpoint...")
+        manifest = load_mmrl_manifest(checkpoint_path)
+
+        print("[2/4] 加载配置与构建模型架构...")
         self.tokenizer = AutoTokenizer.from_pretrained(base_model_path, trust_remote_code=True)
         print(f"    -> Tokenizer 词表大小: {len(self.tokenizer)}")
 
-        try:
-            config = AutoConfig.from_pretrained(trained_model_path, trust_remote_code=True)
-            print("    -> 使用训练目录的 Config")
-        except:
-            print("    -> 回退使用基座 Config")
-            config = AutoConfig.from_pretrained(base_model_path, trust_remote_code=True)
+        config = AutoConfig.from_pretrained(checkpoint_path, trust_remote_code=True)
+        base_config = AutoConfig.from_pretrained(base_model_path, trust_remote_code=True)
+        validate_base_config(manifest, base_config)
+        print("    -> compact Config 与 Base 结构签名一致")
 
         image_processor = AutoImageProcessor.from_pretrained(base_model_path, trust_remote_code=True)
 
@@ -75,25 +81,25 @@ class ModelInterface:
             self.model = Qwen3VLMMRLForGen(config, self.tokenizer)
             self.model.to(torch.bfloat16)
 
-        print(f"[2/3] 加载训练权重: {trained_model_path} ...")
-        safetensors_path = os.path.join(trained_model_path, "model.safetensors")
-        bin_path = os.path.join(trained_model_path, "pytorch_model.bin")
-        if os.path.exists(safetensors_path):
-            state_dict = load_file(safetensors_path)
-        elif os.path.exists(bin_path):
-            state_dict = torch.load(bin_path, map_location="cpu")
-        else:
-            raise FileNotFoundError(f"在 {trained_model_path} 中未找到权重文件")
+        print(f"[3/4] 从 Base 重建冻结权重与 Rep Blocks: {base_model_path} ...")
+        base_model = Qwen3VLForConditionalGeneration.from_pretrained(
+            base_model_path,
+            device_map="cpu",
+            torch_dtype=torch.bfloat16,
+            trust_remote_code=True,
+        )
+        initialize_mmrl_from_base(self.model, base_model)
+        del base_model
+        torch.cuda.empty_cache()
 
-        msg = self.model.load_state_dict(state_dict, strict=False)
-        print(f"    Missing keys: {msg.missing_keys}")
-        print(f"    Unexpected keys: {msg.unexpected_keys}")
+        print(f"[4/4] 严格加载增量权重: {checkpoint_path} ...")
+        load_mmrl_delta(self.model, checkpoint_path)
         self.model.eval()
 
         self.processor = processingWithMMRL.Qwen3ProcessorWithMMRL(
             image_processor=image_processor, tokenizer=self.tokenizer
         )
-        print("[3/3] 模型就绪。")
+        print("[READY] compact FROST-VL 模型就绪。")
 
     def infer(self, image: Image.Image, prompt_text: str, max_new_tokens=256, temperature=0.0, do_sample=False) -> str:
         """单次推理，返回生成文本"""

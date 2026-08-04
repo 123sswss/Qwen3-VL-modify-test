@@ -30,6 +30,7 @@ for import_root in (REPO_ROOT, TRAIN_DIR):
 
 from live_epoch_eval import _LiveModelInterface
 from data_pipeline import FourViewMMRLDataset
+from mmrl_checkpoint import save_mmrl_checkpoint
 from slake.data_pipeline import (
     SLAKEDataCollator,
     SLAKEDataset,
@@ -722,10 +723,22 @@ def main() -> int:
         dataset,
         count=args.generation_checks,
     )
+    checkpoint_manifest = None
     if not args.no_save_final:
         final_dir = output_dir / "final"
-        model.save_pretrained(final_dir)
-        processor.save_pretrained(final_dir)
+        checkpoint_manifest = save_mmrl_checkpoint(
+            model,
+            processor,
+            final_dir,
+            model_path,
+            metadata={
+                "experiment": args.experiment_name,
+                "seed": args.seed,
+                "data_seed": args.data_seed,
+                "dataset": "SLAKE",
+                "language": args.language,
+            },
+        )
         print(f"[SLAKE_CHECKPOINT] saved={final_dir}")
 
     report = {
@@ -743,6 +756,7 @@ def main() -> int:
         "template_and_collator": template_report,
         "forward": forward_report,
         "generation": generation_rows,
+        "checkpoint": checkpoint_manifest,
     }
     report_path = output_dir / "slake_train_report.json"
     with report_path.open("w", encoding="utf-8") as handle:

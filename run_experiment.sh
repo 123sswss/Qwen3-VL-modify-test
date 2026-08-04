@@ -198,6 +198,8 @@ run_slake_full_all() {
   local effective_delta_weight="${3:-0.0003}"
   local effective_delta_floor="${4:-0.52}"
   local run_target_label="${5:-overnight_slake_pooling_pair_seed44}"
+  local stage3_epochs="${6:-1}"
+  local evaluate_epoch_checkpoints="${7:-0}"
   local data_root="${SLAKE_DATA_ROOT:-/root/autodl-tmp/dataset/slake}"
   local model_path="${MMRL_MODEL_PATH:-/root/autodl-tmp/model}"
   local slake_output_root="$SLAKE_OUTPUT_ROOT/mmrl"
@@ -238,6 +240,7 @@ run_slake_full_all() {
   echo "[SLAKE] language=all"
   echo "[SLAKE] seed=44 data_seed=42"
   echo "[SLAKE] decouple_stage_pooling=0"
+  echo "[SLAKE] stage3_epochs=$stage3_epochs epoch_lr_decay=0.5"
   echo "[SLAKE] relation_weight=$relation_weight effective_delta_weight=$effective_delta_weight effective_delta_floor=$effective_delta_floor"
   echo "[SLAKE] output_dir=$output_dir"
   echo "============================================================"
@@ -252,6 +255,8 @@ run_slake_full_all() {
       --language all \
       --seed 44 \
       --data-seed 42 \
+      --stage3-epochs "$stage3_epochs" \
+      --stage3-epoch-lr-decay 0.5 \
       --pooling-lr 6e-5 \
       --mmrl-lr 6e-5 \
       --router-lr 8e-5 \
@@ -330,6 +335,38 @@ run_slake_full_all() {
     } > "$status_file"
     echo "[ERR] SLAKE 官方测评失败: $tag" >&2
     return 1
+  fi
+
+  if [ "$evaluate_epoch_checkpoints" = "1" ]; then
+    local epoch_id
+    for ((epoch_id = 1; epoch_id < stage3_epochs; epoch_id++)); do
+      local epoch_checkpoint="$output_dir/checkpoints/stage3_epoch_${epoch_id}"
+      local epoch_eval_dir="$output_dir/eval_epochs/epoch_${epoch_id}"
+      if [ ! -f "$epoch_checkpoint/mmrl_manifest.json" ] || \
+         [ ! -f "$epoch_checkpoint/mmrl_delta.safetensors" ]; then
+        echo "[ERR] 缺少第 ${epoch_id} 轮 compact checkpoint: $epoch_checkpoint" >&2
+        return 1
+      fi
+      mkdir -p "$epoch_eval_dir"
+      echo "[SLAKE-EPOCH-EVAL] epoch=$epoch_id checkpoint=$epoch_checkpoint"
+      if ! (
+        cd "$ROOT_DIR"
+        python slake/slake_official_eval.py \
+          --backend mmrl \
+          --base-model "$model_path" \
+          --checkpoint "$epoch_checkpoint" \
+          --questions "$data_root/test.json" \
+          --image-root "$data_root/imgs" \
+          --output-dir "$epoch_eval_dir" \
+          --language all \
+          --overwrite \
+          2>&1 | tee "$output_dir/eval_epoch_${epoch_id}.log"
+      ); then
+        echo "[ERR] 第 ${epoch_id} 轮 SLAKE 官方测评失败" >&2
+        return 1
+      fi
+    done
+    echo "[SLAKE-EPOCH-EVAL] epoch=$stage3_epochs covered_by=$eval_dir"
   fi
 
   {
@@ -428,6 +465,17 @@ run_slake_compact_repro_6695() {
     "0.0008" \
     "0.58" \
     "slake_compact_repro_6695"
+}
+
+run_slake_compact_three_epoch_6695() {
+  run_slake_full_all \
+    "slake_mmrl_compact_three_epoch_r0500_w0008_d058_seed44" \
+    "0.0500" \
+    "0.0008" \
+    "0.58" \
+    "slake_compact_three_epoch_6695" \
+    "3" \
+    "1"
 }
 
 # 重复跑 N 次同一实验；目录命名由 find_available_tag 自动处理，不会覆写
@@ -953,6 +1001,7 @@ run_final_constraint_matrix_3x3_part() {
 #   bash run_experiment.sh slake_constraint_matrix_3x2_part2
 #   bash run_experiment.sh slake_constraint_matrix_3x2_part3
 #   bash run_experiment.sh slake_compact_repro_6695
+#   bash run_experiment.sh slake_compact_three_epoch_6695
 #   bash run_experiment.sh final_three_experiments_seed44
 #   bash run_experiment.sh custom_r025_d058_multiseed_45_47
 #   bash run_experiment.sh custom_optimizer_adapter_sweep_seed44
@@ -1160,6 +1209,9 @@ case "$RUN_TARGET" in
   slake_compact_repro_6695)
     run_slake_compact_repro_6695
     ;;
+  slake_compact_three_epoch_6695)
+    run_slake_compact_three_epoch_6695
+    ;;
   final_three_experiments_seed44)
     run_final_three_experiments
     ;;
@@ -1356,7 +1408,7 @@ case "$RUN_TARGET" in
     run_one "visual_router_raw_adapter_v1" "visual_router_raw_adapter_v1_seed47"
     ;;
   *)
-    echo "[ERR] 未知实验目标: $RUN_TARGET（新增 compact 复现入口: slake_compact_repro_6695）" >&2
+    echo "[ERR] 未知实验目标: $RUN_TARGET（compact 入口: slake_compact_repro_6695 / slake_compact_three_epoch_6695）" >&2
     exit 2
     ;;
 esac

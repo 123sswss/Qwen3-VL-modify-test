@@ -131,6 +131,12 @@ def build_experiment_config(args: argparse.Namespace) -> Dict[str, Any]:
         "stage3_schedule_epochs": args.stage3_epochs,
         "stage3_warmup_ratio": args.warmup_ratio,
         "stage3_lr_scheduler_type": args.scheduler,
+        "stage3_epoch_lr_decay": (
+            args.stage3_epoch_lr_decay if args.stage3_epochs > 1 else None
+        ),
+        "stage3_temperature_schedule_epochs": (
+            1 if args.stage3_epochs > 1 else None
+        ),
         "stage3_initial_temp": 1.0,
         "stage3_final_temp": 0.775,
         "stage3_assistant_turn_policy": "all",
@@ -150,6 +156,8 @@ def build_train_config(
         "data_order_seed": args.data_seed,
         "deterministic_sampling": True,
         "eval_each_epoch": False,
+        "save_each_epoch": args.stage3_epochs > 1,
+        "checkpoint_base_model_path": str(args.model_path),
         "visual_residual_adapter_count": 4,
         "adapter_usage_balance_loss_weight": args.usage_weight,
         "adapter_sample_entropy_loss_weight": args.entropy_weight,
@@ -560,6 +568,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--data-seed", type=int, default=42)
     parser.add_argument("--stage1-epochs", type=int, default=1)
     parser.add_argument("--stage3-epochs", type=int, default=1)
+    parser.add_argument("--stage3-epoch-lr-decay", type=float, default=0.5)
     parser.add_argument("--batch-size", type=int, default=2)
     parser.add_argument("--gradient-accumulation", type=int, default=16)
     parser.add_argument("--dataloader-workers", type=int, default=4)
@@ -623,6 +632,8 @@ def parse_args() -> argparse.Namespace:
         parser.error("--max-length must be at least 32")
     if args.stage1_epochs < 1 or args.stage3_epochs < 1:
         parser.error("stage epochs must be positive")
+    if not 0.0 < args.stage3_epoch_lr_decay <= 1.0:
+        parser.error("--stage3-epoch-lr-decay must be in (0, 1]")
     if args.batch_size < 1 or args.gradient_accumulation < 1:
         parser.error("batch size and gradient accumulation must be positive")
     if args.generation_checks < 0:

@@ -23,6 +23,7 @@ import json
 
 from logger import StageMetricLogger, TrainerMetricsCallback
 from live_epoch_eval import run_live_epoch_evaluation
+from mmrl_checkpoint import save_mmrl_checkpoint
 
 import numbers
 
@@ -301,6 +302,53 @@ class EpochEvaluationCallback(TrainerCallback):
             f"[EPOCH-EVAL] stage={self.stage_id} epoch={epoch_id} "
             f"score={summary.get('score')} completed"
         )
+
+
+class EpochCompactCheckpointCallback(TrainerCallback):
+    def __init__(
+        self,
+        processor,
+        output_dir,
+        stage_id,
+        base_model_path,
+        metadata=None,
+    ):
+        self.processor = processor
+        self.output_dir = output_dir
+        self.stage_id = int(stage_id)
+        self.base_model_path = base_model_path
+        self.metadata = dict(metadata or {})
+        self.completed_epochs = set()
+
+    def on_epoch_end(self, args, state, control, **kwargs):
+        if not state.is_world_process_zero:
+            return control
+        epoch_id = max(1, int(round(float(state.epoch or 0.0))))
+        if epoch_id in self.completed_epochs:
+            return control
+        self.completed_epochs.add(epoch_id)
+        checkpoint_dir = os.path.join(
+            self.output_dir,
+            "checkpoints",
+            f"stage{self.stage_id}_epoch_{epoch_id}",
+        )
+        save_mmrl_checkpoint(
+            kwargs["model"],
+            self.processor,
+            checkpoint_dir,
+            self.base_model_path,
+            metadata={
+                **self.metadata,
+                "stage": self.stage_id,
+                "epoch": epoch_id,
+                "global_step": int(state.global_step),
+            },
+        )
+        print(
+            f"[EPOCH-CHECKPOINT] stage={self.stage_id} epoch={epoch_id} "
+            f"global_step={int(state.global_step)} saved={checkpoint_dir}"
+        )
+        return control
 
 
 def _parse_step_evaluation_steps(value):
@@ -1513,6 +1561,48 @@ def _build_stage3_step_scheduler(optimizer, experiment_cfg):
     return torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lr_lambda)
 
 
+def _build_stage3_epoch_decay_scheduler(
+    optimizer,
+    updates_per_epoch,
+    total_epochs,
+    warmup_ratio,
+    epoch_decay,
+):
+    updates_per_epoch = int(updates_per_epoch)
+    total_epochs = int(total_epochs)
+    warmup_steps = max(1, int(updates_per_epoch * float(warmup_ratio)))
+    epoch_decay = float(epoch_decay)
+    if updates_per_epoch < 1 or total_epochs < 2:
+        raise ValueError(
+            "Stage3 epoch-decay schedule requires positive steps and at least two epochs"
+        )
+    if not 0.0 < epoch_decay <= 1.0:
+        raise ValueError(
+            f"Stage3 epoch LR decay must be in (0, 1], got {epoch_decay}"
+        )
+
+    def lr_lambda(current_step):
+        step = int(current_step)
+        if step < warmup_steps:
+            return float(step) / float(warmup_steps)
+        epoch_index = min(step // updates_per_epoch, total_epochs - 1)
+        return epoch_decay ** epoch_index
+
+    audit_steps = [0, warmup_steps]
+    audit_steps.extend(epoch * updates_per_epoch for epoch in range(1, total_epochs))
+    audit = {
+        step: round(lr_lambda(step), 8)
+        for step in dict.fromkeys(audit_steps)
+    }
+    print(
+        "[STAGE3_EPOCH_DECAY_SCHEDULE] "
+        f"updates_per_epoch={updates_per_epoch} total_epochs={total_epochs} "
+        f"warmup_steps={warmup_steps} epoch_decay={epoch_decay} "
+        f"factor_audit={audit}"
+    )
+    return torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lr_lambda)
+
+
 # =========================
 #  Stage1 lightweight classifier pretraining
 # =========================
@@ -1753,6 +1843,10 @@ def run_stage3_full(model, processor, data_cfg, train_cfg, output_dir):
     )
     stage3_max_steps = int(experiment_cfg.get("stage3_max_steps", -1))
     use_step_schedule = stage3_max_steps > 0
+    epoch_lr_decay = experiment_cfg.get("stage3_epoch_lr_decay")
+    use_epoch_decay_schedule = (
+        epoch_lr_decay is not None and actual_epochs > 1 and not use_step_schedule
+    )
     if actual_epochs < 1 or schedule_epochs < actual_epochs:
         raise ValueError(
             "Stage3 requires 1 <= actual epochs <= schedule epochs, got "
@@ -1765,7 +1859,7 @@ def run_stage3_full(model, processor, data_cfg, train_cfg, output_dir):
         f"peak_lr={train_cfg['learning_rate'][stage_id]} "
         f"warmup={experiment_cfg.get('stage3_warmup_steps') if use_step_schedule else train_cfg.get('stage3_warmup_ratio', 0.05)}"
         f"{'_steps' if use_step_schedule else '_ratio'} "
-        f"scheduler={'warmup_hold_cosine' if use_step_schedule else train_cfg.get('stage3_lr_scheduler_type', 'cosine')} "
+        f"scheduler={('warmup_hold_cosine' if use_step_schedule else 'fixed_warmup_epoch_decay' if use_epoch_decay_schedule else train_cfg.get('stage3_lr_scheduler_type', 'cosine'))} "
         f"temperature={train_cfg.get('initial_temp', 1.0)}"
         f"->{train_cfg.get('final_temp', 0.1)}"
     )
@@ -1875,31 +1969,49 @@ def run_stage3_full(model, processor, data_cfg, train_cfg, output_dir):
             assistant_turn_policy=assistant_turn_policy,
         )
         collator = MMRLDataCollator(processor)
+    micro_batches = math.ceil(
+        len(ds) / int(train_cfg["per_device_train_batch_size"])
+    )
+    updates_per_epoch = math.ceil(
+        micro_batches / int(train_cfg["gradient_accumulation_steps"])
+    )
     if use_step_schedule:
-        micro_batches = math.ceil(
-            len(ds) / int(train_cfg["per_device_train_batch_size"])
-        )
-        available_optimizer_steps = math.ceil(
-            micro_batches / int(train_cfg["gradient_accumulation_steps"])
-        )
         print(
             "[STAGE3_DATA_BUDGET] "
             f"view_samples={len(ds)} micro_batches={micro_batches} "
-            f"available_optimizer_steps={available_optimizer_steps} "
+            f"available_optimizer_steps={updates_per_epoch} "
             f"requested_max_steps={stage3_max_steps}"
         )
-        if stage3_max_steps > available_optimizer_steps:
+        if stage3_max_steps > updates_per_epoch:
             raise RuntimeError(
                 "Stage3 max_steps would cross the first dataset pass: "
-                f"requested={stage3_max_steps} available={available_optimizer_steps}"
+                f"requested={stage3_max_steps} available={updates_per_epoch}"
             )
+    temperature_schedule_epochs = experiment_cfg.get(
+        "stage3_temperature_schedule_epochs"
+    )
+    if temperature_schedule_epochs is not None:
+        temperature_schedule_epochs = int(temperature_schedule_epochs)
+        if not 1 <= temperature_schedule_epochs <= schedule_epochs:
+            raise ValueError(
+                "Stage3 temperature schedule epochs must be between 1 and the "
+                f"schedule length, got {temperature_schedule_epochs}"
+            )
+        temperature_steps = updates_per_epoch * temperature_schedule_epochs
+        print(
+            "[STAGE3_TEMPERATURE_SCHEDULE] "
+            f"decay_epochs={temperature_schedule_epochs} "
+            f"decay_steps={temperature_steps} hold_final_afterward=True"
+        )
+    else:
+        temperature_steps = stage3_max_steps if use_step_schedule else None
     cb = StageScheduleCallback(
         dataset=ds,
         total_epochs=schedule_epochs,
         init_temp=train_cfg.get("initial_temp", 1.0),
         final_temp=train_cfg.get("final_temp", 0.1),
         resample_on_first_epoch=False,
-        total_steps=stage3_max_steps if use_step_schedule else None,
+        total_steps=temperature_steps,
     )
     args = TrainingArguments(
         output_dir=f"{output_dir}/stage{stage_id}",
@@ -1915,7 +2027,7 @@ def run_stage3_full(model, processor, data_cfg, train_cfg, output_dir):
         ),
         warmup_ratio=(
             0.0
-            if use_step_schedule
+            if use_step_schedule or use_epoch_decay_schedule
             else train_cfg.get("stage3_warmup_ratio", 0.05)
         ),
         logging_steps=10,
@@ -1987,6 +2099,23 @@ def run_stage3_full(model, processor, data_cfg, train_cfg, output_dir):
             stage_id,
             actual_epochs,
         ))
+    if train_cfg.get("save_each_epoch", False):
+        base_model_path = train_cfg.get("checkpoint_base_model_path")
+        if not base_model_path:
+            raise ValueError(
+                "save_each_epoch requires checkpoint_base_model_path"
+            )
+        callbacks.append(EpochCompactCheckpointCallback(
+            processor,
+            output_dir,
+            stage_id,
+            base_model_path,
+            metadata={
+                "experiment": train_cfg.get("experiment_name"),
+                "seed": train_cfg.get("seed"),
+                "data_seed": train_cfg.get("data_sampling_seed"),
+            },
+        ))
 
     grouped_optimizer = _build_stage3_grouped_optimizer(model, train_cfg)
     trainer_kwargs = {}
@@ -1997,10 +2126,18 @@ def run_stage3_full(model, processor, data_cfg, train_cfg, output_dir):
                 grouped_optimizer,
                 experiment_cfg,
             )
+        elif use_epoch_decay_schedule:
+            grouped_scheduler = _build_stage3_epoch_decay_scheduler(
+                grouped_optimizer,
+                updates_per_epoch=updates_per_epoch,
+                total_epochs=schedule_epochs,
+                warmup_ratio=train_cfg.get("stage3_warmup_ratio", 0.05),
+                epoch_decay=epoch_lr_decay,
+            )
         trainer_kwargs["optimizers"] = (grouped_optimizer, grouped_scheduler)
-    elif use_step_schedule:
+    elif use_step_schedule or use_epoch_decay_schedule:
         raise RuntimeError(
-            "Stage3 fixed-step schedule requires the grouped optimizer configuration"
+            "Stage3 explicit schedule requires the grouped optimizer configuration"
         )
     trainer = Trainer(
         model=model,

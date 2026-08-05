@@ -201,6 +201,7 @@ run_slake_full_all() {
   local stage3_epochs="${6:-1}"
   local evaluate_epoch_checkpoints="${7:-0}"
   local evaluation_split="${8:-test}"
+  local training_seed="${9:-44}"
   local data_root="${SLAKE_DATA_ROOT:-/root/autodl-tmp/dataset/slake}"
   local model_path="${MMRL_MODEL_PATH:-/root/autodl-tmp/model}"
   local slake_output_root="$SLAKE_OUTPUT_ROOT/mmrl"
@@ -228,6 +229,8 @@ run_slake_full_all() {
     echo "experiment=$experiment_name"
     echo "tag=$tag"
     echo "output_dir=$output_dir"
+    echo "seed=$training_seed"
+    echo "data_seed=42"
     echo "evaluation_split=$evaluation_split"
     echo "started_at=$(date --iso-8601=seconds)"
   } > "$status_file"
@@ -245,7 +248,7 @@ run_slake_full_all() {
   echo "[SLAKE] 开始全量训练与官方测评: $tag"
   echo "[SLAKE] data_root=$data_root"
   echo "[SLAKE] language=all"
-  echo "[SLAKE] seed=44 data_seed=42"
+  echo "[SLAKE] seed=$training_seed data_seed=42"
   echo "[SLAKE] decouple_stage_pooling=0"
   echo "[SLAKE] stage3_epochs=$stage3_epochs epoch_lr_decay=0.5"
   echo "[SLAKE] evaluation_split=$evaluation_split questions=$evaluation_questions"
@@ -261,7 +264,7 @@ run_slake_full_all() {
       --output-dir "$output_dir" \
       --experiment-name "$experiment_name" \
       --language all \
-      --seed 44 \
+      --seed "$training_seed" \
       --data-seed 42 \
       --stage3-epochs "$stage3_epochs" \
       --stage3-epoch-lr-decay 0.5 \
@@ -523,6 +526,32 @@ run_slake_validation_2x2_three_epoch() {
   fi
 
   echo "[SLAKE-VAL-2X2-SUMMARY] all four attempted; failures=$failures"
+  if [ "$failures" -ne 0 ]; then
+    return 1
+  fi
+}
+
+run_slake_best_three_epoch_seed44_repeat_and_45_47() {
+  local failures=0
+  local training_seed
+  local seed_tag
+
+  for training_seed in 44 45 46 47; do
+    seed_tag="seed${training_seed}"
+    if [ "$training_seed" = "44" ]; then
+      seed_tag="seed44_repeat"
+    fi
+    if ! run_slake_full_all \
+      "slake_mmrl_best3ep_r0500_w0008_d058_${seed_tag}" \
+      "0.0500" "0.0008" "0.58" \
+      "slake_best_three_epoch_seed44_repeat_and_45_47" \
+      "3" "0" "test" "$training_seed"; then
+      echo "[SLAKE-BEST-MULTISEED-WARN] ${seed_tag} failed; continuing." >&2
+      failures=$((failures + 1))
+    fi
+  done
+
+  echo "[SLAKE-BEST-MULTISEED-SUMMARY] all four attempted; failures=$failures"
   if [ "$failures" -ne 0 ]; then
     return 1
   fi
@@ -1053,6 +1082,7 @@ run_final_constraint_matrix_3x3_part() {
 #   bash run_experiment.sh slake_compact_repro_6695
 #   bash run_experiment.sh slake_compact_three_epoch_6695
 #   bash run_experiment.sh slake_validation_2x2_three_epoch
+#   bash run_experiment.sh slake_best_three_epoch_multiseed
 #   bash run_experiment.sh final_three_experiments_seed44
 #   bash run_experiment.sh custom_r025_d058_multiseed_45_47
 #   bash run_experiment.sh custom_optimizer_adapter_sweep_seed44
@@ -1266,6 +1296,9 @@ case "$RUN_TARGET" in
   slake_validation_2x2_three_epoch)
     run_slake_validation_2x2_three_epoch
     ;;
+  slake_best_three_epoch_multiseed)
+    run_slake_best_three_epoch_seed44_repeat_and_45_47
+    ;;
   final_three_experiments_seed44)
     run_final_three_experiments
     ;;
@@ -1462,7 +1495,7 @@ case "$RUN_TARGET" in
     run_one "visual_router_raw_adapter_v1" "visual_router_raw_adapter_v1_seed47"
     ;;
   *)
-    echo "[ERR] 未知实验目标: $RUN_TARGET（SLAKE validation 矩阵: slake_validation_2x2_three_epoch）" >&2
+    echo "[ERR] 未知实验目标: $RUN_TARGET（SLAKE 多 seed: slake_best_three_epoch_multiseed）" >&2
     exit 2
     ;;
 esac

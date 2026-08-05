@@ -23,6 +23,7 @@ from transformers import (
     AutoModelForCausalLM,
     AutoProcessor,
     Trainer,
+    TrainerCallback,
     TrainingArguments,
 )
 
@@ -121,12 +122,40 @@ class VisualPEFTCollator:
         }
 
 
+class EpochAdapterCheckpointCallback(TrainerCallback):
+    def __init__(self, processor: Any, output_dir: Path) -> None:
+        self.processor = processor
+        self.output_dir = output_dir
+        self.completed_epochs = set()
+
+    def on_epoch_end(self, args, state, control, **kwargs):
+        if not state.is_world_process_zero:
+            return control
+        epoch_id = max(1, int(round(float(state.epoch or 0.0))))
+        if epoch_id in self.completed_epochs:
+            return control
+        self.completed_epochs.add(epoch_id)
+        checkpoint_dir = self.output_dir / "checkpoints" / f"epoch_{epoch_id}"
+        kwargs["model"].save_pretrained(checkpoint_dir)
+        self.processor.save_pretrained(checkpoint_dir)
+        print(
+            f"[SLAKE_PEFT_EPOCH_CHECKPOINT] epoch={epoch_id} "
+            f"global_step={int(state.global_step)} saved={checkpoint_dir}"
+        )
+        return control
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Train one fixed SLAKE visual LoRA/DoRA baseline."
     )
     parser.add_argument("experiment", choices=tuple(EXPERIMENTS))
-    return parser.parse_args()
+    parser.add_argument("--epochs", type=int, default=1)
+    parser.add_argument("--output-dir", type=Path)
+    args = parser.parse_args()
+    if args.epochs < 1:
+        parser.error("--epochs must be positive")
+    return args
 
 
 def seed_everything(seed: int) -> None:
@@ -353,7 +382,11 @@ def count_parameters(model: nn.Module) -> Dict[str, int | float]:
 def main() -> int:
     args = parse_args()
     experiment = EXPERIMENTS[args.experiment]
-    output_dir = OUTPUT_ROOT / args.experiment
+    output_dir = (
+        args.output_dir.expanduser().resolve()
+        if args.output_dir is not None
+        else OUTPUT_ROOT / args.experiment
+    )
     trainer_dir = output_dir / "trainer"
     final_dir = output_dir / "final"
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -417,6 +450,7 @@ def main() -> int:
         "[SLAKE_PEFT_CONFIG] "
         f"experiment={args.experiment} method={experiment['method']} "
         f"target_scope={experiment['target_scope']} "
+        f"epochs={args.epochs} "
         f"rank={rank} alpha={lora_alpha} dropout={LORA_DROPOUT} "
         f"use_dora={experiment['use_dora']} trainable={parameter_counts['trainable']} "
         f"total={parameter_counts['total']} "
@@ -426,7 +460,7 @@ def main() -> int:
 
     training_args = TrainingArguments(
         output_dir=str(trainer_dir),
-        num_train_epochs=1,
+        num_train_epochs=args.epochs,
         per_device_train_batch_size=1,
         gradient_accumulation_steps=32,
         learning_rate=1e-4,
@@ -451,6 +485,11 @@ def main() -> int:
         train_dataset=dataset,
         data_collator=VisualPEFTCollator(processor),
         processing_class=processor,
+        callbacks=(
+            [EpochAdapterCheckpointCallback(processor, output_dir)]
+            if args.epochs > 1
+            else None
+        ),
     )
     train_result = trainer.train()
     trainer.save_metrics("train", train_result.metrics)
@@ -467,6 +506,7 @@ def main() -> int:
         "rank": rank,
         "alpha": lora_alpha,
         "dropout": LORA_DROPOUT,
+        "epochs": args.epochs,
         "selected_vision_layers_0based": selected_vision_layers,
         "selected_language_layers_0based": selected_language_layers,
         "target_modules": target_modules,

@@ -115,7 +115,7 @@ def build_experiment_config(args: argparse.Namespace) -> Dict[str, Any]:
         "mmrl_relation_max_tokens": 64,
         "mmrl_variance_floor_ratio": 0.50,
         "mmrl_variance_floor_weight": 0.10,
-        "enable_adapter_router_identity_residual": False,
+        "enable_adapter_router_identity_residual": args.enable_adapter_router_identity_residual,
         "direct_mmrl_output": False,
         "raw_visual_adapter": False,
         "enable_early_mmrl_guard": False,
@@ -593,6 +593,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--effective-delta-weight", type=float, default=0.0003)
     parser.add_argument("--effective-delta-target-low", type=float, default=0.52)
     parser.add_argument("--effective-delta-target-high", type=float, default=0.98)
+    parser.add_argument(
+        "--enable-adapter-router-identity-residual",
+        action="store_true",
+        help="Add the raw Rep-branch delta to the routed adapter correction.",
+    )
     parser.add_argument("--relation-weight", type=float, default=0.010)
     parser.add_argument(
         "--scheduler",
@@ -678,6 +683,7 @@ def main() -> int:
         f"stages=(1,3) decouple_stage_pooling={args.decouple_stage_pooling} "
         f"rp_space_length={args.rp_space_length} "
         f"adapter_reduction_factor={args.adapter_reduction_factor} "
+        f"identity_residual={args.enable_adapter_router_identity_residual} "
         f"seed={args.seed} data_seed={args.data_seed}"
     )
 

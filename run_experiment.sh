@@ -204,6 +204,12 @@ run_slake_full_all() {
   local training_seed="${9:-44}"
   local rp_space_length="${10:-40}"
   local adapter_reduction_factor="${11:-4}"
+  local effective_delta_ceiling="${12:-0.98}"
+  local enable_identity_residual="${13:-0}"
+  local -a identity_residual_args=()
+  if [ "$enable_identity_residual" = "1" ]; then
+    identity_residual_args+=(--enable-adapter-router-identity-residual)
+  fi
   local data_root="${SLAKE_DATA_ROOT:-/root/autodl-tmp/dataset/slake}"
   local model_path="${MMRL_MODEL_PATH:-/root/autodl-tmp/model}"
   local slake_output_root="$SLAKE_OUTPUT_ROOT/mmrl"
@@ -235,6 +241,8 @@ run_slake_full_all() {
     echo "data_seed=42"
     echo "rp_space_length=$rp_space_length"
     echo "adapter_reduction_factor=$adapter_reduction_factor"
+    echo "effective_delta_ceiling=$effective_delta_ceiling"
+    echo "enable_identity_residual=$enable_identity_residual"
     echo "evaluation_split=$evaluation_split"
     echo "started_at=$(date --iso-8601=seconds)"
   } > "$status_file"
@@ -258,8 +266,9 @@ run_slake_full_all() {
   echo "[SLAKE] decouple_stage_pooling=0"
   echo "[SLAKE] stage3_epochs=$stage3_epochs epoch_lr_decay=0.5"
   echo "[SLAKE] rp_space_length=$rp_space_length adapter_reduction_factor=$adapter_reduction_factor"
+  echo "[SLAKE] enable_identity_residual=$enable_identity_residual"
   echo "[SLAKE] evaluation_split=$evaluation_split questions=$evaluation_questions"
-  echo "[SLAKE] relation_weight=$relation_weight effective_delta_weight=$effective_delta_weight effective_delta_floor=$effective_delta_floor"
+  echo "[SLAKE] relation_weight=$relation_weight effective_delta_weight=$effective_delta_weight effective_delta_range=[$effective_delta_floor,$effective_delta_ceiling]"
   echo "[SLAKE] output_dir=$output_dir"
   echo "============================================================"
 
@@ -286,7 +295,8 @@ run_slake_full_all() {
       --entropy-target 0.72 \
       --effective-delta-weight "$effective_delta_weight" \
       --effective-delta-target-low "$effective_delta_floor" \
-      --effective-delta-target-high 0.98 \
+      --effective-delta-target-high "$effective_delta_ceiling" \
+      "${identity_residual_args[@]}" \
       --relation-weight "$relation_weight" \
       --scheduler constant_with_warmup \
       --warmup-ratio 0.10 \
@@ -565,6 +575,58 @@ run_slake_validation_2x2_three_epoch() {
   fi
 
   echo "[SLAKE-VAL-2X2-SUMMARY] all four attempted; failures=$failures"
+  if [ "$failures" -ne 0 ]; then
+    return 1
+  fi
+}
+
+run_slake_identity_residual_effective_delta_2x2() {
+  local failures=0
+
+  # Keep Rep40, adapter dim/4, relation, routing losses, LR, seed, and data fixed.
+  # The first run removes the semantically changed constraint; the remaining
+  # four form weight x target-range combinations under identity residual.
+  if ! run_slake_full_all \
+    "slake_mmrl_identity_edoff_r0500_seed44" \
+    "0.0500" "0" "0.58" \
+    "slake_identity_residual_effective_delta_2x2" "3" "1" "validation" "44" "40" "4" "0.98" "1"; then
+    echo "[SLAKE-IDENTITY-WARN] effective-delta off failed; continuing." >&2
+    failures=$((failures + 1))
+  fi
+
+  if ! run_slake_full_all \
+    "slake_mmrl_identity_w0004_oldrange_r0500_seed44" \
+    "0.0500" "0.0004" "0.58" \
+    "slake_identity_residual_effective_delta_2x2" "3" "1" "validation" "44" "40" "4" "0.98" "1"; then
+    echo "[SLAKE-IDENTITY-WARN] w0004 old range failed; continuing." >&2
+    failures=$((failures + 1))
+  fi
+
+  if ! run_slake_full_all \
+    "slake_mmrl_identity_w0004_newrange_r0500_seed44" \
+    "0.0500" "0.0004" "0.85" \
+    "slake_identity_residual_effective_delta_2x2" "3" "1" "validation" "44" "40" "4" "1.25" "1"; then
+    echo "[SLAKE-IDENTITY-WARN] w0004 new range failed; continuing." >&2
+    failures=$((failures + 1))
+  fi
+
+  if ! run_slake_full_all \
+    "slake_mmrl_identity_w0008_oldrange_r0500_seed44" \
+    "0.0500" "0.0008" "0.58" \
+    "slake_identity_residual_effective_delta_2x2" "3" "1" "validation" "44" "40" "4" "0.98" "1"; then
+    echo "[SLAKE-IDENTITY-WARN] w0008 old range failed; continuing." >&2
+    failures=$((failures + 1))
+  fi
+
+  if ! run_slake_full_all \
+    "slake_mmrl_identity_w0008_newrange_r0500_seed44" \
+    "0.0500" "0.0008" "0.85" \
+    "slake_identity_residual_effective_delta_2x2" "3" "1" "validation" "44" "40" "4" "1.25" "1"; then
+    echo "[SLAKE-IDENTITY-WARN] w0008 new range failed." >&2
+    failures=$((failures + 1))
+  fi
+
+  echo "[SLAKE-IDENTITY-SUMMARY] all five attempted; failures=$failures"
   if [ "$failures" -ne 0 ]; then
     return 1
   fi
@@ -1342,6 +1404,9 @@ case "$RUN_TARGET" in
     ;;
   slake_validation_2x2_three_epoch)
     run_slake_validation_2x2_three_epoch
+    ;;
+  slake_identity_residual_effective_delta_2x2)
+    run_slake_identity_residual_effective_delta_2x2
     ;;
   slake_best_three_epoch_multiseed)
     run_slake_best_three_epoch_seed44_repeat_and_45_47

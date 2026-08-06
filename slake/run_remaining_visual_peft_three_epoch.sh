@@ -2,6 +2,31 @@
 
 set -uo pipefail
 
+SHUTDOWN_ON_EXIT=1
+
+cancel_shutdown_on_interrupt() {
+    SHUTDOWN_ON_EXIT=0
+    trap - EXIT
+    echo "[INT] Ctrl+C detected; automatic shutdown cancelled."
+    exit 130
+}
+
+shutdown_on_exit() {
+    local exit_code=$?
+    if [[ ${SHUTDOWN_ON_EXIT} -ne 1 ]]; then
+        return "${exit_code}"
+    fi
+    echo "[EXIT] Remaining SLAKE PEFT experiments finished with exit_code=${exit_code}."
+    echo "[EXIT] The server will shut down automatically in 600 seconds."
+    echo "[EXIT] Press Ctrl+C during the countdown to cancel shutdown."
+    sleep 600
+    /usr/bin/shutdown
+    return "${exit_code}"
+}
+
+trap shutdown_on_exit EXIT
+trap cancel_shutdown_on_interrupt INT
+
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
 PYTHON_BIN="${PYTHON_BIN:-python}"
@@ -147,8 +172,7 @@ print(f"{epoch}\t{score}")
         "${test_score}" "${best_checkpoint}" >> "${SUMMARY_TSV}"
 }
 
-# lora_visual_all_attention_r32 was already completed separately.
-run_method "lora_visual_last8_attention_r32" "lora-vision-last8"
+# Both visual-attention R32 LoRA variants were already completed separately.
 run_method "dora_visual_all_attention_r32" "dora-vision"
 run_method "lora_visual_all_attention_r64" "lora-vision"
 run_method "lora_full_model_attention_r16" "lora"

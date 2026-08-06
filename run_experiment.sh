@@ -513,6 +513,21 @@ run_slake_rep10_adapter8_three_epoch() {
     "8"
 }
 
+run_slake_rep10_adapter4_three_epoch() {
+  run_slake_full_all \
+    "slake_mmrl_val3ep_rep10_adapter4_r0500_w0008_d058_seed44" \
+    "0.0500" \
+    "0.0008" \
+    "0.58" \
+    "slake_rep10_adapter4_three_epoch" \
+    "3" \
+    "1" \
+    "validation" \
+    "44" \
+    "10" \
+    "4"
+}
+
 run_slake_validation_2x2_three_epoch() {
   local failures=0
 
@@ -1106,6 +1121,7 @@ run_final_constraint_matrix_3x3_part() {
 #   bash run_experiment.sh slake_compact_repro_6695
 #   bash run_experiment.sh slake_compact_three_epoch_6695
 #   bash run_experiment.sh slake_rep10_adapter8_three_epoch
+#   bash run_experiment.sh slake_rep10_adapter4_three_epoch
 #   bash run_experiment.sh slake_validation_2x2_three_epoch
 #   bash run_experiment.sh slake_best_three_epoch_multiseed
 #   bash run_experiment.sh final_three_experiments_seed44
@@ -1320,6 +1336,9 @@ case "$RUN_TARGET" in
     ;;
   slake_rep10_adapter8_three_epoch)
     run_slake_rep10_adapter8_three_epoch
+    ;;
+  slake_rep10_adapter4_three_epoch)
+    run_slake_rep10_adapter4_three_epoch
     ;;
   slake_validation_2x2_three_epoch)
     run_slake_validation_2x2_three_epoch

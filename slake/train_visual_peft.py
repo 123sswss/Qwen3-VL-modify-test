@@ -59,6 +59,9 @@ VISION_LAYER_COUNT = 24
 LANGUAGE_LAYER_COUNT = 36
 LAST_LAYER_COUNT = 8
 LORA_DROPOUT = 0.05
+DEFAULT_EPOCHS = 3
+MICRO_BATCH_SIZE = 2
+GRADIENT_ACCUMULATION_STEPS = 16
 
 EXPERIMENTS: Dict[str, Dict[str, Any]] = {
     "lora_visual_all_attention_r32": {
@@ -150,7 +153,7 @@ def parse_args() -> argparse.Namespace:
         description="Train one fixed SLAKE visual LoRA/DoRA baseline."
     )
     parser.add_argument("experiment", choices=tuple(EXPERIMENTS))
-    parser.add_argument("--epochs", type=int, default=1)
+    parser.add_argument("--epochs", type=int, default=DEFAULT_EPOCHS)
     parser.add_argument("--output-dir", type=Path)
     args = parser.parse_args()
     if args.epochs < 1:
@@ -441,16 +444,15 @@ def main() -> int:
         use_dora=bool(experiment["use_dora"]),
     )
     model = get_peft_model(model, peft_config)
-    model.gradient_checkpointing_enable()
-    if hasattr(model, "enable_input_require_grads"):
-        model.enable_input_require_grads()
 
     parameter_counts = count_parameters(model)
     print(
         "[SLAKE_PEFT_CONFIG] "
         f"experiment={args.experiment} method={experiment['method']} "
         f"target_scope={experiment['target_scope']} "
-        f"epochs={args.epochs} "
+        f"epochs={args.epochs} micro_batch={MICRO_BATCH_SIZE} "
+        f"gradient_accumulation={GRADIENT_ACCUMULATION_STEPS} "
+        "gradient_checkpointing=False "
         f"rank={rank} alpha={lora_alpha} dropout={LORA_DROPOUT} "
         f"use_dora={experiment['use_dora']} trainable={parameter_counts['trainable']} "
         f"total={parameter_counts['total']} "
@@ -461,8 +463,8 @@ def main() -> int:
     training_args = TrainingArguments(
         output_dir=str(trainer_dir),
         num_train_epochs=args.epochs,
-        per_device_train_batch_size=1,
-        gradient_accumulation_steps=32,
+        per_device_train_batch_size=MICRO_BATCH_SIZE,
+        gradient_accumulation_steps=GRADIENT_ACCUMULATION_STEPS,
         learning_rate=1e-4,
         weight_decay=0.0,
         warmup_ratio=0.03,
@@ -472,7 +474,7 @@ def main() -> int:
         save_strategy="no",
         bf16=True,
         fp16=False,
-        gradient_checkpointing=True,
+        gradient_checkpointing=False,
         dataloader_num_workers=2,
         remove_unused_columns=False,
         report_to="none",
@@ -507,6 +509,9 @@ def main() -> int:
         "alpha": lora_alpha,
         "dropout": LORA_DROPOUT,
         "epochs": args.epochs,
+        "per_device_train_batch_size": MICRO_BATCH_SIZE,
+        "gradient_accumulation_steps": GRADIENT_ACCUMULATION_STEPS,
+        "gradient_checkpointing": False,
         "selected_vision_layers_0based": selected_vision_layers,
         "selected_language_layers_0based": selected_language_layers,
         "target_modules": target_modules,

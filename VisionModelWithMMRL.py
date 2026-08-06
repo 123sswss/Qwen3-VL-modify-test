@@ -105,11 +105,19 @@ def _strip_r_token(hidden_states, original_lens, num_r_token):
     return torch.cat(clean_list, dim=0)
 
 class zeroInit(nn.Module):
-    def __init__(self, dim, random_output_init=False):
+    def __init__(self, dim, reduction_factor=4, random_output_init=False):
         super(zeroInit, self).__init__()
-        self.net = nn.Sequential(nn.Linear(dim, dim // 4),
+        if reduction_factor <= 0:
+            raise ValueError("Adapter reduction_factor must be positive")
+        if dim % reduction_factor != 0:
+            raise ValueError(
+                f"Adapter input dim={dim} must be divisible by reduction_factor={reduction_factor}"
+            )
+        self.reduction_factor = int(reduction_factor)
+        self.bottleneck_dim = dim // self.reduction_factor
+        self.net = nn.Sequential(nn.Linear(dim, self.bottleneck_dim),
                                  nn.ReLU(),
-                                 nn.Linear(dim // 4, dim))
+                                 nn.Linear(self.bottleneck_dim, dim))
         if not random_output_init:
             nn.init.zeros_(self.net[-1].weight)
         nn.init.zeros_(self.net[-1].bias)
@@ -195,6 +203,19 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
             getattr(self.cfg, "VISUAL_RESIDUAL_ADAPTER_COUNT", 4),
             1,
         ))
+        self.visual_adapter_reduction_factor = int(
+            getattr(self.cfg, "VISUAL_ADAPTER_REDUCTION_FACTOR", 4)
+        )
+        if self.visual_adapter_reduction_factor <= 0:
+            raise ValueError("VISUAL_ADAPTER_REDUCTION_FACTOR must be positive")
+        if self.cfg.vision_token_dim % self.visual_adapter_reduction_factor != 0:
+            raise ValueError(
+                "vision_token_dim must be divisible by VISUAL_ADAPTER_REDUCTION_FACTOR: "
+                f"{self.cfg.vision_token_dim} % {self.visual_adapter_reduction_factor} != 0"
+            )
+        self.visual_adapter_bottleneck_dim = (
+            self.cfg.vision_token_dim // self.visual_adapter_reduction_factor
+        )
         self.random_init_adapter_output_count = int(
             getattr(
                 self.cfg,
@@ -217,6 +238,7 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
         self.residual_adapters = nn.ModuleList([
             zeroInit(
                 self.cfg.vision_token_dim,
+                reduction_factor=self.visual_adapter_reduction_factor,
                 random_output_init=index < self.random_init_adapter_output_count,
             )
             for index in range(self.visual_residual_adapter_count)

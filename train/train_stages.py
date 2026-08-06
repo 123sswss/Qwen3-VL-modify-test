@@ -1050,6 +1050,10 @@ def build_model_and_processor(model_path, experiment_cfg=None):
         "visual_residual_adapter_count",
         os.getenv("MMRL_VISUAL_RESIDUAL_ADAPTER_COUNT", "4"),
     ))
+    config.VISUAL_ADAPTER_REDUCTION_FACTOR = int(experiment_cfg.get(
+        "visual_adapter_reduction_factor",
+        os.getenv("MMRL_VISUAL_ADAPTER_REDUCTION_FACTOR", "4"),
+    ))
     config.RANDOM_INIT_ADAPTER_OUTPUT_COUNT = int(
         experiment_cfg.get(
             "random_init_adapter_output_count",
@@ -1197,6 +1201,24 @@ def build_model_and_processor(model_path, experiment_cfg=None):
             f"requested={config.VISUAL_RESIDUAL_ADAPTER_COUNT} "
             f"actual={visual.visual_residual_adapter_count}"
         )
+    if visual.visual_adapter_reduction_factor != config.VISUAL_ADAPTER_REDUCTION_FACTOR:
+        raise RuntimeError(
+            "VISUAL_ADAPTER_REDUCTION_FACTOR config propagation failed: "
+            f"requested={config.VISUAL_ADAPTER_REDUCTION_FACTOR} "
+            f"actual={visual.visual_adapter_reduction_factor}"
+        )
+    expected_adapter_bottleneck = (
+        config.vision_config.hidden_size // config.VISUAL_ADAPTER_REDUCTION_FACTOR
+    )
+    if any(
+        adapter.bottleneck_dim != expected_adapter_bottleneck
+        for adapter in visual.residual_adapters
+    ):
+        raise RuntimeError(
+            "Adapter bottleneck construction mismatch: "
+            f"expected={expected_adapter_bottleneck} "
+            f"actual={[adapter.bottleneck_dim for adapter in visual.residual_adapters]}"
+        )
     if (
         visual.random_init_adapter_output_count
         != config.RANDOM_INIT_ADAPTER_OUTPUT_COUNT
@@ -1231,6 +1253,9 @@ def build_model_and_processor(model_path, experiment_cfg=None):
         f"raw_visual_adapter={visual.raw_visual_adapter} "
         f"decouple_stage_pooling={visual.decouple_stage_pooling} "
         f"visual_residual_adapter_count={visual.visual_residual_adapter_count} "
+        f"rp_space_length={config.RP_SPACE_LENGTH} "
+        f"visual_adapter_reduction_factor={visual.visual_adapter_reduction_factor} "
+        f"visual_adapter_bottleneck_dim={visual.visual_adapter_bottleneck_dim} "
         f"random_init_adapter_output_count={visual.random_init_adapter_output_count}"
     )
     model.model.load_state_dict(base.model.state_dict(), strict=False)
@@ -1326,6 +1351,9 @@ def build_model_and_processor(model_path, experiment_cfg=None):
         f"decouple_stage_pooling={config.DECOUPLE_STAGE_POOLING} "
         f"ablate_direct_learnable_rep={config.ABLATE_DIRECT_LEARNABLE_REP} "
         f"visual_residual_adapter_count={config.VISUAL_RESIDUAL_ADAPTER_COUNT} "
+        f"rp_space_length={config.RP_SPACE_LENGTH} "
+        f"visual_adapter_reduction_factor={config.VISUAL_ADAPTER_REDUCTION_FACTOR} "
+        f"visual_adapter_bottleneck_dim={visual.visual_adapter_bottleneck_dim} "
         f"random_init_adapter_output_count={config.RANDOM_INIT_ADAPTER_OUTPUT_COUNT} "
         f"zero_init_adapter_router_output={config.ZERO_INIT_ADAPTER_ROUTER_OUTPUT} "
         f"adapter_usage_balance_loss_weight={config.ADAPTER_USAGE_BALANCE_LOSS_WEIGHT} "

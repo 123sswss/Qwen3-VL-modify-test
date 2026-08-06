@@ -44,6 +44,9 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
                 config, "DECOUPLE_STAGE_POOLING", False
             ),
             "VISUAL_RESIDUAL_ADAPTER_COUNT": _cfg_attr(config, "VISUAL_RESIDUAL_ADAPTER_COUNT", 4),
+            "VISUAL_ADAPTER_REDUCTION_FACTOR": _cfg_attr(
+                config, "VISUAL_ADAPTER_REDUCTION_FACTOR", 4
+            ),
             "RANDOM_INIT_ADAPTER_OUTPUT_COUNT": _cfg_attr(
                 config, "RANDOM_INIT_ADAPTER_OUTPUT_COUNT", 4
             ),

@@ -77,6 +77,7 @@ def _should_keep_extrema_checkpoint(output_dir, score):
 BASE_VISUAL_ROUTER_MODEL = {
     "rp_space_length": 40,
     "visual_residual_adapter_count": 4,
+    "visual_adapter_reduction_factor": 4,
     # Historical runs were effectively random-initialized because outer post_init
     # overwrote the adapter constructor's zero initialization.
     "random_init_adapter_output_count": 4,

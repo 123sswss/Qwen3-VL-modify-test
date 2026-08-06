@@ -97,8 +97,9 @@ def resolve_train_manifest(
 
 def build_experiment_config(args: argparse.Namespace) -> Dict[str, Any]:
     return {
-        "rp_space_length": 40,
+        "rp_space_length": args.rp_space_length,
         "visual_residual_adapter_count": 4,
+        "visual_adapter_reduction_factor": args.adapter_reduction_factor,
         "random_init_adapter_output_count": 0,
         "zero_init_adapter_router_output": False,
         "adapter_usage_balance_loss_weight": args.usage_weight,
@@ -572,6 +573,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--batch-size", type=int, default=2)
     parser.add_argument("--gradient-accumulation", type=int, default=16)
     parser.add_argument("--dataloader-workers", type=int, default=4)
+    parser.add_argument("--rp-space-length", type=int, default=40)
+    parser.add_argument("--adapter-reduction-factor", type=int, default=4)
 
     parser.add_argument("--stage1-lr", type=float, default=1e-4)
     parser.add_argument("--pooling-lr", type=float, default=6e-5)
@@ -636,6 +639,10 @@ def parse_args() -> argparse.Namespace:
         parser.error("--stage3-epoch-lr-decay must be in (0, 1]")
     if args.batch_size < 1 or args.gradient_accumulation < 1:
         parser.error("batch size and gradient accumulation must be positive")
+    if args.rp_space_length < 1:
+        parser.error("--rp-space-length must be positive")
+    if args.adapter_reduction_factor < 1:
+        parser.error("--adapter-reduction-factor must be positive")
     if args.generation_checks < 0:
         parser.error("--generation-checks must be non-negative")
     if args.effective_delta_target_low < 0:
@@ -669,6 +676,8 @@ def main() -> int:
         f"questions={questions_path} images={image_root} "
         f"limit={200 if args.smoke_test else args.sample_limit} "
         f"stages=(1,3) decouple_stage_pooling={args.decouple_stage_pooling} "
+        f"rp_space_length={args.rp_space_length} "
+        f"adapter_reduction_factor={args.adapter_reduction_factor} "
         f"seed={args.seed} data_seed={args.data_seed}"
     )
 

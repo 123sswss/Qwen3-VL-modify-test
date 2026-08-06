@@ -202,6 +202,8 @@ run_slake_full_all() {
   local evaluate_epoch_checkpoints="${7:-0}"
   local evaluation_split="${8:-test}"
   local training_seed="${9:-44}"
+  local rp_space_length="${10:-40}"
+  local adapter_reduction_factor="${11:-4}"
   local data_root="${SLAKE_DATA_ROOT:-/root/autodl-tmp/dataset/slake}"
   local model_path="${MMRL_MODEL_PATH:-/root/autodl-tmp/model}"
   local slake_output_root="$SLAKE_OUTPUT_ROOT/mmrl"
@@ -231,6 +233,8 @@ run_slake_full_all() {
     echo "output_dir=$output_dir"
     echo "seed=$training_seed"
     echo "data_seed=42"
+    echo "rp_space_length=$rp_space_length"
+    echo "adapter_reduction_factor=$adapter_reduction_factor"
     echo "evaluation_split=$evaluation_split"
     echo "started_at=$(date --iso-8601=seconds)"
   } > "$status_file"
@@ -240,6 +244,8 @@ run_slake_full_all() {
     echo "tag=$tag"
     echo "output_dir=$output_dir"
     echo "evaluation_split=$evaluation_split"
+    echo "rp_space_length=$rp_space_length"
+    echo "adapter_reduction_factor=$adapter_reduction_factor"
     echo "status_file=$status_file"
     echo "train_log=$output_dir/train.log"
     echo "eval_log=$output_dir/eval.log"
@@ -251,6 +257,7 @@ run_slake_full_all() {
   echo "[SLAKE] seed=$training_seed data_seed=42"
   echo "[SLAKE] decouple_stage_pooling=0"
   echo "[SLAKE] stage3_epochs=$stage3_epochs epoch_lr_decay=0.5"
+  echo "[SLAKE] rp_space_length=$rp_space_length adapter_reduction_factor=$adapter_reduction_factor"
   echo "[SLAKE] evaluation_split=$evaluation_split questions=$evaluation_questions"
   echo "[SLAKE] relation_weight=$relation_weight effective_delta_weight=$effective_delta_weight effective_delta_floor=$effective_delta_floor"
   echo "[SLAKE] output_dir=$output_dir"
@@ -268,6 +275,8 @@ run_slake_full_all() {
       --data-seed 42 \
       --stage3-epochs "$stage3_epochs" \
       --stage3-epoch-lr-decay 0.5 \
+      --rp-space-length "$rp_space_length" \
+      --adapter-reduction-factor "$adapter_reduction_factor" \
       --pooling-lr 6e-5 \
       --mmrl-lr 6e-5 \
       --router-lr 8e-5 \
@@ -487,6 +496,21 @@ run_slake_compact_three_epoch_6695() {
     "slake_compact_three_epoch_6695" \
     "3" \
     "1"
+}
+
+run_slake_rep10_adapter8_three_epoch() {
+  run_slake_full_all \
+    "slake_mmrl_val3ep_rep10_adapter8_r0500_w0008_d058_seed44" \
+    "0.0500" \
+    "0.0008" \
+    "0.58" \
+    "slake_rep10_adapter8_three_epoch" \
+    "3" \
+    "1" \
+    "validation" \
+    "44" \
+    "10" \
+    "8"
 }
 
 run_slake_validation_2x2_three_epoch() {
@@ -1081,6 +1105,7 @@ run_final_constraint_matrix_3x3_part() {
 #   bash run_experiment.sh slake_constraint_matrix_3x2_part3
 #   bash run_experiment.sh slake_compact_repro_6695
 #   bash run_experiment.sh slake_compact_three_epoch_6695
+#   bash run_experiment.sh slake_rep10_adapter8_three_epoch
 #   bash run_experiment.sh slake_validation_2x2_three_epoch
 #   bash run_experiment.sh slake_best_three_epoch_multiseed
 #   bash run_experiment.sh final_three_experiments_seed44
@@ -1292,6 +1317,9 @@ case "$RUN_TARGET" in
     ;;
   slake_compact_three_epoch_6695)
     run_slake_compact_three_epoch_6695
+    ;;
+  slake_rep10_adapter8_three_epoch)
+    run_slake_rep10_adapter8_three_epoch
     ;;
   slake_validation_2x2_three_epoch)
     run_slake_validation_2x2_three_epoch

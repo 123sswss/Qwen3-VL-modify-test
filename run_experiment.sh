@@ -206,6 +206,7 @@ run_slake_full_all() {
   local adapter_reduction_factor="${11:-4}"
   local effective_delta_ceiling="${12:-0.98}"
   local enable_identity_residual="${13:-0}"
+  local entropy_weight="${14:-0.020}"
   local -a identity_residual_args=()
   if [ "$enable_identity_residual" = "1" ]; then
     identity_residual_args+=(--enable-adapter-router-identity-residual)
@@ -243,6 +244,7 @@ run_slake_full_all() {
     echo "adapter_reduction_factor=$adapter_reduction_factor"
     echo "effective_delta_ceiling=$effective_delta_ceiling"
     echo "enable_identity_residual=$enable_identity_residual"
+    echo "entropy_weight=$entropy_weight"
     echo "evaluation_split=$evaluation_split"
     echo "started_at=$(date --iso-8601=seconds)"
   } > "$status_file"
@@ -267,6 +269,7 @@ run_slake_full_all() {
   echo "[SLAKE] stage3_epochs=$stage3_epochs epoch_lr_decay=0.5"
   echo "[SLAKE] rp_space_length=$rp_space_length adapter_reduction_factor=$adapter_reduction_factor"
   echo "[SLAKE] enable_identity_residual=$enable_identity_residual"
+  echo "[SLAKE] entropy_weight=$entropy_weight"
   echo "[SLAKE] evaluation_split=$evaluation_split questions=$evaluation_questions"
   echo "[SLAKE] relation_weight=$relation_weight effective_delta_weight=$effective_delta_weight effective_delta_range=[$effective_delta_floor,$effective_delta_ceiling]"
   echo "[SLAKE] output_dir=$output_dir"
@@ -291,7 +294,7 @@ run_slake_full_all() {
       --router-lr 8e-5 \
       --adapter-lrs 4e-5 6e-5 8e-5 1e-4 \
       --usage-weight 0.0026 \
-      --entropy-weight 0.020 \
+      --entropy-weight "$entropy_weight" \
       --entropy-target 0.72 \
       --effective-delta-weight "$effective_delta_weight" \
       --effective-delta-target-low "$effective_delta_floor" \
@@ -627,6 +630,33 @@ run_slake_identity_residual_effective_delta_2x2() {
   fi
 
   echo "[SLAKE-IDENTITY-SUMMARY] all five attempted; failures=$failures"
+  if [ "$failures" -ne 0 ]; then
+    return 1
+  fi
+}
+
+run_slake_minimal_loss_a_c() {
+  local failures=0
+
+  # A: old output structure with only effective-delta removed.
+  if ! run_slake_full_all \
+    "slake_mmrl_a_shared_edoff_r0500_seed44" \
+    "0.0500" "0" "0.58" \
+    "slake_minimal_loss_a_c" "3" "1" "validation" "44" "40" "4" "0.98" "0" "0.020"; then
+    echo "[SLAKE-MINIMAL-LOSS-WARN] A shared/no-effective failed; continuing to C." >&2
+    failures=$((failures + 1))
+  fi
+
+  # C: identity residual with CE + usage as the only Stage 3 objectives.
+  if ! run_slake_full_all \
+    "slake_mmrl_c_identity_ce_usage_only_seed44" \
+    "0" "0" "0.58" \
+    "slake_minimal_loss_a_c" "3" "1" "validation" "44" "40" "4" "0.98" "1" "0"; then
+    echo "[SLAKE-MINIMAL-LOSS-WARN] C identity/CE+usage failed." >&2
+    failures=$((failures + 1))
+  fi
+
+  echo "[SLAKE-MINIMAL-LOSS-SUMMARY] A and C attempted; failures=$failures"
   if [ "$failures" -ne 0 ]; then
     return 1
   fi
@@ -1407,6 +1437,9 @@ case "$RUN_TARGET" in
     ;;
   slake_identity_residual_effective_delta_2x2)
     run_slake_identity_residual_effective_delta_2x2
+    ;;
+  slake_minimal_loss_a_c)
+    run_slake_minimal_loss_a_c
     ;;
   slake_best_three_epoch_multiseed)
     run_slake_best_three_epoch_seed44_repeat_and_45_47

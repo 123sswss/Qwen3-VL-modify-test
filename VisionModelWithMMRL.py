@@ -22,12 +22,24 @@ class MMRLVitBlock(qwen3_vl.Qwen3VLVisionBlock):
                 position_embeddings: Optional[tuple[torch.Tensor, torch.Tensor]] = None,
                 first_insert: Optional[bool] = False,
                 **kwargs):
-        assert r_token is not None
-        num_r_tokens = r_token.shape[0]
+        if r_token is None or r_token.ndim != 3:
+            raise ValueError(
+                "MMRLVitBlock expects per-image r_token=[N,R,D], got "
+                f"{None if r_token is None else tuple(r_token.shape)}"
+            )
+        num_r_tokens = r_token.shape[1]
         full_seq_lengths = (cu_seqlens[1:] - cu_seqlens[:-1]).cpu().tolist()
+        if r_token.shape[0] != len(full_seq_lengths):
+            raise ValueError(
+                "per-image Rep batch does not match visual sequences: "
+                f"rep_images={r_token.shape[0]} visual_images={len(full_seq_lengths)}"
+            )
         if first_insert:
             hidden_states_split = torch.split(hidden_states, full_seq_lengths, dim=0)
-            new_hidden_states_list = [torch.cat([r_token, s], dim=0) for s in hidden_states_split]
+            new_hidden_states_list = [
+                torch.cat([image_rep, image_states], dim=0)
+                for image_rep, image_states in zip(r_token, hidden_states_split)
+            ]
             hidden_states = torch.cat(new_hidden_states_list, dim=0)
             position_embeddings, cu_seqlens, rotary_pos_emb = _resize_cu_and_pos(
                 r_token, cu_seqlens, position_embeddings, rotary_pos_emb
@@ -35,14 +47,20 @@ class MMRLVitBlock(qwen3_vl.Qwen3VLVisionBlock):
         else:
             hidden_states_split = torch.split(hidden_states, full_seq_lengths, dim=0)
             new_hidden_states_list = []
-            updated_seq = None
-            for seq_hidden in hidden_states_split:
+            for image_rep, seq_hidden in zip(r_token, hidden_states_split):
                 if self.INSERT_METHOD == "replace":
-                    updated_seq = torch.cat([r_token, seq_hidden[num_r_tokens:]], dim=0)
+                    updated_seq = torch.cat(
+                        [image_rep, seq_hidden[num_r_tokens:]],
+                        dim=0,
+                    )
                 elif self.INSERT_METHOD == "add":
-                    prefix = seq_hidden[:num_r_tokens] + r_token
+                    prefix = seq_hidden[:num_r_tokens] + image_rep
                     suffix = seq_hidden[num_r_tokens:]
                     updated_seq = torch.cat([prefix, suffix], dim=0)
+                else:
+                    raise ValueError(
+                        f"Unsupported MMRL INSERT_METHOD={self.INSERT_METHOD!r}"
+                    )
                 new_hidden_states_list.append(updated_seq)
             hidden_states = torch.cat(new_hidden_states_list, dim=0)
         hidden_states = hidden_states + self.attn(self.norm1(hidden_states),
@@ -55,8 +73,17 @@ class MMRLVitBlock(qwen3_vl.Qwen3VLVisionBlock):
 
 
 def _resize_cu_and_pos(r_token, cu_seqlens, position_embeddings, rotary_pos_emb):
-    num_r_tokens = r_token.shape[0]
+    if r_token.ndim != 3:
+        raise ValueError(
+            f"position resize expects per-image Rep [N,R,D], got {tuple(r_token.shape)}"
+        )
+    num_r_tokens = r_token.shape[1]
     total_pic_num = cu_seqlens.shape[0] - 1
+    if r_token.shape[0] != total_pic_num:
+        raise ValueError(
+            "position resize image count mismatch: "
+            f"rep_images={r_token.shape[0]} visual_images={total_pic_num}"
+        )
     seq_lengths = (cu_seqlens[1:] - cu_seqlens[:-1]).cpu().tolist()
     original_cos, original_sin = position_embeddings
     dtype = original_cos.dtype
@@ -458,7 +485,7 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
     def forward(self,
                 hidden_states: torch.Tensor,
                 grid_thw: torch.Tensor,
-                v_r_token_list: Optional[list[torch.Tensor]] = None,
+                rep_generator: Optional[nn.Module] = None,
                 embedding: Optional[torch.Tensor] = None,
                 text_pooling_mask: Optional[torch.Tensor] = None,
                 gating_temperature_override: float = None,
@@ -491,13 +518,14 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
         deepstack_delta_ratio_values = []
         deepstack_residual_layer_count = 0
         cu_seqlens_with_rep, position_embeddings_with_rep = None, None
-        hidden_states_with_rep, org_hidden_states= None, None
+        hidden_states_with_rep, org_hidden_states = None, None
         total_pic_num = cu_seqlens.size(0) - 1
-        run_mmrl_branch = v_r_token_list is not None
+        run_mmrl_branch = rep_generator is not None
+        dynamic_rep_tokens = None
         forward_hit_layers = []
         if not self._printed_forward_layer_entry_audit:
             print("[MMRL_FORWARD_ENTRY_AUDIT]")
-            print(f"  v_r_token_list_is_none={v_r_token_list is None}")
+            print(f"  rep_generator_is_none={rep_generator is None}")
             print(f"  planned_insert_layers_0based={self.insert_layers}")
             print(f"  planned_insert_layers_natural={[idx + 1 for idx in self.insert_layers]}")
             print(f"  deepstack_visual_indexes_0based={self.deepstack_visual_indexes}")
@@ -506,7 +534,7 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
         for layer_num, blk in enumerate(self.blocks):
             if (
                 layer_num not in self.insert_layers
-                or v_r_token_list is None
+                or rep_generator is None
             ):
                 hidden_states = blk(
                     hidden_states,
@@ -548,7 +576,7 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
                             device=hidden_states.device,
                             dtype=hidden_states.dtype,
                         )
-                        run_mmrl_branch = v_r_token_list is not None
+                        run_mmrl_branch = rep_generator is not None
                     else:
                         self.alpha_list = self.Task_classifier(
                             gate_pooled_vision_states,
@@ -570,12 +598,39 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
                             if self.G_list.sum() == 0:
                                 run_mmrl_branch = False
 
+                    if self.training or run_mmrl_branch:
+                        dynamic_rep_tokens = rep_generator(
+                            visual_states=hidden_states,
+                            cu_seqlens=cu_seqlens,
+                            text_states=embedding,
+                            text_mask=text_pooling_mask,
+                            images_per_sample=images_per_sample,
+                        )
+                        if len(dynamic_rep_tokens) != len(self.insert_layers):
+                            raise RuntimeError(
+                                "dynamic Rep layer count mismatch: "
+                                f"generated={len(dynamic_rep_tokens)} "
+                                f"expected={len(self.insert_layers)}"
+                            )
+                        expected_shape = (
+                            total_pic_num,
+                            current_num_r_token,
+                            self.cfg.vision_token_dim,
+                        )
+                        invalid_shapes = [
+                            (index, tuple(tokens.shape))
+                            for index, tokens in enumerate(dynamic_rep_tokens)
+                            if tuple(tokens.shape) != expected_shape
+                        ]
+                        if invalid_shapes:
+                            raise RuntimeError(
+                                "dynamic Rep tensor shape mismatch: "
+                                f"expected={expected_shape} actual={invalid_shapes}"
+                            )
+
                 ############ N图切分+门控 ############
                 idx = self.insert_layers.index(layer_num)
                 forward_hit_layers.append(layer_num)
-                assert v_r_token_list[idx] is not None
-                r_tokens_input = v_r_token_list[idx]
-                assert r_tokens_input is not None
 
                 org_hidden_states = blk(hidden_states if first_insert else org_hidden_states,
                                         cu_seqlens=cu_seqlens,
@@ -584,6 +639,11 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
                                         **kwargs)
                 hidden_states = org_hidden_states
                 if self.training or run_mmrl_branch:
+                    if dynamic_rep_tokens is None or dynamic_rep_tokens[idx] is None:
+                        raise RuntimeError(
+                            f"dynamic Rep tokens missing for insertion layer {layer_num}"
+                        )
+                    r_tokens_input = dynamic_rep_tokens[idx]
                     if first_insert:
                         hidden_states_with_rep = self.blocks_with_rep[idx](
                             org_input_states,
@@ -660,7 +720,7 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
             print(f"  actual_hit_layers_natural={[idx + 1 for idx in forward_hit_layers]}")
             expected_insert_layers = (
                 self.insert_layers
-                if v_r_token_list is not None
+                if rep_generator is not None
                 else []
             )
             print(f"  expected_insert_layers_0based={expected_insert_layers}")

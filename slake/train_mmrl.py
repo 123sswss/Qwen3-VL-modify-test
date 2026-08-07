@@ -98,6 +98,10 @@ def resolve_train_manifest(
 def build_experiment_config(args: argparse.Namespace) -> Dict[str, Any]:
     return {
         "rp_space_length": args.rp_space_length,
+        "memory_query_count": args.memory_query_count,
+        "memory_attention_dim": args.memory_attention_dim,
+        "projector_hidden_dim": args.projector_hidden_dim,
+        "cross_attention_heads": args.cross_attention_heads,
         "mmrl_relation_loss_weight": args.relation_weight,
         "mmrl_relation_max_tokens": 64,
         "mmrl_variance_floor_ratio": 0.50,
@@ -107,7 +111,6 @@ def build_experiment_config(args: argparse.Namespace) -> Dict[str, Any]:
         "ablate_visual_gate": False,
         "ablate_direct_learnable_rep": False,
         "stage3_learning_rate": args.mmrl_lr,
-        "stage3_pooling_learning_rate": args.pooling_lr,
         "stage3_mmrl_learning_rate": args.mmrl_lr,
         "stage3_schedule_epochs": args.stage3_epochs,
         "stage3_warmup_ratio": args.warmup_ratio,
@@ -158,6 +161,15 @@ def build_train_config(
             "delta_to_org_ratio",
             "mmrl_delta_to_org_ratio",
             "mmrl_relation_loss_scaled",
+            "dynamic_rep_base_norm_mean",
+            "dynamic_rep_cross_delta_norm_mean",
+            "dynamic_rep_cross_delta_ratio",
+            "visual_memory_norm_mean",
+            "text_memory_norm_mean",
+            "visual_memory_pooling_grad_norm_mean",
+            "text_memory_pooling_grad_norm_mean",
+            "cross_attention_grad_norm_mean",
+            "cross_attention_output_weight_norm",
             "temperature",
         ],
         "learning_rate": {
@@ -367,6 +379,8 @@ def audit_model_forward(
     model.enable_alpha_guide_loss = False
     was_training = model.training
     model.eval()
+    model.model.MMRL.last_rep_shape = None
+    model.model.MMRL.last_memory_shape = None
     with torch.no_grad():
         outputs = model(**device_batch)
     if outputs.loss is None or not bool(torch.isfinite(outputs.loss)):
@@ -376,6 +390,53 @@ def audit_model_forward(
         raise RuntimeError("SLAKE forward did not produce a visual gate value")
     if not bool(torch.isfinite(gate).all()):
         raise RuntimeError("SLAKE forward produced a non-finite visual gate value")
+    mmrl = model.model.MMRL
+    forced_dynamic_audit = False
+    if mmrl.last_rep_shape is None or mmrl.last_memory_shape is None:
+        forced_dynamic_audit = True
+        original_ablation = model.model.visual.ablate_visual_gate
+        model.model.visual.ablate_visual_gate = True
+        try:
+            with torch.no_grad():
+                model(**device_batch)
+        finally:
+            model.model.visual.ablate_visual_gate = original_ablation
+    rep_shape = mmrl.last_rep_shape
+    memory_shape = mmrl.last_memory_shape
+    expected_images = int(device_batch["image_grid_thw"].shape[0])
+    expected_rep_shape = (
+        expected_images,
+        len(model.model.visual.insert_layers),
+        mmrl.rp_space_length,
+        mmrl.vision_token_dim,
+    )
+    expected_memory_shape = (
+        expected_images,
+        2 * mmrl.memory_query_count,
+        mmrl.vision_token_dim,
+    )
+    if rep_shape != expected_rep_shape:
+        raise RuntimeError(
+            "SLAKE dynamic Rep shape audit failed: "
+            f"expected={expected_rep_shape} actual={rep_shape}"
+        )
+    if memory_shape != expected_memory_shape:
+        raise RuntimeError(
+            "SLAKE dynamic memory shape audit failed: "
+            f"expected={expected_memory_shape} actual={memory_shape}"
+        )
+    cross_output_weight_norm = float(
+        mmrl.cross_attention.output_projection.weight.detach().float().norm().item()
+    )
+    cross_output_bias_norm = float(
+        mmrl.cross_attention.output_projection.bias.detach().float().norm().item()
+    )
+    if cross_output_weight_norm != 0.0 or cross_output_bias_norm != 0.0:
+        raise RuntimeError(
+            "Cross-Attention output projection changed before Stage 3: "
+            f"weight_norm={cross_output_weight_norm} "
+            f"bias_norm={cross_output_bias_norm}"
+        )
     if was_training:
         model.train()
 
@@ -384,11 +445,18 @@ def audit_model_forward(
         "text_pooling_tokens": int(text_pooling_mask.sum().item()),
         "batch_size": int(device_batch["input_ids"].shape[0]),
         "gate_values": gate.detach().float().reshape(-1).cpu().tolist(),
+        "dynamic_rep_shape": list(rep_shape),
+        "dynamic_memory_shape": list(memory_shape),
+        "cross_output_weight_norm": cross_output_weight_norm,
+        "cross_output_bias_norm": cross_output_bias_norm,
+        "forced_dynamic_audit": forced_dynamic_audit,
     }
     print(
         "[SLAKE_FORWARD_AUDIT_PASS] "
         f"loss={report['loss']:.6f} "
-        f"text_pooling_tokens={report['text_pooling_tokens']}"
+        f"text_pooling_tokens={report['text_pooling_tokens']} "
+        f"dynamic_rep_shape={rep_shape} memory_shape={memory_shape} "
+        f"forced_gate={forced_dynamic_audit}"
     )
     return report
 
@@ -535,8 +603,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--gradient-accumulation", type=int, default=16)
     parser.add_argument("--dataloader-workers", type=int, default=4)
     parser.add_argument("--rp-space-length", type=int, default=40)
+    parser.add_argument("--memory-query-count", type=int, default=128)
+    parser.add_argument("--memory-attention-dim", type=int, default=128)
+    parser.add_argument("--projector-hidden-dim", type=int, default=1024)
+    parser.add_argument("--cross-attention-heads", type=int, default=8)
     parser.add_argument("--stage1-lr", type=float, default=1e-4)
-    parser.add_argument("--pooling-lr", type=float, default=6e-5)
     parser.add_argument("--mmrl-lr", type=float, default=6e-5)
     parser.add_argument("--relation-weight", type=float, default=0.050)
     parser.add_argument(
@@ -580,6 +651,14 @@ def parse_args() -> argparse.Namespace:
         parser.error("batch size and gradient accumulation must be positive")
     if args.rp_space_length < 1:
         parser.error("--rp-space-length must be positive")
+    if args.memory_query_count < 1:
+        parser.error("--memory-query-count must be positive")
+    if args.memory_attention_dim < 1:
+        parser.error("--memory-attention-dim must be positive")
+    if args.projector_hidden_dim < 1:
+        parser.error("--projector-hidden-dim must be positive")
+    if args.cross_attention_heads < 1:
+        parser.error("--cross-attention-heads must be positive")
     if args.generation_checks < 0:
         parser.error("--generation-checks must be non-negative")
     return args
@@ -607,6 +686,10 @@ def main() -> int:
         f"limit={200 if args.smoke_test else args.sample_limit} "
         f"stages=(1,3) "
         f"rp_space_length={args.rp_space_length} "
+        f"memory_query_count={args.memory_query_count} "
+        f"memory_attention_dim={args.memory_attention_dim} "
+        f"projector_hidden_dim={args.projector_hidden_dim} "
+        f"cross_attention_heads={args.cross_attention_heads} "
         f"seed={args.seed} data_seed={args.data_seed}"
     )
 

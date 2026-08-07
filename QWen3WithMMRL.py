@@ -33,6 +33,26 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
             "POOLING_DIM": _cfg_attr(config, "POOLING_DIM", cfg.POOLING_DIM),
             "RP_SPACE_LENGTH": _cfg_attr(config, "RP_SPACE_LENGTH", cfg.RP_SPACE_LENGTH),
             "RP_SPACE_DIM": _cfg_attr(config, "RP_SPACE_DIM", cfg.RP_SPACE_DIM),
+            "MMRL_MEMORY_QUERY_COUNT": _cfg_attr(
+                config,
+                "MMRL_MEMORY_QUERY_COUNT",
+                cfg.MMRL_MEMORY_QUERY_COUNT,
+            ),
+            "MMRL_MEMORY_ATTENTION_DIM": _cfg_attr(
+                config,
+                "MMRL_MEMORY_ATTENTION_DIM",
+                cfg.MMRL_MEMORY_ATTENTION_DIM,
+            ),
+            "MMRL_PROJECTOR_HIDDEN_DIM": _cfg_attr(
+                config,
+                "MMRL_PROJECTOR_HIDDEN_DIM",
+                vision_dim,
+            ),
+            "MMRL_CROSS_ATTENTION_HEADS": _cfg_attr(
+                config,
+                "MMRL_CROSS_ATTENTION_HEADS",
+                cfg.MMRL_CROSS_ATTENTION_HEADS,
+            ),
             "INSERT_METHOD": _cfg_attr(config, "INSERT_METHOD", cfg.INSERT_METHOD),
             "GATING_MID_DIM": _cfg_attr(config, "GATING_MID_DIM", cfg.GATING_MID_DIM),
             "stretching_length": _cfg_attr(config, "stretching_length", cfg.stretching_length),
@@ -161,18 +181,18 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
     def get_image_features(self,
                         pixel_values: torch.FloatTensor,
                         image_grid_thw: Optional[torch.LongTensor] = None,
-                        v_r_token_list: Optional[list[torch.Tensor]] = None,
-                        embedding: Optional[torch.nn.Module] = None,
+                        rep_generator: Optional[torch.nn.Module] = None,
+                        embedding: Optional[torch.Tensor] = None,
                         images_per_sample: Optional[list[int]] = None,
                         text_pooling_mask: Optional[torch.Tensor] = None,):
-        if self.use_mmrl and v_r_token_list is None:
-            raise ValueError("v_r_token_list must be specified")
+        if self.use_mmrl and rep_generator is None:
+            raise ValueError("rep_generator must be specified")
         elif self.use_mmrl:
             pixel_values = pixel_values.type(self.visual.dtype)
             image_embeds, deepstack_image_embeds = self.visual(
                 pixel_values,
                 grid_thw=image_grid_thw,
-                v_r_token_list=v_r_token_list,
+                rep_generator=rep_generator,
                 embedding=embedding,
                 text_pooling_mask=text_pooling_mask,
                 gating_temperature_override=self.temperature_override,
@@ -224,9 +244,6 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
         mmrl_gating_mask = kwargs.pop("mmrl_gating_mask", None)
         self.debug_context = {}
         
-        v_r_token_list = None
-        if self.use_mmrl:
-            v_r_token_list = self.MMRL()
         visual_pos_masks = None
         deepstack_visual_embeds = None
         is_prefill = True
@@ -286,7 +303,7 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
                 image_embeds_raw, deepstack_image_embeds = self.get_image_features(
                     pixel_values=pixel_values,
                     image_grid_thw=image_grid_thw,
-                    v_r_token_list=v_r_token_list,
+                    rep_generator=self.MMRL,
                     embedding=inputs_embeds,
                     images_per_sample=images_per_sample,
                     text_pooling_mask=text_pooling_mask,
@@ -295,9 +312,8 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
                 image_embeds_raw, deepstack_image_embeds = self.get_image_features(
                     pixel_values=pixel_values,
                     image_grid_thw=image_grid_thw,
-                    v_r_token_list=v_r_token_list,
                     embedding=inputs_embeds,
-                    images_per_sample=images_per_sample
+                    images_per_sample=images_per_sample,
                 )
             image_embeds = torch.cat(image_embeds_raw, dim=0).to(inputs_embeds.device, inputs_embeds.dtype)
             image_mask, _ = self.get_placeholder_mask(

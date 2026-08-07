@@ -47,7 +47,7 @@ available_output_dir() {
 }
 
 run_train_dataset() {
-  local experiment_name="rep_token_direct_v1"
+  local experiment_name="dynamic_rep_cross_attention_v1"
   local output_dir
   output_dir="$(available_output_dir "$OUTPUT_ROOT" "${experiment_name}_seed${SEED}_${RUN_DATE}")"
   mkdir -p "$output_dir"
@@ -68,7 +68,7 @@ run_train_dataset() {
 }
 
 run_slake() {
-  local experiment_name="${SLAKE_EXPERIMENT_NAME:-slake_mmrl_rep_token_direct}"
+  local experiment_name="${SLAKE_EXPERIMENT_NAME:-slake_mmrl_dynamic_rep_cross_attention}"
   local epochs="${SLAKE_STAGE3_EPOCHS:-3}"
   local relation_weight="${MMRL_RELATION_LOSS_WEIGHT:-0.05}"
   local output_dir
@@ -87,8 +87,11 @@ run_slake() {
       --data-seed 42 \
       --stage3-epochs "$epochs" \
       --stage3-epoch-lr-decay 0.5 \
-      --rp-space-length 40 \
-      --pooling-lr 6e-5 \
+      --rp-space-length "${MMRL_RP_SPACE_LENGTH:-40}" \
+      --memory-query-count "${MMRL_MEMORY_QUERY_COUNT:-128}" \
+      --memory-attention-dim "${MMRL_MEMORY_ATTENTION_DIM:-128}" \
+      --projector-hidden-dim "${MMRL_PROJECTOR_HIDDEN_DIM:-1024}" \
+      --cross-attention-heads "${MMRL_CROSS_ATTENTION_HEADS:-8}" \
       --mmrl-lr 6e-5 \
       --relation-weight "$relation_weight" \
       --scheduler constant_with_warmup \

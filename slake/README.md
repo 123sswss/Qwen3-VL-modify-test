@@ -47,10 +47,12 @@ Stage 1 trains the existing focal-BCE expert/general gate objective with:
 - one multimodal and one text-only prompt view per raw sample;
 - prompt-only chat templates, so neither side exposes assistant answers.
 
-Stage 3 then trains only on SLAKE answer supervision. It updates the static
-Rep-Token generator and the two pooling modules while keeping the Stage 1 task
-classifier and both visual backbones frozen. The old residual Router/Adapter
-path has been removed. The visual output is the gate-controlled Rep branch:
+Stage 3 then trains only on SLAKE answer supervision. It keeps the Stage 1
+gate poolers, task classifier, and both visual backbones frozen. The dynamic
+Rep generator pools the question and the natural layer-16 visual states into
+128 memory tokens per modality, then uses one residual Cross-Attention to
+produce 40 image-specific Rep tokens for each of natural layers 17 through 24.
+The old residual Router/Adapter path has been removed. The visual output is:
 
 ```text
 H_out = H_base + G * (H_rep - H_base)
@@ -59,8 +61,10 @@ H_out = H_base + G * (H_rep - H_base)
 The default Stage 3 hyperparameters are:
 
 ```text
-pooling=6e-5
 MMRL=6e-5
+visual memory queries=128
+text memory queries=128
+Cross-Attention heads=8
 relation=0.050
 scheduler=constant_with_warmup
 ```
@@ -93,8 +97,10 @@ FROST-VL training writes only `mmrl_manifest.json` and
 `mmrl_delta.safetensors` for model weights. A matching Base model must be
 provided during evaluation; full-model legacy checkpoints are not supported.
 
-Use `--mmrl-lr`, `--pooling-lr`, `--relation-weight`, and
-`--rp-space-length` to change one training variable without editing source.
+Use `--mmrl-lr`, `--relation-weight`, `--rp-space-length`,
+`--memory-query-count`, `--memory-attention-dim`,
+`--projector-hidden-dim`, and `--cross-attention-heads` to change one
+training variable without editing source.
 
 The default Stage 1 general data paths match `train/train.py`. Override them
 by repeating `--stage1-general-json` and `--stage1-general-image-root`.

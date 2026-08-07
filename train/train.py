@@ -24,11 +24,18 @@ from train_stages import build_model_and_processor, run_stage
 
 
 SCORE_PATTERN = re.compile(r"百分制分数\s*[:：]\s*(-?\d+(?:\.\d+)?)")
-SELECTED_EXPERIMENT = os.getenv("MMRL_EXPERIMENT", "rep_token_direct_v1")
+SELECTED_EXPERIMENT = os.getenv(
+    "MMRL_EXPERIMENT",
+    "dynamic_rep_cross_attention_v1",
+)
 
 EXPERIMENTS = {
-    "rep_token_direct_v1": {
+    "dynamic_rep_cross_attention_v1": {
         "rp_space_length": 40,
+        "memory_query_count": 128,
+        "memory_attention_dim": 128,
+        "projector_hidden_dim": 1024,
+        "cross_attention_heads": 8,
         "ablate_visual_gate": False,
         "ablate_direct_learnable_rep": False,
         "mmrl_relation_loss_weight": 0.05,
@@ -39,7 +46,6 @@ EXPERIMENTS = {
         "deepstack_mmrl_residual_scale": 0.0,
         "stage1_learning_rate": 1e-4,
         "stage3_learning_rate": 6e-5,
-        "stage3_pooling_learning_rate": 6e-5,
         "stage3_mmrl_learning_rate": 6e-5,
         "stage3_warmup_ratio": 0.10,
         "stage3_lr_scheduler_type": "constant_with_warmup",
@@ -197,6 +203,15 @@ CFG = {
             "shared_rep_norm_mean",
             "shared_rep_grad_norm",
             "v_projector_grad_norm_mean",
+            "dynamic_rep_base_norm_mean",
+            "dynamic_rep_cross_delta_norm_mean",
+            "dynamic_rep_cross_delta_ratio",
+            "visual_memory_norm_mean",
+            "text_memory_norm_mean",
+            "visual_memory_pooling_grad_norm_mean",
+            "text_memory_pooling_grad_norm_mean",
+            "cross_attention_grad_norm_mean",
+            "cross_attention_output_weight_norm",
             "temperature",
         ],
         "learning_rate": {

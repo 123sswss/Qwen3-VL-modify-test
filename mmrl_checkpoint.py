@@ -17,7 +17,7 @@ from safetensors.torch import load_file, save_file
 
 
 FORMAT_NAME = "frost-vl-mmrl-delta"
-FORMAT_VERSION = 2
+FORMAT_VERSION = 3
 WEIGHTS_NAME = "mmrl_delta.safetensors"
 MANIFEST_NAME = "mmrl_manifest.json"
 LEGACY_WEIGHT_NAMES = (
@@ -251,6 +251,9 @@ def load_mmrl_delta(
     result = model.load_state_dict(state, strict=False)
     if result.unexpected_keys:
         raise RuntimeError(f"Unexpected delta keys: {result.unexpected_keys}")
+    mmrl = getattr(getattr(model, "model", None), "MMRL", None)
+    if mmrl is not None and hasattr(mmrl, "cached_base_queries"):
+        mmrl.cached_base_queries = None
     print(
         "[MMRL_COMPACT_CHECKPOINT] "
         f"loaded={checkpoint_dir} tensors={len(state)} "

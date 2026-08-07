@@ -666,6 +666,24 @@ class Qwen3VLMMRLForStages(Qwen3VLForConditionalGeneration):
 
 
         _grad_stats(getattr(mmrl, "v_r_token_projector", []), "v_projector")
+        _grad_stats(
+            getattr(mmrl, "visual_memory_pooling", None),
+            "visual_memory_pooling",
+        )
+        _grad_stats(
+            getattr(mmrl, "text_memory_pooling", None),
+            "text_memory_pooling",
+        )
+        _grad_stats(
+            getattr(mmrl, "cross_attention", None),
+            "cross_attention",
+        )
+        cross_attention = getattr(mmrl, "cross_attention", None)
+        output_projection = getattr(cross_attention, "output_projection", None)
+        if output_projection is not None:
+            result["cross_attention_output_weight_norm"] = (
+                output_projection.weight.detach().float().norm()
+            )
 
         visual = getattr(self.model, "visual", None)
         if visual is not None:
@@ -855,6 +873,9 @@ class Qwen3VLMMRLForStages(Qwen3VLForConditionalGeneration):
             model_dbg = getattr(self.model, "debug_context", {}) or {}
             for key, value in model_dbg.items():
                 self._last_metrics[key] = value
+            mmrl_dbg = getattr(self.model.MMRL, "debug_context", {}) or {}
+            for key, value in mmrl_dbg.items():
+                self._last_metrics[key] = value
             for key, value in self._collect_rep_grad_metrics(input_ids.device).items():
                 self._last_metrics[key] = value
 
@@ -888,7 +909,29 @@ class Qwen3VLMMRLForStages(Qwen3VLForConditionalGeneration):
 def build_model_and_processor(model_path, experiment_cfg=None):
     experiment_cfg = experiment_cfg or {}
     config = AutoConfig.from_pretrained(model_path, trust_remote_code=True)
-    config.RP_SPACE_LENGTH = int(experiment_cfg.get("rp_space_length", 40))
+    config.RP_SPACE_LENGTH = int(os.getenv(
+        "MMRL_RP_SPACE_LENGTH",
+        str(experiment_cfg.get("rp_space_length", 40)),
+    ))
+    config.MMRL_MEMORY_QUERY_COUNT = int(os.getenv(
+        "MMRL_MEMORY_QUERY_COUNT",
+        str(experiment_cfg.get("memory_query_count", 128)),
+    ))
+    config.MMRL_MEMORY_ATTENTION_DIM = int(os.getenv(
+        "MMRL_MEMORY_ATTENTION_DIM",
+        str(experiment_cfg.get("memory_attention_dim", 128)),
+    ))
+    config.MMRL_PROJECTOR_HIDDEN_DIM = int(os.getenv(
+        "MMRL_PROJECTOR_HIDDEN_DIM",
+        str(experiment_cfg.get(
+            "projector_hidden_dim",
+            config.vision_config.hidden_size,
+        )),
+    ))
+    config.MMRL_CROSS_ATTENTION_HEADS = int(os.getenv(
+        "MMRL_CROSS_ATTENTION_HEADS",
+        str(experiment_cfg.get("cross_attention_heads", 8)),
+    ))
     config.ABLATE_VISUAL_GATE = bool(experiment_cfg.get(
         "ablate_visual_gate",
         os.getenv("MMRL_ABLATE_VISUAL_GATE", "0") == "1"
@@ -931,6 +974,7 @@ def build_model_and_processor(model_path, experiment_cfg=None):
     model = Qwen3VLMMRLForStages(config, tokenizer).to("cuda").to(torch.bfloat16)
     model._ensure_shared_rep_grad_hook()
     visual = model.model.visual
+    mmrl = model.model.MMRL
     propagation_checks = {
         "MMRL_RELATION_MAX_TOKENS": (
             config.MMRL_RELATION_MAX_TOKENS,
@@ -944,6 +988,22 @@ def build_model_and_processor(model_path, experiment_cfg=None):
             config.MMRL_VARIANCE_FLOOR_WEIGHT,
             visual.mmrl_variance_floor_weight,
         ),
+        "MMRL_MEMORY_QUERY_COUNT": (
+            config.MMRL_MEMORY_QUERY_COUNT,
+            mmrl.memory_query_count,
+        ),
+        "MMRL_MEMORY_ATTENTION_DIM": (
+            config.MMRL_MEMORY_ATTENTION_DIM,
+            mmrl.memory_attention_dim,
+        ),
+        "MMRL_PROJECTOR_HIDDEN_DIM": (
+            config.MMRL_PROJECTOR_HIDDEN_DIM,
+            mmrl.projector_hidden_dim,
+        ),
+        "MMRL_CROSS_ATTENTION_HEADS": (
+            config.MMRL_CROSS_ATTENTION_HEADS,
+            mmrl.cross_attention.num_heads,
+        ),
     }
     for name, (requested, actual) in propagation_checks.items():
         if abs(float(requested) - float(actual)) > 1e-9:
@@ -952,10 +1012,71 @@ def build_model_and_processor(model_path, experiment_cfg=None):
             )
     print(
         "[MMRL_STRUCTURE_AUDIT] "
-        f"rp_space_length={config.RP_SPACE_LENGTH}"
+        f"rp_space_length={config.RP_SPACE_LENGTH} "
+        f"memory_query_count={config.MMRL_MEMORY_QUERY_COUNT} "
+        f"memory_attention_dim={config.MMRL_MEMORY_ATTENTION_DIM} "
+        f"projector_hidden_dim={config.MMRL_PROJECTOR_HIDDEN_DIM} "
+        f"cross_attention_heads={config.MMRL_CROSS_ATTENTION_HEADS} "
+        "memory_tokens_per_image="
+        f"{2 * config.MMRL_MEMORY_QUERY_COUNT}"
+    )
+    component_parameters = {
+        "shared_rep": model.model.MMRL.shared_represent_space.numel(),
+        "layer_embeddings": model.model.MMRL.layer_embeddings.numel(),
+        "layer_projectors": sum(
+            parameter.numel()
+            for parameter in model.model.MMRL.v_r_token_projector.parameters()
+        ),
+        "direct_rep": sum(
+            parameter.numel()
+            for parameter in model.model.MMRL.direct_v_tokens.parameters()
+        ),
+        "visual_memory_pooling": sum(
+            parameter.numel()
+            for parameter in model.model.MMRL.visual_memory_pooling.parameters()
+        ),
+        "text_memory_pooling": sum(
+            parameter.numel()
+            for parameter in model.model.MMRL.text_memory_pooling.parameters()
+        ),
+        "cross_attention": sum(
+            parameter.numel()
+            for parameter in model.model.MMRL.cross_attention.parameters()
+        ),
+    }
+    print(
+        "[MMRL_PARAMETER_AUDIT] "
+        f"components={component_parameters} "
+        f"total={sum(parameter.numel() for parameter in model.model.MMRL.parameters())}"
     )
     model.model.load_state_dict(base.model.state_dict(), strict=False)
     model.lm_head.load_state_dict(base.lm_head.state_dict(), strict=False)
+
+    cross_output_norm = float(
+        model.model.MMRL.cross_attention.output_projection.weight
+        .detach()
+        .float()
+        .norm()
+        .item()
+    )
+    cross_output_bias_norm = float(
+        model.model.MMRL.cross_attention.output_projection.bias
+        .detach()
+        .float()
+        .norm()
+        .item()
+    )
+    if cross_output_norm != 0.0 or cross_output_bias_norm != 0.0:
+        raise RuntimeError(
+            "Dynamic Rep Cross-Attention output projection must start at zero, "
+            f"got weight_norm={cross_output_norm} "
+            f"bias_norm={cross_output_bias_norm}"
+        )
+    print(
+        "[MMRL_CROSS_ATTENTION_INIT_AUDIT] "
+        f"output_weight_norm={cross_output_norm} "
+        f"output_bias_norm={cross_output_bias_norm} residual_identity=True"
+    )
 
     del base
     torch.cuda.empty_cache()
@@ -991,6 +1112,10 @@ def build_model_and_processor(model_path, experiment_cfg=None):
         f"ablate_visual_gate={config.ABLATE_VISUAL_GATE} "
         f"ablate_direct_learnable_rep={config.ABLATE_DIRECT_LEARNABLE_REP} "
         f"rp_space_length={config.RP_SPACE_LENGTH} "
+        f"memory_query_count={config.MMRL_MEMORY_QUERY_COUNT} "
+        f"memory_attention_dim={config.MMRL_MEMORY_ATTENTION_DIM} "
+        f"projector_hidden_dim={config.MMRL_PROJECTOR_HIDDEN_DIM} "
+        f"cross_attention_heads={config.MMRL_CROSS_ATTENTION_HEADS} "
         f"mmrl_relation_loss_weight={config.MMRL_RELATION_LOSS_WEIGHT} "
         f"mmrl_variance_floor_ratio={config.MMRL_VARIANCE_FLOOR_RATIO} "
         f"mmrl_variance_floor_weight={config.MMRL_VARIANCE_FLOOR_WEIGHT} "
@@ -1012,7 +1137,7 @@ def set_trainable_stage(model, stage, train_cfg=None):
     if stage == 1:
         mods = [v.hidden_state_pooling, v.embedding_pooling, v.Task_classifier]
     elif stage == 3:
-        mods = [model.model.MMRL, v.hidden_state_pooling, v.embedding_pooling]
+        mods = [model.model.MMRL]
         # v.blocks_with_rep stay frozen while the Rep-Token branch remains active.
     else:
         raise ValueError("stage must be 1 or 3")
@@ -1037,10 +1162,7 @@ def print_joint_trainable_params_before_stage1(model):
 
 def _build_stage3_grouped_optimizer(model, train_cfg):
     experiment_cfg = train_cfg.get("experiment_cfg", {}) or {}
-    if (
-        "stage3_mmrl_learning_rate" not in experiment_cfg
-        and "stage3_pooling_learning_rate" not in experiment_cfg
-    ):
+    if "stage3_mmrl_learning_rate" not in experiment_cfg:
         return None
 
     mmrl_lr = float(experiment_cfg.get(
@@ -1062,54 +1184,29 @@ def _build_stage3_grouped_optimizer(model, train_cfg):
         raise ValueError(
             f"Stage 3 weight decay must be non-negative, got {weight_decay}"
         )
-    visual = model.model.visual
-    grouped = {"mmrl": []}
-    pooling_lr = experiment_cfg.get("stage3_pooling_learning_rate")
-    if pooling_lr is not None:
-        pooling_lr = float(pooling_lr)
-        grouped["pooling"] = []
-    active_pooling_modules = (visual.hidden_state_pooling, visual.embedding_pooling)
-    active_pooling_param_ids = {
-        id(parameter)
-        for module in active_pooling_modules
-        for parameter in module.parameters()
-    }
-
-    for name, param in model.named_parameters():
-        if not param.requires_grad:
-            continue
-        if pooling_lr is not None and id(param) in active_pooling_param_ids:
-            grouped["pooling"].append(param)
-            continue
-        grouped["mmrl"].append(param)
-
-    if pooling_lr is not None:
-        actual_pooling_param_ids = {
-            id(parameter)
-            for parameter in grouped["pooling"]
-        }
-        if actual_pooling_param_ids != active_pooling_param_ids:
-            raise RuntimeError(
-                "Stage 3 pooling LR group does not exactly match the active "
-                "hidden/text pooling parameters"
-            )
-
-    learning_rates = {"mmrl": mmrl_lr}
-    if pooling_lr is not None:
-        learning_rates["pooling"] = pooling_lr
-    empty_groups = [name for name, params in grouped.items() if not params]
-    if empty_groups:
-        raise RuntimeError(f"Empty Stage3 optimizer groups: {empty_groups}")
-
-    parameter_groups = [
-        {
-            "params": params,
-            "lr": learning_rates[name],
-            "weight_decay": weight_decay,
-            "group_name": name,
-        }
-        for name, params in grouped.items()
+    mmrl_parameters = [
+        parameter
+        for parameter in model.model.MMRL.parameters()
+        if parameter.requires_grad
     ]
+    active_parameters = [
+        parameter for parameter in model.parameters() if parameter.requires_grad
+    ]
+    if not mmrl_parameters:
+        raise RuntimeError("Stage 3 MMRL optimizer group is empty")
+    if {id(parameter) for parameter in active_parameters} != {
+        id(parameter) for parameter in mmrl_parameters
+    }:
+        raise RuntimeError(
+            "Stage 3 trainable parameters must belong exclusively to model.MMRL"
+        )
+
+    parameter_groups = [{
+        "params": mmrl_parameters,
+        "lr": mmrl_lr,
+        "weight_decay": weight_decay,
+        "group_name": "mmrl",
+    }]
     print(
         "[STAGE3_OPTIMIZER_GROUPS] "
         + " ".join(
@@ -1403,15 +1500,15 @@ def run_stage3_full(model, processor, data_cfg, train_cfg, output_dir):
         "hidden_state_pooling": visual.hidden_state_pooling,
         "embedding_pooling": visual.embedding_pooling,
     }
-    unexpectedly_frozen = [
+    unexpectedly_trainable = [
         name
         for name, module in pooling_modules.items()
-        if not all(parameter.requires_grad for parameter in module.parameters())
+        if any(parameter.requires_grad for parameter in module.parameters())
     ]
-    if unexpectedly_frozen:
+    if unexpectedly_trainable:
         raise RuntimeError(
-            "Stage 3 must train its active pooling coordinate systems: "
-            f"{unexpectedly_frozen}"
+            "Stage 3 must preserve the Stage 1 gate pooling coordinate systems: "
+            f"{unexpectedly_trainable}"
         )
     classifier_trainable = any(
         parameter.requires_grad
@@ -1419,9 +1516,19 @@ def run_stage3_full(model, processor, data_cfg, train_cfg, output_dir):
     )
     if classifier_trainable:
         raise RuntimeError("Stage 3 must keep the Stage 1 task classifier frozen")
+    frozen_mmrl_parameters = [
+        name
+        for name, parameter in model.model.MMRL.named_parameters()
+        if not parameter.requires_grad
+    ]
+    if frozen_mmrl_parameters:
+        raise RuntimeError(
+            "Stage 3 must train the complete dynamic Rep generator: "
+            f"{frozen_mmrl_parameters}"
+        )
     print(
         "[STAGE3_TRAINABILITY] "
-        f"active_pooling={tuple(pooling_modules)} task_classifier=False"
+        "dynamic_rep_generator=True gate_pooling=False task_classifier=False"
     )
     experiment_cfg = train_cfg.get("experiment_cfg", {}) or {}
     actual_epochs = int(train_cfg["epochs"][stage_id])

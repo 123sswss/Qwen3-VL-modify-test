@@ -648,6 +648,21 @@ class Qwen3VLMMRLForStages(Qwen3VLForConditionalGeneration):
             if shared.grad is not None:
                 result["shared_rep_grad_norm"] = shared.grad.detach().float().norm()
 
+        for parameter_name, metric_prefix in (
+            ("layer_lora_A", "layer_lora_A"),
+            ("layer_lora_B", "layer_lora_B"),
+        ):
+            parameter = getattr(mmrl, parameter_name, None)
+            if parameter is None:
+                continue
+            result[f"{metric_prefix}_param_norm"] = (
+                parameter.detach().float().norm()
+            )
+            if parameter.grad is not None:
+                grad = parameter.grad.detach().float()
+                result[f"{metric_prefix}_grad_norm"] = grad.norm()
+                result[f"{metric_prefix}_grad_mean_abs"] = grad.abs().mean()
+
         def _grad_stats(modules, prefix):
             if modules is None:
                 modules = []
@@ -944,6 +959,10 @@ def build_model_and_processor(model_path, experiment_cfg=None):
         "direct_shared_rep",
         os.getenv("MMRL_DIRECT_SHARED_REP", "0") == "1"
     ))
+    config.MMRL_LAYER_LORA_RANK = int(os.getenv(
+        "MMRL_LAYER_LORA_RANK",
+        str(experiment_cfg.get("layer_lora_rank", 0)),
+    ))
     config.MMRL_RELATION_LOSS_WEIGHT = float(experiment_cfg.get(
         "mmrl_relation_loss_weight",
         os.getenv("MMRL_RELATION_LOSS_WEIGHT", "0.0"),
@@ -1008,6 +1027,10 @@ def build_model_and_processor(model_path, experiment_cfg=None):
             config.DIRECT_SHARED_REP,
             mmrl.use_direct_shared_rep,
         ),
+        "MMRL_LAYER_LORA_RANK": (
+            config.MMRL_LAYER_LORA_RANK,
+            mmrl.layer_lora_rank,
+        ),
         "MMRL_CROSS_ATTENTION_HEADS": (
             config.MMRL_CROSS_ATTENTION_HEADS,
             mmrl.cross_attention.num_heads,
@@ -1028,6 +1051,7 @@ def build_model_and_processor(model_path, experiment_cfg=None):
         f"projector_hidden_dim={config.MMRL_PROJECTOR_HIDDEN_DIM} "
         f"cross_attention_heads={config.MMRL_CROSS_ATTENTION_HEADS} "
         f"direct_shared_rep={config.DIRECT_SHARED_REP} "
+        f"layer_lora_rank={config.MMRL_LAYER_LORA_RANK} "
         "memory_tokens_per_image="
         f"{2 * config.MMRL_MEMORY_QUERY_COUNT}"
     )
@@ -1041,6 +1065,16 @@ def build_model_and_processor(model_path, experiment_cfg=None):
         "direct_rep": sum(
             parameter.numel()
             for parameter in model.model.MMRL.direct_v_tokens.parameters()
+        ),
+        "layer_lora_A": (
+            model.model.MMRL.layer_lora_A.numel()
+            if model.model.MMRL.layer_lora_A is not None
+            else 0
+        ),
+        "layer_lora_B": (
+            model.model.MMRL.layer_lora_B.numel()
+            if model.model.MMRL.layer_lora_B is not None
+            else 0
         ),
         "visual_memory_pooling": sum(
             parameter.numel()
@@ -1060,6 +1094,15 @@ def build_model_and_processor(model_path, experiment_cfg=None):
         f"components={component_parameters} "
         f"total={sum(parameter.numel() for parameter in model.model.MMRL.parameters())}"
     )
+    if mmrl.layer_lora_rank > 0:
+        print(
+            "[MMRL_LAYER_LORA_INIT_AUDIT] "
+            f"rank={mmrl.layer_lora_rank} "
+            f"A_norm={float(mmrl.layer_lora_A.detach().float().norm().item())} "
+            f"B_norm={float(mmrl.layer_lora_B.detach().float().norm().item())} "
+            "residual_identity="
+            f"{bool(torch.count_nonzero(mmrl.layer_lora_B.detach()).item() == 0)}"
+        )
     model.model.load_state_dict(base.model.state_dict(), strict=False)
     model.lm_head.load_state_dict(base.lm_head.state_dict(), strict=False)
 
@@ -1123,6 +1166,7 @@ def build_model_and_processor(model_path, experiment_cfg=None):
         f"ablate_visual_gate={config.ABLATE_VISUAL_GATE} "
         f"ablate_direct_learnable_rep={config.ABLATE_DIRECT_LEARNABLE_REP} "
         f"direct_shared_rep={config.DIRECT_SHARED_REP} "
+        f"layer_lora_rank={config.MMRL_LAYER_LORA_RANK} "
         f"rp_space_length={config.RP_SPACE_LENGTH} "
         f"memory_query_count={config.MMRL_MEMORY_QUERY_COUNT} "
         f"memory_attention_dim={config.MMRL_MEMORY_ATTENTION_DIM} "

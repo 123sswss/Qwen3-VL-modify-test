@@ -103,6 +103,7 @@ def build_experiment_config(args: argparse.Namespace) -> Dict[str, Any]:
         "projector_hidden_dim": args.projector_hidden_dim,
         "cross_attention_heads": args.cross_attention_heads,
         "direct_shared_rep": args.direct_shared_rep,
+        "layer_lora_rank": args.layer_lora_rank,
         "mmrl_relation_loss_weight": args.relation_weight,
         "mmrl_relation_max_tokens": 64,
         "mmrl_variance_floor_ratio": 0.50,
@@ -162,15 +163,47 @@ def build_train_config(
             "delta_to_org_ratio",
             "mmrl_delta_to_org_ratio",
             "mmrl_relation_loss_scaled",
+            "mmrl_relation_gram_loss",
+            "mmrl_variance_floor_loss",
+            "delta_pool_common_mode_ratio",
+            "delta_pool_specificity_ratio",
             "dynamic_rep_base_norm_mean",
             "dynamic_rep_cross_delta_norm_mean",
             "dynamic_rep_cross_delta_ratio",
+            "dynamic_rep_layer_cos_mean",
+            "dynamic_rep_layer_cos_max",
+            "dynamic_rep_effective_rank",
+            "dynamic_rep_singular_top1_ratio",
+            "dynamic_rep_singular_top2_ratio",
+            "cross_delta_layer_cos_mean",
+            "cross_delta_layer_cos_max",
+            "cross_delta_effective_rank",
+            "cross_delta_singular_top1_ratio",
+            "cross_delta_singular_top2_ratio",
+            "low_rank_delta_norm_mean",
+            "low_rank_delta_to_base_ratio",
+            "low_rank_delta_layer_cos_mean",
+            "low_rank_delta_layer_cos_max",
+            "low_rank_delta_effective_rank",
+            "low_rank_delta_singular_top1_ratio",
+            "low_rank_delta_singular_top2_ratio",
+            "layer_lora_A_param_norm",
+            "layer_lora_A_grad_norm",
+            "layer_lora_A_grad_mean_abs",
+            "layer_lora_B_param_norm",
+            "layer_lora_B_grad_norm",
+            "layer_lora_B_grad_mean_abs",
             "visual_memory_norm_mean",
             "text_memory_norm_mean",
             "visual_memory_pooling_grad_norm_mean",
             "text_memory_pooling_grad_norm_mean",
             "cross_attention_grad_norm_mean",
             "cross_attention_output_weight_norm",
+            "cross_attention_visual_mass_mean",
+            "cross_attention_text_mass_mean",
+            "cross_attention_visual_mass_query_std",
+            "cross_attention_entropy_norm",
+            "cross_attention_peak_mean",
             "temperature",
         ],
         "learning_rate": {
@@ -613,6 +646,7 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Use one learned [R,Dv] Rep table directly as all layer queries.",
     )
+    parser.add_argument("--layer-lora-rank", type=int, default=0)
     parser.add_argument("--stage1-lr", type=float, default=1e-4)
     parser.add_argument("--mmrl-lr", type=float, default=6e-5)
     parser.add_argument("--relation-weight", type=float, default=0.050)
@@ -665,6 +699,10 @@ def parse_args() -> argparse.Namespace:
         parser.error("--projector-hidden-dim must be positive")
     if args.cross_attention_heads < 1:
         parser.error("--cross-attention-heads must be positive")
+    if args.layer_lora_rank < 0:
+        parser.error("--layer-lora-rank must be non-negative")
+    if args.layer_lora_rank > 0 and not args.direct_shared_rep:
+        parser.error("--layer-lora-rank requires --direct-shared-rep")
     if args.generation_checks < 0:
         parser.error("--generation-checks must be non-negative")
     return args
@@ -697,6 +735,7 @@ def main() -> int:
         f"projector_hidden_dim={args.projector_hidden_dim} "
         f"cross_attention_heads={args.cross_attention_heads} "
         f"direct_shared_rep={args.direct_shared_rep} "
+        f"layer_lora_rank={args.layer_lora_rank} "
         f"seed={args.seed} data_seed={args.data_seed}"
     )
 

@@ -71,6 +71,7 @@ run_slake() {
   local experiment_name="${SLAKE_EXPERIMENT_NAME:-slake_mmrl_dynamic_rep_cross_attention}"
   local epochs="${SLAKE_STAGE3_EPOCHS:-3}"
   local relation_weight="${MMRL_RELATION_LOSS_WEIGHT:-0.05}"
+  local layer_lora_rank="${MMRL_LAYER_LORA_RANK:-0}"
   local extra_args=()
   if [ "${MMRL_DIRECT_SHARED_REP:-0}" = "1" ]; then
     extra_args+=(--direct-shared-rep)
@@ -78,7 +79,7 @@ run_slake() {
   local output_dir
   output_dir="$(available_output_dir "$SLAKE_OUTPUT_ROOT" "${experiment_name}_seed${SEED}_${RUN_DATE}")"
   mkdir -p "$output_dir/eval"
-  echo "[SLAKE] experiment=$experiment_name seed=$SEED epochs=$epochs output=$output_dir"
+  echo "[SLAKE] experiment=$experiment_name seed=$SEED epochs=$epochs relation=$relation_weight layer_lora_rank=$layer_lora_rank output=$output_dir"
   (
     cd "$ROOT_DIR" || exit 1
     python slake/train_mmrl.py \
@@ -96,6 +97,7 @@ run_slake() {
       --memory-attention-dim "${MMRL_MEMORY_ATTENTION_DIM:-128}" \
       --projector-hidden-dim "${MMRL_PROJECTOR_HIDDEN_DIM:-1024}" \
       --cross-attention-heads "${MMRL_CROSS_ATTENTION_HEADS:-8}" \
+      --layer-lora-rank "$layer_lora_rank" \
       "${extra_args[@]}" \
       --mmrl-lr 6e-5 \
       --relation-weight "$relation_weight" \
@@ -132,6 +134,23 @@ case "$RUN_TARGET" in
     MMRL_DIRECT_SHARED_REP=1 \
       run_slake || failures=$((failures + 1))
     ;;
+  slake_lowrank_matrix)
+    SLAKE_EXPERIMENT_NAME="slake_mmrl_shared_direct_rank16_relation0050" \
+    MMRL_DIRECT_SHARED_REP=1 \
+    MMRL_LAYER_LORA_RANK=16 \
+    MMRL_RELATION_LOSS_WEIGHT=0.05 \
+      run_slake || failures=$((failures + 1))
+    SLAKE_EXPERIMENT_NAME="slake_mmrl_shared_direct_rank16_relation0000" \
+    MMRL_DIRECT_SHARED_REP=1 \
+    MMRL_LAYER_LORA_RANK=16 \
+    MMRL_RELATION_LOSS_WEIGHT=0.0 \
+      run_slake || failures=$((failures + 1))
+    SLAKE_EXPERIMENT_NAME="slake_mmrl_shared_direct_rank64_relation0050" \
+    MMRL_DIRECT_SHARED_REP=1 \
+    MMRL_LAYER_LORA_RANK=64 \
+    MMRL_RELATION_LOSS_WEIGHT=0.05 \
+      run_slake || failures=$((failures + 1))
+    ;;
   train_shared_direct)
     MMRL_EXPERIMENT_NAME="dynamic_rep_shared_direct_v1" \
       run_train_dataset || failures=$((failures + 1))
@@ -141,7 +160,7 @@ case "$RUN_TARGET" in
     run_slake || failures=$((failures + 1))
     ;;
   *)
-    echo "[ERR] 未知目标: $RUN_TARGET，可选 train、slake、slake_shared_direct、train_shared_direct、all。" >&2
+    echo "[ERR] 未知目标: $RUN_TARGET，可选 train、slake、slake_shared_direct、slake_lowrank_matrix、train_shared_direct、all。" >&2
     exit 2
     ;;
 esac

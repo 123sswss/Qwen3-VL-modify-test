@@ -78,6 +78,13 @@ EXPERIMENTS: Dict[str, Dict[str, Any]] = {
         "rank": 32,
         "use_dora": False,
     },
+    "lora_visual_last8_attention_r128": {
+        "method": "lora",
+        "target_scope": "visual",
+        "last_n_layers": LAST_LAYER_COUNT,
+        "rank": 128,
+        "use_dora": False,
+    },
     "dora_visual_all_attention_r32": {
         "method": "dora",
         "target_scope": "visual",

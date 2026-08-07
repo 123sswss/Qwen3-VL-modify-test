@@ -45,6 +45,18 @@ def _build_experiment_context(train_cfg, output_dir, stage_id):
             "deterministic_sampling": train_cfg.get("deterministic_sampling", False),
             "per_device_train_batch_size": train_cfg.get("per_device_train_batch_size"),
             "gradient_accumulation_steps": train_cfg.get("gradient_accumulation_steps"),
+            "stage3_per_device_train_batch_size": train_cfg.get(
+                "stage3_per_device_train_batch_size"
+            ),
+            "stage3_gradient_accumulation_steps": train_cfg.get(
+                "stage3_gradient_accumulation_steps"
+            ),
+            "stage3_dataloader_num_workers": train_cfg.get(
+                "stage3_dataloader_num_workers"
+            ),
+            "stage3_dataloader_pin_memory": train_cfg.get(
+                "stage3_dataloader_pin_memory"
+            ),
             "learning_rate": train_cfg.get("learning_rate", {}).get(stage_id),
             "epochs": train_cfg.get("epochs", {}).get(stage_id),
             "console_log_every": train_cfg.get("console_log_every"),
@@ -1444,12 +1456,22 @@ def run_stage1_light(model, processor, data_cfg, train_cfg, output_dir):
     data_generator = torch.Generator()
     data_generator.manual_seed(int(train_cfg.get("data_order_seed", 42)) + int(stage_id))
 
+    print(
+        "[STAGE1_BATCH] "
+        f"micro_batch={train_cfg['per_device_train_batch_size']} "
+        f"gradient_accumulation={train_cfg['gradient_accumulation_steps']} "
+        "effective_batch="
+        f"{train_cfg['per_device_train_batch_size'] * train_cfg['gradient_accumulation_steps']} "
+        f"workers={train_cfg.get('dataloader_num_workers', 4)} "
+        f"pin_memory={bool(train_cfg.get('dataloader_pin_memory', False))}"
+    )
+
     dl = DataLoader(
         ds,
         batch_size=train_cfg["per_device_train_batch_size"],
         shuffle=True,
         num_workers=train_cfg.get("dataloader_num_workers", 4),
-        pin_memory=False,
+        pin_memory=bool(train_cfg.get("dataloader_pin_memory", False)),
         collate_fn=collator,
         drop_last=True,
         generator=data_generator,
@@ -1695,11 +1717,38 @@ def run_stage3_full(model, processor, data_cfg, train_cfg, output_dir):
             assistant_turn_policy=assistant_turn_policy,
         )
         collator = MMRLDataCollator(processor)
-    micro_batches = math.ceil(
-        len(ds) / int(train_cfg["per_device_train_batch_size"])
+    stage3_batch_size = int(train_cfg.get(
+        "stage3_per_device_train_batch_size",
+        train_cfg["per_device_train_batch_size"],
+    ))
+    stage3_gradient_accumulation = int(train_cfg.get(
+        "stage3_gradient_accumulation_steps",
+        train_cfg["gradient_accumulation_steps"],
+    ))
+    stage3_workers = int(train_cfg.get(
+        "stage3_dataloader_num_workers",
+        train_cfg.get("dataloader_num_workers", 4),
+    ))
+    stage3_pin_memory = bool(train_cfg.get(
+        "stage3_dataloader_pin_memory",
+        False,
+    ))
+    if stage3_batch_size < 1 or stage3_gradient_accumulation < 1:
+        raise ValueError(
+            "Stage3 batch size and gradient accumulation must be positive, got "
+            f"batch={stage3_batch_size} accumulation={stage3_gradient_accumulation}"
+        )
+    print(
+        "[STAGE3_BATCH] "
+        f"micro_batch={stage3_batch_size} "
+        f"gradient_accumulation={stage3_gradient_accumulation} "
+        f"effective_batch={stage3_batch_size * stage3_gradient_accumulation} "
+        f"workers={stage3_workers} pin_memory={stage3_pin_memory} "
+        "persistent_workers=False"
     )
+    micro_batches = math.ceil(len(ds) / stage3_batch_size)
     updates_per_epoch = math.ceil(
-        micro_batches / int(train_cfg["gradient_accumulation_steps"])
+        micro_batches / stage3_gradient_accumulation
     )
     if use_step_schedule:
         print(
@@ -1743,8 +1792,8 @@ def run_stage3_full(model, processor, data_cfg, train_cfg, output_dir):
         output_dir=f"{output_dir}/stage{stage_id}",
         num_train_epochs=schedule_epochs,
         max_steps=stage3_max_steps,
-        per_device_train_batch_size=train_cfg["per_device_train_batch_size"],
-        gradient_accumulation_steps=train_cfg["gradient_accumulation_steps"],
+        per_device_train_batch_size=stage3_batch_size,
+        gradient_accumulation_steps=stage3_gradient_accumulation,
         learning_rate=train_cfg["learning_rate"][stage_id],
         lr_scheduler_type=(
             "constant"
@@ -1760,8 +1809,9 @@ def run_stage3_full(model, processor, data_cfg, train_cfg, output_dir):
         save_strategy="no",
         remove_unused_columns=False,
         bf16=True,
-        dataloader_pin_memory=False,
-        dataloader_num_workers=train_cfg.get("dataloader_num_workers", 4),
+        dataloader_pin_memory=stage3_pin_memory,
+        dataloader_num_workers=stage3_workers,
+        dataloader_persistent_workers=False,
         seed=train_cfg["seed"],
         data_seed=int(train_cfg.get("data_order_seed", 42)) + int(stage_id),
     )

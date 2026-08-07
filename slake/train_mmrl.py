@@ -148,6 +148,11 @@ def build_train_config(
         "per_device_train_batch_size": args.batch_size,
         "gradient_accumulation_steps": args.gradient_accumulation,
         "dataloader_num_workers": args.dataloader_workers,
+        "dataloader_pin_memory": True,
+        "stage3_per_device_train_batch_size": args.stage3_batch_size,
+        "stage3_gradient_accumulation_steps": args.stage3_gradient_accumulation,
+        "stage3_dataloader_num_workers": args.stage3_dataloader_workers,
+        "stage3_dataloader_pin_memory": False,
         "console_log_every": 1 if args.smoke_test else 25,
         "metric_smooth_window": 10 if args.smoke_test else 30,
         "metric_ema_alpha": 0.12,
@@ -633,9 +638,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--stage1-epochs", type=int, default=1)
     parser.add_argument("--stage3-epochs", type=int, default=1)
     parser.add_argument("--stage3-epoch-lr-decay", type=float, default=0.5)
-    parser.add_argument("--batch-size", type=int, default=2)
-    parser.add_argument("--gradient-accumulation", type=int, default=16)
-    parser.add_argument("--dataloader-workers", type=int, default=4)
+    parser.add_argument("--batch-size", type=int, default=4)
+    parser.add_argument("--gradient-accumulation", type=int, default=8)
+    parser.add_argument("--dataloader-workers", type=int, default=8)
+    parser.add_argument("--stage3-batch-size", type=int, default=2)
+    parser.add_argument("--stage3-gradient-accumulation", type=int, default=16)
+    parser.add_argument("--stage3-dataloader-workers", type=int, default=4)
     parser.add_argument("--rp-space-length", type=int, default=40)
     parser.add_argument("--memory-query-count", type=int, default=128)
     parser.add_argument("--memory-attention-dim", type=int, default=128)
@@ -689,6 +697,12 @@ def parse_args() -> argparse.Namespace:
         parser.error("--stage3-epoch-lr-decay must be in (0, 1]")
     if args.batch_size < 1 or args.gradient_accumulation < 1:
         parser.error("batch size and gradient accumulation must be positive")
+    if (
+        args.stage3_batch_size < 1
+        or args.stage3_gradient_accumulation < 1
+        or args.stage3_dataloader_workers < 0
+    ):
+        parser.error("Stage 3 batch/accumulation must be positive and workers non-negative")
     if args.rp_space_length < 1:
         parser.error("--rp-space-length must be positive")
     if args.memory_query_count < 1:
@@ -736,6 +750,9 @@ def main() -> int:
         f"cross_attention_heads={args.cross_attention_heads} "
         f"direct_shared_rep={args.direct_shared_rep} "
         f"layer_lora_rank={args.layer_lora_rank} "
+        f"stage1_batch={args.batch_size}x{args.gradient_accumulation} "
+        f"stage3_batch={args.stage3_batch_size}x{args.stage3_gradient_accumulation} "
+        f"stage3_workers={args.stage3_dataloader_workers} "
         f"seed={args.seed} data_seed={args.data_seed}"
     )
 

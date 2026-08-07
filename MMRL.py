@@ -317,8 +317,11 @@ class MMRL(nn.Module):
         states: torch.Tensor,
         prefix: str,
     ) -> dict[str, torch.Tensor]:
-        with torch.no_grad():
-            states = states.detach().float()
+        states = states.detach().float()
+        with torch.no_grad(), torch.autocast(
+            device_type=states.device.type,
+            enabled=False,
+        ):
             if states.ndim == 4:
                 flat = states.permute(1, 0, 2, 3).reshape(states.shape[1], -1)
             elif states.ndim == 3:

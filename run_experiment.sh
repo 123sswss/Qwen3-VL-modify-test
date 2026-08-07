@@ -92,6 +92,12 @@ run_slake() {
       --data-seed 42 \
       --stage3-epochs "$epochs" \
       --stage3-epoch-lr-decay 0.5 \
+      --batch-size "${SLAKE_STAGE1_BATCH_SIZE:-4}" \
+      --gradient-accumulation "${SLAKE_STAGE1_GRAD_ACCUM:-8}" \
+      --dataloader-workers "${SLAKE_STAGE1_WORKERS:-8}" \
+      --stage3-batch-size "${SLAKE_STAGE3_BATCH_SIZE:-2}" \
+      --stage3-gradient-accumulation "${SLAKE_STAGE3_GRAD_ACCUM:-16}" \
+      --stage3-dataloader-workers "${SLAKE_STAGE3_WORKERS:-4}" \
       --rp-space-length "${MMRL_RP_SPACE_LENGTH:-40}" \
       --memory-query-count "${MMRL_MEMORY_QUERY_COUNT:-128}" \
       --memory-attention-dim "${MMRL_MEMORY_ATTENTION_DIM:-128}" \

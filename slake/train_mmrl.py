@@ -406,14 +406,16 @@ def audit_model_forward(
         raise RuntimeError(f"SLAKE preflight forward produced invalid loss: {outputs.loss}")
     gate = model.model.visual.G_list
     route_probs = model.model.visual.route_probs
+    direct_mmrl_output = bool(model.model.visual.direct_mmrl_output)
     if not torch.is_tensor(gate) or gate.numel() == 0:
         raise RuntimeError("SLAKE forward did not produce a visual gate value")
     if not bool(torch.isfinite(gate).all()):
         raise RuntimeError("SLAKE forward produced a non-finite visual gate value")
-    if not torch.is_tensor(route_probs) or route_probs.shape[-1] != 4:
-        raise RuntimeError(
-            "SLAKE Stage 3 must preserve the four-expert adapter router"
-        )
+    if direct_mmrl_output:
+        if route_probs is not None:
+            raise RuntimeError("SLAKE MMRL-only forward must bypass the adapter router")
+    elif not torch.is_tensor(route_probs) or route_probs.shape[-1] != 4:
+        raise RuntimeError("SLAKE Stage 3 must preserve the four-expert adapter router")
     if was_training:
         model.train()
 
@@ -422,12 +424,18 @@ def audit_model_forward(
         "text_pooling_tokens": int(text_pooling_mask.sum().item()),
         "batch_size": int(device_batch["input_ids"].shape[0]),
         "gate_values": gate.detach().float().reshape(-1).cpu().tolist(),
-        "route_probs": route_probs.detach().float().cpu().tolist(),
+        "route_probs": (
+            None
+            if route_probs is None
+            else route_probs.detach().float().cpu().tolist()
+        ),
+        "direct_mmrl_output": direct_mmrl_output,
     }
     print(
         "[SLAKE_FORWARD_AUDIT_PASS] "
         f"loss={report['loss']:.6f} "
-        f"text_pooling_tokens={report['text_pooling_tokens']}"
+        f"text_pooling_tokens={report['text_pooling_tokens']} "
+        f"direct_mmrl_output={direct_mmrl_output}"
     )
     return report
 

@@ -679,6 +679,13 @@ run_slake_mmrl_only() {
     "slake_mmrl_only" "3" "1" "validation" "44" "40" "4" "0.98" "0" "0" "0" "1"
 }
 
+run_slake_mmrl_only_ce() {
+  run_slake_full_all \
+    "slake_mmrl_direct_rep_only_ce_seed44" \
+    "0" "0" "0.58" \
+    "slake_mmrl_only_ce" "3" "1" "validation" "44" "40" "4" "0.98" "0" "0" "0" "1"
+}
+
 run_slake_best_three_epoch_seed44_repeat_and_45_47() {
   local failures=0
   local training_seed
@@ -1460,6 +1467,9 @@ case "$RUN_TARGET" in
     ;;
   slake_mmrl_only)
     run_slake_mmrl_only
+    ;;
+  slake_mmrl_only_ce)
+    run_slake_mmrl_only_ce
     ;;
   slake_best_three_epoch_multiseed)
     run_slake_best_three_epoch_seed44_repeat_and_45_47

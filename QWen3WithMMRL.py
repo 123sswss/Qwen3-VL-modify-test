@@ -60,6 +60,7 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
             "insert_method": _cfg_attr(config, "INSERT_METHOD", cfg.INSERT_METHOD),
             "ABLATE_VISUAL_GATE": _cfg_attr(config, "ABLATE_VISUAL_GATE", False),
             "ABLATE_DIRECT_LEARNABLE_REP": _cfg_attr(config, "ABLATE_DIRECT_LEARNABLE_REP", False),
+            "DIRECT_SHARED_REP": _cfg_attr(config, "DIRECT_SHARED_REP", False),
             "MMRL_RELATION_MAX_TOKENS": _cfg_attr(config, "MMRL_RELATION_MAX_TOKENS", 64),
             "MMRL_VARIANCE_FLOOR_RATIO": _cfg_attr(config, "MMRL_VARIANCE_FLOOR_RATIO", 0.50),
             "MMRL_VARIANCE_FLOOR_WEIGHT": _cfg_attr(config, "MMRL_VARIANCE_FLOOR_WEIGHT", 0.10),

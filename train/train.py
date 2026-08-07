@@ -51,6 +51,28 @@ EXPERIMENTS = {
         "stage3_lr_scheduler_type": "constant_with_warmup",
         "diag_every_steps": 250,
     },
+    "dynamic_rep_shared_direct_v1": {
+        "rp_space_length": 40,
+        "memory_query_count": 128,
+        "memory_attention_dim": 128,
+        "projector_hidden_dim": 1024,
+        "cross_attention_heads": 8,
+        "direct_shared_rep": True,
+        "ablate_visual_gate": False,
+        "ablate_direct_learnable_rep": False,
+        "mmrl_relation_loss_weight": 0.05,
+        "mmrl_relation_max_tokens": 64,
+        "mmrl_variance_floor_ratio": 0.50,
+        "mmrl_variance_floor_weight": 0.10,
+        "enable_deepstack_mmrl_residual": False,
+        "deepstack_mmrl_residual_scale": 0.0,
+        "stage1_learning_rate": 1e-4,
+        "stage3_learning_rate": 6e-5,
+        "stage3_mmrl_learning_rate": 6e-5,
+        "stage3_warmup_ratio": 0.10,
+        "stage3_lr_scheduler_type": "constant_with_warmup",
+        "diag_every_steps": 250,
+    },
 }
 
 if SELECTED_EXPERIMENT not in EXPERIMENTS:

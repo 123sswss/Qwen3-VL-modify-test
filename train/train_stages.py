@@ -940,6 +940,10 @@ def build_model_and_processor(model_path, experiment_cfg=None):
         "ablate_direct_learnable_rep",
         os.getenv("MMRL_ABLATE_DIRECT_LEARNABLE_REP", "0") == "1"
     ))
+    config.DIRECT_SHARED_REP = bool(experiment_cfg.get(
+        "direct_shared_rep",
+        os.getenv("MMRL_DIRECT_SHARED_REP", "0") == "1"
+    ))
     config.MMRL_RELATION_LOSS_WEIGHT = float(experiment_cfg.get(
         "mmrl_relation_loss_weight",
         os.getenv("MMRL_RELATION_LOSS_WEIGHT", "0.0"),
@@ -1000,6 +1004,10 @@ def build_model_and_processor(model_path, experiment_cfg=None):
             config.MMRL_PROJECTOR_HIDDEN_DIM,
             mmrl.projector_hidden_dim,
         ),
+        "DIRECT_SHARED_REP": (
+            config.DIRECT_SHARED_REP,
+            mmrl.use_direct_shared_rep,
+        ),
         "MMRL_CROSS_ATTENTION_HEADS": (
             config.MMRL_CROSS_ATTENTION_HEADS,
             mmrl.cross_attention.num_heads,
@@ -1012,11 +1020,14 @@ def build_model_and_processor(model_path, experiment_cfg=None):
             )
     print(
         "[MMRL_STRUCTURE_AUDIT] "
+        "query_parameterization="
+        f"{'shared_direct' if config.DIRECT_SHARED_REP else 'layer_mlp'} "
         f"rp_space_length={config.RP_SPACE_LENGTH} "
         f"memory_query_count={config.MMRL_MEMORY_QUERY_COUNT} "
         f"memory_attention_dim={config.MMRL_MEMORY_ATTENTION_DIM} "
         f"projector_hidden_dim={config.MMRL_PROJECTOR_HIDDEN_DIM} "
         f"cross_attention_heads={config.MMRL_CROSS_ATTENTION_HEADS} "
+        f"direct_shared_rep={config.DIRECT_SHARED_REP} "
         "memory_tokens_per_image="
         f"{2 * config.MMRL_MEMORY_QUERY_COUNT}"
     )
@@ -1111,6 +1122,7 @@ def build_model_and_processor(model_path, experiment_cfg=None):
     print(
         f"ablate_visual_gate={config.ABLATE_VISUAL_GATE} "
         f"ablate_direct_learnable_rep={config.ABLATE_DIRECT_LEARNABLE_REP} "
+        f"direct_shared_rep={config.DIRECT_SHARED_REP} "
         f"rp_space_length={config.RP_SPACE_LENGTH} "
         f"memory_query_count={config.MMRL_MEMORY_QUERY_COUNT} "
         f"memory_attention_dim={config.MMRL_MEMORY_ATTENTION_DIM} "

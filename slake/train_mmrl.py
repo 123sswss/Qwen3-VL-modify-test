@@ -102,6 +102,7 @@ def build_experiment_config(args: argparse.Namespace) -> Dict[str, Any]:
         "memory_attention_dim": args.memory_attention_dim,
         "projector_hidden_dim": args.projector_hidden_dim,
         "cross_attention_heads": args.cross_attention_heads,
+        "direct_shared_rep": args.direct_shared_rep,
         "mmrl_relation_loss_weight": args.relation_weight,
         "mmrl_relation_max_tokens": 64,
         "mmrl_variance_floor_ratio": 0.50,
@@ -607,6 +608,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--memory-attention-dim", type=int, default=128)
     parser.add_argument("--projector-hidden-dim", type=int, default=1024)
     parser.add_argument("--cross-attention-heads", type=int, default=8)
+    parser.add_argument(
+        "--direct-shared-rep",
+        action="store_true",
+        help="Use one learned [R,Dv] Rep table directly as all layer queries.",
+    )
     parser.add_argument("--stage1-lr", type=float, default=1e-4)
     parser.add_argument("--mmrl-lr", type=float, default=6e-5)
     parser.add_argument("--relation-weight", type=float, default=0.050)
@@ -690,6 +696,7 @@ def main() -> int:
         f"memory_attention_dim={args.memory_attention_dim} "
         f"projector_hidden_dim={args.projector_hidden_dim} "
         f"cross_attention_heads={args.cross_attention_heads} "
+        f"direct_shared_rep={args.direct_shared_rep} "
         f"seed={args.seed} data_seed={args.data_seed}"
     )
 

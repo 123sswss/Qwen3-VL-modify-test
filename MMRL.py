@@ -151,6 +151,13 @@ class MMRL(nn.Module):
         self.use_direct_learnable_rep = bool(
             getattr(cfg, "ABLATE_DIRECT_LEARNABLE_REP", False)
         )
+        self.use_direct_shared_rep = bool(
+            getattr(cfg, "DIRECT_SHARED_REP", False)
+        )
+        if self.use_direct_learnable_rep and self.use_direct_shared_rep:
+            raise ValueError(
+                "DIRECT_SHARED_REP and ABLATE_DIRECT_LEARNABLE_REP are mutually exclusive"
+            )
         self.insert_layer_count = len(cfg.INSERT_LAYER)
         self.rp_space_length = int(cfg.RP_SPACE_LENGTH)
         self.rp_space_dim = int(cfg.RP_SPACE_DIM)
@@ -180,8 +187,13 @@ class MMRL(nn.Module):
                 f"MMRL dimensions must be positive: {invalid_dimensions}"
             )
 
+        shared_rep_dim = (
+            self.vision_token_dim
+            if self.use_direct_shared_rep
+            else self.rp_space_dim
+        )
         self.shared_represent_space = nn.Parameter(
-            torch.empty(self.rp_space_length, self.rp_space_dim)
+            torch.empty(self.rp_space_length, shared_rep_dim)
         )
         nn.init.normal_(self.shared_represent_space, std=0.02)
 
@@ -195,6 +207,9 @@ class MMRL(nn.Module):
             ])
             for parameter in self.direct_v_tokens:
                 nn.init.normal_(parameter, std=0.02)
+        elif self.use_direct_shared_rep:
+            self.v_r_token_projector = nn.ModuleList()
+            self.direct_v_tokens = nn.ParameterList()
         else:
             self.v_r_token_projector = nn.ModuleList([
                 nn.Sequential(
@@ -237,6 +252,12 @@ class MMRL(nn.Module):
     def _compute_base_queries(self) -> torch.Tensor:
         if self.use_direct_learnable_rep:
             projected = torch.stack(list(self.direct_v_tokens), dim=0)
+        elif self.use_direct_shared_rep:
+            projected = self.shared_represent_space.unsqueeze(0).expand(
+                self.insert_layer_count,
+                -1,
+                -1,
+            )
         else:
             projected = torch.stack([
                 projector(self.shared_represent_space)

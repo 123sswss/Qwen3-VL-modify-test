@@ -116,7 +116,7 @@ def build_experiment_config(args: argparse.Namespace) -> Dict[str, Any]:
         "mmrl_variance_floor_ratio": 0.50,
         "mmrl_variance_floor_weight": 0.10,
         "enable_adapter_router_identity_residual": args.enable_adapter_router_identity_residual,
-        "direct_mmrl_output": False,
+        "direct_mmrl_output": args.direct_mmrl_output,
         "raw_visual_adapter": False,
         "enable_early_mmrl_guard": False,
         "enable_deepstack_mmrl_residual": False,
@@ -598,6 +598,11 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Add the raw Rep-branch delta to the routed adapter correction.",
     )
+    parser.add_argument(
+        "--direct-mmrl-output",
+        action="store_true",
+        help="Use the Rep branch output directly and bypass routed adapters.",
+    )
     parser.add_argument("--relation-weight", type=float, default=0.010)
     parser.add_argument(
         "--scheduler",
@@ -684,6 +689,7 @@ def main() -> int:
         f"rp_space_length={args.rp_space_length} "
         f"adapter_reduction_factor={args.adapter_reduction_factor} "
         f"identity_residual={args.enable_adapter_router_identity_residual} "
+        f"direct_mmrl_output={args.direct_mmrl_output} "
         f"seed={args.seed} data_seed={args.data_seed}"
     )
 

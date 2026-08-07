@@ -207,9 +207,15 @@ run_slake_full_all() {
   local effective_delta_ceiling="${12:-0.98}"
   local enable_identity_residual="${13:-0}"
   local entropy_weight="${14:-0.020}"
+  local usage_weight="${15:-0.0026}"
+  local enable_direct_mmrl_output="${16:-0}"
   local -a identity_residual_args=()
+  local -a direct_mmrl_output_args=()
   if [ "$enable_identity_residual" = "1" ]; then
     identity_residual_args+=(--enable-adapter-router-identity-residual)
+  fi
+  if [ "$enable_direct_mmrl_output" = "1" ]; then
+    direct_mmrl_output_args+=(--direct-mmrl-output)
   fi
   local data_root="${SLAKE_DATA_ROOT:-/root/autodl-tmp/dataset/slake}"
   local model_path="${MMRL_MODEL_PATH:-/root/autodl-tmp/model}"
@@ -245,6 +251,8 @@ run_slake_full_all() {
     echo "effective_delta_ceiling=$effective_delta_ceiling"
     echo "enable_identity_residual=$enable_identity_residual"
     echo "entropy_weight=$entropy_weight"
+    echo "usage_weight=$usage_weight"
+    echo "enable_direct_mmrl_output=$enable_direct_mmrl_output"
     echo "evaluation_split=$evaluation_split"
     echo "started_at=$(date --iso-8601=seconds)"
   } > "$status_file"
@@ -270,6 +278,7 @@ run_slake_full_all() {
   echo "[SLAKE] rp_space_length=$rp_space_length adapter_reduction_factor=$adapter_reduction_factor"
   echo "[SLAKE] enable_identity_residual=$enable_identity_residual"
   echo "[SLAKE] entropy_weight=$entropy_weight"
+  echo "[SLAKE] usage_weight=$usage_weight direct_mmrl_output=$enable_direct_mmrl_output"
   echo "[SLAKE] evaluation_split=$evaluation_split questions=$evaluation_questions"
   echo "[SLAKE] relation_weight=$relation_weight effective_delta_weight=$effective_delta_weight effective_delta_range=[$effective_delta_floor,$effective_delta_ceiling]"
   echo "[SLAKE] output_dir=$output_dir"
@@ -293,13 +302,14 @@ run_slake_full_all() {
       --mmrl-lr 6e-5 \
       --router-lr 8e-5 \
       --adapter-lrs 4e-5 6e-5 8e-5 1e-4 \
-      --usage-weight 0.0026 \
+      --usage-weight "$usage_weight" \
       --entropy-weight "$entropy_weight" \
       --entropy-target 0.72 \
       --effective-delta-weight "$effective_delta_weight" \
       --effective-delta-target-low "$effective_delta_floor" \
       --effective-delta-target-high "$effective_delta_ceiling" \
       "${identity_residual_args[@]}" \
+      "${direct_mmrl_output_args[@]}" \
       --relation-weight "$relation_weight" \
       --scheduler constant_with_warmup \
       --warmup-ratio 0.10 \
@@ -660,6 +670,13 @@ run_slake_minimal_loss_a_c() {
   if [ "$failures" -ne 0 ]; then
     return 1
   fi
+}
+
+run_slake_mmrl_only() {
+  run_slake_full_all \
+    "slake_mmrl_direct_rep_only_r0500_seed44" \
+    "0.0500" "0" "0.58" \
+    "slake_mmrl_only" "3" "1" "validation" "44" "40" "4" "0.98" "0" "0" "0" "1"
 }
 
 run_slake_best_three_epoch_seed44_repeat_and_45_47() {
@@ -1440,6 +1457,9 @@ case "$RUN_TARGET" in
     ;;
   slake_minimal_loss_a_c)
     run_slake_minimal_loss_a_c
+    ;;
+  slake_mmrl_only)
+    run_slake_mmrl_only
     ;;
   slake_best_three_epoch_multiseed)
     run_slake_best_three_epoch_seed44_repeat_and_45_47

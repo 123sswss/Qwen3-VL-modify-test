@@ -98,37 +98,17 @@ def resolve_train_manifest(
 def build_experiment_config(args: argparse.Namespace) -> Dict[str, Any]:
     return {
         "rp_space_length": args.rp_space_length,
-        "visual_residual_adapter_count": 4,
-        "visual_adapter_reduction_factor": args.adapter_reduction_factor,
-        "random_init_adapter_output_count": 0,
-        "zero_init_adapter_router_output": False,
-        "adapter_usage_balance_loss_weight": args.usage_weight,
-        "adapter_sample_entropy_loss_weight": args.entropy_weight,
-        "adapter_common_mode_loss_weight": 0.0,
-        "adapter_effective_delta_loss_weight": args.effective_delta_weight,
-        "adapter_diversity_loss_weight": 0.0,
-        "adapter_sample_entropy_target": args.entropy_target,
-        "adapter_common_mode_target": 0.94,
-        "adapter_effective_delta_target_low": args.effective_delta_target_low,
-        "adapter_effective_delta_target_high": args.effective_delta_target_high,
         "mmrl_relation_loss_weight": args.relation_weight,
         "mmrl_relation_max_tokens": 64,
         "mmrl_variance_floor_ratio": 0.50,
         "mmrl_variance_floor_weight": 0.10,
-        "enable_adapter_router_identity_residual": args.enable_adapter_router_identity_residual,
-        "direct_mmrl_output": args.direct_mmrl_output,
-        "raw_visual_adapter": False,
-        "enable_early_mmrl_guard": False,
         "enable_deepstack_mmrl_residual": False,
         "deepstack_mmrl_residual_scale": 0.0,
         "ablate_visual_gate": False,
         "ablate_direct_learnable_rep": False,
-        "decouple_stage_pooling": args.decouple_stage_pooling,
         "stage3_learning_rate": args.mmrl_lr,
         "stage3_pooling_learning_rate": args.pooling_lr,
         "stage3_mmrl_learning_rate": args.mmrl_lr,
-        "stage3_router_learning_rate": args.router_lr,
-        "stage3_adapter_learning_rates": list(args.adapter_lrs),
         "stage3_schedule_epochs": args.stage3_epochs,
         "stage3_warmup_ratio": args.warmup_ratio,
         "stage3_lr_scheduler_type": args.scheduler,
@@ -159,12 +139,6 @@ def build_train_config(
         "eval_each_epoch": False,
         "save_each_epoch": args.stage3_epochs > 1,
         "checkpoint_base_model_path": str(args.model_path),
-        "visual_residual_adapter_count": 4,
-        "adapter_usage_balance_loss_weight": args.usage_weight,
-        "adapter_sample_entropy_loss_weight": args.entropy_weight,
-        "adapter_common_mode_loss_weight": 0.0,
-        "adapter_effective_delta_loss_weight": args.effective_delta_weight,
-        "adapter_diversity_loss_weight": 0.0,
         "mmrl_relation_loss_weight": args.relation_weight,
         "per_device_train_batch_size": args.batch_size,
         "gradient_accumulation_steps": args.gradient_accumulation,
@@ -184,13 +158,6 @@ def build_train_config(
             "delta_to_org_ratio",
             "mmrl_delta_to_org_ratio",
             "mmrl_relation_loss_scaled",
-            "adapter_effective_delta_ratio_mean",
-            "final_to_gated_ratio",
-            "adapter_route_entropy_norm",
-            "adapter_usage_0",
-            "adapter_usage_1",
-            "adapter_usage_2",
-            "adapter_usage_3",
             "temperature",
         ],
         "learning_rate": {
@@ -405,17 +372,10 @@ def audit_model_forward(
     if outputs.loss is None or not bool(torch.isfinite(outputs.loss)):
         raise RuntimeError(f"SLAKE preflight forward produced invalid loss: {outputs.loss}")
     gate = model.model.visual.G_list
-    route_probs = model.model.visual.route_probs
-    direct_mmrl_output = bool(model.model.visual.direct_mmrl_output)
     if not torch.is_tensor(gate) or gate.numel() == 0:
         raise RuntimeError("SLAKE forward did not produce a visual gate value")
     if not bool(torch.isfinite(gate).all()):
         raise RuntimeError("SLAKE forward produced a non-finite visual gate value")
-    if direct_mmrl_output:
-        if route_probs is not None:
-            raise RuntimeError("SLAKE MMRL-only forward must bypass the adapter router")
-    elif not torch.is_tensor(route_probs) or route_probs.shape[-1] != 4:
-        raise RuntimeError("SLAKE Stage 3 must preserve the four-expert adapter router")
     if was_training:
         model.train()
 
@@ -424,18 +384,11 @@ def audit_model_forward(
         "text_pooling_tokens": int(text_pooling_mask.sum().item()),
         "batch_size": int(device_batch["input_ids"].shape[0]),
         "gate_values": gate.detach().float().reshape(-1).cpu().tolist(),
-        "route_probs": (
-            None
-            if route_probs is None
-            else route_probs.detach().float().cpu().tolist()
-        ),
-        "direct_mmrl_output": direct_mmrl_output,
     }
     print(
         "[SLAKE_FORWARD_AUDIT_PASS] "
         f"loss={report['loss']:.6f} "
-        f"text_pooling_tokens={report['text_pooling_tokens']} "
-        f"direct_mmrl_output={direct_mmrl_output}"
+        f"text_pooling_tokens={report['text_pooling_tokens']}"
     )
     return report
 
@@ -582,36 +535,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--gradient-accumulation", type=int, default=16)
     parser.add_argument("--dataloader-workers", type=int, default=4)
     parser.add_argument("--rp-space-length", type=int, default=40)
-    parser.add_argument("--adapter-reduction-factor", type=int, default=4)
-
     parser.add_argument("--stage1-lr", type=float, default=1e-4)
     parser.add_argument("--pooling-lr", type=float, default=6e-5)
     parser.add_argument("--mmrl-lr", type=float, default=6e-5)
-    parser.add_argument("--router-lr", type=float, default=8e-5)
-    parser.add_argument(
-        "--adapter-lrs",
-        type=float,
-        nargs=4,
-        default=(4e-5, 6e-5, 8e-5, 1e-4),
-        metavar=("A0", "A1", "A2", "A3"),
-    )
-    parser.add_argument("--usage-weight", type=float, default=0.0026)
-    parser.add_argument("--entropy-weight", type=float, default=0.020)
-    parser.add_argument("--entropy-target", type=float, default=0.72)
-    parser.add_argument("--effective-delta-weight", type=float, default=0.0003)
-    parser.add_argument("--effective-delta-target-low", type=float, default=0.52)
-    parser.add_argument("--effective-delta-target-high", type=float, default=0.98)
-    parser.add_argument(
-        "--enable-adapter-router-identity-residual",
-        action="store_true",
-        help="Add the raw Rep-branch delta to the routed adapter correction.",
-    )
-    parser.add_argument(
-        "--direct-mmrl-output",
-        action="store_true",
-        help="Use the Rep branch output directly and bypass routed adapters.",
-    )
-    parser.add_argument("--relation-weight", type=float, default=0.010)
+    parser.add_argument("--relation-weight", type=float, default=0.050)
     parser.add_argument(
         "--scheduler",
         choices=("constant_with_warmup", "cosine"),
@@ -633,12 +560,6 @@ def parse_args() -> argparse.Namespace:
         help="Repeat to override the default general-domain Stage 1 image roots.",
     )
     parser.add_argument(
-        "--decouple-stage-pooling",
-        action="store_true",
-        help="Use a frozen Stage 1 gate pooler and an independent Stage 3 router copy.",
-    )
-
-    parser.add_argument(
         "--smoke-test",
         action="store_true",
         help="Use exactly 200 samples and run template, forward, train, and generation checks.",
@@ -659,17 +580,8 @@ def parse_args() -> argparse.Namespace:
         parser.error("batch size and gradient accumulation must be positive")
     if args.rp_space_length < 1:
         parser.error("--rp-space-length must be positive")
-    if args.adapter_reduction_factor < 1:
-        parser.error("--adapter-reduction-factor must be positive")
     if args.generation_checks < 0:
         parser.error("--generation-checks must be non-negative")
-    if args.effective_delta_target_low < 0:
-        parser.error("--effective-delta-target-low must be non-negative")
-    if args.effective_delta_target_high < args.effective_delta_target_low:
-        parser.error(
-            "--effective-delta-target-high must be greater than or equal to "
-            "--effective-delta-target-low"
-        )
     return args
 
 
@@ -693,11 +605,8 @@ def main() -> int:
         "[SLAKE_TRAIN_CONFIG] "
         f"questions={questions_path} images={image_root} "
         f"limit={200 if args.smoke_test else args.sample_limit} "
-        f"stages=(1,3) decouple_stage_pooling={args.decouple_stage_pooling} "
+        f"stages=(1,3) "
         f"rp_space_length={args.rp_space_length} "
-        f"adapter_reduction_factor={args.adapter_reduction_factor} "
-        f"identity_residual={args.enable_adapter_router_identity_residual} "
-        f"direct_mmrl_output={args.direct_mmrl_output} "
         f"seed={args.seed} data_seed={args.data_seed}"
     )
 
@@ -743,8 +652,6 @@ def main() -> int:
         pooling_before,
         require_update=True,
     )
-    if model.model.visual.decouple_stage_pooling:
-        model.model.visual.reset_router_pooling_from_gate()
     forward_report = audit_model_forward(model, audit_batch)
 
     print("\n========== Running SLAKE Stage 3 ==========")

@@ -47,22 +47,21 @@ Stage 1 trains the existing focal-BCE expert/general gate objective with:
 - one multimodal and one text-only prompt view per raw sample;
 - prompt-only chat templates, so neither side exposes assistant answers.
 
-Stage 3 then trains only on SLAKE answer supervision. By default, Stage 1 and
-Stage 3 share the two pooling modules, matching the main training path.
-`--decouple-stage-pooling` is available for an explicit ablation but remains
-off unless requested.
-
-The default hyperparameters are the historical effective relation plus
-heterogeneous-adapter configuration:
+Stage 3 then trains only on SLAKE answer supervision. It updates the static
+Rep-Token generator and the two pooling modules while keeping the Stage 1 task
+classifier and both visual backbones frozen. The old residual Router/Adapter
+path has been removed. The visual output is the gate-controlled Rep branch:
 
 ```text
-pooling/MMRL=6e-5
-router=8e-5
-adapters=4e-5,6e-5,8e-5,1e-4
-usage=0.0026
-entropy=0.020, target=0.72
-effective_delta=0.0003
-relation=0.010
+H_out = H_base + G * (H_rep - H_base)
+```
+
+The default Stage 3 hyperparameters are:
+
+```text
+pooling=6e-5
+MMRL=6e-5
+relation=0.050
 scheduler=constant_with_warmup
 ```
 
@@ -94,9 +93,8 @@ FROST-VL training writes only `mmrl_manifest.json` and
 `mmrl_delta.safetensors` for model weights. A matching Base model must be
 provided during evaluation; full-model legacy checkpoints are not supported.
 
-Use flags such as `--mmrl-lr`, `--pooling-lr`, `--router-lr`,
-`--adapter-lrs A0 A1 A2 A3`, `--relation-weight`, and `--usage-weight` to
-change one training variable without editing source.
+Use `--mmrl-lr`, `--pooling-lr`, `--relation-weight`, and
+`--rp-space-length` to change one training variable without editing source.
 
 The default Stage 1 general data paths match `train/train.py`. Override them
 by repeating `--stage1-general-json` and `--stage1-general-image-root`.

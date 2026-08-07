@@ -17,7 +17,7 @@ from safetensors.torch import load_file, save_file
 
 
 FORMAT_NAME = "frost-vl-mmrl-delta"
-FORMAT_VERSION = 1
+FORMAT_VERSION = 2
 WEIGHTS_NAME = "mmrl_delta.safetensors"
 MANIFEST_NAME = "mmrl_manifest.json"
 LEGACY_WEIGHT_NAMES = (
@@ -33,11 +33,7 @@ DELTA_PREFIXES = (
     "model.MMRL.",
     "model.visual.hidden_state_pooling.",
     "model.visual.embedding_pooling.",
-    "model.visual.router_hidden_state_pooling.",
-    "model.visual.router_embedding_pooling.",
     "model.visual.Task_classifier.",
-    "model.visual.adapter_router.",
-    "model.visual.residual_adapters.",
 )
 
 

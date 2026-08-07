@@ -122,20 +122,9 @@ class StageMetricLogger:
     def _has_valid_data(self, df, column):
         return column in df.columns and pd.to_numeric(df[column], errors="coerce").notna().any()
 
-    def _adapter_usage_columns(self, df):
-        cols = []
-        for c in df.columns:
-            if c.startswith("adapter_usage_"):
-                suffix = c[len("adapter_usage_"):]
-                if suffix.isdigit():
-                    cols.append(c)
-        cols.sort(key=lambda c: int(c.split("_")[-1]))
-        return cols
-
     def _plot_paper_figure(self, df):
         self._setup_style()
         x = df["step"].values
-        has_adapter_usage = len(self._adapter_usage_columns(df)) > 0
 
         C = {
             "total": "#222222",
@@ -155,9 +144,7 @@ class StageMetricLogger:
             ("total_loss", "Total", C["total"]),
             ("ce_loss", "CE", C["ce"]),
             ("alpha_guide_loss", "Alpha", C["alpha"]),
-            ("adapter_usage_balance_loss_scaled", "Route-Balance", "#72b7b2"),
-            ("adapter_sample_entropy_loss_scaled", "Route-Entropy", "#eeca3b"),
-            ("adapter_common_mode_loss_scaled", "Common-Mode Penalty", "#b279a2"),
+            ("mmrl_relation_loss_scaled", "Relation", "#72b7b2"),
             ("cls_loss", "Cls", C["cls"]),
             ("gate_loss", "Gate", C["gate"]),
         ]
@@ -178,16 +165,13 @@ class StageMetricLogger:
         if "alpha_mae" in df.columns and df["alpha_mae"].notna().any():
             self._plot_series(ax, x, df["alpha_mae"], "Alpha MAE", C["std_alpha"])
             plotted += 1
-        if self._has_valid_data(df, "adapter_route_entropy_norm"):
-            self._plot_series(ax, x, df["adapter_route_entropy_norm"], "Route Entropy", C["alpha"])
+        if self._has_valid_data(df, "G_mean"):
+            self._plot_series(ax, x, df["G_mean"], "Gate Mean", C["alpha"])
             plotted += 1
-        if self._has_valid_data(df, "adapter_usage_max"):
-            self._plot_series(ax, x, df["adapter_usage_max"], "Usage Max", "#f58518")
+        if self._has_valid_data(df, "alpha_prob_mean"):
+            self._plot_series(ax, x, df["alpha_prob_mean"], "Alpha Mean", "#f58518")
             plotted += 1
-        if self._has_valid_data(df, "adapter_usage_min"):
-            self._plot_series(ax, x, df["adapter_usage_min"], "Usage Min", "#72b7b2")
-            plotted += 1
-        ax.set_title("Routing Health")
+        ax.set_title("Gate Health")
         ax.set_xlabel("Global Step")
         ax.set_ylabel("Value")
         ax.grid(alpha=0.25, linestyle="--")
@@ -196,9 +180,6 @@ class StageMetricLogger:
 
         ax = axes[2]
         plotted = 0
-        if self._has_valid_data(df, "gated_delta_norm_mean"):
-            self._plot_series(ax, x, df["gated_delta_norm_mean"], "Gated Δ Norm", "#4c78a8")
-            plotted += 1
         if self._has_valid_data(df, "final_delta_norm_mean"):
             self._plot_series(ax, x, df["final_delta_norm_mean"], "Final Δ Norm", "#f58518")
             plotted += 1
@@ -226,10 +207,6 @@ class StageMetricLogger:
         if "learning_rate" in df.columns and df["learning_rate"].notna().any():
             self._plot_series(ax, x, df["learning_rate"], "Learning Rate", C["lr"])
             plotted += 1
-        if has_adapter_usage:
-            for col in self._adapter_usage_columns(df):
-                self._plot_series(ax, x, df[col], col.replace("adapter_usage_", "Adapter "), "#9c755f", draw_raw=False)
-                plotted += 1
         ax.set_title("Schedule")
         ax.set_xlabel("Global Step")
         ax.set_ylabel("Value")
@@ -296,31 +273,8 @@ class TrainerMetricsCallback(TrainerCallback):
             print(f"  ├─ Cls Loss:              {_fmt(row.get('cls_loss')):>10}")
         if "gate_loss" in row:
             print(f"  ├─ Gate Loss:             {_fmt(row.get('gate_loss')):>10}")
-        if "capacity_prior_loss" in row:
-            print(f"  ├─ Capacity Prior Loss:   {_fmt(row.get('capacity_prior_loss')):>10}")
-        if "adapter_usage_balance_loss_scaled" in row:
-            print(f"  ├─ Route Balance Loss:    {_fmt(row.get('adapter_usage_balance_loss_scaled')):>10}")
-        if "adapter_sample_entropy_loss_scaled" in row:
-            print(f"  ├─ Route Entropy Loss:    {_fmt(row.get('adapter_sample_entropy_loss_scaled')):>10}")
-        if "adapter_common_mode_loss_scaled" in row:
-            print(f"  ├─ Common-Mode Penalty:   {_fmt(row.get('adapter_common_mode_loss_scaled')):>10}")
-        if "raw_capacity_prior_loss" in row:
-            print(f"  ├─ Raw Capacity Prior:    {_fmt(row.get('raw_capacity_prior_loss')):>10}")
-
-        # Routing 统计
-        has_route = (
-            ("active_token_count_mean" in row) or
-            ("batch_alpha_mean" in row) or
-            ("adapter_route_entropy_norm" in row)
-        )
-        if has_route:
-            print(f"[Routing Statistics]")
-            if "active_token_count_mean" in row:
-                print(f"  ├─ Active Tokens:         {_fmt(row.get('active_token_count_mean'), nd=3):>10}")
-            if "batch_alpha_mean" in row:
-                print(f"  ├─ Batch Alpha:           {_fmt(row.get('batch_alpha_mean'), nd=4):>10}")
-            if "adapter_route_entropy_norm" in row:
-                print(f"  └─ Route Entropy:         {_fmt(row.get('adapter_route_entropy_norm'), nd=4):>10}")
+        if "mmrl_relation_loss_scaled" in row:
+            print(f"  ├─ Relation Loss:         {_fmt(row.get('mmrl_relation_loss_scaled')):>10}")
 
         # Alpha 统计
         has_alpha = ("alpha_mae" in row) or ("alpha_std" in row) or ("label_alpha_std" in row)
@@ -358,25 +312,6 @@ class TrainerMetricsCallback(TrainerCallback):
             ("delta_pool_common_mode_ratio" in row) or
             ("delta_pool_specificity_ratio" in row)
         )
-        has_visual_branch_probe = (
-            ("adapter_route_entropy_norm" in row) or
-            ("adapter_usage_max" in row) or
-            ("delta_pool_common_mode_ratio" in row) or
-            ("delta_pool_specificity_ratio" in row)
-        )
-        if has_visual_branch_probe:
-            print(f"[Visual Adapter Routing]")
-            if "adapter_route_entropy_norm" in row:
-                print(f"  ├─ Route Entropy:      {_fmt(row.get('adapter_route_entropy_norm'), nd=4):>10}")
-            if "adapter_usage_max" in row:
-                print(f"  ├─ Adapter Usage Max:  {_fmt(row.get('adapter_usage_max'), nd=4):>10}")
-            if "adapter_usage_min" in row:
-                print(f"  ├─ Adapter Usage Min:  {_fmt(row.get('adapter_usage_min'), nd=4):>10}")
-            if "delta_pool_common_mode_ratio" in row:
-                print(f"  ├─ Common-Mode Ratio:   {_fmt(row.get('delta_pool_common_mode_ratio'), nd=4):>10}")
-            if "delta_pool_specificity_ratio" in row:
-                print(f"  └─ Specificity Ratio:   {_fmt(row.get('delta_pool_specificity_ratio'), nd=4):>10}")
-
         if has_visual_residual:
             print(f"[Vision Residual]")
             if "final_delta_norm_mean" in row:
@@ -392,16 +327,8 @@ class TrainerMetricsCallback(TrainerCallback):
         print(f"[Schedule]")
         if "temperature" in row:
             print(f"  ├─ Temperature:           {_fmt(row.get('temperature'), nd=4):>10}")
-        if "capacity_prior_weight" in row:
-            print(f"  ├─ Capacity Prior Weight: {_fmt(row.get('capacity_prior_weight'), nd=4):>10}")
         if "learning_rate" in row:
             print(f"  └─ Learning Rate:         {_fmt(row.get('learning_rate'), nd=8):>10}")
-        if "adapter_usage_balance_weight" in row:
-            print(f"  ├─ Route Balance W:       {_fmt(row.get('adapter_usage_balance_weight'), nd=4):>10}")
-        if "adapter_sample_entropy_weight" in row:
-            print(f"  ├─ Route Entropy W:       {_fmt(row.get('adapter_sample_entropy_weight'), nd=4):>10}")
-        if "adapter_common_mode_weight" in row:
-            print(f"  ├─ Common-Mode W:         {_fmt(row.get('adapter_common_mode_weight'), nd=4):>10}")
         print("=" * 72 + "\n")
 
     def on_step_end(self, args, state, control, **kwargs):

@@ -51,14 +51,6 @@ def _build_experiment_context(train_cfg, output_dir, stage_id):
             "metric_smooth_window": train_cfg.get("metric_smooth_window"),
             "metric_ema_alpha": train_cfg.get("metric_ema_alpha"),
             "metric_scatter_stride": train_cfg.get("metric_scatter_stride"),
-            "visual_residual_adapter_count": train_cfg.get("visual_residual_adapter_count"),
-            "adapter_usage_balance_loss_weight": train_cfg.get("adapter_usage_balance_loss_weight"),
-            "adapter_sample_entropy_loss_weight": train_cfg.get("adapter_sample_entropy_loss_weight"),
-            "adapter_common_mode_loss_weight": train_cfg.get("adapter_common_mode_loss_weight"),
-            "adapter_effective_delta_loss_weight": train_cfg.get(
-                "adapter_effective_delta_loss_weight",
-                experiment_cfg.get("adapter_effective_delta_loss_weight"),
-            ),
             "mmrl_relation_loss_weight": train_cfg.get(
                 "mmrl_relation_loss_weight",
                 experiment_cfg.get("mmrl_relation_loss_weight"),
@@ -74,48 +66,6 @@ def _build_experiment_context(train_cfg, output_dir, stage_id):
             "mmrl_variance_floor_weight": train_cfg.get(
                 "mmrl_variance_floor_weight",
                 experiment_cfg.get("mmrl_variance_floor_weight"),
-            ),
-            "adapter_sample_entropy_target": train_cfg.get("adapter_sample_entropy_target"),
-            "adapter_common_mode_target": train_cfg.get("adapter_common_mode_target"),
-            "adapter_effective_delta_target_low": train_cfg.get(
-                "adapter_effective_delta_target_low",
-                experiment_cfg.get("adapter_effective_delta_target_low"),
-            ),
-            "adapter_effective_delta_target_high": train_cfg.get(
-                "adapter_effective_delta_target_high",
-                experiment_cfg.get("adapter_effective_delta_target_high"),
-            ),
-            "adapter_diversity_loss_weight": train_cfg.get(
-                "adapter_diversity_loss_weight",
-                experiment_cfg.get("adapter_diversity_loss_weight"),
-            ),
-            "adapter_diversity_target_low": train_cfg.get(
-                "adapter_diversity_target_low",
-                experiment_cfg.get("adapter_diversity_target_low"),
-            ),
-            "adapter_diversity_target_high": train_cfg.get(
-                "adapter_diversity_target_high",
-                experiment_cfg.get("adapter_diversity_target_high"),
-            ),
-            "adapter_diversity_upper_weight": train_cfg.get(
-                "adapter_diversity_upper_weight",
-                experiment_cfg.get("adapter_diversity_upper_weight"),
-            ),
-            "adapter_diversity_worst_pair_weight": train_cfg.get(
-                "adapter_diversity_worst_pair_weight",
-                experiment_cfg.get("adapter_diversity_worst_pair_weight"),
-            ),
-            "enable_adapter_router_identity_residual": train_cfg.get(
-                "enable_adapter_router_identity_residual",
-                experiment_cfg.get("enable_adapter_router_identity_residual"),
-            ),
-            "raw_visual_adapter": train_cfg.get(
-                "raw_visual_adapter",
-                experiment_cfg.get("raw_visual_adapter"),
-            ),
-            "direct_mmrl_output": train_cfg.get(
-                "direct_mmrl_output",
-                experiment_cfg.get("direct_mmrl_output"),
             ),
             "enable_deepstack_mmrl_residual": train_cfg.get(
                 "enable_deepstack_mmrl_residual",
@@ -182,17 +132,6 @@ def print_stage_step_summary(stage_name, step, row):
     if "alpha_mae" in row:
         print(f"[Alpha Statistics]")
         print(f"  └─ Alpha MAE:             {_fmt(row.get('alpha_mae')):>10}")
-
-    if "active_token_count_mean" in row:
-        print(f"[Routing Statistics]")
-        if "active_token_count_mean" in row:
-            print(f"  ├─ Active Tokens:         {_fmt(row.get('active_token_count_mean'), 3):>10}")
-        if "k_budget_mean" in row:
-            print(f"  ├─ K Budget:              {_fmt(row.get('k_budget_mean'), 3):>10}")
-        if "raw_budget_mean" in row:
-            print(f"  ├─ Raw Budget:            {_fmt(row.get('raw_budget_mean'), 3):>10}")
-        if "batch_alpha_mean" in row:
-            print(f"  └─ Batch Alpha:           {_fmt(row.get('batch_alpha_mean'), 4):>10}")
 
     print(f"[Schedule]")
     if "temperature" in row:
@@ -419,38 +358,20 @@ class StepEvaluationCallback(TrainerCallback):
 class MMRLDiagnosticsCallback(TrainerCallback):
     DEFAULT_KEEP_KEYS = {
         "ce_loss",
-        "active_token_count_mean",
         "delta_pool_common_mode_ratio",
         "delta_pool_specificity_ratio",
-        "mmrl_delta_pool_common_mode_ratio",
-        "mmrl_delta_pool_specificity_ratio",
-        "adapter_route_entropy_norm",
-    }
-    KEEP_KEY_ALIASES = {
-        "group_entropy_norm": ("group_entropy_norm", "group_usage_entropy_norm"),
-        "group_usage_entropy_norm": ("group_entropy_norm", "group_usage_entropy_norm"),
     }
 
     def __init__(self, save_dir, every_steps=1000, stage_name="stage", keep_keys=None):
         self.save_dir = save_dir
         self.every_steps = int(max(1, every_steps))
         self.stage_name = stage_name
-        self.keep_keys = self._expand_keep_keys(keep_keys or self.DEFAULT_KEEP_KEYS)
+        self.keep_keys = set(keep_keys or self.DEFAULT_KEEP_KEYS)
         self.buffer = []
         self.jsonl_path = os.path.join(save_dir, "mmrl_diagnostics.jsonl")
         self.csv_path = os.path.join(save_dir, "mmrl_diagnostics.csv")
         self.csv_header_written = False
         os.makedirs(save_dir, exist_ok=True)
-
-    def _expand_keep_keys(self, keep_keys):
-        expanded = set()
-        for key in keep_keys:
-            aliases = self.KEEP_KEY_ALIASES.get(key)
-            if aliases is None:
-                expanded.add(key)
-            else:
-                expanded.update(aliases)
-        return expanded
 
     def _to_python(self, value):
         if torch.is_tensor(value):
@@ -674,8 +595,6 @@ class SharedRepGradMonitorCallback(TrainerCallback):
                     "total_loss": metrics.get("total_loss"),
                     "ce_loss": metrics.get("ce_loss"),
                     "alpha_guide_loss": metrics.get("alpha_guide_loss"),
-                    "active_token_count_mean": metrics.get("active_token_count_mean"),
-                    "batch_alpha_mean": metrics.get("batch_alpha_mean"),
                     "delta_to_org_ratio": metrics.get("delta_to_org_ratio"),
                 }
                 self._write_event(event_payload)
@@ -691,9 +610,6 @@ class Qwen3VLMMRLForStages(Qwen3VLForConditionalGeneration):
         hidden_size = config.text_config.hidden_size
         self.lm_head = nn.Linear(hidden_size, len(tokenizer), bias=False)
         self.post_init()
-        if self.model.visual.decouple_stage_pooling:
-            self.model.visual.reset_router_pooling_from_gate()
-
         # 补充 generation_config，避免 save_pretrained 时报错
         from transformers import GenerationConfig
         self.generation_config = GenerationConfig.from_model_config(config)
@@ -704,12 +620,7 @@ class Qwen3VLMMRLForStages(Qwen3VLForConditionalGeneration):
         self.current_stage_step = 0
         self.current_stage_progress = 0.0
         self.enable_alpha_guide_loss = False
-        self.adapter_usage_balance_loss_weight = 0.0
-        self.adapter_sample_entropy_loss_weight = 0.0
-        self.adapter_common_mode_loss_weight = 0.0
-        self.adapter_effective_delta_loss_weight = 0.0
         self.mmrl_relation_loss_weight = 0.0
-        self.adapter_diversity_loss_weight = 0.0
 
         self.temperature_override = None
 
@@ -771,8 +682,6 @@ class Qwen3VLMMRLForStages(Qwen3VLForConditionalGeneration):
                     result[f"{prefix}_grad_norm_mean"] = torch.tensor(0.0, device=device)
                     result[f"{prefix}_grad_norm_max"] = torch.tensor(0.0, device=device)
 
-            _module_grad_stats(getattr(visual, "adapter_router", nn.Module()), "adapter_router")
-            _module_grad_stats(getattr(visual, "residual_adapters", nn.Module()), "visual_adapter")
             _module_grad_stats(getattr(visual, "visionGating", nn.Module()), "vision_gate")
             blocks_with_rep = getattr(visual, "blocks_with_rep", [])
             trainable_count = 0
@@ -905,56 +814,17 @@ class Qwen3VLMMRLForStages(Qwen3VLForConditionalGeneration):
                         alpha_logits[:n], expanded_labels[:n].to(alpha_logits.dtype)
                     ) * self.alpha_loss_weight
 
-        adapter_usage_balance_loss = getattr(self.model.visual, "adapter_usage_balance_loss", torch.tensor(0.0, device=input_ids.device))
-        adapter_sample_entropy_loss = getattr(self.model.visual, "adapter_sample_entropy_loss", torch.tensor(0.0, device=input_ids.device))
-        adapter_common_mode_loss = getattr(self.model.visual, "adapter_common_mode_loss", torch.tensor(0.0, device=input_ids.device))
-        adapter_effective_delta_loss = getattr(self.model.visual, "adapter_effective_delta_loss", torch.tensor(0.0, device=input_ids.device))
         mmrl_relation_loss = getattr(self.model.visual, "mmrl_relation_loss", torch.tensor(0.0, device=input_ids.device))
-        adapter_diversity_loss = getattr(self.model.visual, "adapter_diversity_loss", torch.tensor(0.0, device=input_ids.device))
-        if not torch.is_tensor(adapter_usage_balance_loss):
-            adapter_usage_balance_loss = torch.tensor(adapter_usage_balance_loss, device=input_ids.device, dtype=ce_loss.dtype)
-        else:
-            adapter_usage_balance_loss = adapter_usage_balance_loss.to(device=input_ids.device, dtype=ce_loss.dtype)
-        if not torch.is_tensor(adapter_sample_entropy_loss):
-            adapter_sample_entropy_loss = torch.tensor(adapter_sample_entropy_loss, device=input_ids.device, dtype=ce_loss.dtype)
-        else:
-            adapter_sample_entropy_loss = adapter_sample_entropy_loss.to(device=input_ids.device, dtype=ce_loss.dtype)
-        if not torch.is_tensor(adapter_common_mode_loss):
-            adapter_common_mode_loss = torch.tensor(adapter_common_mode_loss, device=input_ids.device, dtype=ce_loss.dtype)
-        else:
-            adapter_common_mode_loss = adapter_common_mode_loss.to(device=input_ids.device, dtype=ce_loss.dtype)
-        if not torch.is_tensor(adapter_effective_delta_loss):
-            adapter_effective_delta_loss = torch.tensor(adapter_effective_delta_loss, device=input_ids.device, dtype=ce_loss.dtype)
-        else:
-            adapter_effective_delta_loss = adapter_effective_delta_loss.to(device=input_ids.device, dtype=ce_loss.dtype)
         if not torch.is_tensor(mmrl_relation_loss):
             mmrl_relation_loss = torch.tensor(mmrl_relation_loss, device=input_ids.device, dtype=ce_loss.dtype)
         else:
             mmrl_relation_loss = mmrl_relation_loss.to(device=input_ids.device, dtype=ce_loss.dtype)
-        if not torch.is_tensor(adapter_diversity_loss):
-            adapter_diversity_loss = torch.tensor(adapter_diversity_loss, device=input_ids.device, dtype=ce_loss.dtype)
-        else:
-            adapter_diversity_loss = adapter_diversity_loss.to(device=input_ids.device, dtype=ce_loss.dtype)
-        effective_delta_weight = float(self.adapter_effective_delta_loss_weight)
-        adapter_diversity_weight = float(self.adapter_diversity_loss_weight)
-        usage_balance_weight = float(self.adapter_usage_balance_loss_weight)
-        sample_entropy_weight = float(self.adapter_sample_entropy_loss_weight)
-        scaled_adapter_usage_balance_loss = adapter_usage_balance_loss * usage_balance_weight
-        scaled_adapter_sample_entropy_loss = adapter_sample_entropy_loss * sample_entropy_weight
-        scaled_adapter_common_mode_loss = adapter_common_mode_loss * float(self.adapter_common_mode_loss_weight)
-        scaled_adapter_effective_delta_loss = adapter_effective_delta_loss * float(effective_delta_weight)
         scaled_mmrl_relation_loss = mmrl_relation_loss * float(self.mmrl_relation_loss_weight)
-        scaled_adapter_diversity_loss = adapter_diversity_loss * float(adapter_diversity_weight)
 
         outputs.loss = (
             self.ce_loss_weight * ce_loss
             + alpha_guide_loss
-            + scaled_adapter_usage_balance_loss
-            + scaled_adapter_sample_entropy_loss
-            + scaled_adapter_common_mode_loss
-            + scaled_adapter_effective_delta_loss
             + scaled_mmrl_relation_loss
-            + scaled_adapter_diversity_loss
         )
 
         # ---- cache metrics for external logger ----
@@ -973,25 +843,10 @@ class Qwen3VLMMRLForStages(Qwen3VLForConditionalGeneration):
                 "total_loss": outputs.loss.detach(),
                 "ce_loss": ce_loss.detach(),
                 "alpha_guide_loss": alpha_guide_loss.detach(),
-                "adapter_usage_balance_loss": adapter_usage_balance_loss.detach(),
-                "adapter_sample_entropy_loss": adapter_sample_entropy_loss.detach(),
-                "adapter_common_mode_loss": adapter_common_mode_loss.detach(),
-                "adapter_effective_delta_loss": adapter_effective_delta_loss.detach(),
                 "mmrl_relation_loss": mmrl_relation_loss.detach(),
-                "adapter_diversity_loss": adapter_diversity_loss.detach(),
-                "adapter_usage_balance_loss_scaled": scaled_adapter_usage_balance_loss.detach(),
-                "adapter_sample_entropy_loss_scaled": scaled_adapter_sample_entropy_loss.detach(),
-                "adapter_common_mode_loss_scaled": scaled_adapter_common_mode_loss.detach(),
-                "adapter_effective_delta_loss_scaled": scaled_adapter_effective_delta_loss.detach(),
                 "mmrl_relation_loss_scaled": scaled_mmrl_relation_loss.detach(),
-                "adapter_diversity_loss_scaled": scaled_adapter_diversity_loss.detach(),
                 "alpha_mae": alpha_mae.detach(),
                 "temperature": torch.tensor(float(self.temperature_override) if self.temperature_override is not None else float("nan"), device=input_ids.device),
-                "adapter_usage_balance_weight": torch.tensor(usage_balance_weight, device=input_ids.device),
-                "adapter_sample_entropy_weight": torch.tensor(sample_entropy_weight, device=input_ids.device),
-                "adapter_common_mode_weight": torch.tensor(float(self.adapter_common_mode_loss_weight), device=input_ids.device),
-                "adapter_effective_delta_weight": torch.tensor(float(effective_delta_weight), device=input_ids.device),
-                "adapter_diversity_weight": torch.tensor(float(adapter_diversity_weight), device=input_ids.device),
                 "stage_progress": torch.tensor(float(getattr(self, "current_stage_progress", 0.0)), device=input_ids.device),
             }
             visual_dbg = getattr(self.model.visual, "debug_context", {}) or {}
@@ -1038,46 +893,9 @@ def build_model_and_processor(model_path, experiment_cfg=None):
         "ablate_visual_gate",
         os.getenv("MMRL_ABLATE_VISUAL_GATE", "0") == "1"
     ))
-    config.DECOUPLE_STAGE_POOLING = bool(experiment_cfg.get(
-        "decouple_stage_pooling",
-        os.getenv("MMRL_DECOUPLE_STAGE_POOLING", "0") == "1",
-    ))
     config.ABLATE_DIRECT_LEARNABLE_REP = bool(experiment_cfg.get(
         "ablate_direct_learnable_rep",
         os.getenv("MMRL_ABLATE_DIRECT_LEARNABLE_REP", "0") == "1"
-    ))
-    config.VISUAL_RESIDUAL_ADAPTER_COUNT = int(experiment_cfg.get(
-        "visual_residual_adapter_count",
-        os.getenv("MMRL_VISUAL_RESIDUAL_ADAPTER_COUNT", "4"),
-    ))
-    config.VISUAL_ADAPTER_REDUCTION_FACTOR = int(experiment_cfg.get(
-        "visual_adapter_reduction_factor",
-        os.getenv("MMRL_VISUAL_ADAPTER_REDUCTION_FACTOR", "4"),
-    ))
-    config.RANDOM_INIT_ADAPTER_OUTPUT_COUNT = int(
-        experiment_cfg.get(
-            "random_init_adapter_output_count",
-            config.VISUAL_RESIDUAL_ADAPTER_COUNT,
-        )
-    )
-    config.ZERO_INIT_ADAPTER_ROUTER_OUTPUT = bool(
-        experiment_cfg.get("zero_init_adapter_router_output", False)
-    )
-    config.ADAPTER_USAGE_BALANCE_LOSS_WEIGHT = float(experiment_cfg.get(
-        "adapter_usage_balance_loss_weight",
-        os.getenv("MMRL_ADAPTER_USAGE_BALANCE_LOSS_WEIGHT", "0.0"),
-    ))
-    config.ADAPTER_SAMPLE_ENTROPY_LOSS_WEIGHT = float(experiment_cfg.get(
-        "adapter_sample_entropy_loss_weight",
-        os.getenv("MMRL_ADAPTER_SAMPLE_ENTROPY_LOSS_WEIGHT", "0.0"),
-    ))
-    config.ADAPTER_COMMON_MODE_LOSS_WEIGHT = float(experiment_cfg.get(
-        "adapter_common_mode_loss_weight",
-        os.getenv("MMRL_ADAPTER_COMMON_MODE_LOSS_WEIGHT", "0.0"),
-    ))
-    config.ADAPTER_EFFECTIVE_DELTA_LOSS_WEIGHT = float(experiment_cfg.get(
-        "adapter_effective_delta_loss_weight",
-        os.getenv("MMRL_ADAPTER_EFFECTIVE_DELTA_LOSS_WEIGHT", "0.0"),
     ))
     config.MMRL_RELATION_LOSS_WEIGHT = float(experiment_cfg.get(
         "mmrl_relation_loss_weight",
@@ -1095,66 +913,6 @@ def build_model_and_processor(model_path, experiment_cfg=None):
         "mmrl_variance_floor_weight",
         os.getenv("MMRL_VARIANCE_FLOOR_WEIGHT", "0.10"),
     ))
-    config.ADAPTER_SAMPLE_ENTROPY_TARGET = float(experiment_cfg.get(
-        "adapter_sample_entropy_target",
-        os.getenv("MMRL_ADAPTER_SAMPLE_ENTROPY_TARGET", "0.40"),
-    ))
-    config.ADAPTER_COMMON_MODE_TARGET = float(experiment_cfg.get(
-        "adapter_common_mode_target",
-        os.getenv("MMRL_ADAPTER_COMMON_MODE_TARGET", "0.85"),
-    ))
-    config.ADAPTER_EFFECTIVE_DELTA_TARGET_LOW = float(experiment_cfg.get(
-        "adapter_effective_delta_target_low",
-        os.getenv("MMRL_ADAPTER_EFFECTIVE_DELTA_TARGET_LOW", "0.78"),
-    ))
-    config.ADAPTER_EFFECTIVE_DELTA_TARGET_HIGH = float(experiment_cfg.get(
-        "adapter_effective_delta_target_high",
-        os.getenv("MMRL_ADAPTER_EFFECTIVE_DELTA_TARGET_HIGH", "1.10"),
-    ))
-    config.ADAPTER_DIVERSITY_LOSS_WEIGHT = float(experiment_cfg.get(
-        "adapter_diversity_loss_weight",
-        os.getenv("MMRL_ADAPTER_DIVERSITY_LOSS_WEIGHT", "0.0"),
-    ))
-    config.ADAPTER_DIVERSITY_TARGET_LOW = float(experiment_cfg.get(
-        "adapter_diversity_target_low",
-        os.getenv("MMRL_ADAPTER_DIVERSITY_TARGET_LOW", "0.30"),
-    ))
-    config.ADAPTER_DIVERSITY_TARGET_HIGH = float(experiment_cfg.get(
-        "adapter_diversity_target_high",
-        os.getenv("MMRL_ADAPTER_DIVERSITY_TARGET_HIGH", "0.58"),
-    ))
-    config.ADAPTER_DIVERSITY_UPPER_WEIGHT = float(experiment_cfg.get(
-        "adapter_diversity_upper_weight",
-        os.getenv("MMRL_ADAPTER_DIVERSITY_UPPER_WEIGHT", "2.0"),
-    ))
-    config.ADAPTER_DIVERSITY_WORST_PAIR_WEIGHT = float(experiment_cfg.get(
-        "adapter_diversity_worst_pair_weight",
-        os.getenv("MMRL_ADAPTER_DIVERSITY_WORST_PAIR_WEIGHT", "1.0"),
-    ))
-    config.ENABLE_ADAPTER_ROUTER_IDENTITY_RESIDUAL = os.getenv(
-        "MMRL_ENABLE_ADAPTER_ROUTER_IDENTITY_RESIDUAL",
-        "1" if experiment_cfg.get("enable_adapter_router_identity_residual", False) else "0",
-    ) == "1"
-    config.DIRECT_MMRL_OUTPUT = os.getenv(
-        "MMRL_DIRECT_MMRL_OUTPUT",
-        "1" if experiment_cfg.get("direct_mmrl_output", False) else "0",
-    ) == "1"
-    config.RAW_VISUAL_ADAPTER = os.getenv(
-        "MMRL_RAW_VISUAL_ADAPTER",
-        "1" if experiment_cfg.get("raw_visual_adapter", False) else "0",
-    ) == "1"
-    config.ENABLE_EARLY_MMRL_GUARD = bool(
-        experiment_cfg.get("enable_early_mmrl_guard", False)
-    )
-    config.EARLY_MMRL_GUARD_RATIO = float(
-        experiment_cfg.get("early_mmrl_guard_ratio", 1.25)
-    )
-    config.EARLY_MMRL_GUARD_HOLD_STEPS = int(
-        experiment_cfg.get("early_mmrl_guard_hold_steps", 250)
-    )
-    config.EARLY_MMRL_GUARD_RELEASE_STEPS = int(
-        experiment_cfg.get("early_mmrl_guard_release_steps", 125)
-    )
     config.ENABLE_DEEPSTACK_MMRL_RESIDUAL = os.getenv(
         "MMRL_ENABLE_DEEPSTACK_MMRL_RESIDUAL",
         "1" if experiment_cfg.get("enable_deepstack_mmrl_residual", False) else "0",
@@ -1173,61 +931,6 @@ def build_model_and_processor(model_path, experiment_cfg=None):
     model = Qwen3VLMMRLForStages(config, tokenizer).to("cuda").to(torch.bfloat16)
     model._ensure_shared_rep_grad_hook()
     visual = model.model.visual
-    if visual.direct_mmrl_output != config.DIRECT_MMRL_OUTPUT:
-        raise RuntimeError(
-            "DIRECT_MMRL_OUTPUT config propagation failed: "
-            f"requested={config.DIRECT_MMRL_OUTPUT} actual={visual.direct_mmrl_output}"
-        )
-    if visual.raw_visual_adapter != config.RAW_VISUAL_ADAPTER:
-        raise RuntimeError(
-            "RAW_VISUAL_ADAPTER config propagation failed: "
-            f"requested={config.RAW_VISUAL_ADAPTER} actual={visual.raw_visual_adapter}"
-        )
-    if visual.decouple_stage_pooling != config.DECOUPLE_STAGE_POOLING:
-        raise RuntimeError(
-            "DECOUPLE_STAGE_POOLING config propagation failed: "
-            f"requested={config.DECOUPLE_STAGE_POOLING} "
-            f"actual={visual.decouple_stage_pooling}"
-        )
-    if visual.enable_early_mmrl_guard != config.ENABLE_EARLY_MMRL_GUARD:
-        raise RuntimeError(
-            "ENABLE_EARLY_MMRL_GUARD config propagation failed: "
-            f"requested={config.ENABLE_EARLY_MMRL_GUARD} "
-            f"actual={visual.enable_early_mmrl_guard}"
-        )
-    if visual.visual_residual_adapter_count != config.VISUAL_RESIDUAL_ADAPTER_COUNT:
-        raise RuntimeError(
-            "VISUAL_RESIDUAL_ADAPTER_COUNT config propagation failed: "
-            f"requested={config.VISUAL_RESIDUAL_ADAPTER_COUNT} "
-            f"actual={visual.visual_residual_adapter_count}"
-        )
-    if visual.visual_adapter_reduction_factor != config.VISUAL_ADAPTER_REDUCTION_FACTOR:
-        raise RuntimeError(
-            "VISUAL_ADAPTER_REDUCTION_FACTOR config propagation failed: "
-            f"requested={config.VISUAL_ADAPTER_REDUCTION_FACTOR} "
-            f"actual={visual.visual_adapter_reduction_factor}"
-        )
-    expected_adapter_bottleneck = (
-        config.vision_config.hidden_size // config.VISUAL_ADAPTER_REDUCTION_FACTOR
-    )
-    if any(
-        adapter.bottleneck_dim != expected_adapter_bottleneck
-        for adapter in visual.residual_adapters
-    ):
-        raise RuntimeError(
-            "Adapter bottleneck construction mismatch: "
-            f"expected={expected_adapter_bottleneck} "
-            f"actual={[adapter.bottleneck_dim for adapter in visual.residual_adapters]}"
-        )
-    if (
-        visual.random_init_adapter_output_count
-        != config.RANDOM_INIT_ADAPTER_OUTPUT_COUNT
-    ):
-        raise RuntimeError(
-            "RANDOM_INIT_ADAPTER_OUTPUT_COUNT config propagation failed: "
-            f"requested={config.RANDOM_INIT_ADAPTER_OUTPUT_COUNT} "
-            f"actual={visual.random_init_adapter_output_count}"
-        )
     propagation_checks = {
         "MMRL_RELATION_MAX_TOKENS": (
             config.MMRL_RELATION_MAX_TOKENS,
@@ -1249,73 +952,11 @@ def build_model_and_processor(model_path, experiment_cfg=None):
             )
     print(
         "[MMRL_STRUCTURE_AUDIT] "
-        f"direct_mmrl_output={visual.direct_mmrl_output} "
-        f"raw_visual_adapter={visual.raw_visual_adapter} "
-        f"decouple_stage_pooling={visual.decouple_stage_pooling} "
-        f"visual_residual_adapter_count={visual.visual_residual_adapter_count} "
-        f"rp_space_length={config.RP_SPACE_LENGTH} "
-        f"visual_adapter_reduction_factor={visual.visual_adapter_reduction_factor} "
-        f"visual_adapter_bottleneck_dim={visual.visual_adapter_bottleneck_dim} "
-        f"random_init_adapter_output_count={visual.random_init_adapter_output_count}"
+        f"rp_space_length={config.RP_SPACE_LENGTH}"
     )
     model.model.load_state_dict(base.model.state_dict(), strict=False)
     model.lm_head.load_state_dict(base.lm_head.state_dict(), strict=False)
 
-    # QWen3WithMMRL.post_init runs after VisionWithMMRL is constructed and
-    # reinitializes its Linear layers. Apply the requested expert policy only
-    # after both post_init and base-weight loading have completed.
-    random_count = config.RANDOM_INIT_ADAPTER_OUTPUT_COUNT
-    with torch.no_grad():
-        for index, adapter in enumerate(visual.residual_adapters):
-            if index >= random_count:
-                adapter.net[-1].weight.zero_()
-            adapter.net[-1].bias.zero_()
-        if config.ZERO_INIT_ADAPTER_ROUTER_OUTPUT:
-            visual.adapter_router.output_head.weight.zero_()
-            visual.adapter_router.output_head.bias.zero_()
-
-    adapter_output_weight_norms = [
-        float(adapter.net[-1].weight.detach().float().norm().item())
-        for adapter in visual.residual_adapters
-    ]
-    adapter_output_bias_norms = [
-        float(adapter.net[-1].bias.detach().float().norm().item())
-        for adapter in visual.residual_adapters
-    ]
-    router_output_weight_norm = float(
-        visual.adapter_router.output_head.weight.detach().float().norm().item()
-    )
-    router_output_bias_norm = float(
-        visual.adapter_router.output_head.bias.detach().float().norm().item()
-    )
-    for index, norm in enumerate(adapter_output_weight_norms):
-        expected_random = index < random_count
-        if expected_random and norm == 0.0:
-            raise RuntimeError(
-                f"Random adapter output initialization produced zero weights at index {index}"
-            )
-        if not expected_random and norm != 0.0:
-            raise RuntimeError(
-                f"Strict-zero adapter output initialization produced nonzero weights at index {index}"
-            )
-    if any(norm != 0.0 for norm in adapter_output_bias_norms):
-        raise RuntimeError("Adapter output initialization produced nonzero bias")
-    if config.ZERO_INIT_ADAPTER_ROUTER_OUTPUT and (
-        router_output_weight_norm != 0.0 or router_output_bias_norm != 0.0
-    ):
-        raise RuntimeError(
-            "Strict-zero adapter router output initialization produced nonzero parameters"
-        )
-    print(
-        "[ADAPTER_OUTPUT_INIT_AUDIT] "
-        f"random_count={random_count} "
-        f"random_indices={list(range(random_count))} "
-        f"weight_norms={adapter_output_weight_norms} "
-        f"bias_norms={adapter_output_bias_norms} "
-        f"zero_init_router_output={config.ZERO_INIT_ADAPTER_ROUTER_OUTPUT} "
-        f"router_output_weight_norm={router_output_weight_norm} "
-        f"router_output_bias_norm={router_output_bias_norm}"
-    )
     del base
     torch.cuda.empty_cache()
     print("MMRL model built and loaded with base weights.")
@@ -1348,33 +989,11 @@ def build_model_and_processor(model_path, experiment_cfg=None):
     )
     print(
         f"ablate_visual_gate={config.ABLATE_VISUAL_GATE} "
-        f"decouple_stage_pooling={config.DECOUPLE_STAGE_POOLING} "
         f"ablate_direct_learnable_rep={config.ABLATE_DIRECT_LEARNABLE_REP} "
-        f"visual_residual_adapter_count={config.VISUAL_RESIDUAL_ADAPTER_COUNT} "
         f"rp_space_length={config.RP_SPACE_LENGTH} "
-        f"visual_adapter_reduction_factor={config.VISUAL_ADAPTER_REDUCTION_FACTOR} "
-        f"visual_adapter_bottleneck_dim={visual.visual_adapter_bottleneck_dim} "
-        f"random_init_adapter_output_count={config.RANDOM_INIT_ADAPTER_OUTPUT_COUNT} "
-        f"zero_init_adapter_router_output={config.ZERO_INIT_ADAPTER_ROUTER_OUTPUT} "
-        f"adapter_usage_balance_loss_weight={config.ADAPTER_USAGE_BALANCE_LOSS_WEIGHT} "
-        f"adapter_sample_entropy_loss_weight={config.ADAPTER_SAMPLE_ENTROPY_LOSS_WEIGHT} "
-        f"adapter_common_mode_loss_weight={config.ADAPTER_COMMON_MODE_LOSS_WEIGHT} "
-        f"adapter_effective_delta_loss_weight={config.ADAPTER_EFFECTIVE_DELTA_LOSS_WEIGHT} "
         f"mmrl_relation_loss_weight={config.MMRL_RELATION_LOSS_WEIGHT} "
         f"mmrl_variance_floor_ratio={config.MMRL_VARIANCE_FLOOR_RATIO} "
         f"mmrl_variance_floor_weight={config.MMRL_VARIANCE_FLOOR_WEIGHT} "
-        f"adapter_sample_entropy_target={config.ADAPTER_SAMPLE_ENTROPY_TARGET} "
-        f"adapter_common_mode_target={config.ADAPTER_COMMON_MODE_TARGET} "
-        f"adapter_effective_delta_target_low={config.ADAPTER_EFFECTIVE_DELTA_TARGET_LOW} "
-        f"adapter_effective_delta_target_high={config.ADAPTER_EFFECTIVE_DELTA_TARGET_HIGH} "
-        f"adapter_diversity_loss_weight={config.ADAPTER_DIVERSITY_LOSS_WEIGHT} "
-        f"adapter_diversity_target_low={config.ADAPTER_DIVERSITY_TARGET_LOW} "
-        f"adapter_diversity_target_high={config.ADAPTER_DIVERSITY_TARGET_HIGH} "
-        f"adapter_diversity_upper_weight={config.ADAPTER_DIVERSITY_UPPER_WEIGHT} "
-        f"adapter_diversity_worst_pair_weight={config.ADAPTER_DIVERSITY_WORST_PAIR_WEIGHT} "
-        f"enable_adapter_router_identity_residual={config.ENABLE_ADAPTER_ROUTER_IDENTITY_RESIDUAL} "
-        f"direct_mmrl_output={config.DIRECT_MMRL_OUTPUT} "
-        f"raw_visual_adapter={config.RAW_VISUAL_ADAPTER} "
         f"enable_deepstack_mmrl_residual={config.ENABLE_DEEPSTACK_MMRL_RESIDUAL} "
         f"deepstack_mmrl_residual_scale={config.DEEPSTACK_MMRL_RESIDUAL_SCALE}"
     )
@@ -1393,16 +1012,8 @@ def set_trainable_stage(model, stage, train_cfg=None):
     if stage == 1:
         mods = [v.hidden_state_pooling, v.embedding_pooling, v.Task_classifier]
     elif stage == 3:
-        if v.decouple_stage_pooling:
-            mods = [v.router_hidden_state_pooling, v.router_embedding_pooling]
-        else:
-            # Historical Stage 3 adapts the same pooling modules used by Stage 1.
-            mods = [v.hidden_state_pooling, v.embedding_pooling]
-        if not v.raw_visual_adapter:
-            mods.insert(0, model.model.MMRL)
-            # v.blocks_with_rep stay frozen while the rep-token branch remains active.
-        if not v.direct_mmrl_output:
-            mods.extend([v.adapter_router, v.residual_adapters])
+        mods = [model.model.MMRL, v.hidden_state_pooling, v.embedding_pooling]
+        # v.blocks_with_rep stay frozen while the Rep-Token branch remains active.
     else:
         raise ValueError("stage must be 1 or 3")
 
@@ -1426,20 +1037,16 @@ def print_joint_trainable_params_before_stage1(model):
 
 def _build_stage3_grouped_optimizer(model, train_cfg):
     experiment_cfg = train_cfg.get("experiment_cfg", {}) or {}
-    adapter_lrs = experiment_cfg.get("stage3_adapter_learning_rates")
-    if adapter_lrs is None:
+    if (
+        "stage3_mmrl_learning_rate" not in experiment_cfg
+        and "stage3_pooling_learning_rate" not in experiment_cfg
+    ):
         return None
 
-    adapter_lrs = [float(lr) for lr in adapter_lrs]
-    adapter_count = int(model.model.visual.visual_residual_adapter_count)
-    if len(adapter_lrs) != adapter_count:
-        raise ValueError(
-            "stage3_adapter_learning_rates must match adapter count, got "
-            f"rates={adapter_lrs} adapter_count={adapter_count}"
-        )
-
-    mmrl_lr = float(experiment_cfg["stage3_mmrl_learning_rate"])
-    router_lr = float(experiment_cfg["stage3_router_learning_rate"])
+    mmrl_lr = float(experiment_cfg.get(
+        "stage3_mmrl_learning_rate",
+        train_cfg["learning_rate"][3],
+    ))
     adam_beta1 = float(experiment_cfg.get("stage3_adam_beta1", 0.9))
     adam_beta2 = float(experiment_cfg.get("stage3_adam_beta2", 0.999))
     adam_epsilon = float(experiment_cfg.get("stage3_adam_epsilon", 1e-8))
@@ -1456,24 +1063,12 @@ def _build_stage3_grouped_optimizer(model, train_cfg):
             f"Stage 3 weight decay must be non-negative, got {weight_decay}"
         )
     visual = model.model.visual
-    direct_mmrl_output = bool(visual.direct_mmrl_output)
     grouped = {"mmrl": []}
-    if not direct_mmrl_output:
-        grouped["router"] = []
     pooling_lr = experiment_cfg.get("stage3_pooling_learning_rate")
     if pooling_lr is not None:
         pooling_lr = float(pooling_lr)
         grouped["pooling"] = []
-    if not direct_mmrl_output:
-        grouped.update({f"adapter_{idx}": [] for idx in range(adapter_count)})
-    active_pooling_modules = (
-        (
-            visual.router_hidden_state_pooling,
-            visual.router_embedding_pooling,
-        )
-        if visual.decouple_stage_pooling
-        else (visual.hidden_state_pooling, visual.embedding_pooling)
-    )
+    active_pooling_modules = (visual.hidden_state_pooling, visual.embedding_pooling)
     active_pooling_param_ids = {
         id(parameter)
         for module in active_pooling_modules
@@ -1486,17 +1081,7 @@ def _build_stage3_grouped_optimizer(model, train_cfg):
         if pooling_lr is not None and id(param) in active_pooling_param_ids:
             grouped["pooling"].append(param)
             continue
-        if ".adapter_router." in name:
-            grouped["router"].append(param)
-            continue
-        matched_adapter = False
-        for idx in range(adapter_count):
-            if f".residual_adapters.{idx}." in name:
-                grouped[f"adapter_{idx}"].append(param)
-                matched_adapter = True
-                break
-        if not matched_adapter:
-            grouped["mmrl"].append(param)
+        grouped["mmrl"].append(param)
 
     if pooling_lr is not None:
         actual_pooling_param_ids = {
@@ -1510,11 +1095,8 @@ def _build_stage3_grouped_optimizer(model, train_cfg):
             )
 
     learning_rates = {"mmrl": mmrl_lr}
-    if not direct_mmrl_output:
-        learning_rates["router"] = router_lr
     if pooling_lr is not None:
         learning_rates["pooling"] = pooling_lr
-    learning_rates.update({f"adapter_{idx}": lr for idx, lr in enumerate(adapter_lrs)})
     empty_groups = [name for name, params in grouped.items() if not params]
     if empty_groups:
         raise RuntimeError(f"Empty Stage3 optimizer groups: {empty_groups}")
@@ -1535,8 +1117,6 @@ def _build_stage3_grouped_optimizer(model, train_cfg):
             for group in parameter_groups
         )
     )
-    if direct_mmrl_output:
-        print("[STAGE3_OPTIMIZER_GROUPS] direct_mmrl_output=True router/adapters=excluded")
     print(
         "[STAGE3_OPTIMIZER] "
         f"AdamW beta1={adam_beta1} beta2={adam_beta2} "
@@ -1818,33 +1398,11 @@ def run_stage1_light(model, processor, data_cfg, train_cfg, output_dir):
 def run_stage3_full(model, processor, data_cfg, train_cfg, output_dir):
     stage_id = 3
     visual = model.model.visual
-    if visual.decouple_stage_pooling:
-        visual.reset_router_pooling_from_gate()
-        pooling_pairs = (
-            (visual.hidden_state_pooling, visual.router_hidden_state_pooling),
-            (visual.embedding_pooling, visual.router_embedding_pooling),
-        )
-        for gate_pooling, router_pooling in pooling_pairs:
-            gate_state = gate_pooling.state_dict()
-            router_state = router_pooling.state_dict()
-            if list(gate_state) != list(router_state) or any(
-                not torch.equal(gate_state[key], router_state[key])
-                for key in gate_state
-            ):
-                raise RuntimeError(
-                    "Stage 3 router pooling is not an exact Stage 1 copy"
-                )
     set_trainable_stage(model, stage_id)
-    if visual.decouple_stage_pooling:
-        pooling_modules = {
-            "router_hidden_state_pooling": visual.router_hidden_state_pooling,
-            "router_embedding_pooling": visual.router_embedding_pooling,
-        }
-    else:
-        pooling_modules = {
-            "hidden_state_pooling": visual.hidden_state_pooling,
-            "embedding_pooling": visual.embedding_pooling,
-        }
+    pooling_modules = {
+        "hidden_state_pooling": visual.hidden_state_pooling,
+        "embedding_pooling": visual.embedding_pooling,
+    }
     unexpectedly_frozen = [
         name
         for name, module in pooling_modules.items()
@@ -1855,12 +1413,6 @@ def run_stage3_full(model, processor, data_cfg, train_cfg, output_dir):
             "Stage 3 must train its active pooling coordinate systems: "
             f"{unexpectedly_frozen}"
         )
-    if visual.decouple_stage_pooling and any(
-        parameter.requires_grad
-        for module in (visual.hidden_state_pooling, visual.embedding_pooling)
-        for parameter in module.parameters()
-    ):
-        raise RuntimeError("Stage 3 must freeze the Stage 1 gate pooling modules")
     classifier_trainable = any(
         parameter.requires_grad
         for parameter in visual.Task_classifier.parameters()
@@ -1869,7 +1421,6 @@ def run_stage3_full(model, processor, data_cfg, train_cfg, output_dir):
         raise RuntimeError("Stage 3 must keep the Stage 1 task classifier frozen")
     print(
         "[STAGE3_TRAINABILITY] "
-        f"decouple_stage_pooling={visual.decouple_stage_pooling} "
         f"active_pooling={tuple(pooling_modules)} task_classifier=False"
     )
     experiment_cfg = train_cfg.get("experiment_cfg", {}) or {}
@@ -1907,22 +1458,10 @@ def run_stage3_full(model, processor, data_cfg, train_cfg, output_dir):
     model.current_stage_id = int(stage_id)
     model.current_stage_step = 0
     model.current_stage_progress = 0.0
-    model.adapter_usage_balance_loss_weight = float(train_cfg.get("adapter_usage_balance_loss_weight", 0.0))
-    model.adapter_sample_entropy_loss_weight = float(train_cfg.get("adapter_sample_entropy_loss_weight", 0.0))
-    model.adapter_common_mode_loss_weight = float(train_cfg.get("adapter_common_mode_loss_weight", 0.0))
-    model.adapter_effective_delta_loss_weight = float(train_cfg.get(
-        "adapter_effective_delta_loss_weight",
-        experiment_cfg.get("adapter_effective_delta_loss_weight", 0.0),
-    ))
     model.mmrl_relation_loss_weight = float(train_cfg.get(
         "mmrl_relation_loss_weight",
         experiment_cfg.get("mmrl_relation_loss_weight", 0.0),
     ))
-    print(
-        "[ROUTE_REGULARIZATION] "
-        f"usage_weight_start={model.adapter_usage_balance_loss_weight} "
-        f"entropy_weight_start={model.adapter_sample_entropy_loss_weight}"
-    )
     print(
         "[MMRL_RELATION] "
         f"weight={model.mmrl_relation_loss_weight} "
@@ -1930,18 +1469,6 @@ def run_stage3_full(model, processor, data_cfg, train_cfg, output_dir):
         f"variance_floor_ratio={model.model.visual.mmrl_variance_floor_ratio} "
         f"variance_floor_weight={model.model.visual.mmrl_variance_floor_weight}"
     )
-    print(
-        "[EARLY_MMRL_GUARD] "
-        f"enabled={model.model.visual.enable_early_mmrl_guard} "
-        f"ratio={model.model.visual.early_mmrl_guard_ratio} "
-        f"hold_steps={model.model.visual.early_mmrl_guard_hold_steps} "
-        f"release_steps={model.model.visual.early_mmrl_guard_release_steps}"
-    )
-    model.adapter_diversity_loss_weight = float(train_cfg.get(
-        "adapter_diversity_loss_weight",
-        experiment_cfg.get("adapter_diversity_loss_weight", 0.0),
-    ))
-
     stage3_views = ("expert-mm",)
     print(f"[Stage{stage_id}] enable_views={stage3_views}")
     assistant_turn_policy = str(

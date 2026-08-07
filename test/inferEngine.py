@@ -46,8 +46,6 @@ class Qwen3VLMMRLForGen(Qwen3VLForConditionalGeneration):
         if tokenizer.eos_token_id is not None:
             self.generation_config.eos_token_id = tokenizer.eos_token_id
         self.post_init()
-        if self.model.visual.decouple_stage_pooling:
-            self.model.visual.reset_router_pooling_from_gate()
 
     def get_output_embeddings(self):
         return self.lm_head

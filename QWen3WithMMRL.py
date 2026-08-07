@@ -40,51 +40,9 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
             "insert_method": _cfg_attr(config, "INSERT_METHOD", cfg.INSERT_METHOD),
             "ABLATE_VISUAL_GATE": _cfg_attr(config, "ABLATE_VISUAL_GATE", False),
             "ABLATE_DIRECT_LEARNABLE_REP": _cfg_attr(config, "ABLATE_DIRECT_LEARNABLE_REP", False),
-            "DECOUPLE_STAGE_POOLING": _cfg_attr(
-                config, "DECOUPLE_STAGE_POOLING", False
-            ),
-            "VISUAL_RESIDUAL_ADAPTER_COUNT": _cfg_attr(config, "VISUAL_RESIDUAL_ADAPTER_COUNT", 4),
-            "VISUAL_ADAPTER_REDUCTION_FACTOR": _cfg_attr(
-                config, "VISUAL_ADAPTER_REDUCTION_FACTOR", 4
-            ),
-            "RANDOM_INIT_ADAPTER_OUTPUT_COUNT": _cfg_attr(
-                config, "RANDOM_INIT_ADAPTER_OUTPUT_COUNT", 4
-            ),
-            "ADAPTER_USAGE_BALANCE_LOSS_WEIGHT": _cfg_attr(config, "ADAPTER_USAGE_BALANCE_LOSS_WEIGHT", 0.0),
-            "ADAPTER_SAMPLE_ENTROPY_LOSS_WEIGHT": _cfg_attr(config, "ADAPTER_SAMPLE_ENTROPY_LOSS_WEIGHT", 0.0),
-            "ADAPTER_COMMON_MODE_LOSS_WEIGHT": _cfg_attr(config, "ADAPTER_COMMON_MODE_LOSS_WEIGHT", 0.0),
-            "ADAPTER_SAMPLE_ENTROPY_TARGET": _cfg_attr(config, "ADAPTER_SAMPLE_ENTROPY_TARGET", 0.40),
-            "ADAPTER_COMMON_MODE_TARGET": _cfg_attr(config, "ADAPTER_COMMON_MODE_TARGET", 0.85),
-            "ADAPTER_EFFECTIVE_DELTA_LOSS_WEIGHT": _cfg_attr(config, "ADAPTER_EFFECTIVE_DELTA_LOSS_WEIGHT", 0.0),
-            "ADAPTER_EFFECTIVE_DELTA_TARGET_LOW": _cfg_attr(config, "ADAPTER_EFFECTIVE_DELTA_TARGET_LOW", 0.78),
-            "ADAPTER_EFFECTIVE_DELTA_TARGET_HIGH": _cfg_attr(config, "ADAPTER_EFFECTIVE_DELTA_TARGET_HIGH", 1.10),
             "MMRL_RELATION_MAX_TOKENS": _cfg_attr(config, "MMRL_RELATION_MAX_TOKENS", 64),
             "MMRL_VARIANCE_FLOOR_RATIO": _cfg_attr(config, "MMRL_VARIANCE_FLOOR_RATIO", 0.50),
             "MMRL_VARIANCE_FLOOR_WEIGHT": _cfg_attr(config, "MMRL_VARIANCE_FLOOR_WEIGHT", 0.10),
-            "ADAPTER_DIVERSITY_LOSS_WEIGHT": _cfg_attr(config, "ADAPTER_DIVERSITY_LOSS_WEIGHT", 0.0),
-            "ADAPTER_DIVERSITY_TARGET_LOW": _cfg_attr(config, "ADAPTER_DIVERSITY_TARGET_LOW", 0.30),
-            "ADAPTER_DIVERSITY_TARGET_HIGH": _cfg_attr(config, "ADAPTER_DIVERSITY_TARGET_HIGH", 0.58),
-            "ADAPTER_DIVERSITY_UPPER_WEIGHT": _cfg_attr(config, "ADAPTER_DIVERSITY_UPPER_WEIGHT", 2.0),
-            "ADAPTER_DIVERSITY_WORST_PAIR_WEIGHT": _cfg_attr(
-                config, "ADAPTER_DIVERSITY_WORST_PAIR_WEIGHT", 1.0
-            ),
-            "ENABLE_ADAPTER_ROUTER_IDENTITY_RESIDUAL": _cfg_attr(
-                config, "ENABLE_ADAPTER_ROUTER_IDENTITY_RESIDUAL", False
-            ),
-            "DIRECT_MMRL_OUTPUT": _cfg_attr(config, "DIRECT_MMRL_OUTPUT", False),
-            "RAW_VISUAL_ADAPTER": _cfg_attr(config, "RAW_VISUAL_ADAPTER", False),
-            "ENABLE_EARLY_MMRL_GUARD": _cfg_attr(
-                config, "ENABLE_EARLY_MMRL_GUARD", False
-            ),
-            "EARLY_MMRL_GUARD_RATIO": _cfg_attr(
-                config, "EARLY_MMRL_GUARD_RATIO", 1.25
-            ),
-            "EARLY_MMRL_GUARD_HOLD_STEPS": _cfg_attr(
-                config, "EARLY_MMRL_GUARD_HOLD_STEPS", 250
-            ),
-            "EARLY_MMRL_GUARD_RELEASE_STEPS": _cfg_attr(
-                config, "EARLY_MMRL_GUARD_RELEASE_STEPS", 125
-            ),
             "ENABLE_DEEPSTACK_MMRL_RESIDUAL": _cfg_attr(config, "ENABLE_DEEPSTACK_MMRL_RESIDUAL", False),
             "DEEPSTACK_MMRL_RESIDUAL_SCALE": _cfg_attr(config, "DEEPSTACK_MMRL_RESIDUAL_SCALE", 0.0),
             "vision_token_dim": vision_dim,
@@ -130,11 +88,7 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
             print(f"[Info] tokenizer={vocab_size}, embedding={curr_embedding_size}")
         self.tokenizer = tokenizer
         self.use_mmrl = config.mmrl_config["USE_MMRL"]
-        self.tax_loss = None
-        self.capacity_prior_loss = None
-        self.top4_group_balance_loss = None
         self.temperature_override = None
-        self.k_results = None
         self.debug_context = {}
         self._text_pooling_audit_contexts = set()
         ###################
@@ -211,11 +165,11 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
                         embedding: Optional[torch.nn.Module] = None,
                         images_per_sample: Optional[list[int]] = None,
                         text_pooling_mask: Optional[torch.Tensor] = None,):
-        if self.use_mmrl and v_r_token_list is None and not self.visual.raw_visual_adapter:
+        if self.use_mmrl and v_r_token_list is None:
             raise ValueError("v_r_token_list must be specified")
         elif self.use_mmrl:
             pixel_values = pixel_values.type(self.visual.dtype)
-            image_embeds, deepstack_image_embeds, k = self.visual(
+            image_embeds, deepstack_image_embeds = self.visual(
                 pixel_values,
                 grid_thw=image_grid_thw,
                 v_r_token_list=v_r_token_list,
@@ -226,7 +180,7 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
             )
             split_sizes = (image_grid_thw.prod(-1) // self.visual.spatial_merge_size ** 2).tolist()
             image_embeds = torch.split(image_embeds, split_sizes)
-            return image_embeds, deepstack_image_embeds, k
+            return image_embeds, deepstack_image_embeds
         elif not self.use_mmrl:
             pixel_values = pixel_values.type(self.visual.dtype)
             image_embeds, deepstack_image_embeds = self.visual(
@@ -268,17 +222,13 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
             self.temperature_override = temp_from_kwargs
         
         mmrl_gating_mask = kwargs.pop("mmrl_gating_mask", None)
-        self.tax_loss = torch.tensor(0.0, device=inputs_embeds.device)
-        self.capacity_prior_loss = torch.tensor(0.0, device=inputs_embeds.device)
-        self.top4_group_balance_loss = torch.tensor(0.0, device=inputs_embeds.device, dtype=inputs_embeds.dtype)
         self.debug_context = {}
         
         v_r_token_list = None
-        if self.use_mmrl and not self.visual.raw_visual_adapter:
+        if self.use_mmrl:
             v_r_token_list = self.MMRL()
         visual_pos_masks = None
         deepstack_visual_embeds = None
-        k_results = None
         is_prefill = True
         if cache_position is not None and cache_position.numel() > 0:
             is_prefill = bool(cache_position[0].item() == 0)
@@ -333,7 +283,7 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
                 f"but got sum {sum(images_per_sample)} and image_grid_thw.shape[0] {image_grid_thw.shape[0]}"
             
             if self.use_mmrl:
-                image_embeds_raw, deepstack_image_embeds, k_results = self.get_image_features(
+                image_embeds_raw, deepstack_image_embeds = self.get_image_features(
                     pixel_values=pixel_values,
                     image_grid_thw=image_grid_thw,
                     v_r_token_list=v_r_token_list,
@@ -358,11 +308,6 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
             inputs_embeds = inputs_embeds.masked_scatter(image_mask, image_embeds)
             visual_pos_masks = image_mask[..., 0]
             deepstack_visual_embeds = deepstack_image_embeds
-        if self.use_mmrl:
-            self.capacity_prior_loss = torch.tensor(0.0, device=inputs_embeds.device, dtype=inputs_embeds.dtype)
-            self.tax_loss = self.capacity_prior_loss
-        self.k_results = k_results
-        
         if position_ids is None:
             attention_mask_tensor = (
                 attention_mask if not isinstance(attention_mask, dict) else attention_mask["full_attention"]

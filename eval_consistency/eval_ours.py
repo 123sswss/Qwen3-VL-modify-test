@@ -61,8 +61,6 @@ class Qwen3VLMMRLForConsistency(Qwen3VLForConditionalGeneration):
         if tokenizer.eos_token_id is not None:
             self.generation_config.eos_token_id = tokenizer.eos_token_id
         self.post_init()
-        if self.model.visual.decouple_stage_pooling:
-            self.model.visual.reset_router_pooling_from_gate()
 
     def get_output_embeddings(self) -> nn.Module:
         return self.lm_head
@@ -81,8 +79,6 @@ REQUIRED_MMRL_CONFIG_KEYS = (
     "GATING_MID_DIM",
     "stretching_length",
     "gating_temperature",
-    "VISUAL_RESIDUAL_ADAPTER_COUNT",
-    "RANDOM_INIT_ADAPTER_OUTPUT_COUNT",
 )
 
 
@@ -112,11 +108,6 @@ def _validate_checkpoint_config(config: Any, checkpoint: Path) -> None:
         )
     if not bool(config.USE_MMRL):
         raise RuntimeError(f"Checkpoint has USE_MMRL=False: {checkpoint}")
-    if int(config.VISUAL_RESIDUAL_ADAPTER_COUNT) < 1:
-        raise RuntimeError(
-            "VISUAL_RESIDUAL_ADAPTER_COUNT must be positive, got "
-            f"{config.VISUAL_RESIDUAL_ADAPTER_COUNT}"
-        )
 
 
 def _apply_shared_attention_backend(config: Any) -> None:
@@ -138,22 +129,10 @@ def _audit_loaded_model(
     custom_parameter_names = [
         name
         for name, _ in model.named_parameters()
-        if (
-            ".MMRL." in name
-            or ".residual_adapters." in name
-            or ".adapter_router." in name
-        )
+        if ".MMRL." in name
     ]
     if not custom_parameter_names:
-        raise RuntimeError("Loaded model contains no MMRL/router/adapter parameters")
-    if len(visual.residual_adapters) != int(
-        model.config.VISUAL_RESIDUAL_ADAPTER_COUNT
-    ):
-        raise RuntimeError(
-            "Loaded adapter count does not match checkpoint config: "
-            f"model={len(visual.residual_adapters)} "
-            f"config={model.config.VISUAL_RESIDUAL_ADAPTER_COUNT}"
-        )
+        raise RuntimeError("Loaded model contains no MMRL parameters")
     expected_vocab_size = int(model.config.text_config.vocab_size)
     if model.lm_head.weight.shape[0] != expected_vocab_size:
         raise RuntimeError(
@@ -166,7 +145,6 @@ def _audit_loaded_model(
         "[MMRL_MODEL_AUDIT] "
         f"checkpoint={checkpoint} "
         f"insert_layers={list(visual.insert_layers)} "
-        f"adapter_count={len(visual.residual_adapters)} "
         f"custom_parameter_tensors={len(custom_parameter_names)} "
         f"device={parameter_device} "
         f"lm_head_shape={tuple(model.lm_head.weight.shape)}"

@@ -1455,13 +1455,17 @@ def _build_stage3_grouped_optimizer(model, train_cfg):
         raise ValueError(
             f"Stage 3 weight decay must be non-negative, got {weight_decay}"
         )
-    grouped = {"mmrl": [] , "router": []}
+    visual = model.model.visual
+    direct_mmrl_output = bool(visual.direct_mmrl_output)
+    grouped = {"mmrl": []}
+    if not direct_mmrl_output:
+        grouped["router"] = []
     pooling_lr = experiment_cfg.get("stage3_pooling_learning_rate")
     if pooling_lr is not None:
         pooling_lr = float(pooling_lr)
         grouped["pooling"] = []
-    grouped.update({f"adapter_{idx}": [] for idx in range(adapter_count)})
-    visual = model.model.visual
+    if not direct_mmrl_output:
+        grouped.update({f"adapter_{idx}": [] for idx in range(adapter_count)})
     active_pooling_modules = (
         (
             visual.router_hidden_state_pooling,
@@ -1505,7 +1509,9 @@ def _build_stage3_grouped_optimizer(model, train_cfg):
                 "hidden/text pooling parameters"
             )
 
-    learning_rates = {"mmrl": mmrl_lr, "router": router_lr}
+    learning_rates = {"mmrl": mmrl_lr}
+    if not direct_mmrl_output:
+        learning_rates["router"] = router_lr
     if pooling_lr is not None:
         learning_rates["pooling"] = pooling_lr
     learning_rates.update({f"adapter_{idx}": lr for idx, lr in enumerate(adapter_lrs)})
@@ -1529,6 +1535,8 @@ def _build_stage3_grouped_optimizer(model, train_cfg):
             for group in parameter_groups
         )
     )
+    if direct_mmrl_output:
+        print("[STAGE3_OPTIMIZER_GROUPS] direct_mmrl_output=True router/adapters=excluded")
     print(
         "[STAGE3_OPTIMIZER] "
         f"AdamW beta1={adam_beta1} beta2={adam_beta2} "

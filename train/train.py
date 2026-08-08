@@ -237,6 +237,30 @@ CFG = {
             "dynamic_rep_effective_rank",
             "dynamic_rep_singular_top1_ratio",
             "dynamic_rep_singular_top2_ratio",
+            *[
+                f"{prefix}_{suffix}"
+                for prefix in (
+                    "dynamic_rep",
+                    "cross_delta",
+                    "cross_attention_map",
+                )
+                for suffix in (
+                    "token_pair_cos_mean",
+                    "token_pair_cos_max",
+                    "token_effective_rank_mean",
+                    "token_effective_rank_min",
+                    "token_effective_rank_fraction_mean",
+                    "token_effective_rank_fraction_min",
+                    "token_centered_effective_rank_mean",
+                    "token_centered_effective_rank_min",
+                    "token_centered_effective_rank_fraction_mean",
+                    "token_centered_effective_rank_fraction_min",
+                    "token_singular_top1_ratio_mean",
+                    "token_singular_top5_ratio_mean",
+                    "token_common_mode_ratio_mean",
+                    "token_common_mode_ratio_max",
+                )
+            ],
             "shared_rep_norm_mean",
             "shared_rep_grad_norm",
             "layer_embeddings_norm",

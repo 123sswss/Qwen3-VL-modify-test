@@ -8,6 +8,92 @@ import torch.nn.functional as F
 from torch.nn.utils.rnn import pad_sequence
 
 
+def _grouped_token_geometry(
+    states: torch.Tensor,
+    prefix: str,
+) -> dict[str, torch.Tensor]:
+    """Summarize token diversity independently inside each sample and layer."""
+    if states.ndim != 4:
+        raise ValueError(
+            f"grouped token geometry expects [B,L,R,D], got {tuple(states.shape)}"
+        )
+    states = states.detach().float()
+    with torch.no_grad(), torch.autocast(
+        device_type=states.device.type,
+        enabled=False,
+    ):
+        token_count = states.shape[2]
+        if token_count < 2:
+            return {}
+
+        norms = states.norm(dim=-1)
+        unit = states / norms.unsqueeze(-1).clamp_min(1e-8)
+        cosine = torch.matmul(unit, unit.transpose(-2, -1))
+        triangle = torch.triu_indices(
+            token_count,
+            token_count,
+            offset=1,
+            device=states.device,
+        )
+        pairwise = cosine[..., triangle[0], triangle[1]]
+
+        def _rank_statistics(token_states: torch.Tensor):
+            gram = torch.matmul(token_states, token_states.transpose(-2, -1))
+            singular_values = torch.linalg.eigvalsh(gram).clamp_min(0).sqrt()
+            singular_sum = singular_values.sum(dim=-1)
+            distribution = singular_values / singular_sum.unsqueeze(-1).clamp_min(1e-8)
+            has_signal = (singular_sum > 1e-8).to(distribution.dtype)
+            effective_rank = torch.exp(-(
+                distribution * distribution.clamp_min(1e-8).log()
+            ).sum(dim=-1)) * has_signal
+            descending = singular_values.flip(-1)
+            top1_ratio = descending[..., 0] / singular_sum.clamp_min(1e-8)
+            top5_ratio = descending[..., :min(5, token_count)].sum(
+                dim=-1
+            ) / singular_sum.clamp_min(1e-8)
+            return effective_rank, top1_ratio, top5_ratio
+
+        effective_rank, top1_ratio, top5_ratio = _rank_statistics(states)
+        centered_states = states - states.mean(dim=-2, keepdim=True)
+        centered_effective_rank, _, _ = _rank_statistics(centered_states)
+        effective_rank_fraction = effective_rank / float(token_count)
+        centered_effective_rank_fraction = centered_effective_rank / float(
+            max(token_count - 1, 1)
+        )
+        common_mode_ratio = states.mean(dim=-2).norm(dim=-1) / norms.mean(
+            dim=-1
+        ).clamp_min(1e-8)
+
+        return {
+            f"{prefix}_token_pair_cos_mean": pairwise.mean(),
+            f"{prefix}_token_pair_cos_max": pairwise.max(),
+            f"{prefix}_token_effective_rank_mean": effective_rank.mean(),
+            f"{prefix}_token_effective_rank_min": effective_rank.min(),
+            f"{prefix}_token_effective_rank_fraction_mean": (
+                effective_rank_fraction.mean()
+            ),
+            f"{prefix}_token_effective_rank_fraction_min": (
+                effective_rank_fraction.min()
+            ),
+            f"{prefix}_token_centered_effective_rank_mean": (
+                centered_effective_rank.mean()
+            ),
+            f"{prefix}_token_centered_effective_rank_min": (
+                centered_effective_rank.min()
+            ),
+            f"{prefix}_token_centered_effective_rank_fraction_mean": (
+                centered_effective_rank_fraction.mean()
+            ),
+            f"{prefix}_token_centered_effective_rank_fraction_min": (
+                centered_effective_rank_fraction.min()
+            ),
+            f"{prefix}_token_singular_top1_ratio_mean": top1_ratio.mean(),
+            f"{prefix}_token_singular_top5_ratio_mean": top5_ratio.mean(),
+            f"{prefix}_token_common_mode_ratio_mean": common_mode_ratio.mean(),
+            f"{prefix}_token_common_mode_ratio_max": common_mode_ratio.max(),
+        }
+
+
 class MultiQueryAttentionPooling(nn.Module):
     """Compress a masked sequence into a fixed number of learned memory tokens."""
 
@@ -115,6 +201,7 @@ class ResidualCrossAttention(nn.Module):
         queries: torch.Tensor,
         memory: torch.Tensor,
         memory_split_index: int | None = None,
+        query_group_shape: tuple[int, int] | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         if queries.ndim != 3 or memory.ndim != 3:
             raise ValueError(
@@ -167,6 +254,24 @@ class ResidualCrossAttention(nn.Module):
                         stats["cross_attention_visual_mass_query_std"] = (
                             full_visual_mass.mean(dim=(0, 1)).std(unbiased=False)
                         )
+                if query_group_shape is not None:
+                    group_count, group_size = map(int, query_group_shape)
+                    if group_count * group_size != queries.shape[1]:
+                        raise ValueError(
+                            "query_group_shape does not match Cross-Attention "
+                            f"queries: groups={query_group_shape} "
+                            f"query_count={queries.shape[1]}"
+                        )
+                    grouped_attention = full_weights.mean(dim=1).reshape(
+                        queries.shape[0],
+                        group_count,
+                        group_size,
+                        full_weights.shape[-1],
+                    )
+                    stats.update(_grouped_token_geometry(
+                        grouped_attention,
+                        "cross_attention_map",
+                    ))
                 self.debug_context = stats
         else:
             self.debug_context = {}
@@ -573,6 +678,10 @@ class MMRL(nn.Module):
             flat_queries,
             memory,
             memory_split_index=visual_memory.shape[1],
+            query_group_shape=(
+                self.insert_layer_count,
+                self.rp_space_length,
+            ),
         )
         dynamic_cross_queries = dynamic_cross_queries.reshape(
             image_count,
@@ -667,6 +776,14 @@ class MMRL(nn.Module):
                         "dynamic_rep",
                     ),
                     **self._layer_geometry_metrics(
+                        output_cross_delta,
+                        "cross_delta",
+                    ),
+                    **_grouped_token_geometry(
+                        dynamic_queries,
+                        "dynamic_rep",
+                    ),
+                    **_grouped_token_geometry(
                         output_cross_delta,
                         "cross_delta",
                     ),

@@ -69,15 +69,17 @@ run_train_dataset() {
 
 run_slake() {
   local experiment_name="${SLAKE_EXPERIMENT_NAME:-slake_mmrl_dynamic_rep_cross_attention}"
+  local run_seed="${SLAKE_RUN_SEED:-$SEED}"
   local epochs="${SLAKE_STAGE3_EPOCHS:-3}"
+  local mmrl_lr="${SLAKE_MMRL_LR:-6e-5}"
   local relation_weight="${MMRL_RELATION_LOSS_WEIGHT:-0.05}"
   local layer_lora_rank="${MMRL_LAYER_LORA_RANK:-0}"
   local query_architecture="${MMRL_QUERY_ARCHITECTURE:-layer_mlp_post_cross}"
   local rep_update_mode="${MMRL_REP_UPDATE_MODE:-replace}"
   local output_dir
-  output_dir="$(available_output_dir "$SLAKE_OUTPUT_ROOT" "${experiment_name}_seed${SEED}_${RUN_DATE}")"
+  output_dir="$(available_output_dir "$SLAKE_OUTPUT_ROOT" "${experiment_name}_seed${run_seed}_${RUN_DATE}")"
   mkdir -p "$output_dir/eval"
-  echo "[SLAKE] experiment=$experiment_name seed=$SEED epochs=$epochs relation=$relation_weight query_architecture=$query_architecture rep_update_mode=$rep_update_mode layer_lora_rank=$layer_lora_rank output=$output_dir"
+  echo "[SLAKE] experiment=$experiment_name seed=$run_seed epochs=$epochs mmrl_lr=$mmrl_lr relation=$relation_weight query_architecture=$query_architecture rep_update_mode=$rep_update_mode layer_lora_rank=$layer_lora_rank output=$output_dir"
   (
     cd "$ROOT_DIR" || exit 1
     python slake/train_mmrl.py \
@@ -86,7 +88,7 @@ run_slake() {
       --output-dir "$output_dir" \
       --experiment-name "$experiment_name" \
       --language all \
-      --seed "$SEED" \
+      --seed "$run_seed" \
       --data-seed 42 \
       --stage3-epochs "$epochs" \
       --stage3-epoch-lr-decay 0.5 \
@@ -104,7 +106,7 @@ run_slake() {
       --query-architecture "$query_architecture" \
       --rep-update-mode "$rep_update_mode" \
       --layer-lora-rank "$layer_lora_rank" \
-      --mmrl-lr 6e-5 \
+      --mmrl-lr "$mmrl_lr" \
       --relation-weight "$relation_weight" \
       --scheduler constant_with_warmup \
       --warmup-ratio 0.10 \
@@ -201,6 +203,42 @@ case "$RUN_TARGET" in
     MMRL_RELATION_LOSS_WEIGHT=0.05 \
       run_slake || failures=$((failures + 1))
     ;;
+  slake_full_geometry_budget4)
+    SLAKE_EXPERIMENT_NAME="slake_mmrl_full_geometry_repro" \
+    SLAKE_RUN_SEED=45 \
+    SLAKE_MMRL_LR=6e-5 \
+    MMRL_QUERY_ARCHITECTURE=layer_mlp_post_cross \
+    MMRL_REP_UPDATE_MODE=replace \
+    MMRL_CROSS_ATTENTION_HEADS=8 \
+    MMRL_RELATION_LOSS_WEIGHT=0.05 \
+      run_slake || failures=$((failures + 1))
+    SLAKE_EXPERIMENT_NAME="slake_mmrl_full_geometry_lr8e5" \
+    SLAKE_RUN_SEED=45 \
+    SLAKE_MMRL_LR=8e-5 \
+    MMRL_QUERY_ARCHITECTURE=layer_mlp_post_cross \
+    MMRL_REP_UPDATE_MODE=replace \
+    MMRL_CROSS_ATTENTION_HEADS=8 \
+    MMRL_RELATION_LOSS_WEIGHT=0.05 \
+      run_slake || failures=$((failures + 1))
+    SLAKE_EXPERIMENT_NAME="slake_mmrl_full_geometry_rep80" \
+    SLAKE_RUN_SEED=45 \
+    SLAKE_MMRL_LR=6e-5 \
+    MMRL_RP_SPACE_LENGTH=80 \
+    MMRL_QUERY_ARCHITECTURE=layer_mlp_post_cross \
+    MMRL_REP_UPDATE_MODE=replace \
+    MMRL_CROSS_ATTENTION_HEADS=8 \
+    MMRL_RELATION_LOSS_WEIGHT=0.05 \
+      run_slake || failures=$((failures + 1))
+    SLAKE_EXPERIMENT_NAME="slake_mmrl_full_geometry_memory256" \
+    SLAKE_RUN_SEED=45 \
+    SLAKE_MMRL_LR=6e-5 \
+    MMRL_MEMORY_QUERY_COUNT=256 \
+    MMRL_QUERY_ARCHITECTURE=layer_mlp_post_cross \
+    MMRL_REP_UPDATE_MODE=replace \
+    MMRL_CROSS_ATTENTION_HEADS=8 \
+    MMRL_RELATION_LOSS_WEIGHT=0.05 \
+      run_slake || failures=$((failures + 1))
+    ;;
   slake_force_g_one)
     run_slake_force_g_one || failures=$((failures + 1))
     ;;
@@ -214,7 +252,7 @@ case "$RUN_TARGET" in
     run_slake || failures=$((failures + 1))
     ;;
   *)
-    echo "[ERR] 未知目标: $RUN_TARGET，可选 train、slake、slake_shared_direct、slake_lowrank_matrix、slake_structure_matrix、slake_force_g_one、train_shared_direct、all。" >&2
+    echo "[ERR] 未知目标: $RUN_TARGET，可选 train、slake、slake_shared_direct、slake_lowrank_matrix、slake_structure_matrix、slake_full_geometry_budget4、slake_force_g_one、train_shared_direct、all。" >&2
     exit 2
     ;;
 esac

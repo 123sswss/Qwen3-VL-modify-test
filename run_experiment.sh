@@ -72,14 +72,12 @@ run_slake() {
   local epochs="${SLAKE_STAGE3_EPOCHS:-3}"
   local relation_weight="${MMRL_RELATION_LOSS_WEIGHT:-0.05}"
   local layer_lora_rank="${MMRL_LAYER_LORA_RANK:-0}"
-  local extra_args=()
-  if [ "${MMRL_DIRECT_SHARED_REP:-0}" = "1" ]; then
-    extra_args+=(--direct-shared-rep)
-  fi
+  local query_architecture="${MMRL_QUERY_ARCHITECTURE:-layer_mlp_post_cross}"
+  local rep_update_mode="${MMRL_REP_UPDATE_MODE:-replace}"
   local output_dir
   output_dir="$(available_output_dir "$SLAKE_OUTPUT_ROOT" "${experiment_name}_seed${SEED}_${RUN_DATE}")"
   mkdir -p "$output_dir/eval"
-  echo "[SLAKE] experiment=$experiment_name seed=$SEED epochs=$epochs relation=$relation_weight layer_lora_rank=$layer_lora_rank output=$output_dir"
+  echo "[SLAKE] experiment=$experiment_name seed=$SEED epochs=$epochs relation=$relation_weight query_architecture=$query_architecture rep_update_mode=$rep_update_mode layer_lora_rank=$layer_lora_rank output=$output_dir"
   (
     cd "$ROOT_DIR" || exit 1
     python slake/train_mmrl.py \
@@ -103,8 +101,9 @@ run_slake() {
       --memory-attention-dim "${MMRL_MEMORY_ATTENTION_DIM:-128}" \
       --projector-hidden-dim "${MMRL_PROJECTOR_HIDDEN_DIM:-1024}" \
       --cross-attention-heads "${MMRL_CROSS_ATTENTION_HEADS:-8}" \
+      --query-architecture "$query_architecture" \
+      --rep-update-mode "$rep_update_mode" \
       --layer-lora-rank "$layer_lora_rank" \
-      "${extra_args[@]}" \
       --mmrl-lr 6e-5 \
       --relation-weight "$relation_weight" \
       --scheduler constant_with_warmup \
@@ -127,6 +126,34 @@ run_slake() {
   )
 }
 
+run_slake_force_g_one() {
+  local checkpoint="${MMRL_CHECKPOINT:-}"
+  if [ -z "$checkpoint" ]; then
+    echo "[ERR] slake_force_g_one requires MMRL_CHECKPOINT=/path/to/final" >&2
+    return 2
+  fi
+  local checkpoint_name
+  checkpoint_name="$(basename "$(dirname "$checkpoint")")"
+  local output_dir
+  output_dir="$(available_output_dir "$SLAKE_OUTPUT_ROOT" "${checkpoint_name}_force_g_one_${RUN_DATE}")"
+  mkdir -p "$output_dir"
+  echo "[SLAKE FORCE G=1] checkpoint=$checkpoint output=$output_dir"
+  (
+    cd "$ROOT_DIR" || exit 1
+    python slake/slake_official_eval.py \
+      --backend mmrl \
+      --base-model "$MODEL_PATH" \
+      --checkpoint "$checkpoint" \
+      --questions "$SLAKE_DATA_ROOT/test.json" \
+      --image-root "$SLAKE_DATA_ROOT/imgs" \
+      --output-dir "$output_dir" \
+      --language all \
+      --force-g-one \
+      --overwrite \
+      2>&1 | tee "$output_dir/eval.log"
+  )
+}
+
 failures=0
 case "$RUN_TARGET" in
   train)
@@ -137,28 +164,49 @@ case "$RUN_TARGET" in
     ;;
   slake_shared_direct)
     SLAKE_EXPERIMENT_NAME="slake_mmrl_dynamic_rep_shared_direct" \
-    MMRL_DIRECT_SHARED_REP=1 \
+    MMRL_QUERY_ARCHITECTURE=shared_direct_post_cross \
       run_slake || failures=$((failures + 1))
     ;;
   slake_lowrank_matrix)
     SLAKE_EXPERIMENT_NAME="slake_mmrl_shared_direct_rank16_relation0050" \
-    MMRL_DIRECT_SHARED_REP=1 \
+    MMRL_QUERY_ARCHITECTURE=shared_direct_post_cross \
     MMRL_LAYER_LORA_RANK=16 \
     MMRL_RELATION_LOSS_WEIGHT=0.05 \
       run_slake || failures=$((failures + 1))
     SLAKE_EXPERIMENT_NAME="slake_mmrl_shared_direct_rank16_relation0000" \
-    MMRL_DIRECT_SHARED_REP=1 \
+    MMRL_QUERY_ARCHITECTURE=shared_direct_post_cross \
     MMRL_LAYER_LORA_RANK=16 \
     MMRL_RELATION_LOSS_WEIGHT=0.0 \
       run_slake || failures=$((failures + 1))
     SLAKE_EXPERIMENT_NAME="slake_mmrl_shared_direct_rank64_relation0050" \
-    MMRL_DIRECT_SHARED_REP=1 \
+    MMRL_QUERY_ARCHITECTURE=shared_direct_post_cross \
     MMRL_LAYER_LORA_RANK=64 \
     MMRL_RELATION_LOSS_WEIGHT=0.05 \
       run_slake || failures=$((failures + 1))
     ;;
+  slake_structure_matrix)
+    SLAKE_EXPERIMENT_NAME="slake_mmrl_layer_linear_post_cross_replace_r0050" \
+    MMRL_QUERY_ARCHITECTURE=layer_linear_post_cross \
+    MMRL_REP_UPDATE_MODE=replace \
+    MMRL_RELATION_LOSS_WEIGHT=0.05 \
+      run_slake || failures=$((failures + 1))
+    SLAKE_EXPERIMENT_NAME="slake_mmrl_lowdim_cross_layer_linear_replace_r0050" \
+    MMRL_QUERY_ARCHITECTURE=lowdim_cross_layer_linear \
+    MMRL_REP_UPDATE_MODE=replace \
+    MMRL_RELATION_LOSS_WEIGHT=0.05 \
+      run_slake || failures=$((failures + 1))
+    SLAKE_EXPERIMENT_NAME="slake_mmrl_layer_mlp_persistent_delta_r0050" \
+    MMRL_QUERY_ARCHITECTURE=layer_mlp_post_cross \
+    MMRL_REP_UPDATE_MODE=persistent_delta \
+    MMRL_RELATION_LOSS_WEIGHT=0.05 \
+      run_slake || failures=$((failures + 1))
+    ;;
+  slake_force_g_one)
+    run_slake_force_g_one || failures=$((failures + 1))
+    ;;
   train_shared_direct)
     MMRL_EXPERIMENT_NAME="dynamic_rep_shared_direct_v1" \
+    MMRL_QUERY_ARCHITECTURE=shared_direct_post_cross \
       run_train_dataset || failures=$((failures + 1))
     ;;
   all)
@@ -166,7 +214,7 @@ case "$RUN_TARGET" in
     run_slake || failures=$((failures + 1))
     ;;
   *)
-    echo "[ERR] 未知目标: $RUN_TARGET，可选 train、slake、slake_shared_direct、slake_lowrank_matrix、train_shared_direct、all。" >&2
+    echo "[ERR] 未知目标: $RUN_TARGET，可选 train、slake、slake_shared_direct、slake_lowrank_matrix、slake_structure_matrix、slake_force_g_one、train_shared_direct、all。" >&2
     exit 2
     ;;
 esac

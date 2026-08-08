@@ -55,6 +55,13 @@ DEFAULT_GENERAL_IMAGE_ROOTS = (
     Path("/root/autodl-tmp/dataset/gen/train2017"),
     Path("/root/autodl-tmp/dataset/gen/val2017"),
 )
+QUERY_ARCHITECTURES = (
+    "layer_mlp_post_cross",
+    "layer_linear_post_cross",
+    "lowdim_cross_layer_linear",
+    "shared_direct_post_cross",
+)
+REP_UPDATE_MODES = ("replace", "persistent_delta")
 
 
 def seed_everything(seed: int) -> None:
@@ -102,7 +109,8 @@ def build_experiment_config(args: argparse.Namespace) -> Dict[str, Any]:
         "memory_attention_dim": args.memory_attention_dim,
         "projector_hidden_dim": args.projector_hidden_dim,
         "cross_attention_heads": args.cross_attention_heads,
-        "direct_shared_rep": args.direct_shared_rep,
+        "query_architecture": args.query_architecture,
+        "rep_update_mode": args.rep_update_mode,
         "layer_lora_rank": args.layer_lora_rank,
         "mmrl_relation_loss_weight": args.relation_weight,
         "mmrl_relation_max_tokens": 64,
@@ -180,6 +188,12 @@ def build_train_config(
             "dynamic_rep_effective_rank",
             "dynamic_rep_singular_top1_ratio",
             "dynamic_rep_singular_top2_ratio",
+            "shared_rep_norm_mean",
+            "shared_rep_grad_norm",
+            "layer_embeddings_norm",
+            "layer_embeddings_grad_norm",
+            "v_projector_grad_norm_mean",
+            "v_projector_grad_norm_max",
             "cross_delta_layer_cos_mean",
             "cross_delta_layer_cos_max",
             "cross_delta_effective_rank",
@@ -452,7 +466,7 @@ def audit_model_forward(
     expected_memory_shape = (
         expected_images,
         2 * mmrl.memory_query_count,
-        mmrl.vision_token_dim,
+        mmrl.cross_attention_dim,
     )
     if rep_shape != expected_rep_shape:
         raise RuntimeError(
@@ -650,9 +664,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--projector-hidden-dim", type=int, default=1024)
     parser.add_argument("--cross-attention-heads", type=int, default=8)
     parser.add_argument(
-        "--direct-shared-rep",
-        action="store_true",
-        help="Use one learned [R,Dv] Rep table directly as all layer queries.",
+        "--query-architecture",
+        choices=QUERY_ARCHITECTURES,
+        default="layer_mlp_post_cross",
+    )
+    parser.add_argument(
+        "--rep-update-mode",
+        choices=REP_UPDATE_MODES,
+        default="replace",
     )
     parser.add_argument("--layer-lora-rank", type=int, default=0)
     parser.add_argument("--stage1-lr", type=float, default=1e-4)
@@ -715,8 +734,22 @@ def parse_args() -> argparse.Namespace:
         parser.error("--cross-attention-heads must be positive")
     if args.layer_lora_rank < 0:
         parser.error("--layer-lora-rank must be non-negative")
-    if args.layer_lora_rank > 0 and not args.direct_shared_rep:
-        parser.error("--layer-lora-rank requires --direct-shared-rep")
+    if (
+        args.layer_lora_rank > 0
+        and args.query_architecture != "shared_direct_post_cross"
+    ):
+        parser.error(
+            "--layer-lora-rank requires "
+            "--query-architecture shared_direct_post_cross"
+        )
+    if (
+        args.rep_update_mode == "persistent_delta"
+        and args.query_architecture != "layer_mlp_post_cross"
+    ):
+        parser.error(
+            "--rep-update-mode persistent_delta requires "
+            "--query-architecture layer_mlp_post_cross"
+        )
     if args.generation_checks < 0:
         parser.error("--generation-checks must be non-negative")
     return args
@@ -748,7 +781,8 @@ def main() -> int:
         f"memory_attention_dim={args.memory_attention_dim} "
         f"projector_hidden_dim={args.projector_hidden_dim} "
         f"cross_attention_heads={args.cross_attention_heads} "
-        f"direct_shared_rep={args.direct_shared_rep} "
+        f"query_architecture={args.query_architecture} "
+        f"rep_update_mode={args.rep_update_mode} "
         f"layer_lora_rank={args.layer_lora_rank} "
         f"stage1_batch={args.batch_size}x{args.gradient_accumulation} "
         f"stage3_batch={args.stage3_batch_size}x{args.stage3_gradient_accumulation} "
@@ -830,6 +864,10 @@ def main() -> int:
                 "data_seed": args.data_seed,
                 "dataset": "SLAKE",
                 "language": args.language,
+                "query_architecture": args.query_architecture,
+                "rep_update_mode": args.rep_update_mode,
+                "stage3_epochs": args.stage3_epochs,
+                "relation_weight": args.relation_weight,
             },
         )
         print(f"[SLAKE_CHECKPOINT] saved={final_dir}")

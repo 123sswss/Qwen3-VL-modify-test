@@ -660,6 +660,16 @@ class Qwen3VLMMRLForStages(Qwen3VLForConditionalGeneration):
             if shared.grad is not None:
                 result["shared_rep_grad_norm"] = shared.grad.detach().float().norm()
 
+        layer_embeddings = getattr(mmrl, "layer_embeddings", None)
+        if layer_embeddings is not None:
+            result["layer_embeddings_norm"] = (
+                layer_embeddings.detach().float().norm()
+            )
+            if layer_embeddings.grad is not None:
+                result["layer_embeddings_grad_norm"] = (
+                    layer_embeddings.grad.detach().float().norm()
+                )
+
         for parameter_name, metric_prefix in (
             ("layer_lora_A", "layer_lora_A"),
             ("layer_lora_B", "layer_lora_B"),
@@ -959,6 +969,20 @@ def build_model_and_processor(model_path, experiment_cfg=None):
         "MMRL_CROSS_ATTENTION_HEADS",
         str(experiment_cfg.get("cross_attention_heads", 8)),
     ))
+    config.MMRL_QUERY_ARCHITECTURE = os.getenv(
+        "MMRL_QUERY_ARCHITECTURE",
+        str(experiment_cfg.get(
+            "query_architecture",
+            cfg.MMRL_QUERY_ARCHITECTURE,
+        )),
+    )
+    config.MMRL_REP_UPDATE_MODE = os.getenv(
+        "MMRL_REP_UPDATE_MODE",
+        str(experiment_cfg.get(
+            "rep_update_mode",
+            cfg.MMRL_REP_UPDATE_MODE,
+        )),
+    )
     config.ABLATE_VISUAL_GATE = bool(experiment_cfg.get(
         "ablate_visual_gate",
         os.getenv("MMRL_ABLATE_VISUAL_GATE", "0") == "1"
@@ -966,10 +990,6 @@ def build_model_and_processor(model_path, experiment_cfg=None):
     config.ABLATE_DIRECT_LEARNABLE_REP = bool(experiment_cfg.get(
         "ablate_direct_learnable_rep",
         os.getenv("MMRL_ABLATE_DIRECT_LEARNABLE_REP", "0") == "1"
-    ))
-    config.DIRECT_SHARED_REP = bool(experiment_cfg.get(
-        "direct_shared_rep",
-        os.getenv("MMRL_DIRECT_SHARED_REP", "0") == "1"
     ))
     config.MMRL_LAYER_LORA_RANK = int(os.getenv(
         "MMRL_LAYER_LORA_RANK",
@@ -1035,9 +1055,13 @@ def build_model_and_processor(model_path, experiment_cfg=None):
             config.MMRL_PROJECTOR_HIDDEN_DIM,
             mmrl.projector_hidden_dim,
         ),
-        "DIRECT_SHARED_REP": (
-            config.DIRECT_SHARED_REP,
-            mmrl.use_direct_shared_rep,
+        "MMRL_QUERY_ARCHITECTURE": (
+            config.MMRL_QUERY_ARCHITECTURE,
+            mmrl.query_architecture,
+        ),
+        "MMRL_REP_UPDATE_MODE": (
+            config.MMRL_REP_UPDATE_MODE,
+            mmrl.rep_update_mode,
         ),
         "MMRL_LAYER_LORA_RANK": (
             config.MMRL_LAYER_LORA_RANK,
@@ -1049,20 +1073,24 @@ def build_model_and_processor(model_path, experiment_cfg=None):
         ),
     }
     for name, (requested, actual) in propagation_checks.items():
-        if abs(float(requested) - float(actual)) > 1e-9:
+        if isinstance(requested, str):
+            mismatch = requested != actual
+        else:
+            mismatch = abs(float(requested) - float(actual)) > 1e-9
+        if mismatch:
             raise RuntimeError(
                 f"{name} config propagation failed: requested={requested} actual={actual}"
             )
     print(
         "[MMRL_STRUCTURE_AUDIT] "
-        "query_parameterization="
-        f"{'shared_direct' if config.DIRECT_SHARED_REP else 'layer_mlp'} "
+        f"query_architecture={config.MMRL_QUERY_ARCHITECTURE} "
+        f"rep_update_mode={config.MMRL_REP_UPDATE_MODE} "
+        f"cross_attention_dim={mmrl.cross_attention_dim} "
         f"rp_space_length={config.RP_SPACE_LENGTH} "
         f"memory_query_count={config.MMRL_MEMORY_QUERY_COUNT} "
         f"memory_attention_dim={config.MMRL_MEMORY_ATTENTION_DIM} "
         f"projector_hidden_dim={config.MMRL_PROJECTOR_HIDDEN_DIM} "
         f"cross_attention_heads={config.MMRL_CROSS_ATTENTION_HEADS} "
-        f"direct_shared_rep={config.DIRECT_SHARED_REP} "
         f"layer_lora_rank={config.MMRL_LAYER_LORA_RANK} "
         "memory_tokens_per_image="
         f"{2 * config.MMRL_MEMORY_QUERY_COUNT}"
@@ -1177,7 +1205,9 @@ def build_model_and_processor(model_path, experiment_cfg=None):
     print(
         f"ablate_visual_gate={config.ABLATE_VISUAL_GATE} "
         f"ablate_direct_learnable_rep={config.ABLATE_DIRECT_LEARNABLE_REP} "
-        f"direct_shared_rep={config.DIRECT_SHARED_REP} "
+        f"query_architecture={config.MMRL_QUERY_ARCHITECTURE} "
+        f"rep_update_mode={config.MMRL_REP_UPDATE_MODE} "
+        f"cross_attention_dim={mmrl.cross_attention_dim} "
         f"layer_lora_rank={config.MMRL_LAYER_LORA_RANK} "
         f"rp_space_length={config.RP_SPACE_LENGTH} "
         f"memory_query_count={config.MMRL_MEMORY_QUERY_COUNT} "

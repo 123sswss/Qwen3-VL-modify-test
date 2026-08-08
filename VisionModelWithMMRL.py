@@ -13,7 +13,7 @@ import utils
 class MMRLVitBlock(qwen3_vl.Qwen3VLVisionBlock):
     def __init__(self, config):
         super(MMRLVitBlock, self).__init__(config)
-        self.INSERT_METHOD = config.mmrl_config["insert_method"]
+        self.rep_update_mode = config.mmrl_config["MMRL_REP_UPDATE_MODE"]
     def forward(self,
                 hidden_states: torch.Tensor,
                 cu_seqlens: torch.Tensor,
@@ -48,18 +48,19 @@ class MMRLVitBlock(qwen3_vl.Qwen3VLVisionBlock):
             hidden_states_split = torch.split(hidden_states, full_seq_lengths, dim=0)
             new_hidden_states_list = []
             for image_rep, seq_hidden in zip(r_token, hidden_states_split):
-                if self.INSERT_METHOD == "replace":
+                if self.rep_update_mode == "replace":
                     updated_seq = torch.cat(
                         [image_rep, seq_hidden[num_r_tokens:]],
                         dim=0,
                     )
-                elif self.INSERT_METHOD == "add":
+                elif self.rep_update_mode == "persistent_delta":
                     prefix = seq_hidden[:num_r_tokens] + image_rep
                     suffix = seq_hidden[num_r_tokens:]
                     updated_seq = torch.cat([prefix, suffix], dim=0)
                 else:
                     raise ValueError(
-                        f"Unsupported MMRL INSERT_METHOD={self.INSERT_METHOD!r}"
+                        "Unsupported MMRL_REP_UPDATE_MODE="
+                        f"{self.rep_update_mode!r}"
                     )
                 new_hidden_states_list.append(updated_seq)
             hidden_states = torch.cat(new_hidden_states_list, dim=0)

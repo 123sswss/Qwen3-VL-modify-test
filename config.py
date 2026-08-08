@@ -9,7 +9,8 @@ MMRL_MEMORY_QUERY_COUNT = 128
 MMRL_MEMORY_ATTENTION_DIM = 128
 MMRL_PROJECTOR_HIDDEN_DIM = 1024
 MMRL_CROSS_ATTENTION_HEADS = 8
-DIRECT_SHARED_REP = False
+MMRL_QUERY_ARCHITECTURE = "layer_mlp_post_cross"
+MMRL_REP_UPDATE_MODE = "replace"
 MMRL_LAYER_LORA_RANK = 0
 # V:5*DIM -(DIM*1024)> 5*1024
 # T:5*DIM -(DIM*2560)> 5*2560
@@ -17,9 +18,6 @@ MMRL_LAYER_LORA_RANK = 0
 # 0-based vision block indexes. Python range is left-closed/right-open.
 # range(16, 24) means natural-language layers 17..24.
 INSERT_LAYER = range(16, 24)
-
-INSERT_METHOD = "replace"
-# INSERT_METHOD = "add"
 
 GATING_MID_DIM = 512
 ##################################### Gating #####################################

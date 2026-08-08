@@ -53,14 +53,21 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
                 "MMRL_CROSS_ATTENTION_HEADS",
                 cfg.MMRL_CROSS_ATTENTION_HEADS,
             ),
-            "INSERT_METHOD": _cfg_attr(config, "INSERT_METHOD", cfg.INSERT_METHOD),
+            "MMRL_QUERY_ARCHITECTURE": _cfg_attr(
+                config,
+                "MMRL_QUERY_ARCHITECTURE",
+                cfg.MMRL_QUERY_ARCHITECTURE,
+            ),
+            "MMRL_REP_UPDATE_MODE": _cfg_attr(
+                config,
+                "MMRL_REP_UPDATE_MODE",
+                cfg.MMRL_REP_UPDATE_MODE,
+            ),
             "GATING_MID_DIM": _cfg_attr(config, "GATING_MID_DIM", cfg.GATING_MID_DIM),
             "stretching_length": _cfg_attr(config, "stretching_length", cfg.stretching_length),
             "gating_temperature": _cfg_attr(config, "gating_temperature", cfg.gating_temperature),
-            "insert_method": _cfg_attr(config, "INSERT_METHOD", cfg.INSERT_METHOD),
             "ABLATE_VISUAL_GATE": _cfg_attr(config, "ABLATE_VISUAL_GATE", False),
             "ABLATE_DIRECT_LEARNABLE_REP": _cfg_attr(config, "ABLATE_DIRECT_LEARNABLE_REP", False),
-            "DIRECT_SHARED_REP": _cfg_attr(config, "DIRECT_SHARED_REP", False),
             "MMRL_LAYER_LORA_RANK": _cfg_attr(config, "MMRL_LAYER_LORA_RANK", 0),
             "MMRL_RELATION_MAX_TOKENS": _cfg_attr(config, "MMRL_RELATION_MAX_TOKENS", 64),
             "MMRL_VARIANCE_FLOOR_RATIO": _cfg_attr(config, "MMRL_VARIANCE_FLOOR_RATIO", 0.50),
@@ -95,8 +102,7 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
             raise ValueError("tokenizer must be specified")
         ###################
         vision_config = getattr(config, "vision_config", config)
-        if not hasattr(vision_config, "mmrl_config"):
-            vision_config.mmrl_config = config.mmrl_config
+        vision_config.mmrl_config = config.mmrl_config
         original_visual = self.visual
         self.visual = vmmrl.VisionWithMMRL(vision_config)
         self.visual.load_state_dict(original_visual.state_dict(), strict=False)

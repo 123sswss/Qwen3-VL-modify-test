@@ -31,6 +31,8 @@ SELECTED_EXPERIMENT = os.getenv(
 
 EXPERIMENTS = {
     "dynamic_rep_cross_attention_v1": {
+        "query_architecture": "layer_mlp_post_cross",
+        "rep_update_mode": "replace",
         "rp_space_length": 40,
         "memory_query_count": 128,
         "memory_attention_dim": 128,
@@ -52,12 +54,13 @@ EXPERIMENTS = {
         "diag_every_steps": 250,
     },
     "dynamic_rep_shared_direct_v1": {
+        "query_architecture": "shared_direct_post_cross",
+        "rep_update_mode": "replace",
         "rp_space_length": 40,
         "memory_query_count": 128,
         "memory_attention_dim": 128,
         "projector_hidden_dim": 1024,
         "cross_attention_heads": 8,
-        "direct_shared_rep": True,
         "layer_lora_rank": 0,
         "ablate_visual_gate": False,
         "ablate_direct_learnable_rep": False,
@@ -234,6 +237,12 @@ CFG = {
             "dynamic_rep_effective_rank",
             "dynamic_rep_singular_top1_ratio",
             "dynamic_rep_singular_top2_ratio",
+            "shared_rep_norm_mean",
+            "shared_rep_grad_norm",
+            "layer_embeddings_norm",
+            "layer_embeddings_grad_norm",
+            "v_projector_grad_norm_mean",
+            "v_projector_grad_norm_max",
             "cross_delta_layer_cos_mean",
             "cross_delta_layer_cos_max",
             "cross_delta_effective_rank",

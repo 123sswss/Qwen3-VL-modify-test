@@ -441,6 +441,41 @@ def summarize_generation_timings(
     }
 
 
+def summarize_gate_values(
+    prediction_rows: Sequence[Mapping[str, Any]],
+) -> Dict[str, Any]:
+    values = []
+    for row in prediction_rows:
+        gate_value = row.get("gate_value")
+        if isinstance(gate_value, Sequence) and not isinstance(
+            gate_value,
+            (str, bytes),
+        ):
+            values.extend(float(value) for value in gate_value)
+        elif gate_value is not None:
+            values.append(float(gate_value))
+    return {
+        "count": len(values),
+        "mean": round(sum(values) / len(values), 6) if values else None,
+        "zero_count": sum(abs(value) <= 1e-6 for value in values),
+        "one_count": sum(abs(value - 1.0) <= 1e-6 for value in values),
+        "non_binary_count": sum(
+            abs(value) > 1e-6 and abs(value - 1.0) > 1e-6
+            for value in values
+        ),
+    }
+
+
+def force_mmrl_gate_one(model: Any) -> None:
+    generation_model = getattr(model, "model", None)
+    backbone = getattr(generation_model, "model", None)
+    visual = getattr(backbone, "visual", None)
+    if visual is None or not hasattr(visual, "ablate_visual_gate"):
+        raise RuntimeError("MMRL interface does not expose the visual gate")
+    visual.ablate_visual_gate = True
+    print("[SLAKE_FORCE_G_ONE] visual.ablate_visual_gate=True")
+
+
 def run_timing_warmup(
     records: Sequence[Mapping[str, Any]],
     model: Any,
@@ -476,6 +511,7 @@ def run_inference(
     resume: bool,
     overwrite: bool,
     continue_on_error: bool,
+    enforce_gate_one: bool = False,
 ) -> List[Dict[str, Any]]:
     progress_path = output_dir / "slake_progress.jsonl"
     if progress_path.exists() and overwrite:
@@ -513,6 +549,22 @@ def run_inference(
             )
             request_total_seconds = time.perf_counter() - request_started_at
             answer = extract_generated_answer(raw_output, answer_mode)
+            gate_value = getattr(model, "last_gate_value", None)
+            gate_values = (
+                gate_value
+                if isinstance(gate_value, list)
+                else [gate_value]
+            )
+            if enforce_gate_one and (
+                not gate_values
+                or any(
+                    value is None or abs(float(value) - 1.0) > 1e-6
+                    for value in gate_values
+                )
+            ):
+                raise RuntimeError(
+                    f"Force G=1 audit failed for question_id={qid}: {gate_value!r}"
+                )
             row = {
                 "question_id": qid,
                 "answer": answer,
@@ -520,6 +572,7 @@ def run_inference(
                 "question": record["_slake_question"],
                 "image": record["_slake_image_name"],
                 "status": "ok",
+                "gate_value": gate_value,
                 "timing": _normalized_timing(
                     getattr(model, "last_generation_timing", None),
                     request_total_seconds,
@@ -586,6 +639,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--overwrite", action="store_true")
     parser.add_argument(
+        "--force-g-one",
+        action="store_true",
+        help="Force the MMRL visual gate to G=1 for every image.",
+    )
+    parser.add_argument(
         "--timing-warmup-runs",
         type=int,
         default=3,
@@ -604,6 +662,8 @@ def main() -> int:
         raise ValueError("--resume and --overwrite are mutually exclusive")
     if args.timing_warmup_runs < 0:
         raise ValueError("--timing-warmup-runs must be non-negative")
+    if args.force_g_one and args.backend != "mmrl":
+        raise ValueError("--force-g-one is only valid with --backend mmrl")
 
     question_path = args.questions.expanduser().resolve()
     if not question_path.is_file():
@@ -637,6 +697,8 @@ def main() -> int:
         base_model_path=args.base_model,
         checkpoint_path=args.checkpoint,
     )
+    if args.force_g_one:
+        force_mmrl_gate_one(model)
     instruction = "" if args.no_instruction else args.instruction
     run_timing_warmup(
         records,
@@ -657,6 +719,7 @@ def main() -> int:
         resume=args.resume,
         overwrite=args.overwrite,
         continue_on_error=args.continue_on_error,
+        enforce_gate_one=args.force_g_one,
     )
 
     official_predictions = [
@@ -668,6 +731,7 @@ def main() -> int:
         prediction_rows,
         warmup_runs=args.timing_warmup_runs,
     )
+    gate_summary = summarize_gate_values(prediction_rows)
     summary.update(
         {
             "backend": args.backend,
@@ -687,6 +751,8 @@ def main() -> int:
                 else args.instruction or "language-aware-short-answer"
             ),
             "partial_evaluation": args.limit is not None,
+            "force_g_one": args.force_g_one,
+            "gate": gate_summary,
             "timing": timing_summary,
         }
     )
@@ -701,6 +767,7 @@ def main() -> int:
     print(f"Per Answer Type: {summary['per_answer_type_accuracy']}")
     print(f"Per Question Type: {summary['per_question_type_accuracy']}")
     print(f"Per Language: {summary['per_language_accuracy']}")
+    print(f"Gate: {gate_summary}")
     print(f"TTFT: {timing_summary['ttft_seconds']}")
     print(
         "TPOT: "

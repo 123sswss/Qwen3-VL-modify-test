@@ -181,18 +181,46 @@ class ResidualCrossAttention(nn.Module):
 
 
 class MMRL(nn.Module):
+    QUERY_ARCHITECTURES = {
+        "layer_mlp_post_cross",
+        "layer_linear_post_cross",
+        "lowdim_cross_layer_linear",
+        "shared_direct_post_cross",
+    }
+    REP_UPDATE_MODES = {"replace", "persistent_delta"}
+
     def __init__(self, config):
         super().__init__()
         cfg = SimpleNamespace(**config.mmrl_config)
+        self.query_architecture = str(cfg.MMRL_QUERY_ARCHITECTURE)
+        self.rep_update_mode = str(cfg.MMRL_REP_UPDATE_MODE)
+        if self.query_architecture not in self.QUERY_ARCHITECTURES:
+            raise ValueError(
+                "Unsupported MMRL_QUERY_ARCHITECTURE="
+                f"{self.query_architecture!r}; choices={sorted(self.QUERY_ARCHITECTURES)}"
+            )
+        if self.rep_update_mode not in self.REP_UPDATE_MODES:
+            raise ValueError(
+                "Unsupported MMRL_REP_UPDATE_MODE="
+                f"{self.rep_update_mode!r}; choices={sorted(self.REP_UPDATE_MODES)}"
+            )
+        if (
+            self.rep_update_mode == "persistent_delta"
+            and self.query_architecture != "layer_mlp_post_cross"
+        ):
+            raise ValueError(
+                "persistent_delta currently requires layer_mlp_post_cross"
+            )
         self.use_direct_learnable_rep = bool(
             getattr(cfg, "ABLATE_DIRECT_LEARNABLE_REP", False)
         )
-        self.use_direct_shared_rep = bool(
-            getattr(cfg, "DIRECT_SHARED_REP", False)
+        self.use_direct_shared_rep = (
+            self.query_architecture == "shared_direct_post_cross"
         )
         if self.use_direct_learnable_rep and self.use_direct_shared_rep:
             raise ValueError(
-                "DIRECT_SHARED_REP and ABLATE_DIRECT_LEARNABLE_REP are mutually exclusive"
+                "shared_direct_post_cross and ABLATE_DIRECT_LEARNABLE_REP "
+                "are mutually exclusive"
             )
         self.insert_layer_count = len(cfg.INSERT_LAYER)
         self.rp_space_length = int(cfg.RP_SPACE_LENGTH)
@@ -202,6 +230,11 @@ class MMRL(nn.Module):
         self.memory_query_count = int(cfg.MMRL_MEMORY_QUERY_COUNT)
         self.memory_attention_dim = int(cfg.MMRL_MEMORY_ATTENTION_DIM)
         self.projector_hidden_dim = int(cfg.MMRL_PROJECTOR_HIDDEN_DIM)
+        self.cross_attention_dim = (
+            self.rp_space_dim
+            if self.query_architecture == "lowdim_cross_layer_linear"
+            else self.vision_token_dim
+        )
         self.layer_lora_rank = int(getattr(cfg, "MMRL_LAYER_LORA_RANK", 0))
         if self.layer_lora_rank < 0:
             raise ValueError(
@@ -209,7 +242,16 @@ class MMRL(nn.Module):
             )
         if self.layer_lora_rank > 0 and not self.use_direct_shared_rep:
             raise ValueError(
-                "MMRL_LAYER_LORA_RANK requires DIRECT_SHARED_REP=True"
+                "MMRL_LAYER_LORA_RANK requires "
+                "MMRL_QUERY_ARCHITECTURE='shared_direct_post_cross'"
+            )
+        if (
+            self.use_direct_learnable_rep
+            and self.query_architecture == "lowdim_cross_layer_linear"
+        ):
+            raise ValueError(
+                "ABLATE_DIRECT_LEARNABLE_REP is incompatible with "
+                "lowdim_cross_layer_linear"
             )
 
         positive_dimensions = {
@@ -221,6 +263,7 @@ class MMRL(nn.Module):
             "memory_query_count": self.memory_query_count,
             "memory_attention_dim": self.memory_attention_dim,
             "projector_hidden_dim": self.projector_hidden_dim,
+            "cross_attention_dim": self.cross_attention_dim,
         }
         invalid_dimensions = {
             name: value
@@ -255,7 +298,7 @@ class MMRL(nn.Module):
         elif self.use_direct_shared_rep:
             self.v_r_token_projector = nn.ModuleList()
             self.direct_v_tokens = nn.ParameterList()
-        else:
+        elif self.query_architecture == "layer_mlp_post_cross":
             self.v_r_token_projector = nn.ModuleList([
                 nn.Sequential(
                     nn.Linear(self.rp_space_dim, self.projector_hidden_dim),
@@ -265,9 +308,15 @@ class MMRL(nn.Module):
                 for _ in range(self.insert_layer_count)
             ])
             self.direct_v_tokens = nn.ParameterList()
+        else:
+            self.v_r_token_projector = nn.ModuleList([
+                nn.Linear(self.rp_space_dim, self.vision_token_dim)
+                for _ in range(self.insert_layer_count)
+            ])
+            self.direct_v_tokens = nn.ParameterList()
 
         self.layer_embeddings = nn.Parameter(
-            torch.empty(self.insert_layer_count, 1, self.vision_token_dim)
+            torch.empty(self.insert_layer_count, 1, self.cross_attention_dim)
         )
         nn.init.normal_(self.layer_embeddings, std=0.02)
 
@@ -290,18 +339,18 @@ class MMRL(nn.Module):
 
         self.visual_memory_pooling = MultiQueryAttentionPooling(
             input_dim=self.vision_token_dim,
-            output_dim=self.vision_token_dim,
+            output_dim=self.cross_attention_dim,
             query_count=self.memory_query_count,
             attention_dim=self.memory_attention_dim,
         )
         self.text_memory_pooling = MultiQueryAttentionPooling(
             input_dim=self.text_token_dim,
-            output_dim=self.vision_token_dim,
+            output_dim=self.cross_attention_dim,
             query_count=self.memory_query_count,
             attention_dim=self.memory_attention_dim,
         )
         self.cross_attention = ResidualCrossAttention(
-            hidden_dim=self.vision_token_dim,
+            hidden_dim=self.cross_attention_dim,
             num_heads=int(cfg.MMRL_CROSS_ATTENTION_HEADS),
         )
 
@@ -406,12 +455,40 @@ class MMRL(nn.Module):
                     self.low_rank_debug_context = {}
             else:
                 self.low_rank_debug_context = {}
+        elif self.query_architecture == "lowdim_cross_layer_linear":
+            projected = self.shared_represent_space.unsqueeze(0).expand(
+                self.insert_layer_count,
+                -1,
+                -1,
+            )
+            self.low_rank_debug_context = {}
         else:
             projected = torch.stack([
                 projector(self.shared_represent_space)
                 for projector in self.v_r_token_projector
             ], dim=0)
         return projected + self.layer_embeddings
+
+    def _project_lowdim_layers(self, states: torch.Tensor) -> torch.Tensor:
+        if states.ndim == 3 and states.shape[0] == self.insert_layer_count:
+            return torch.stack([
+                projector(states[layer_index])
+                for layer_index, projector in enumerate(
+                    self.v_r_token_projector
+                )
+            ], dim=0)
+        if states.ndim == 4 and states.shape[1] == self.insert_layer_count:
+            return torch.stack([
+                projector(states[:, layer_index])
+                for layer_index, projector in enumerate(
+                    self.v_r_token_projector
+                )
+            ], dim=1)
+        raise ValueError(
+            "low-dimensional layer projection expects [L,R,D] or "
+            "[B,L,R,D], got "
+            f"{tuple(states.shape)}"
+        )
 
     def _get_base_queries(self) -> torch.Tensor:
         if self.training:
@@ -490,24 +567,66 @@ class MMRL(nn.Module):
         )
         flat_queries = base_queries.reshape(
             self.insert_layer_count * self.rp_space_length,
-            self.vision_token_dim,
+            self.cross_attention_dim,
         ).unsqueeze(0).expand(image_count, -1, -1)
-        dynamic_queries, cross_delta = self.cross_attention(
+        dynamic_cross_queries, cross_delta = self.cross_attention(
             flat_queries,
             memory,
             memory_split_index=visual_memory.shape[1],
         )
-        dynamic_queries = dynamic_queries.reshape(
+        dynamic_cross_queries = dynamic_cross_queries.reshape(
             image_count,
             self.insert_layer_count,
             self.rp_space_length,
-            self.vision_token_dim,
+            self.cross_attention_dim,
         )
+        cross_delta = cross_delta.reshape(
+            image_count,
+            self.insert_layer_count,
+            self.rp_space_length,
+            self.cross_attention_dim,
+        )
+        expanded_base_queries = base_queries.unsqueeze(0).expand(
+            image_count,
+            -1,
+            -1,
+            -1,
+        )
+        if self.query_architecture == "lowdim_cross_layer_linear":
+            projected_base_queries = self._project_lowdim_layers(
+                base_queries
+            ).unsqueeze(0).expand(image_count, -1, -1, -1)
+            output_cross_delta = torch.stack([
+                F.linear(
+                    cross_delta[:, layer_index],
+                    projector.weight,
+                    bias=None,
+                )
+                for layer_index, projector in enumerate(
+                    self.v_r_token_projector
+                )
+            ], dim=1)
+            dynamic_queries = projected_base_queries + output_cross_delta
+        else:
+            dynamic_queries = dynamic_cross_queries
+            projected_base_queries = expanded_base_queries
+            output_cross_delta = cross_delta
+
+        if self.rep_update_mode == "persistent_delta":
+            insertion_queries = torch.cat(
+                [dynamic_queries[:, :1], output_cross_delta[:, 1:]],
+                dim=1,
+            )
+        else:
+            insertion_queries = dynamic_queries
 
         self.last_memory_shape = tuple(memory.shape)
-        self.last_rep_shape = tuple(dynamic_queries.shape)
+        self.last_rep_shape = tuple(insertion_queries.shape)
         if not self._printed_shape_audit:
             print("[MMRL_DYNAMIC_REP_AUDIT]")
+            print(f"  query_architecture={self.query_architecture}")
+            print(f"  rep_update_mode={self.rep_update_mode}")
+            print(f"  cross_attention_dim={self.cross_attention_dim}")
             print(f"  visual_memory_shape={tuple(visual_memory.shape)}")
             print(f"  text_memory_shape={tuple(text_memory.shape)}")
             print(f"  combined_memory_shape={self.last_memory_shape}")
@@ -524,8 +643,12 @@ class MMRL(nn.Module):
 
         if self.training:
             with torch.no_grad():
-                base_norm = flat_queries.detach().float().norm(dim=-1).mean()
-                delta_norm = cross_delta.detach().float().norm(dim=-1).mean()
+                base_norm = projected_base_queries.detach().float().norm(
+                    dim=-1
+                ).mean()
+                delta_norm = output_cross_delta.detach().float().norm(
+                    dim=-1
+                ).mean()
                 self.debug_context = {
                     "dynamic_rep_base_norm_mean": base_norm,
                     "dynamic_rep_cross_delta_norm_mean": delta_norm,
@@ -544,12 +667,7 @@ class MMRL(nn.Module):
                         "dynamic_rep",
                     ),
                     **self._layer_geometry_metrics(
-                        cross_delta.reshape(
-                            image_count,
-                            self.insert_layer_count,
-                            self.rp_space_length,
-                            self.vision_token_dim,
-                        ),
+                        output_cross_delta,
                         "cross_delta",
                     ),
                 }
@@ -557,6 +675,6 @@ class MMRL(nn.Module):
             self.debug_context = {}
 
         return [
-            dynamic_queries[:, layer_index]
+            insertion_queries[:, layer_index]
             for layer_index in range(self.insert_layer_count)
         ]

@@ -225,6 +225,7 @@ class CrossAttentionCapture:
         memory = kwargs.get("memory", args[1] if len(args) > 1 else None)
         group_shape = kwargs.get("query_group_shape")
         memory_split = kwargs.get("memory_split_index")
+        memory_logit_bias = kwargs.get("memory_logit_bias")
         if queries is None or memory is None or group_shape is None:
             raise RuntimeError("Cross-Attention hook did not receive required inputs")
 
@@ -257,6 +258,11 @@ class CrossAttentionCapture:
             )
             scores = torch.matmul(query_heads, key_heads.transpose(-2, -1))
             scores = scores.float() / math.sqrt(module.head_dim)
+            if memory_logit_bias is not None:
+                scores = scores + memory_logit_bias.to(
+                    device=scores.device,
+                    dtype=scores.dtype,
+                )[:, None, None, :]
             weights = torch.softmax(scores, dim=-1)
             context = torch.matmul(weights.to(value_heads.dtype), value_heads)
             context = context.transpose(1, 2).contiguous().view(

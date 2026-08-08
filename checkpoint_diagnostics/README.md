@@ -52,3 +52,25 @@ Outputs are written under `checkpoint_diagnostics/outputs/TIMESTAMP/`:
 - `summary.json`: aggregate geometry, correlations, and category groups;
 - `report.md`: compact human-readable diagnosis;
 - `comparison.md`: checkpoint comparison table.
+
+## Memory-count inference ablation
+
+Evaluate one trained checkpoint four times without retraining: original memory,
+text `128->1`, visual `128->1`, and both modalities `128->1`.
+Collapsed tokens receive a `log(original_count)` attention-logit correction, so
+the ablation preserves modality mass exactly when the original tokens are
+identical instead of introducing a token-count bias.
+
+```bash
+bash checkpoint_diagnostics/run_memory_collapse_ablation.sh \
+  /root/autodl-tmp/Qwen3-VL-modify-test/slake/outputs/mmrl/EXPERIMENT/final
+```
+
+Set `SLAKE_LIMIT=200` for a quick pipeline check. Failures in one mode do not
+prevent later modes from running. The final table is saved as
+`memory_collapse_summary.md` under the printed output directory.
+
+This inference ablation still computes the trained 128-query pooling before
+collapsing its outputs. Accuracy directly tests whether slot diversity matters;
+its TTFT reduction is only a lower bound for a model retrained with one pooling
+query per modality.

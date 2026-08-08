@@ -476,6 +476,16 @@ def force_mmrl_gate_one(model: Any) -> None:
     print("[SLAKE_FORCE_G_ONE] visual.ablate_visual_gate=True")
 
 
+def set_mmrl_memory_collapse(model: Any, mode: str) -> None:
+    generation_model = getattr(model, "model", None)
+    backbone = getattr(generation_model, "model", None)
+    mmrl = getattr(backbone, "MMRL", None)
+    setter = getattr(mmrl, "set_inference_memory_collapse_mode", None)
+    if not callable(setter):
+        raise RuntimeError("MMRL interface does not expose memory-collapse control")
+    setter(mode)
+
+
 def run_timing_warmup(
     records: Sequence[Mapping[str, Any]],
     model: Any,
@@ -644,6 +654,15 @@ def parse_args() -> argparse.Namespace:
         help="Force the MMRL visual gate to G=1 for every image.",
     )
     parser.add_argument(
+        "--mmrl-memory-collapse",
+        choices=("none", "text", "visual", "both"),
+        default="none",
+        help=(
+            "Inference-only ablation that mean-collapses visual and/or text "
+            "MMRL memory tokens to one token per selected modality."
+        ),
+    )
+    parser.add_argument(
         "--timing-warmup-runs",
         type=int,
         default=3,
@@ -664,6 +683,10 @@ def main() -> int:
         raise ValueError("--timing-warmup-runs must be non-negative")
     if args.force_g_one and args.backend != "mmrl":
         raise ValueError("--force-g-one is only valid with --backend mmrl")
+    if args.mmrl_memory_collapse != "none" and args.backend != "mmrl":
+        raise ValueError(
+            "--mmrl-memory-collapse is only valid with --backend mmrl"
+        )
 
     question_path = args.questions.expanduser().resolve()
     if not question_path.is_file():
@@ -699,6 +722,8 @@ def main() -> int:
     )
     if args.force_g_one:
         force_mmrl_gate_one(model)
+    if args.backend == "mmrl":
+        set_mmrl_memory_collapse(model, args.mmrl_memory_collapse)
     instruction = "" if args.no_instruction else args.instruction
     run_timing_warmup(
         records,
@@ -752,6 +777,7 @@ def main() -> int:
             ),
             "partial_evaluation": args.limit is not None,
             "force_g_one": args.force_g_one,
+            "mmrl_memory_collapse": args.mmrl_memory_collapse,
             "gate": gate_summary,
             "timing": timing_summary,
         }

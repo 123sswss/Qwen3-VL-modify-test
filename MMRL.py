@@ -202,6 +202,7 @@ class ResidualCrossAttention(nn.Module):
         memory: torch.Tensor,
         memory_split_index: int | None = None,
         query_group_shape: tuple[int, int] | None = None,
+        memory_logit_bias: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         if queries.ndim != 3 or memory.ndim != 3:
             raise ValueError(
@@ -222,6 +223,18 @@ class ResidualCrossAttention(nn.Module):
         value_states = self._split_heads(self.value_projection(normalized_memory))
         scores = torch.matmul(query_states, key_states.transpose(-2, -1))
         scores = scores.float() / math.sqrt(self.head_dim)
+        if memory_logit_bias is not None:
+            expected_bias_shape = memory.shape[:2]
+            if tuple(memory_logit_bias.shape) != tuple(expected_bias_shape):
+                raise ValueError(
+                    "memory_logit_bias must match [B,M], got "
+                    f"bias={tuple(memory_logit_bias.shape)} "
+                    f"memory={tuple(memory.shape)}"
+                )
+            scores = scores + memory_logit_bias.to(
+                device=scores.device,
+                dtype=scores.dtype,
+            )[:, None, None, :]
         weights = torch.softmax(scores, dim=-1).to(dtype=value_states.dtype)
         if self.training:
             with torch.no_grad():
@@ -293,6 +306,7 @@ class MMRL(nn.Module):
         "shared_direct_post_cross",
     }
     REP_UPDATE_MODES = {"replace", "persistent_delta"}
+    INFERENCE_MEMORY_COLLAPSE_MODES = {"none", "visual", "text", "both"}
 
     def __init__(self, config):
         super().__init__()
@@ -464,7 +478,89 @@ class MMRL(nn.Module):
         self.last_rep_shape = None
         self.last_memory_shape = None
         self._printed_shape_audit = False
+        self.inference_memory_collapse_mode = "none"
+        self._printed_memory_collapse_audit = False
         self.low_rank_debug_context = {}
+
+    def set_inference_memory_collapse_mode(self, mode: str) -> None:
+        mode = str(mode).strip().lower()
+        if mode not in self.INFERENCE_MEMORY_COLLAPSE_MODES:
+            raise ValueError(
+                "Unsupported inference memory collapse mode "
+                f"{mode!r}; choices={sorted(self.INFERENCE_MEMORY_COLLAPSE_MODES)}"
+            )
+        self.inference_memory_collapse_mode = mode
+        self._printed_memory_collapse_audit = False
+        print(f"[MMRL_INFERENCE_MEMORY_COLLAPSE] mode={mode}")
+
+    def _apply_inference_memory_collapse(
+        self,
+        visual_memory: torch.Tensor,
+        text_memory: torch.Tensor,
+    ) -> tuple[
+        torch.Tensor,
+        torch.Tensor,
+        torch.Tensor | None,
+        torch.Tensor | None,
+    ]:
+        mode = self.inference_memory_collapse_mode
+        if mode == "none":
+            return visual_memory, text_memory, None, None
+        if self.training:
+            raise RuntimeError(
+                "Memory collapse is an inference-only ablation and cannot run "
+                "while MMRL is in training mode"
+            )
+
+        original_visual_shape = tuple(visual_memory.shape)
+        original_text_shape = tuple(text_memory.shape)
+        visual_logit_bias = torch.zeros(
+            visual_memory.shape[:2],
+            device=visual_memory.device,
+            dtype=torch.float32,
+        )
+        text_logit_bias = torch.zeros(
+            text_memory.shape[:2],
+            device=text_memory.device,
+            dtype=torch.float32,
+        )
+        if mode in {"visual", "both"}:
+            visual_count = visual_memory.shape[1]
+            visual_memory = visual_memory.mean(dim=1, keepdim=True)
+            visual_logit_bias = torch.full(
+                visual_memory.shape[:2],
+                math.log(float(visual_count)),
+                device=visual_memory.device,
+                dtype=torch.float32,
+            )
+        if mode in {"text", "both"}:
+            text_count = text_memory.shape[1]
+            text_memory = text_memory.mean(dim=1, keepdim=True)
+            text_logit_bias = torch.full(
+                text_memory.shape[:2],
+                math.log(float(text_count)),
+                device=text_memory.device,
+                dtype=torch.float32,
+            )
+        if not self._printed_memory_collapse_audit:
+            print("[MMRL_INFERENCE_MEMORY_COLLAPSE_AUDIT]")
+            print(f"  mode={mode}")
+            print(
+                f"  visual_memory={original_visual_shape}"
+                f"->{tuple(visual_memory.shape)}"
+            )
+            print(
+                f"  text_memory={original_text_shape}"
+                f"->{tuple(text_memory.shape)}"
+            )
+            print("  multiplicity_logit_correction=True")
+            self._printed_memory_collapse_audit = True
+        return (
+            visual_memory,
+            text_memory,
+            visual_logit_bias,
+            text_logit_bias,
+        )
 
     @staticmethod
     def _layer_geometry_metrics(
@@ -642,6 +738,12 @@ class MMRL(nn.Module):
             visual_mask,
         )
         text_memory = self.text_memory_pooling(text_states, text_mask)
+        (
+            visual_memory,
+            text_memory,
+            visual_logit_bias,
+            text_logit_bias,
+        ) = self._apply_inference_memory_collapse(visual_memory, text_memory)
 
         image_counts = torch.as_tensor(
             images_per_sample,
@@ -665,6 +767,17 @@ class MMRL(nn.Module):
             dim=0,
         )
         memory = torch.cat([visual_memory, expanded_text_memory], dim=1)
+        memory_logit_bias = None
+        if visual_logit_bias is not None and text_logit_bias is not None:
+            expanded_text_logit_bias = torch.repeat_interleave(
+                text_logit_bias,
+                image_counts,
+                dim=0,
+            )
+            memory_logit_bias = torch.cat(
+                [visual_logit_bias, expanded_text_logit_bias],
+                dim=1,
+            )
 
         base_queries = self._get_base_queries().to(
             device=visual_states.device,
@@ -682,6 +795,7 @@ class MMRL(nn.Module):
                 self.insert_layer_count,
                 self.rp_space_length,
             ),
+            memory_logit_bias=memory_logit_bias,
         )
         dynamic_cross_queries = dynamic_cross_queries.reshape(
             image_count,

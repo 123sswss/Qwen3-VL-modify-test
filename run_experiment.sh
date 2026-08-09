@@ -289,6 +289,16 @@ case "$RUN_TARGET" in
     SLAKE_RUN_MEMORY_COLLAPSE_BOTH=1 \
       run_slake || failures=$((failures + 1))
     ;;
+  slake_memory_pooling_competitive128)
+    SLAKE_EXPERIMENT_NAME="slake_mmrl_pooling128_competitive" \
+    SLAKE_RUN_SEED=44 \
+    MMRL_MEMORY_QUERY_COUNT=128 \
+    MMRL_MEMORY_POOLING_MODE=competitive \
+    MMRL_MEMORY_SLOT_DIVERSITY_WEIGHT=0.0 \
+    MMRL_MEMORY_SLOT_COSINE_MAX=0.995 \
+    SLAKE_RUN_MEMORY_COLLAPSE_BOTH=1 \
+      run_slake || failures=$((failures + 1))
+    ;;
   slake_force_g_one)
     run_slake_force_g_one || failures=$((failures + 1))
     ;;
@@ -302,7 +312,7 @@ case "$RUN_TARGET" in
     run_slake || failures=$((failures + 1))
     ;;
   *)
-    echo "[ERR] 未知目标: $RUN_TARGET，可选 train、slake、slake_shared_direct、slake_lowrank_matrix、slake_structure_matrix、slake_full_geometry_budget4、slake_memory_pooling_serial3、slake_force_g_one、train_shared_direct、all。" >&2
+    echo "[ERR] 未知目标: $RUN_TARGET，可选 train、slake、slake_shared_direct、slake_lowrank_matrix、slake_structure_matrix、slake_full_geometry_budget4、slake_memory_pooling_serial3、slake_memory_pooling_competitive128、slake_force_g_one、train_shared_direct、all。" >&2
     exit 2
     ;;
 esac

@@ -107,6 +107,9 @@ def build_experiment_config(args: argparse.Namespace) -> Dict[str, Any]:
         "rp_space_length": args.rp_space_length,
         "memory_query_count": args.memory_query_count,
         "memory_attention_dim": args.memory_attention_dim,
+        "memory_pooling_mode": args.memory_pooling_mode,
+        "memory_slot_diversity_weight": args.memory_slot_diversity_weight,
+        "memory_slot_cosine_max": args.memory_slot_cosine_max,
         "projector_hidden_dim": args.projector_hidden_dim,
         "cross_attention_heads": args.cross_attention_heads,
         "query_architecture": args.query_architecture,
@@ -153,6 +156,7 @@ def build_train_config(
         "save_each_epoch": args.stage3_epochs > 1,
         "checkpoint_base_model_path": str(args.model_path),
         "mmrl_relation_loss_weight": args.relation_weight,
+        "memory_slot_diversity_weight": args.memory_slot_diversity_weight,
         "per_device_train_batch_size": args.batch_size,
         "gradient_accumulation_steps": args.gradient_accumulation,
         "dataloader_num_workers": args.dataloader_workers,
@@ -176,6 +180,8 @@ def build_train_config(
             "delta_to_org_ratio",
             "mmrl_delta_to_org_ratio",
             "mmrl_relation_loss_scaled",
+            "memory_slot_diversity_loss",
+            "memory_slot_diversity_loss_scaled",
             "mmrl_relation_gram_loss",
             "mmrl_variance_floor_loss",
             "delta_pool_common_mode_ratio",
@@ -247,6 +253,25 @@ def build_train_config(
             "cross_attention_visual_mass_query_std",
             "cross_attention_entropy_norm",
             "cross_attention_peak_mean",
+            *[
+                f"{modality}_pooling_{metric}"
+                for modality in ("visual", "text")
+                for metric in (
+                    "source_specificity_ratio",
+                    "attention_entropy_norm",
+                    "attention_token_pair_cos_mean",
+                    "attention_token_pair_cos_max",
+                    "attention_token_centered_effective_rank_mean",
+                    "attention_token_common_mode_ratio_mean",
+                    "output_specificity_ratio",
+                    "output_token_pair_cos_mean",
+                    "output_token_pair_cos_max",
+                    "output_token_centered_effective_rank_mean",
+                    "output_token_common_mode_ratio_mean",
+                    "query_token_pair_cos_mean",
+                    "query_token_centered_effective_rank_mean",
+                )
+            ],
             "temperature",
         ],
         "learning_rate": {
@@ -685,6 +710,21 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--rp-space-length", type=int, default=40)
     parser.add_argument("--memory-query-count", type=int, default=128)
     parser.add_argument("--memory-attention-dim", type=int, default=128)
+    parser.add_argument(
+        "--memory-pooling-mode",
+        choices=("independent", "competitive"),
+        default="independent",
+    )
+    parser.add_argument(
+        "--memory-slot-diversity-weight",
+        type=float,
+        default=0.0,
+    )
+    parser.add_argument(
+        "--memory-slot-cosine-max",
+        type=float,
+        default=0.995,
+    )
     parser.add_argument("--projector-hidden-dim", type=int, default=1024)
     parser.add_argument("--cross-attention-heads", type=int, default=8)
     parser.add_argument(
@@ -752,6 +792,10 @@ def parse_args() -> argparse.Namespace:
         parser.error("--memory-query-count must be positive")
     if args.memory_attention_dim < 1:
         parser.error("--memory-attention-dim must be positive")
+    if args.memory_slot_diversity_weight < 0.0:
+        parser.error("--memory-slot-diversity-weight must be non-negative")
+    if not -1.0 <= args.memory_slot_cosine_max <= 1.0:
+        parser.error("--memory-slot-cosine-max must be in [-1, 1]")
     if args.projector_hidden_dim < 1:
         parser.error("--projector-hidden-dim must be positive")
     if args.cross_attention_heads < 1:
@@ -803,6 +847,9 @@ def main() -> int:
         f"rp_space_length={args.rp_space_length} "
         f"memory_query_count={args.memory_query_count} "
         f"memory_attention_dim={args.memory_attention_dim} "
+        f"memory_pooling_mode={args.memory_pooling_mode} "
+        f"memory_slot_diversity_weight={args.memory_slot_diversity_weight} "
+        f"memory_slot_cosine_max={args.memory_slot_cosine_max} "
         f"projector_hidden_dim={args.projector_hidden_dim} "
         f"cross_attention_heads={args.cross_attention_heads} "
         f"query_architecture={args.query_architecture} "
@@ -890,6 +937,12 @@ def main() -> int:
                 "language": args.language,
                 "query_architecture": args.query_architecture,
                 "rep_update_mode": args.rep_update_mode,
+                "memory_query_count": args.memory_query_count,
+                "memory_pooling_mode": args.memory_pooling_mode,
+                "memory_slot_diversity_weight": (
+                    args.memory_slot_diversity_weight
+                ),
+                "memory_slot_cosine_max": args.memory_slot_cosine_max,
                 "stage3_epochs": args.stage3_epochs,
                 "relation_weight": args.relation_weight,
             },

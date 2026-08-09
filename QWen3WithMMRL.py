@@ -43,6 +43,21 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
                 "MMRL_MEMORY_ATTENTION_DIM",
                 cfg.MMRL_MEMORY_ATTENTION_DIM,
             ),
+            "MMRL_MEMORY_POOLING_MODE": _cfg_attr(
+                config,
+                "MMRL_MEMORY_POOLING_MODE",
+                cfg.MMRL_MEMORY_POOLING_MODE,
+            ),
+            "MMRL_MEMORY_SLOT_DIVERSITY_WEIGHT": _cfg_attr(
+                config,
+                "MMRL_MEMORY_SLOT_DIVERSITY_WEIGHT",
+                cfg.MMRL_MEMORY_SLOT_DIVERSITY_WEIGHT,
+            ),
+            "MMRL_MEMORY_SLOT_COSINE_MAX": _cfg_attr(
+                config,
+                "MMRL_MEMORY_SLOT_COSINE_MAX",
+                cfg.MMRL_MEMORY_SLOT_COSINE_MAX,
+            ),
             "MMRL_PROJECTOR_HIDDEN_DIM": _cfg_attr(
                 config,
                 "MMRL_PROJECTOR_HIDDEN_DIM",

@@ -67,6 +67,14 @@ def _build_experiment_context(train_cfg, output_dir, stage_id):
                 "mmrl_relation_loss_weight",
                 experiment_cfg.get("mmrl_relation_loss_weight"),
             ),
+            "memory_pooling_mode": experiment_cfg.get("memory_pooling_mode"),
+            "memory_slot_diversity_weight": train_cfg.get(
+                "memory_slot_diversity_weight",
+                experiment_cfg.get("memory_slot_diversity_weight"),
+            ),
+            "memory_slot_cosine_max": experiment_cfg.get(
+                "memory_slot_cosine_max"
+            ),
             "mmrl_relation_max_tokens": train_cfg.get(
                 "mmrl_relation_max_tokens",
                 experiment_cfg.get("mmrl_relation_max_tokens"),
@@ -633,6 +641,7 @@ class Qwen3VLMMRLForStages(Qwen3VLForConditionalGeneration):
         self.current_stage_progress = 0.0
         self.enable_alpha_guide_loss = False
         self.mmrl_relation_loss_weight = 0.0
+        self.memory_slot_diversity_weight = 0.0
 
         self.temperature_override = None
 
@@ -875,11 +884,32 @@ class Qwen3VLMMRLForStages(Qwen3VLForConditionalGeneration):
         else:
             mmrl_relation_loss = mmrl_relation_loss.to(device=input_ids.device, dtype=ce_loss.dtype)
         scaled_mmrl_relation_loss = mmrl_relation_loss * float(self.mmrl_relation_loss_weight)
+        memory_slot_diversity_loss = getattr(
+            self.model.MMRL,
+            "memory_slot_diversity_loss",
+            torch.tensor(0.0, device=input_ids.device),
+        )
+        if not torch.is_tensor(memory_slot_diversity_loss):
+            memory_slot_diversity_loss = torch.tensor(
+                memory_slot_diversity_loss,
+                device=input_ids.device,
+                dtype=ce_loss.dtype,
+            )
+        else:
+            memory_slot_diversity_loss = memory_slot_diversity_loss.to(
+                device=input_ids.device,
+                dtype=ce_loss.dtype,
+            )
+        scaled_memory_slot_diversity_loss = (
+            memory_slot_diversity_loss
+            * float(self.memory_slot_diversity_weight)
+        )
 
         outputs.loss = (
             self.ce_loss_weight * ce_loss
             + alpha_guide_loss
             + scaled_mmrl_relation_loss
+            + scaled_memory_slot_diversity_loss
         )
 
         # ---- cache metrics for external logger ----
@@ -900,6 +930,12 @@ class Qwen3VLMMRLForStages(Qwen3VLForConditionalGeneration):
                 "alpha_guide_loss": alpha_guide_loss.detach(),
                 "mmrl_relation_loss": mmrl_relation_loss.detach(),
                 "mmrl_relation_loss_scaled": scaled_mmrl_relation_loss.detach(),
+                "memory_slot_diversity_loss": (
+                    memory_slot_diversity_loss.detach()
+                ),
+                "memory_slot_diversity_loss_scaled": (
+                    scaled_memory_slot_diversity_loss.detach()
+                ),
                 "alpha_mae": alpha_mae.detach(),
                 "temperature": torch.tensor(float(self.temperature_override) if self.temperature_override is not None else float("nan"), device=input_ids.device),
                 "stage_progress": torch.tensor(float(getattr(self, "current_stage_progress", 0.0)), device=input_ids.device),
@@ -957,6 +993,21 @@ def build_model_and_processor(model_path, experiment_cfg=None):
     config.MMRL_MEMORY_ATTENTION_DIM = int(os.getenv(
         "MMRL_MEMORY_ATTENTION_DIM",
         str(experiment_cfg.get("memory_attention_dim", 128)),
+    ))
+    config.MMRL_MEMORY_POOLING_MODE = os.getenv(
+        "MMRL_MEMORY_POOLING_MODE",
+        str(experiment_cfg.get(
+            "memory_pooling_mode",
+            cfg.MMRL_MEMORY_POOLING_MODE,
+        )),
+    )
+    config.MMRL_MEMORY_SLOT_DIVERSITY_WEIGHT = float(os.getenv(
+        "MMRL_MEMORY_SLOT_DIVERSITY_WEIGHT",
+        str(experiment_cfg.get("memory_slot_diversity_weight", 0.0)),
+    ))
+    config.MMRL_MEMORY_SLOT_COSINE_MAX = float(os.getenv(
+        "MMRL_MEMORY_SLOT_COSINE_MAX",
+        str(experiment_cfg.get("memory_slot_cosine_max", 0.995)),
     ))
     config.MMRL_PROJECTOR_HIDDEN_DIM = int(os.getenv(
         "MMRL_PROJECTOR_HIDDEN_DIM",
@@ -1051,6 +1102,18 @@ def build_model_and_processor(model_path, experiment_cfg=None):
             config.MMRL_MEMORY_ATTENTION_DIM,
             mmrl.memory_attention_dim,
         ),
+        "MMRL_MEMORY_POOLING_MODE": (
+            config.MMRL_MEMORY_POOLING_MODE,
+            mmrl.memory_pooling_mode,
+        ),
+        "MMRL_MEMORY_SLOT_DIVERSITY_WEIGHT": (
+            config.MMRL_MEMORY_SLOT_DIVERSITY_WEIGHT,
+            mmrl.memory_slot_diversity_weight,
+        ),
+        "MMRL_MEMORY_SLOT_COSINE_MAX": (
+            config.MMRL_MEMORY_SLOT_COSINE_MAX,
+            mmrl.memory_slot_cosine_max,
+        ),
         "MMRL_PROJECTOR_HIDDEN_DIM": (
             config.MMRL_PROJECTOR_HIDDEN_DIM,
             mmrl.projector_hidden_dim,
@@ -1089,6 +1152,10 @@ def build_model_and_processor(model_path, experiment_cfg=None):
         f"rp_space_length={config.RP_SPACE_LENGTH} "
         f"memory_query_count={config.MMRL_MEMORY_QUERY_COUNT} "
         f"memory_attention_dim={config.MMRL_MEMORY_ATTENTION_DIM} "
+        f"memory_pooling_mode={config.MMRL_MEMORY_POOLING_MODE} "
+        "memory_slot_diversity_weight="
+        f"{config.MMRL_MEMORY_SLOT_DIVERSITY_WEIGHT} "
+        f"memory_slot_cosine_max={config.MMRL_MEMORY_SLOT_COSINE_MAX} "
         f"projector_hidden_dim={config.MMRL_PROJECTOR_HIDDEN_DIM} "
         f"cross_attention_heads={config.MMRL_CROSS_ATTENTION_HEADS} "
         f"layer_lora_rank={config.MMRL_LAYER_LORA_RANK} "
@@ -1212,6 +1279,10 @@ def build_model_and_processor(model_path, experiment_cfg=None):
         f"rp_space_length={config.RP_SPACE_LENGTH} "
         f"memory_query_count={config.MMRL_MEMORY_QUERY_COUNT} "
         f"memory_attention_dim={config.MMRL_MEMORY_ATTENTION_DIM} "
+        f"memory_pooling_mode={config.MMRL_MEMORY_POOLING_MODE} "
+        "memory_slot_diversity_weight="
+        f"{config.MMRL_MEMORY_SLOT_DIVERSITY_WEIGHT} "
+        f"memory_slot_cosine_max={config.MMRL_MEMORY_SLOT_COSINE_MAX} "
         f"projector_hidden_dim={config.MMRL_PROJECTOR_HIDDEN_DIM} "
         f"cross_attention_heads={config.MMRL_CROSS_ATTENTION_HEADS} "
         f"mmrl_relation_loss_weight={config.MMRL_RELATION_LOSS_WEIGHT} "
@@ -1677,12 +1748,23 @@ def run_stage3_full(model, processor, data_cfg, train_cfg, output_dir):
         "mmrl_relation_loss_weight",
         experiment_cfg.get("mmrl_relation_loss_weight", 0.0),
     ))
+    model.memory_slot_diversity_weight = float(train_cfg.get(
+        "memory_slot_diversity_weight",
+        experiment_cfg.get("memory_slot_diversity_weight", 0.0),
+    ))
     print(
         "[MMRL_RELATION] "
         f"weight={model.mmrl_relation_loss_weight} "
         f"max_tokens={model.model.visual.mmrl_relation_max_tokens} "
         f"variance_floor_ratio={model.model.visual.mmrl_variance_floor_ratio} "
         f"variance_floor_weight={model.model.visual.mmrl_variance_floor_weight}"
+    )
+    print(
+        "[MMRL_MEMORY_POOLING] "
+        f"mode={model.model.MMRL.memory_pooling_mode} "
+        f"slots_per_modality={model.model.MMRL.memory_query_count} "
+        f"diversity_weight={model.memory_slot_diversity_weight} "
+        f"cosine_max={model.model.MMRL.memory_slot_cosine_max}"
     )
     stage3_views = ("expert-mm",)
     print(f"[Stage{stage_id}] enable_views={stage3_views}")

@@ -73,13 +73,16 @@ run_slake() {
   local epochs="${SLAKE_STAGE3_EPOCHS:-3}"
   local mmrl_lr="${SLAKE_MMRL_LR:-6e-5}"
   local relation_weight="${MMRL_RELATION_LOSS_WEIGHT:-0.05}"
+  local memory_pooling_mode="${MMRL_MEMORY_POOLING_MODE:-independent}"
+  local memory_slot_diversity_weight="${MMRL_MEMORY_SLOT_DIVERSITY_WEIGHT:-0.0}"
+  local memory_slot_cosine_max="${MMRL_MEMORY_SLOT_COSINE_MAX:-0.995}"
   local layer_lora_rank="${MMRL_LAYER_LORA_RANK:-0}"
   local query_architecture="${MMRL_QUERY_ARCHITECTURE:-layer_mlp_post_cross}"
   local rep_update_mode="${MMRL_REP_UPDATE_MODE:-replace}"
   local output_dir
   output_dir="$(available_output_dir "$SLAKE_OUTPUT_ROOT" "${experiment_name}_seed${run_seed}_${RUN_DATE}")"
   mkdir -p "$output_dir/eval"
-  echo "[SLAKE] experiment=$experiment_name seed=$run_seed epochs=$epochs mmrl_lr=$mmrl_lr relation=$relation_weight query_architecture=$query_architecture rep_update_mode=$rep_update_mode layer_lora_rank=$layer_lora_rank output=$output_dir"
+  echo "[SLAKE] experiment=$experiment_name seed=$run_seed epochs=$epochs mmrl_lr=$mmrl_lr relation=$relation_weight memory_pooling=$memory_pooling_mode memory_slot_weight=$memory_slot_diversity_weight memory_slot_cosine_max=$memory_slot_cosine_max query_architecture=$query_architecture rep_update_mode=$rep_update_mode layer_lora_rank=$layer_lora_rank output=$output_dir"
   (
     cd "$ROOT_DIR" || exit 1
     python slake/train_mmrl.py \
@@ -101,6 +104,9 @@ run_slake() {
       --rp-space-length "${MMRL_RP_SPACE_LENGTH:-40}" \
       --memory-query-count "${MMRL_MEMORY_QUERY_COUNT:-128}" \
       --memory-attention-dim "${MMRL_MEMORY_ATTENTION_DIM:-128}" \
+      --memory-pooling-mode "$memory_pooling_mode" \
+      --memory-slot-diversity-weight "$memory_slot_diversity_weight" \
+      --memory-slot-cosine-max "$memory_slot_cosine_max" \
       --projector-hidden-dim "${MMRL_PROJECTOR_HIDDEN_DIM:-1024}" \
       --cross-attention-heads "${MMRL_CROSS_ATTENTION_HEADS:-8}" \
       --query-architecture "$query_architecture" \
@@ -125,7 +131,25 @@ run_slake() {
       --language all \
       --overwrite \
       2>&1 | tee "$output_dir/eval.log"
-  )
+  ) || return 1
+
+  if [ "${SLAKE_RUN_MEMORY_COLLAPSE_BOTH:-0}" = "1" ]; then
+    mkdir -p "$output_dir/eval_memory_collapse_both"
+    (
+      cd "$ROOT_DIR" || exit 1
+      python slake/slake_official_eval.py \
+        --backend mmrl \
+        --base-model "$MODEL_PATH" \
+        --checkpoint "$output_dir/final" \
+        --questions "$SLAKE_DATA_ROOT/test.json" \
+        --image-root "$SLAKE_DATA_ROOT/imgs" \
+        --output-dir "$output_dir/eval_memory_collapse_both" \
+        --language all \
+        --mmrl-memory-collapse both \
+        --overwrite \
+        2>&1 | tee "$output_dir/eval_memory_collapse_both.log"
+    ) || return 1
+  fi
 }
 
 run_slake_force_g_one() {
@@ -239,6 +263,32 @@ case "$RUN_TARGET" in
     MMRL_RELATION_LOSS_WEIGHT=0.05 \
       run_slake || failures=$((failures + 1))
     ;;
+  slake_memory_pooling_serial3)
+    SLAKE_EXPERIMENT_NAME="slake_mmrl_pooling8_independent" \
+    SLAKE_RUN_SEED=44 \
+    MMRL_MEMORY_QUERY_COUNT=8 \
+    MMRL_MEMORY_POOLING_MODE=independent \
+    MMRL_MEMORY_SLOT_DIVERSITY_WEIGHT=0.0 \
+    MMRL_MEMORY_SLOT_COSINE_MAX=0.995 \
+    SLAKE_RUN_MEMORY_COLLAPSE_BOTH=1 \
+      run_slake || failures=$((failures + 1))
+    SLAKE_EXPERIMENT_NAME="slake_mmrl_pooling8_cosine995" \
+    SLAKE_RUN_SEED=44 \
+    MMRL_MEMORY_QUERY_COUNT=8 \
+    MMRL_MEMORY_POOLING_MODE=independent \
+    MMRL_MEMORY_SLOT_DIVERSITY_WEIGHT=0.03 \
+    MMRL_MEMORY_SLOT_COSINE_MAX=0.995 \
+    SLAKE_RUN_MEMORY_COLLAPSE_BOTH=1 \
+      run_slake || failures=$((failures + 1))
+    SLAKE_EXPERIMENT_NAME="slake_mmrl_pooling8_competitive" \
+    SLAKE_RUN_SEED=44 \
+    MMRL_MEMORY_QUERY_COUNT=8 \
+    MMRL_MEMORY_POOLING_MODE=competitive \
+    MMRL_MEMORY_SLOT_DIVERSITY_WEIGHT=0.0 \
+    MMRL_MEMORY_SLOT_COSINE_MAX=0.995 \
+    SLAKE_RUN_MEMORY_COLLAPSE_BOTH=1 \
+      run_slake || failures=$((failures + 1))
+    ;;
   slake_force_g_one)
     run_slake_force_g_one || failures=$((failures + 1))
     ;;
@@ -252,7 +302,7 @@ case "$RUN_TARGET" in
     run_slake || failures=$((failures + 1))
     ;;
   *)
-    echo "[ERR] 未知目标: $RUN_TARGET，可选 train、slake、slake_shared_direct、slake_lowrank_matrix、slake_structure_matrix、slake_full_geometry_budget4、slake_force_g_one、train_shared_direct、all。" >&2
+    echo "[ERR] 未知目标: $RUN_TARGET，可选 train、slake、slake_shared_direct、slake_lowrank_matrix、slake_structure_matrix、slake_full_geometry_budget4、slake_memory_pooling_serial3、slake_force_g_one、train_shared_direct、all。" >&2
     exit 2
     ;;
 esac

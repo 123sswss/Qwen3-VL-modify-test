@@ -97,12 +97,15 @@ def _grouped_token_geometry(
 class MultiQueryAttentionPooling(nn.Module):
     """Compress a masked sequence into a fixed number of learned memory tokens."""
 
+    POOLING_MODES = {"independent", "competitive"}
+
     def __init__(
         self,
         input_dim: int,
         output_dim: int,
         query_count: int,
         attention_dim: int,
+        pooling_mode: str = "independent",
     ):
         super().__init__()
         if query_count < 1 or attention_dim < 1:
@@ -112,6 +115,12 @@ class MultiQueryAttentionPooling(nn.Module):
             )
         self.query_count = int(query_count)
         self.attention_dim = int(attention_dim)
+        self.pooling_mode = str(pooling_mode).strip().lower()
+        if self.pooling_mode not in self.POOLING_MODES:
+            raise ValueError(
+                f"Unsupported memory pooling mode={self.pooling_mode!r}; "
+                f"choices={sorted(self.POOLING_MODES)}"
+            )
         self.queries = nn.Parameter(
             torch.empty(self.query_count, self.attention_dim)
         )
@@ -119,6 +128,103 @@ class MultiQueryAttentionPooling(nn.Module):
         self.key_projection = nn.Linear(input_dim, self.attention_dim)
         self.value_projection = nn.Linear(input_dim, output_dim)
         self.output_norm = nn.LayerNorm(output_dim)
+        self.debug_context = {}
+
+    @staticmethod
+    def _sample_slots(states: torch.Tensor, limit: int = 16) -> torch.Tensor:
+        slot_count = states.shape[-2]
+        if slot_count <= limit:
+            return states
+        indices = torch.linspace(
+            0,
+            slot_count - 1,
+            steps=limit,
+            device=states.device,
+        ).round().long()
+        return states.index_select(-2, indices)
+
+    @staticmethod
+    def _specificity_ratio(
+        states: torch.Tensor,
+        valid_mask: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        states = states.detach().float()
+        if valid_mask is None:
+            centered = states - states.mean(dim=-2, keepdim=True)
+            centered_rms = centered.square().mean(dim=(-2, -1)).sqrt()
+            full_rms = states.square().mean(dim=(-2, -1)).sqrt()
+            return (centered_rms / full_rms.clamp_min(1e-8)).mean()
+
+        mask = valid_mask.to(device=states.device, dtype=states.dtype)
+        count = mask.sum(dim=-1, keepdim=True).clamp_min(1.0)
+        mean = (states * mask.unsqueeze(-1)).sum(dim=-2) / count
+        centered = (states - mean.unsqueeze(-2)) * mask.unsqueeze(-1)
+        centered_energy = centered.square().sum(dim=(-2, -1))
+        full_energy = (states * mask.unsqueeze(-1)).square().sum(dim=(-2, -1))
+        return (centered_energy / full_energy.clamp_min(1e-8)).sqrt().mean()
+
+    @staticmethod
+    def slot_diversity_loss(
+        pooled: torch.Tensor,
+        cosine_max: float,
+    ) -> torch.Tensor:
+        slot_count = pooled.shape[1]
+        if slot_count < 2:
+            return pooled.sum() * 0.0
+        normalized = F.normalize(pooled.float(), dim=-1, eps=1e-8)
+        cosine = torch.matmul(normalized, normalized.transpose(-2, -1))
+        off_diagonal = ~torch.eye(
+            slot_count,
+            device=pooled.device,
+            dtype=torch.bool,
+        ).unsqueeze(0)
+        return F.relu(cosine - float(cosine_max))[off_diagonal.expand_as(
+            cosine
+        )].mean()
+
+    def _update_debug_context(
+        self,
+        input_states: torch.Tensor,
+        valid_mask: torch.Tensor,
+        weights: torch.Tensor,
+        pooled: torch.Tensor,
+    ) -> None:
+        if not self.training:
+            self.debug_context = {}
+            return
+        with torch.no_grad():
+            sampled_queries = self._sample_slots(self.queries).float()
+            sampled_weights = self._sample_slots(weights.detach()).float()
+            sampled_pooled = self._sample_slots(pooled.detach()).float()
+            valid_count = valid_mask.sum(dim=-1).clamp_min(1).float()
+            entropy = -(
+                sampled_weights
+                * sampled_weights.clamp_min(1e-8).log()
+            ).sum(dim=-1)
+            entropy_norm = entropy / valid_count.log().clamp_min(1.0).unsqueeze(1)
+            stats = {
+                "source_specificity_ratio": self._specificity_ratio(
+                    input_states,
+                    valid_mask,
+                ),
+                "attention_entropy_norm": entropy_norm.mean(),
+                "output_specificity_ratio": self._specificity_ratio(
+                    sampled_pooled,
+                ),
+            }
+            stats.update(_grouped_token_geometry(
+                sampled_queries[None, None],
+                "query",
+            ))
+            stats.update(_grouped_token_geometry(
+                sampled_weights[:, None],
+                "attention",
+            ))
+            stats.update(_grouped_token_geometry(
+                sampled_pooled[:, None],
+                "output",
+            ))
+            self.debug_context = stats
 
     def forward(
         self,
@@ -150,10 +256,32 @@ class MultiQueryAttentionPooling(nn.Module):
         queries = self.queries.to(device=keys.device, dtype=keys.dtype)
         scores = torch.einsum("qa,bsa->bqs", queries, keys)
         scores = scores.float() / math.sqrt(self.attention_dim)
-        scores = scores.masked_fill(~valid_mask[:, None, :], float("-inf"))
-        weights = torch.softmax(scores, dim=-1).to(dtype=values.dtype)
+        if self.pooling_mode == "independent":
+            scores = scores.masked_fill(
+                ~valid_mask[:, None, :],
+                float("-inf"),
+            )
+            weights = torch.softmax(scores, dim=-1)
+        else:
+            assignment = torch.softmax(scores, dim=1)
+            assignment = assignment.masked_fill(
+                ~valid_mask[:, None, :],
+                0.0,
+            )
+            weights = assignment / assignment.sum(
+                dim=-1,
+                keepdim=True,
+            ).clamp_min(1e-8)
+        weights = weights.to(dtype=values.dtype)
         pooled = torch.einsum("bqs,bsd->bqd", weights, values)
-        return self.output_norm(pooled)
+        pooled = self.output_norm(pooled)
+        self._update_debug_context(
+            input_states,
+            valid_mask,
+            weights,
+            pooled,
+        )
+        return pooled
 
 
 class ZeroInitProjection(nn.Module):
@@ -348,6 +476,31 @@ class MMRL(nn.Module):
         self.text_token_dim = int(cfg.text_token_dim)
         self.memory_query_count = int(cfg.MMRL_MEMORY_QUERY_COUNT)
         self.memory_attention_dim = int(cfg.MMRL_MEMORY_ATTENTION_DIM)
+        self.memory_pooling_mode = str(
+            getattr(cfg, "MMRL_MEMORY_POOLING_MODE", "independent")
+        ).strip().lower()
+        self.memory_slot_diversity_weight = float(
+            getattr(cfg, "MMRL_MEMORY_SLOT_DIVERSITY_WEIGHT", 0.0)
+        )
+        self.memory_slot_cosine_max = float(
+            getattr(cfg, "MMRL_MEMORY_SLOT_COSINE_MAX", 0.995)
+        )
+        if self.memory_pooling_mode not in MultiQueryAttentionPooling.POOLING_MODES:
+            raise ValueError(
+                "Unsupported MMRL_MEMORY_POOLING_MODE="
+                f"{self.memory_pooling_mode!r}; choices="
+                f"{sorted(MultiQueryAttentionPooling.POOLING_MODES)}"
+            )
+        if self.memory_slot_diversity_weight < 0.0:
+            raise ValueError(
+                "MMRL_MEMORY_SLOT_DIVERSITY_WEIGHT must be non-negative, got "
+                f"{self.memory_slot_diversity_weight}"
+            )
+        if not -1.0 <= self.memory_slot_cosine_max <= 1.0:
+            raise ValueError(
+                "MMRL_MEMORY_SLOT_COSINE_MAX must be in [-1, 1], got "
+                f"{self.memory_slot_cosine_max}"
+            )
         self.projector_hidden_dim = int(cfg.MMRL_PROJECTOR_HIDDEN_DIM)
         self.cross_attention_dim = (
             self.rp_space_dim
@@ -461,12 +614,14 @@ class MMRL(nn.Module):
             output_dim=self.cross_attention_dim,
             query_count=self.memory_query_count,
             attention_dim=self.memory_attention_dim,
+            pooling_mode=self.memory_pooling_mode,
         )
         self.text_memory_pooling = MultiQueryAttentionPooling(
             input_dim=self.text_token_dim,
             output_dim=self.cross_attention_dim,
             query_count=self.memory_query_count,
             attention_dim=self.memory_attention_dim,
+            pooling_mode=self.memory_pooling_mode,
         )
         self.cross_attention = ResidualCrossAttention(
             hidden_dim=self.cross_attention_dim,
@@ -481,6 +636,7 @@ class MMRL(nn.Module):
         self.inference_memory_collapse_mode = "none"
         self._printed_memory_collapse_audit = False
         self.low_rank_debug_context = {}
+        self.memory_slot_diversity_loss = torch.tensor(0.0)
 
     def set_inference_memory_collapse_mode(self, mode: str) -> None:
         mode = str(mode).strip().lower()
@@ -738,6 +894,27 @@ class MMRL(nn.Module):
             visual_mask,
         )
         text_memory = self.text_memory_pooling(text_states, text_mask)
+        should_measure_slot_diversity = (
+            self.training
+            and (
+                self.memory_query_count <= 32
+                or self.memory_slot_diversity_weight > 0.0
+            )
+        )
+        if should_measure_slot_diversity:
+            visual_slot_loss = MultiQueryAttentionPooling.slot_diversity_loss(
+                visual_memory,
+                self.memory_slot_cosine_max,
+            )
+            text_slot_loss = MultiQueryAttentionPooling.slot_diversity_loss(
+                text_memory,
+                self.memory_slot_cosine_max,
+            )
+            self.memory_slot_diversity_loss = 0.5 * (
+                visual_slot_loss + text_slot_loss
+            )
+        else:
+            self.memory_slot_diversity_loss = visual_memory.sum() * 0.0
         (
             visual_memory,
             text_memory,
@@ -883,6 +1060,17 @@ class MMRL(nn.Module):
                     "text_memory_norm_mean": text_memory.detach().float().norm(
                         dim=-1
                     ).mean(),
+                    "memory_slot_diversity_loss": (
+                        self.memory_slot_diversity_loss.detach()
+                    ),
+                    **{
+                        f"visual_pooling_{key}": value
+                        for key, value in self.visual_memory_pooling.debug_context.items()
+                    },
+                    **{
+                        f"text_pooling_{key}": value
+                        for key, value in self.text_memory_pooling.debug_context.items()
+                    },
                     **self.low_rank_debug_context,
                     **self.cross_attention.debug_context,
                     **self._layer_geometry_metrics(

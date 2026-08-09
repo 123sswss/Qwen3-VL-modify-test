@@ -114,6 +114,7 @@ def build_experiment_config(args: argparse.Namespace) -> Dict[str, Any]:
         "cross_attention_heads": args.cross_attention_heads,
         "query_architecture": args.query_architecture,
         "rep_update_mode": args.rep_update_mode,
+        "ablate_direct_learnable_rep": args.independent_layer_rep,
         "layer_lora_rank": args.layer_lora_rank,
         "mmrl_relation_loss_weight": args.relation_weight,
         "mmrl_relation_max_tokens": 64,
@@ -737,6 +738,14 @@ def parse_args() -> argparse.Namespace:
         choices=REP_UPDATE_MODES,
         default="replace",
     )
+    parser.add_argument(
+        "--independent-layer-rep",
+        action="store_true",
+        help=(
+            "Replace the eight layer MLP projectors with eight directly "
+            "learned [rep_length, vision_dim] Rep tables."
+        ),
+    )
     parser.add_argument("--layer-lora-rank", type=int, default=0)
     parser.add_argument("--stage1-lr", type=float, default=1e-4)
     parser.add_argument("--mmrl-lr", type=float, default=6e-5)
@@ -810,6 +819,14 @@ def parse_args() -> argparse.Namespace:
             "--layer-lora-rank requires "
             "--query-architecture shared_direct_post_cross"
         )
+    if args.independent_layer_rep and args.query_architecture in {
+        "shared_direct_post_cross",
+        "lowdim_cross_layer_linear",
+    }:
+        parser.error(
+            "--independent-layer-rep requires a full-dimensional Cross-Attention "
+            "query architecture"
+        )
     if (
         args.rep_update_mode == "persistent_delta"
         and args.query_architecture != "layer_mlp_post_cross"
@@ -854,6 +871,7 @@ def main() -> int:
         f"cross_attention_heads={args.cross_attention_heads} "
         f"query_architecture={args.query_architecture} "
         f"rep_update_mode={args.rep_update_mode} "
+        f"independent_layer_rep={args.independent_layer_rep} "
         f"layer_lora_rank={args.layer_lora_rank} "
         f"stage1_batch={args.batch_size}x{args.gradient_accumulation} "
         f"stage3_batch={args.stage3_batch_size}x{args.stage3_gradient_accumulation} "
@@ -937,6 +955,7 @@ def main() -> int:
                 "language": args.language,
                 "query_architecture": args.query_architecture,
                 "rep_update_mode": args.rep_update_mode,
+                "independent_layer_rep": args.independent_layer_rep,
                 "memory_query_count": args.memory_query_count,
                 "memory_pooling_mode": args.memory_pooling_mode,
                 "memory_slot_diversity_weight": (

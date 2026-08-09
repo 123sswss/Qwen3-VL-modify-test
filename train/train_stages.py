@@ -1126,6 +1126,10 @@ def build_model_and_processor(model_path, experiment_cfg=None):
             config.MMRL_REP_UPDATE_MODE,
             mmrl.rep_update_mode,
         ),
+        "ABLATE_DIRECT_LEARNABLE_REP": (
+            config.ABLATE_DIRECT_LEARNABLE_REP,
+            mmrl.use_direct_learnable_rep,
+        ),
         "MMRL_LAYER_LORA_RANK": (
             config.MMRL_LAYER_LORA_RANK,
             mmrl.layer_lora_rank,

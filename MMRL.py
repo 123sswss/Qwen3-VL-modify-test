@@ -38,15 +38,21 @@ def _grouped_token_geometry(
         pairwise = cosine[..., triangle[0], triangle[1]]
 
         def _rank_statistics(token_states: torch.Tensor):
-            gram = torch.matmul(token_states, token_states.transpose(-2, -1))
-            singular_values = torch.linalg.eigvalsh(gram).clamp_min(0).sqrt()
+            try:
+                # Direct SVD avoids squaring the condition number of nearly
+                # collapsed token sets through an intermediate Gram matrix.
+                singular_values = torch.linalg.svdvals(token_states)
+            except RuntimeError:
+                singular_values = torch.linalg.svdvals(
+                    token_states.detach().cpu().double()
+                ).to(device=token_states.device, dtype=token_states.dtype)
             singular_sum = singular_values.sum(dim=-1)
             distribution = singular_values / singular_sum.unsqueeze(-1).clamp_min(1e-8)
             has_signal = (singular_sum > 1e-8).to(distribution.dtype)
             effective_rank = torch.exp(-(
                 distribution * distribution.clamp_min(1e-8).log()
             ).sum(dim=-1)) * has_signal
-            descending = singular_values.flip(-1)
+            descending = singular_values
             top1_ratio = descending[..., 0] / singular_sum.clamp_min(1e-8)
             top5_ratio = descending[..., :min(5, token_count)].sum(
                 dim=-1
@@ -766,8 +772,12 @@ class MMRL(nn.Module):
             )
             pairwise = cosine[triangle[0], triangle[1]]
 
-            gram = flat @ flat.transpose(0, 1)
-            singular_values = torch.linalg.eigvalsh(gram).clamp_min(0).sqrt()
+            try:
+                singular_values = torch.linalg.svdvals(flat)
+            except RuntimeError:
+                singular_values = torch.linalg.svdvals(
+                    flat.detach().cpu().double()
+                ).to(device=flat.device, dtype=flat.dtype)
             singular_sum = singular_values.sum()
             safe_sum = singular_sum.clamp_min(1e-8)
             distribution = singular_values / safe_sum
@@ -775,7 +785,7 @@ class MMRL(nn.Module):
             effective_rank = torch.exp(-(
                 distribution * distribution.clamp_min(1e-8).log()
             ).sum()) * has_signal
-            descending = singular_values.flip(0)
+            descending = singular_values
             top1_ratio = descending[0] / safe_sum * has_signal
             top2_ratio = descending[:2].sum() / safe_sum * has_signal
 

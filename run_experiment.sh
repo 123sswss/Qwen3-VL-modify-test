@@ -77,6 +77,9 @@ run_slake() {
   local memory_slot_diversity_weight="${MMRL_MEMORY_SLOT_DIVERSITY_WEIGHT:-0.0}"
   local memory_slot_cosine_max="${MMRL_MEMORY_SLOT_COSINE_MAX:-0.995}"
   local layer_lora_rank="${MMRL_LAYER_LORA_RANK:-0}"
+  local ca_layer_lora_target="${MMRL_CA_LAYER_LORA_TARGET:-none}"
+  local ca_layer_lora_rank="${MMRL_CA_LAYER_LORA_RANK:-0}"
+  local ca_layer_lora_alpha="${MMRL_CA_LAYER_LORA_ALPHA:-1.0}"
   local query_architecture="${MMRL_QUERY_ARCHITECTURE:-layer_mlp_post_cross}"
   local rep_update_mode="${MMRL_REP_UPDATE_MODE:-replace}"
   local independent_layer_rep="${MMRL_INDEPENDENT_LAYER_REP:-0}"
@@ -90,7 +93,7 @@ run_slake() {
   local output_dir
   output_dir="$(available_output_dir "$SLAKE_OUTPUT_ROOT" "${experiment_name}_seed${run_seed}_${RUN_DATE}")"
   mkdir -p "$output_dir/eval"
-  echo "[SLAKE] experiment=$experiment_name seed=$run_seed epochs=$epochs mmrl_lr=$mmrl_lr relation=$relation_weight memory_pooling=$memory_pooling_mode memory_slot_weight=$memory_slot_diversity_weight memory_slot_cosine_max=$memory_slot_cosine_max query_architecture=$query_architecture rep_update_mode=$rep_update_mode independent_layer_rep=$independent_layer_rep layer_lora_rank=$layer_lora_rank output=$output_dir"
+  echo "[SLAKE] experiment=$experiment_name seed=$run_seed epochs=$epochs mmrl_lr=$mmrl_lr relation=$relation_weight memory_pooling=$memory_pooling_mode memory_slot_weight=$memory_slot_diversity_weight memory_slot_cosine_max=$memory_slot_cosine_max query_architecture=$query_architecture rep_update_mode=$rep_update_mode independent_layer_rep=$independent_layer_rep layer_lora_rank=$layer_lora_rank ca_layer_lora=$ca_layer_lora_target:r$ca_layer_lora_rank:alpha$ca_layer_lora_alpha output=$output_dir"
   (
     cd "$ROOT_DIR" || exit 1
     python slake/train_mmrl.py \
@@ -121,6 +124,9 @@ run_slake() {
       --rep-update-mode "$rep_update_mode" \
       "${independent_layer_rep_args[@]}" \
       --layer-lora-rank "$layer_lora_rank" \
+      --ca-layer-lora-target "$ca_layer_lora_target" \
+      --ca-layer-lora-rank "$ca_layer_lora_rank" \
+      --ca-layer-lora-alpha "$ca_layer_lora_alpha" \
       --mmrl-lr "$mmrl_lr" \
       --relation-weight "$relation_weight" \
       --scheduler constant_with_warmup \
@@ -340,6 +346,65 @@ case "$RUN_TARGET" in
     SLAKE_RUN_MEMORY_COLLAPSE_BOTH=1 \
       run_slake || failures=$((failures + 1))
     ;;
+  slake_ca_ablation_serial3)
+    SLAKE_EXPERIMENT_NAME="slake_mmrl_shared_mlp512_full_ca" \
+    SLAKE_RUN_SEED=44 \
+    SLAKE_STAGE3_EPOCHS=3 \
+    SLAKE_MMRL_LR=6e-5 \
+    MMRL_RP_SPACE_LENGTH=40 \
+    MMRL_MEMORY_QUERY_COUNT=128 \
+    MMRL_MEMORY_ATTENTION_DIM=128 \
+    MMRL_MEMORY_POOLING_MODE=independent \
+    MMRL_MEMORY_SLOT_DIVERSITY_WEIGHT=0.0 \
+    MMRL_PROJECTOR_HIDDEN_DIM=512 \
+    MMRL_CROSS_ATTENTION_HEADS=8 \
+    MMRL_QUERY_ARCHITECTURE=shared_mlp_post_cross \
+    MMRL_REP_UPDATE_MODE=replace \
+    MMRL_LAYER_LORA_RANK=0 \
+    MMRL_CA_LAYER_LORA_TARGET=none \
+    MMRL_CA_LAYER_LORA_RANK=0 \
+    MMRL_CA_LAYER_LORA_ALPHA=1.0 \
+    MMRL_RELATION_LOSS_WEIGHT=0.05 \
+      run_slake || failures=$((failures + 1))
+    SLAKE_EXPERIMENT_NAME="slake_mmrl_shared_direct_ca_q_lora_r4" \
+    SLAKE_RUN_SEED=44 \
+    SLAKE_STAGE3_EPOCHS=3 \
+    SLAKE_MMRL_LR=6e-5 \
+    MMRL_RP_SPACE_LENGTH=40 \
+    MMRL_MEMORY_QUERY_COUNT=128 \
+    MMRL_MEMORY_ATTENTION_DIM=128 \
+    MMRL_MEMORY_POOLING_MODE=independent \
+    MMRL_MEMORY_SLOT_DIVERSITY_WEIGHT=0.0 \
+    MMRL_PROJECTOR_HIDDEN_DIM=1024 \
+    MMRL_CROSS_ATTENTION_HEADS=8 \
+    MMRL_QUERY_ARCHITECTURE=shared_direct_post_cross \
+    MMRL_REP_UPDATE_MODE=replace \
+    MMRL_LAYER_LORA_RANK=0 \
+    MMRL_CA_LAYER_LORA_TARGET=query \
+    MMRL_CA_LAYER_LORA_RANK=4 \
+    MMRL_CA_LAYER_LORA_ALPHA=4.0 \
+    MMRL_RELATION_LOSS_WEIGHT=0.05 \
+      run_slake || failures=$((failures + 1))
+    SLAKE_EXPERIMENT_NAME="slake_mmrl_shared_direct_ca_o_lora_r4" \
+    SLAKE_RUN_SEED=44 \
+    SLAKE_STAGE3_EPOCHS=3 \
+    SLAKE_MMRL_LR=6e-5 \
+    MMRL_RP_SPACE_LENGTH=40 \
+    MMRL_MEMORY_QUERY_COUNT=128 \
+    MMRL_MEMORY_ATTENTION_DIM=128 \
+    MMRL_MEMORY_POOLING_MODE=independent \
+    MMRL_MEMORY_SLOT_DIVERSITY_WEIGHT=0.0 \
+    MMRL_PROJECTOR_HIDDEN_DIM=1024 \
+    MMRL_CROSS_ATTENTION_HEADS=8 \
+    MMRL_QUERY_ARCHITECTURE=shared_direct_post_cross \
+    MMRL_REP_UPDATE_MODE=replace \
+    MMRL_LAYER_LORA_RANK=0 \
+    MMRL_CA_LAYER_LORA_TARGET=output \
+    MMRL_CA_LAYER_LORA_RANK=4 \
+    MMRL_CA_LAYER_LORA_ALPHA=4.0 \
+    MMRL_RELATION_LOSS_WEIGHT=0.05 \
+      run_slake || failures=$((failures + 1))
+    ;;
   slake_force_g_one)
     run_slake_force_g_one || failures=$((failures + 1))
     ;;
@@ -353,7 +418,7 @@ case "$RUN_TARGET" in
     run_slake || failures=$((failures + 1))
     ;;
   *)
-    echo "[ERR] 未知目标: $RUN_TARGET，可选 train、slake、slake_shared_direct、slake_lowrank_matrix、slake_structure_matrix、slake_full_geometry_budget4、slake_memory_pooling_serial3、slake_memory_pooling_competitive128、slake_independent_layer_rep、slake_shared_layer_delta、slake_force_g_one、train_shared_direct、all。" >&2
+    echo "[ERR] 未知目标: $RUN_TARGET，可选 train、slake、slake_shared_direct、slake_lowrank_matrix、slake_structure_matrix、slake_full_geometry_budget4、slake_memory_pooling_serial3、slake_memory_pooling_competitive128、slake_independent_layer_rep、slake_shared_layer_delta、slake_ca_ablation_serial3、slake_force_g_one、train_shared_direct、all。" >&2
     exit 2
     ;;
 esac

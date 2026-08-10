@@ -731,6 +731,20 @@ class Qwen3VLMMRLForStages(Qwen3VLForConditionalGeneration):
             result["cross_attention_output_weight_norm"] = (
                 output_projection.weight.detach().float().norm()
             )
+        ca_layer_lora = getattr(cross_attention, "layer_lora", None)
+        if ca_layer_lora is not None:
+            prefix = f"ca_{cross_attention.layer_lora_target}_lora"
+            for parameter_name in ("A", "B"):
+                parameter = getattr(ca_layer_lora, parameter_name)
+                result[f"{prefix}_{parameter_name}_param_norm"] = (
+                    parameter.detach().float().norm()
+                )
+                if parameter.grad is not None:
+                    grad = parameter.grad.detach().float()
+                    result[f"{prefix}_{parameter_name}_grad_norm"] = grad.norm()
+                    result[f"{prefix}_{parameter_name}_grad_mean_abs"] = (
+                        grad.abs().mean()
+                    )
 
         visual = getattr(self.model, "visual", None)
         if visual is not None:
@@ -1047,6 +1061,18 @@ def build_model_and_processor(model_path, experiment_cfg=None):
         "MMRL_LAYER_LORA_RANK",
         str(experiment_cfg.get("layer_lora_rank", 0)),
     ))
+    config.MMRL_CA_LAYER_LORA_TARGET = os.getenv(
+        "MMRL_CA_LAYER_LORA_TARGET",
+        str(experiment_cfg.get("ca_layer_lora_target", "none")),
+    )
+    config.MMRL_CA_LAYER_LORA_RANK = int(os.getenv(
+        "MMRL_CA_LAYER_LORA_RANK",
+        str(experiment_cfg.get("ca_layer_lora_rank", 0)),
+    ))
+    config.MMRL_CA_LAYER_LORA_ALPHA = float(os.getenv(
+        "MMRL_CA_LAYER_LORA_ALPHA",
+        str(experiment_cfg.get("ca_layer_lora_alpha", 1.0)),
+    ))
     config.MMRL_RELATION_LOSS_WEIGHT = float(experiment_cfg.get(
         "mmrl_relation_loss_weight",
         os.getenv("MMRL_RELATION_LOSS_WEIGHT", "0.0"),
@@ -1135,6 +1161,18 @@ def build_model_and_processor(model_path, experiment_cfg=None):
             config.MMRL_LAYER_LORA_RANK,
             mmrl.layer_lora_rank,
         ),
+        "MMRL_CA_LAYER_LORA_TARGET": (
+            config.MMRL_CA_LAYER_LORA_TARGET,
+            mmrl.ca_layer_lora_target,
+        ),
+        "MMRL_CA_LAYER_LORA_RANK": (
+            config.MMRL_CA_LAYER_LORA_RANK,
+            mmrl.ca_layer_lora_rank,
+        ),
+        "MMRL_CA_LAYER_LORA_ALPHA": (
+            config.MMRL_CA_LAYER_LORA_ALPHA,
+            mmrl.ca_layer_lora_alpha,
+        ),
         "MMRL_CROSS_ATTENTION_HEADS": (
             config.MMRL_CROSS_ATTENTION_HEADS,
             mmrl.cross_attention.num_heads,
@@ -1164,6 +1202,10 @@ def build_model_and_processor(model_path, experiment_cfg=None):
         f"projector_hidden_dim={config.MMRL_PROJECTOR_HIDDEN_DIM} "
         f"cross_attention_heads={config.MMRL_CROSS_ATTENTION_HEADS} "
         f"layer_lora_rank={config.MMRL_LAYER_LORA_RANK} "
+        "ca_layer_lora="
+        f"{config.MMRL_CA_LAYER_LORA_TARGET}:"
+        f"r{config.MMRL_CA_LAYER_LORA_RANK}:"
+        f"alpha{config.MMRL_CA_LAYER_LORA_ALPHA} "
         "memory_tokens_per_image="
         f"{2 * config.MMRL_MEMORY_QUERY_COUNT}"
     )
@@ -1203,7 +1245,13 @@ def build_model_and_processor(model_path, experiment_cfg=None):
         ),
         "cross_attention": sum(
             parameter.numel()
-            for parameter in model.model.MMRL.cross_attention.parameters()
+            for name, parameter in model.model.MMRL.cross_attention.named_parameters()
+            if not name.startswith("layer_lora.")
+        ),
+        "ca_layer_lora": sum(
+            parameter.numel()
+            for name, parameter in model.model.MMRL.cross_attention.named_parameters()
+            if name.startswith("layer_lora.")
         ),
     }
     print(
@@ -1219,6 +1267,18 @@ def build_model_and_processor(model_path, experiment_cfg=None):
             f"B_norm={float(mmrl.layer_lora_B.detach().float().norm().item())} "
             "residual_identity="
             f"{bool(torch.count_nonzero(mmrl.layer_lora_B.detach()).item() == 0)}"
+        )
+    if mmrl.ca_layer_lora_rank > 0:
+        ca_lora = mmrl.cross_attention.layer_lora
+        print(
+            "[MMRL_CA_LAYER_LORA_INIT_AUDIT] "
+            f"target={mmrl.ca_layer_lora_target} "
+            f"rank={mmrl.ca_layer_lora_rank} "
+            f"alpha={mmrl.ca_layer_lora_alpha} "
+            f"A_norm={float(ca_lora.A.detach().float().norm().item())} "
+            f"B_norm={float(ca_lora.B.detach().float().norm().item())} "
+            "residual_identity="
+            f"{bool(torch.count_nonzero(ca_lora.B.detach()).item() == 0)}"
         )
     if mmrl.layer_rep_delta is not None:
         layer_rep_delta_norm = float(
@@ -1300,6 +1360,10 @@ def build_model_and_processor(model_path, experiment_cfg=None):
         f"rep_update_mode={config.MMRL_REP_UPDATE_MODE} "
         f"cross_attention_dim={mmrl.cross_attention_dim} "
         f"layer_lora_rank={config.MMRL_LAYER_LORA_RANK} "
+        "ca_layer_lora="
+        f"{config.MMRL_CA_LAYER_LORA_TARGET}:"
+        f"r{config.MMRL_CA_LAYER_LORA_RANK}:"
+        f"alpha{config.MMRL_CA_LAYER_LORA_ALPHA} "
         f"rp_space_length={config.RP_SPACE_LENGTH} "
         f"memory_query_count={config.MMRL_MEMORY_QUERY_COUNT} "
         f"memory_attention_dim={config.MMRL_MEMORY_ATTENTION_DIM} "

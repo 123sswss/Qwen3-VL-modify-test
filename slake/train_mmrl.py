@@ -59,10 +59,12 @@ QUERY_ARCHITECTURES = (
     "layer_mlp_post_cross",
     "layer_linear_post_cross",
     "lowdim_cross_layer_linear",
+    "shared_mlp_post_cross",
     "shared_direct_post_cross",
     "shared_delta_post_cross",
 )
 REP_UPDATE_MODES = ("replace", "persistent_delta")
+CA_LAYER_LORA_TARGETS = ("none", "query", "output")
 
 
 def seed_everything(seed: int) -> None:
@@ -117,6 +119,9 @@ def build_experiment_config(args: argparse.Namespace) -> Dict[str, Any]:
         "rep_update_mode": args.rep_update_mode,
         "ablate_direct_learnable_rep": args.independent_layer_rep,
         "layer_lora_rank": args.layer_lora_rank,
+        "ca_layer_lora_target": args.ca_layer_lora_target,
+        "ca_layer_lora_rank": args.ca_layer_lora_rank,
+        "ca_layer_lora_alpha": args.ca_layer_lora_alpha,
         "mmrl_relation_loss_weight": args.relation_weight,
         "mmrl_relation_max_tokens": 64,
         "mmrl_variance_floor_ratio": 0.50,
@@ -244,6 +249,31 @@ def build_train_config(
             "layer_lora_B_param_norm",
             "layer_lora_B_grad_norm",
             "layer_lora_B_grad_mean_abs",
+            *[
+                f"ca_{target}_lora_{metric}"
+                for target in ("query", "output")
+                for metric in (
+                    "base_norm_mean",
+                    "delta_norm_mean",
+                    "delta_to_base_ratio",
+                    "layer_cos_mean",
+                    "layer_cos_max",
+                    "effective_rank",
+                    "singular_top1_ratio",
+                    "singular_top2_ratio",
+                    "A_param_norm",
+                    "A_grad_norm",
+                    "A_grad_mean_abs",
+                    "B_param_norm",
+                    "B_grad_norm",
+                    "B_grad_mean_abs",
+                )
+            ],
+            "cross_attention_map_layer_cos_mean",
+            "cross_attention_map_layer_cos_max",
+            "cross_attention_map_effective_rank",
+            "cross_attention_map_singular_top1_ratio",
+            "cross_attention_map_singular_top2_ratio",
             "layer_rep_delta_param_norm",
             "layer_rep_delta_grad_norm",
             "layer_rep_delta_grad_mean_abs",
@@ -760,6 +790,13 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument("--layer-lora-rank", type=int, default=0)
+    parser.add_argument(
+        "--ca-layer-lora-target",
+        choices=CA_LAYER_LORA_TARGETS,
+        default="none",
+    )
+    parser.add_argument("--ca-layer-lora-rank", type=int, default=0)
+    parser.add_argument("--ca-layer-lora-alpha", type=float, default=1.0)
     parser.add_argument("--stage1-lr", type=float, default=1e-4)
     parser.add_argument("--mmrl-lr", type=float, default=6e-5)
     parser.add_argument("--relation-weight", type=float, default=0.050)
@@ -824,6 +861,14 @@ def parse_args() -> argparse.Namespace:
         parser.error("--cross-attention-heads must be positive")
     if args.layer_lora_rank < 0:
         parser.error("--layer-lora-rank must be non-negative")
+    if args.ca_layer_lora_rank < 0:
+        parser.error("--ca-layer-lora-rank must be non-negative")
+    if args.ca_layer_lora_alpha <= 0.0:
+        parser.error("--ca-layer-lora-alpha must be positive")
+    if (args.ca_layer_lora_target == "none") != (args.ca_layer_lora_rank == 0):
+        parser.error(
+            "--ca-layer-lora-target and --ca-layer-lora-rank must be enabled together"
+        )
     if (
         args.layer_lora_rank > 0
         and args.query_architecture != "shared_direct_post_cross"
@@ -887,6 +932,8 @@ def main() -> int:
         f"rep_update_mode={args.rep_update_mode} "
         f"independent_layer_rep={args.independent_layer_rep} "
         f"layer_lora_rank={args.layer_lora_rank} "
+        f"ca_layer_lora={args.ca_layer_lora_target}:r{args.ca_layer_lora_rank}:"
+        f"alpha{args.ca_layer_lora_alpha} "
         f"stage1_batch={args.batch_size}x{args.gradient_accumulation} "
         f"stage3_batch={args.stage3_batch_size}x{args.stage3_gradient_accumulation} "
         f"stage3_workers={args.stage3_dataloader_workers} "
@@ -969,6 +1016,9 @@ def main() -> int:
                 "language": args.language,
                 "query_architecture": args.query_architecture,
                 "rep_update_mode": args.rep_update_mode,
+                "ca_layer_lora_target": args.ca_layer_lora_target,
+                "ca_layer_lora_rank": args.ca_layer_lora_rank,
+                "ca_layer_lora_alpha": args.ca_layer_lora_alpha,
                 "independent_layer_rep": args.independent_layer_rep,
                 "memory_query_count": args.memory_query_count,
                 "memory_pooling_mode": args.memory_pooling_mode,

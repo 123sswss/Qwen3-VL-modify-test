@@ -84,6 +84,21 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
             "ABLATE_VISUAL_GATE": _cfg_attr(config, "ABLATE_VISUAL_GATE", False),
             "ABLATE_DIRECT_LEARNABLE_REP": _cfg_attr(config, "ABLATE_DIRECT_LEARNABLE_REP", False),
             "MMRL_LAYER_LORA_RANK": _cfg_attr(config, "MMRL_LAYER_LORA_RANK", 0),
+            "MMRL_CA_LAYER_LORA_TARGET": _cfg_attr(
+                config,
+                "MMRL_CA_LAYER_LORA_TARGET",
+                cfg.MMRL_CA_LAYER_LORA_TARGET,
+            ),
+            "MMRL_CA_LAYER_LORA_RANK": _cfg_attr(
+                config,
+                "MMRL_CA_LAYER_LORA_RANK",
+                cfg.MMRL_CA_LAYER_LORA_RANK,
+            ),
+            "MMRL_CA_LAYER_LORA_ALPHA": _cfg_attr(
+                config,
+                "MMRL_CA_LAYER_LORA_ALPHA",
+                cfg.MMRL_CA_LAYER_LORA_ALPHA,
+            ),
             "MMRL_RELATION_MAX_TOKENS": _cfg_attr(config, "MMRL_RELATION_MAX_TOKENS", 64),
             "MMRL_VARIANCE_FLOOR_RATIO": _cfg_attr(config, "MMRL_VARIANCE_FLOOR_RATIO", 0.50),
             "MMRL_VARIANCE_FLOOR_WEIGHT": _cfg_attr(config, "MMRL_VARIANCE_FLOOR_WEIGHT", 0.10),

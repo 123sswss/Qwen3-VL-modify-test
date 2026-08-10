@@ -100,6 +100,61 @@ def _grouped_token_geometry(
         }
 
 
+def _layer_geometry_metrics(
+    states: torch.Tensor,
+    prefix: str,
+) -> dict[str, torch.Tensor]:
+    """Summarize geometry across the layer axis."""
+    states = states.detach().float()
+    with torch.no_grad(), torch.autocast(
+        device_type=states.device.type,
+        enabled=False,
+    ):
+        if states.ndim == 4:
+            flat = states.permute(1, 0, 2, 3).reshape(states.shape[1], -1)
+        elif states.ndim == 3:
+            flat = states.reshape(states.shape[0], -1)
+        else:
+            raise ValueError(
+                f"layer geometry expects [L,R,D] or [B,L,R,D], got {tuple(states.shape)}"
+            )
+
+        norms = flat.norm(dim=-1)
+        unit = flat / norms.unsqueeze(-1).clamp_min(1e-8)
+        cosine = unit @ unit.transpose(0, 1)
+        triangle = torch.triu_indices(
+            cosine.shape[0],
+            cosine.shape[1],
+            offset=1,
+            device=cosine.device,
+        )
+        pairwise = cosine[triangle[0], triangle[1]]
+
+        try:
+            singular_values = torch.linalg.svdvals(flat)
+        except RuntimeError:
+            singular_values = torch.linalg.svdvals(
+                flat.detach().cpu().double()
+            ).to(device=flat.device, dtype=flat.dtype)
+        singular_sum = singular_values.sum()
+        safe_sum = singular_sum.clamp_min(1e-8)
+        distribution = singular_values / safe_sum
+        has_signal = (singular_sum > 1e-8).to(distribution.dtype)
+        effective_rank = torch.exp(-(
+            distribution * distribution.clamp_min(1e-8).log()
+        ).sum()) * has_signal
+        top1_ratio = singular_values[0] / safe_sum * has_signal
+        top2_ratio = singular_values[:2].sum() / safe_sum * has_signal
+
+        return {
+            f"{prefix}_layer_cos_mean": pairwise.mean(),
+            f"{prefix}_layer_cos_max": pairwise.max(),
+            f"{prefix}_effective_rank": effective_rank,
+            f"{prefix}_singular_top1_ratio": top1_ratio,
+            f"{prefix}_singular_top2_ratio": top2_ratio,
+        }
+
+
 class MultiQueryAttentionPooling(nn.Module):
     """Compress a masked sequence into a fixed number of learned memory tokens."""
 
@@ -302,8 +357,64 @@ class ZeroInitProjection(nn.Module):
         return F.linear(inputs, self.weight, self.bias)
 
 
+class LayerwiseLowRankResidual(nn.Module):
+    """Apply one zero-initialized low-rank residual per insertion layer."""
+
+    def __init__(
+        self,
+        layer_count: int,
+        input_dim: int,
+        output_dim: int,
+        rank: int,
+        alpha: float,
+    ):
+        super().__init__()
+        if min(layer_count, input_dim, output_dim, rank) < 1:
+            raise ValueError(
+                "layer-wise LoRA dimensions must be positive, got "
+                f"layers={layer_count} input={input_dim} output={output_dim} rank={rank}"
+            )
+        if alpha <= 0.0:
+            raise ValueError(f"layer-wise LoRA alpha must be positive, got {alpha}")
+        self.layer_count = int(layer_count)
+        self.rank = int(rank)
+        self.alpha = float(alpha)
+        self.scaling = self.alpha / float(self.rank)
+        self.A = nn.Parameter(torch.empty(
+            self.layer_count,
+            input_dim,
+            self.rank,
+        ))
+        self.B = nn.Parameter(torch.zeros(
+            self.layer_count,
+            self.rank,
+            output_dim,
+        ))
+        for layer_matrix in self.A:
+            nn.init.kaiming_uniform_(layer_matrix, a=math.sqrt(5))
+
+    def forward(self, states: torch.Tensor) -> torch.Tensor:
+        if states.ndim != 4 or states.shape[1] != self.layer_count:
+            raise ValueError(
+                "layer-wise LoRA expects [B,L,R,D], got "
+                f"states={tuple(states.shape)} expected_layers={self.layer_count}"
+            )
+        hidden = torch.einsum("bltd,ldr->bltr", states, self.A)
+        return torch.einsum("bltr,lrd->bltd", hidden, self.B) * self.scaling
+
+
 class ResidualCrossAttention(nn.Module):
-    def __init__(self, hidden_dim: int, num_heads: int):
+    LAYER_LORA_TARGETS = {"none", "query", "output"}
+
+    def __init__(
+        self,
+        hidden_dim: int,
+        num_heads: int,
+        layer_count: int,
+        layer_lora_target: str = "none",
+        layer_lora_rank: int = 0,
+        layer_lora_alpha: float = 1.0,
+    ):
         super().__init__()
         if hidden_dim % num_heads != 0:
             raise ValueError(
@@ -313,13 +424,80 @@ class ResidualCrossAttention(nn.Module):
         self.hidden_dim = int(hidden_dim)
         self.num_heads = int(num_heads)
         self.head_dim = self.hidden_dim // self.num_heads
+        self.layer_count = int(layer_count)
+        self.layer_lora_target = str(layer_lora_target).strip().lower()
+        self.layer_lora_rank = int(layer_lora_rank)
+        self.layer_lora_alpha = float(layer_lora_alpha)
+        if self.layer_lora_target not in self.LAYER_LORA_TARGETS:
+            raise ValueError(
+                f"unsupported CA layer LoRA target={self.layer_lora_target!r}; "
+                f"choices={sorted(self.LAYER_LORA_TARGETS)}"
+            )
+        if (self.layer_lora_target == "none") != (self.layer_lora_rank == 0):
+            raise ValueError(
+                "CA layer LoRA target and rank must be enabled together, got "
+                f"target={self.layer_lora_target!r} rank={self.layer_lora_rank}"
+            )
         self.query_norm = nn.LayerNorm(self.hidden_dim)
         self.memory_norm = nn.LayerNorm(self.hidden_dim)
         self.query_projection = nn.Linear(self.hidden_dim, self.hidden_dim)
         self.key_projection = nn.Linear(self.hidden_dim, self.hidden_dim)
         self.value_projection = nn.Linear(self.hidden_dim, self.hidden_dim)
         self.output_projection = ZeroInitProjection(self.hidden_dim)
+        self.layer_lora = (
+            LayerwiseLowRankResidual(
+                layer_count=self.layer_count,
+                input_dim=self.hidden_dim,
+                output_dim=self.hidden_dim,
+                rank=self.layer_lora_rank,
+                alpha=self.layer_lora_alpha,
+            )
+            if self.layer_lora_rank > 0
+            else None
+        )
         self.debug_context = {}
+
+    def _group_layers(
+        self,
+        states: torch.Tensor,
+        query_group_shape: tuple[int, int] | None,
+    ) -> torch.Tensor:
+        if query_group_shape is None:
+            raise ValueError("active CA layer LoRA requires query_group_shape")
+        group_count, group_size = map(int, query_group_shape)
+        if group_count != self.layer_count:
+            raise ValueError(
+                "CA layer LoRA group count mismatch: "
+                f"configured={self.layer_count} actual={group_count}"
+            )
+        if group_count * group_size != states.shape[1]:
+            raise ValueError(
+                "CA layer LoRA query groups do not match sequence length: "
+                f"groups={query_group_shape} sequence={states.shape[1]}"
+            )
+        return states.reshape(
+            states.shape[0],
+            group_count,
+            group_size,
+            states.shape[-1],
+        )
+
+    @staticmethod
+    def _lora_debug_metrics(
+        base: torch.Tensor,
+        residual: torch.Tensor,
+        prefix: str,
+    ) -> dict[str, torch.Tensor]:
+        base_norm = base.detach().float().norm(dim=-1).mean()
+        residual_norm = residual.detach().float().norm(dim=-1).mean()
+        return {
+            f"{prefix}_base_norm_mean": base_norm,
+            f"{prefix}_delta_norm_mean": residual_norm,
+            f"{prefix}_delta_to_base_ratio": (
+                residual_norm / base_norm.clamp_min(1e-8)
+            ),
+            **_layer_geometry_metrics(residual, prefix),
+        }
 
     def _split_heads(self, states: torch.Tensor) -> torch.Tensor:
         batch_size, sequence_length, _ = states.shape
@@ -349,9 +527,30 @@ class ResidualCrossAttention(nn.Module):
                 f"queries={queries.shape[0]} memory={memory.shape[0]}"
             )
 
-        query_states = self._split_heads(
-            self.query_projection(self.query_norm(queries))
-        )
+        stats = {}
+        normalized_queries = self.query_norm(queries)
+        base_projected_queries = self.query_projection(normalized_queries)
+        projected_queries = base_projected_queries
+        if self.layer_lora_target == "query":
+            grouped_queries = self._group_layers(
+                normalized_queries,
+                query_group_shape,
+            )
+            query_lora_delta = self.layer_lora(grouped_queries)
+            projected_queries = projected_queries + query_lora_delta.reshape_as(
+                projected_queries
+            )
+            if self.training:
+                with torch.no_grad():
+                    stats.update(self._lora_debug_metrics(
+                        self._group_layers(
+                            base_projected_queries,
+                            query_group_shape,
+                        ),
+                        query_lora_delta,
+                        "ca_query_lora",
+                    ))
+        query_states = self._split_heads(projected_queries)
         normalized_memory = self.memory_norm(memory)
         key_states = self._split_heads(self.key_projection(normalized_memory))
         value_states = self._split_heads(self.value_projection(normalized_memory))
@@ -379,10 +578,10 @@ class ResidualCrossAttention(nn.Module):
                     sampled * sampled.clamp_min(1e-8).log()
                 ).sum(dim=-1)
                 entropy_norm = entropy / math.log(float(sampled.shape[-1]))
-                stats = {
+                stats.update({
                     "cross_attention_entropy_norm": entropy_norm.mean(),
                     "cross_attention_peak_mean": sampled.max(dim=-1).values.mean(),
-                }
+                })
                 if memory_split_index is not None:
                     split = int(memory_split_index)
                     if not 0 < split < sampled.shape[-1]:
@@ -419,9 +618,10 @@ class ResidualCrossAttention(nn.Module):
                         grouped_attention,
                         "cross_attention_map",
                     ))
-                self.debug_context = stats
-        else:
-            self.debug_context = {}
+                    stats.update(_layer_geometry_metrics(
+                        grouped_attention,
+                        "cross_attention_map",
+                    ))
         context = torch.matmul(weights, value_states)
         context = context.transpose(1, 2).contiguous().view(
             queries.shape[0],
@@ -429,6 +629,18 @@ class ResidualCrossAttention(nn.Module):
             self.hidden_dim,
         )
         delta = self.output_projection(context)
+        if self.layer_lora_target == "output":
+            grouped_context = self._group_layers(context, query_group_shape)
+            output_lora_delta = self.layer_lora(grouped_context)
+            if self.training:
+                with torch.no_grad():
+                    stats.update(self._lora_debug_metrics(
+                        self._group_layers(delta, query_group_shape),
+                        output_lora_delta,
+                        "ca_output_lora",
+                    ))
+            delta = delta + output_lora_delta.reshape_as(delta)
+        self.debug_context = stats if self.training else {}
         return queries + delta, delta
 
 
@@ -437,6 +649,7 @@ class MMRL(nn.Module):
         "layer_mlp_post_cross",
         "layer_linear_post_cross",
         "lowdim_cross_layer_linear",
+        "shared_mlp_post_cross",
         "shared_direct_post_cross",
         "shared_delta_post_cross",
     }
@@ -531,6 +744,15 @@ class MMRL(nn.Module):
                 "MMRL_LAYER_LORA_RANK requires "
                 "MMRL_QUERY_ARCHITECTURE='shared_direct_post_cross'"
             )
+        self.ca_layer_lora_target = str(
+            getattr(cfg, "MMRL_CA_LAYER_LORA_TARGET", "none")
+        ).strip().lower()
+        self.ca_layer_lora_rank = int(
+            getattr(cfg, "MMRL_CA_LAYER_LORA_RANK", 0)
+        )
+        self.ca_layer_lora_alpha = float(
+            getattr(cfg, "MMRL_CA_LAYER_LORA_ALPHA", 1.0)
+        )
         if (
             self.use_direct_learnable_rep
             and self.query_architecture == "lowdim_cross_layer_linear"
@@ -594,6 +816,15 @@ class MMRL(nn.Module):
                 for _ in range(self.insert_layer_count)
             ])
             self.direct_v_tokens = nn.ParameterList()
+        elif self.query_architecture == "shared_mlp_post_cross":
+            self.v_r_token_projector = nn.ModuleList([
+                nn.Sequential(
+                    nn.Linear(self.rp_space_dim, self.projector_hidden_dim),
+                    nn.GELU(),
+                    nn.Linear(self.projector_hidden_dim, self.vision_token_dim),
+                )
+            ])
+            self.direct_v_tokens = nn.ParameterList()
         else:
             self.v_r_token_projector = nn.ModuleList([
                 nn.Linear(self.rp_space_dim, self.vision_token_dim)
@@ -649,6 +880,10 @@ class MMRL(nn.Module):
         self.cross_attention = ResidualCrossAttention(
             hidden_dim=self.cross_attention_dim,
             num_heads=int(cfg.MMRL_CROSS_ATTENTION_HEADS),
+            layer_count=self.insert_layer_count,
+            layer_lora_target=self.ca_layer_lora_target,
+            layer_lora_rank=self.ca_layer_lora_rank,
+            layer_lora_alpha=self.ca_layer_lora_alpha,
         )
 
         self.cached_base_queries = None
@@ -747,55 +982,7 @@ class MMRL(nn.Module):
         states: torch.Tensor,
         prefix: str,
     ) -> dict[str, torch.Tensor]:
-        states = states.detach().float()
-        with torch.no_grad(), torch.autocast(
-            device_type=states.device.type,
-            enabled=False,
-        ):
-            if states.ndim == 4:
-                flat = states.permute(1, 0, 2, 3).reshape(states.shape[1], -1)
-            elif states.ndim == 3:
-                flat = states.reshape(states.shape[0], -1)
-            else:
-                raise ValueError(
-                    f"layer geometry expects [L,R,D] or [B,L,R,D], got {tuple(states.shape)}"
-                )
-
-            norms = flat.norm(dim=-1)
-            unit = flat / norms.unsqueeze(-1).clamp_min(1e-8)
-            cosine = unit @ unit.transpose(0, 1)
-            triangle = torch.triu_indices(
-                cosine.shape[0],
-                cosine.shape[1],
-                offset=1,
-                device=cosine.device,
-            )
-            pairwise = cosine[triangle[0], triangle[1]]
-
-            try:
-                singular_values = torch.linalg.svdvals(flat)
-            except RuntimeError:
-                singular_values = torch.linalg.svdvals(
-                    flat.detach().cpu().double()
-                ).to(device=flat.device, dtype=flat.dtype)
-            singular_sum = singular_values.sum()
-            safe_sum = singular_sum.clamp_min(1e-8)
-            distribution = singular_values / safe_sum
-            has_signal = (singular_sum > 1e-8).to(distribution.dtype)
-            effective_rank = torch.exp(-(
-                distribution * distribution.clamp_min(1e-8).log()
-            ).sum()) * has_signal
-            descending = singular_values
-            top1_ratio = descending[0] / safe_sum * has_signal
-            top2_ratio = descending[:2].sum() / safe_sum * has_signal
-
-            return {
-                f"{prefix}_layer_cos_mean": pairwise.mean(),
-                f"{prefix}_layer_cos_max": pairwise.max(),
-                f"{prefix}_effective_rank": effective_rank,
-                f"{prefix}_singular_top1_ratio": top1_ratio,
-                f"{prefix}_singular_top2_ratio": top2_ratio,
-            }
+        return _layer_geometry_metrics(states, prefix)
 
     def _compute_base_queries(self) -> torch.Tensor:
         self.low_rank_debug_context = {}
@@ -866,6 +1053,15 @@ class MMRL(nn.Module):
                         }
         elif self.query_architecture == "lowdim_cross_layer_linear":
             projected = self.shared_represent_space.unsqueeze(0).expand(
+                self.insert_layer_count,
+                -1,
+                -1,
+            )
+        elif self.query_architecture == "shared_mlp_post_cross":
+            shared_projected = self.v_r_token_projector[0](
+                self.shared_represent_space
+            )
+            projected = shared_projected.unsqueeze(0).expand(
                 self.insert_layer_count,
                 -1,
                 -1,

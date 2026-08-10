@@ -682,6 +682,7 @@ class Qwen3VLMMRLForStages(Qwen3VLForConditionalGeneration):
         for parameter_name, metric_prefix in (
             ("layer_lora_A", "layer_lora_A"),
             ("layer_lora_B", "layer_lora_B"),
+            ("layer_rep_delta", "layer_rep_delta"),
         ):
             parameter = getattr(mmrl, parameter_name, None)
             if parameter is None:
@@ -1177,6 +1178,11 @@ def build_model_and_processor(model_path, experiment_cfg=None):
             parameter.numel()
             for parameter in model.model.MMRL.direct_v_tokens.parameters()
         ),
+        "layer_rep_delta": (
+            model.model.MMRL.layer_rep_delta.numel()
+            if model.model.MMRL.layer_rep_delta is not None
+            else 0
+        ),
         "layer_lora_A": (
             model.model.MMRL.layer_lora_A.numel()
             if model.model.MMRL.layer_lora_A is not None
@@ -1213,6 +1219,20 @@ def build_model_and_processor(model_path, experiment_cfg=None):
             f"B_norm={float(mmrl.layer_lora_B.detach().float().norm().item())} "
             "residual_identity="
             f"{bool(torch.count_nonzero(mmrl.layer_lora_B.detach()).item() == 0)}"
+        )
+    if mmrl.layer_rep_delta is not None:
+        layer_rep_delta_norm = float(
+            mmrl.layer_rep_delta.detach().float().norm().item()
+        )
+        if layer_rep_delta_norm != 0.0:
+            raise RuntimeError(
+                "Layer Rep delta must start from the shared-direct baseline, "
+                f"got norm={layer_rep_delta_norm}"
+            )
+        print(
+            "[MMRL_LAYER_REP_DELTA_INIT_AUDIT] "
+            f"shape={tuple(mmrl.layer_rep_delta.shape)} "
+            f"norm={layer_rep_delta_norm} shared_identity=True"
         )
     model.model.load_state_dict(base.model.state_dict(), strict=False)
     model.lm_head.load_state_dict(base.lm_head.state_dict(), strict=False)

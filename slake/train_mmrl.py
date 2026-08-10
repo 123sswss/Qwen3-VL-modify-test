@@ -60,6 +60,7 @@ QUERY_ARCHITECTURES = (
     "layer_linear_post_cross",
     "lowdim_cross_layer_linear",
     "shared_direct_post_cross",
+    "shared_delta_post_cross",
 )
 REP_UPDATE_MODES = ("replace", "persistent_delta")
 
@@ -243,6 +244,18 @@ def build_train_config(
             "layer_lora_B_param_norm",
             "layer_lora_B_grad_norm",
             "layer_lora_B_grad_mean_abs",
+            "layer_rep_delta_param_norm",
+            "layer_rep_delta_grad_norm",
+            "layer_rep_delta_grad_mean_abs",
+            "layer_rep_delta_norm_mean",
+            "layer_rep_delta_to_shared_ratio",
+            "layer_rep_delta_layer_cos_mean",
+            "layer_rep_delta_layer_cos_max",
+            "layer_rep_delta_effective_rank",
+            "layer_rep_delta_singular_top1_ratio",
+            "layer_rep_delta_singular_top2_ratio",
+            "layer_rep_delta_token_pair_cos_mean",
+            "layer_rep_delta_token_centered_effective_rank_mean",
             "visual_memory_norm_mean",
             "text_memory_norm_mean",
             "visual_memory_pooling_grad_norm_mean",
@@ -821,6 +834,7 @@ def parse_args() -> argparse.Namespace:
         )
     if args.independent_layer_rep and args.query_architecture in {
         "shared_direct_post_cross",
+        "shared_delta_post_cross",
         "lowdim_cross_layer_linear",
     }:
         parser.error(

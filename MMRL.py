@@ -432,6 +432,7 @@ class MMRL(nn.Module):
         "layer_linear_post_cross",
         "lowdim_cross_layer_linear",
         "shared_direct_post_cross",
+        "shared_delta_post_cross",
     }
     REP_UPDATE_MODES = {"replace", "persistent_delta"}
     INFERENCE_MEMORY_COLLAPSE_MODES = {"none", "visual", "text", "both"}
@@ -461,12 +462,16 @@ class MMRL(nn.Module):
         self.use_direct_learnable_rep = bool(
             getattr(cfg, "ABLATE_DIRECT_LEARNABLE_REP", False)
         )
-        self.use_direct_shared_rep = (
-            self.query_architecture == "shared_direct_post_cross"
+        self.use_direct_shared_rep = self.query_architecture in {
+            "shared_direct_post_cross",
+            "shared_delta_post_cross",
+        }
+        self.use_layer_rep_delta = (
+            self.query_architecture == "shared_delta_post_cross"
         )
         if self.use_direct_learnable_rep and self.use_direct_shared_rep:
             raise ValueError(
-                "shared_direct_post_cross and ABLATE_DIRECT_LEARNABLE_REP "
+                "shared Rep query architectures and ABLATE_DIRECT_LEARNABLE_REP "
                 "are mutually exclusive"
             )
         self.insert_layer_count = len(cfg.INSERT_LAYER)
@@ -512,7 +517,10 @@ class MMRL(nn.Module):
             raise ValueError(
                 f"MMRL_LAYER_LORA_RANK must be non-negative, got {self.layer_lora_rank}"
             )
-        if self.layer_lora_rank > 0 and not self.use_direct_shared_rep:
+        if (
+            self.layer_lora_rank > 0
+            and self.query_architecture != "shared_direct_post_cross"
+        ):
             raise ValueError(
                 "MMRL_LAYER_LORA_RANK requires "
                 "MMRL_QUERY_ARCHITECTURE='shared_direct_post_cross'"
@@ -592,6 +600,15 @@ class MMRL(nn.Module):
         )
         nn.init.normal_(self.layer_embeddings, std=0.02)
 
+        if self.use_layer_rep_delta:
+            self.layer_rep_delta = nn.Parameter(torch.zeros(
+                self.insert_layer_count,
+                self.rp_space_length,
+                self.vision_token_dim,
+            ))
+        else:
+            self.register_parameter("layer_rep_delta", None)
+
         if self.layer_lora_rank > 0:
             self.layer_lora_A = nn.Parameter(torch.empty(
                 self.insert_layer_count,
@@ -636,6 +653,7 @@ class MMRL(nn.Module):
         self.inference_memory_collapse_mode = "none"
         self._printed_memory_collapse_audit = False
         self.low_rank_debug_context = {}
+        self.layer_rep_delta_debug_context = {}
         self.memory_slot_diversity_loss = torch.tensor(0.0)
 
     def set_inference_memory_collapse_mode(self, mode: str) -> None:
@@ -770,6 +788,8 @@ class MMRL(nn.Module):
             }
 
     def _compute_base_queries(self) -> torch.Tensor:
+        self.low_rank_debug_context = {}
+        self.layer_rep_delta_debug_context = {}
         if self.use_direct_learnable_rep:
             projected = torch.stack(list(self.direct_v_tokens), dim=0)
         elif self.use_direct_shared_rep:
@@ -778,6 +798,32 @@ class MMRL(nn.Module):
                 -1,
                 -1,
             )
+            if self.layer_rep_delta is not None:
+                projected = projected + self.layer_rep_delta
+                if self.training:
+                    with torch.no_grad():
+                        shared_norm = (
+                            self.shared_represent_space.detach().float().norm(
+                                dim=-1
+                            ).mean()
+                        )
+                        delta_norm = self.layer_rep_delta.detach().float().norm(
+                            dim=-1
+                        ).mean()
+                        self.layer_rep_delta_debug_context = {
+                            "layer_rep_delta_norm_mean": delta_norm,
+                            "layer_rep_delta_to_shared_ratio": (
+                                delta_norm / shared_norm.clamp_min(1e-8)
+                            ),
+                            **self._layer_geometry_metrics(
+                                self.layer_rep_delta,
+                                "layer_rep_delta",
+                            ),
+                            **_grouped_token_geometry(
+                                self.layer_rep_delta.unsqueeze(0),
+                                "layer_rep_delta",
+                            ),
+                        }
             if self.layer_lora_rank > 0:
                 low_rank_hidden = torch.einsum(
                     "td,ldr->ltr",
@@ -808,17 +854,12 @@ class MMRL(nn.Module):
                                 "low_rank_delta",
                             ),
                         }
-                else:
-                    self.low_rank_debug_context = {}
-            else:
-                self.low_rank_debug_context = {}
         elif self.query_architecture == "lowdim_cross_layer_linear":
             projected = self.shared_represent_space.unsqueeze(0).expand(
                 self.insert_layer_count,
                 -1,
                 -1,
             )
-            self.low_rank_debug_context = {}
         else:
             projected = torch.stack([
                 projector(self.shared_represent_space)
@@ -1072,6 +1113,7 @@ class MMRL(nn.Module):
                         for key, value in self.text_memory_pooling.debug_context.items()
                     },
                     **self.low_rank_debug_context,
+                    **self.layer_rep_delta_debug_context,
                     **self.cross_attention.debug_context,
                     **self._layer_geometry_metrics(
                         dynamic_queries,

@@ -1260,22 +1260,52 @@ def build_model_and_processor(model_path, experiment_cfg=None):
         f"total={sum(parameter.numel() for parameter in model.model.MMRL.parameters())}"
     )
     if mmrl.layer_lora_rank > 0:
+        layer_lora_A = mmrl.layer_lora_A.detach().float()
+        expected_bound = 1.0 / math.sqrt(float(mmrl.layer_lora_A.shape[1]))
+        actual_max = float(layer_lora_A.abs().max().item())
+        normalized_rms = float(
+            layer_lora_A.square().mean().sqrt().item()
+            * math.sqrt(3.0 * float(mmrl.layer_lora_A.shape[1]))
+        )
+        if actual_max > expected_bound * 1.001:
+            raise RuntimeError(
+                "Layer LoRA A uses the wrong fan-in initialization: "
+                f"actual_max={actual_max} expected_bound={expected_bound}"
+            )
         print(
             "[MMRL_LAYER_LORA_INIT_AUDIT] "
             f"rank={mmrl.layer_lora_rank} "
-            f"A_norm={float(mmrl.layer_lora_A.detach().float().norm().item())} "
+            f"A_norm={float(layer_lora_A.norm().item())} "
+            f"A_abs_max={actual_max} "
+            f"expected_bound={expected_bound} "
+            f"normalized_rms={normalized_rms} "
             f"B_norm={float(mmrl.layer_lora_B.detach().float().norm().item())} "
             "residual_identity="
             f"{bool(torch.count_nonzero(mmrl.layer_lora_B.detach()).item() == 0)}"
         )
     if mmrl.ca_layer_lora_rank > 0:
         ca_lora = mmrl.cross_attention.layer_lora
+        ca_lora_A = ca_lora.A.detach().float()
+        expected_bound = 1.0 / math.sqrt(float(ca_lora.A.shape[1]))
+        actual_max = float(ca_lora_A.abs().max().item())
+        normalized_rms = float(
+            ca_lora_A.square().mean().sqrt().item()
+            * math.sqrt(3.0 * float(ca_lora.A.shape[1]))
+        )
+        if actual_max > expected_bound * 1.001:
+            raise RuntimeError(
+                "CA layer LoRA A uses the wrong fan-in initialization: "
+                f"actual_max={actual_max} expected_bound={expected_bound}"
+            )
         print(
             "[MMRL_CA_LAYER_LORA_INIT_AUDIT] "
             f"target={mmrl.ca_layer_lora_target} "
             f"rank={mmrl.ca_layer_lora_rank} "
             f"alpha={mmrl.ca_layer_lora_alpha} "
-            f"A_norm={float(ca_lora.A.detach().float().norm().item())} "
+            f"A_norm={float(ca_lora_A.norm().item())} "
+            f"A_abs_max={actual_max} "
+            f"expected_bound={expected_bound} "
+            f"normalized_rms={normalized_rms} "
             f"B_norm={float(ca_lora.B.detach().float().norm().item())} "
             "residual_identity="
             f"{bool(torch.count_nonzero(ca_lora.B.detach()).item() == 0)}"

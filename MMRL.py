@@ -357,6 +357,15 @@ class ZeroInitProjection(nn.Module):
         return F.linear(inputs, self.weight, self.bias)
 
 
+def _init_low_rank_input_projection_(matrix: torch.Tensor) -> None:
+    """Initialize [input_dim, rank] as a Linear(input_dim, rank) weight."""
+    if matrix.ndim != 2:
+        raise ValueError(
+            f"low-rank input projection must be 2D, got {tuple(matrix.shape)}"
+        )
+    nn.init.kaiming_uniform_(matrix.transpose(0, 1), a=math.sqrt(5))
+
+
 class LayerwiseLowRankResidual(nn.Module):
     """Apply one zero-initialized low-rank residual per insertion layer."""
 
@@ -391,7 +400,7 @@ class LayerwiseLowRankResidual(nn.Module):
             output_dim,
         ))
         for layer_matrix in self.A:
-            nn.init.kaiming_uniform_(layer_matrix, a=math.sqrt(5))
+            _init_low_rank_input_projection_(layer_matrix)
 
     def forward(self, states: torch.Tensor) -> torch.Tensor:
         if states.ndim != 4 or states.shape[1] != self.layer_count:
@@ -858,7 +867,7 @@ class MMRL(nn.Module):
                 self.vision_token_dim,
             ))
             for layer_matrix in self.layer_lora_A:
-                nn.init.kaiming_uniform_(layer_matrix, a=math.sqrt(5))
+                _init_low_rank_input_projection_(layer_matrix)
         else:
             self.register_parameter("layer_lora_A", None)
             self.register_parameter("layer_lora_B", None)

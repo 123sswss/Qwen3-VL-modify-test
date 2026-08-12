@@ -357,13 +357,15 @@ class ZeroInitProjection(nn.Module):
         return F.linear(inputs, self.weight, self.bias)
 
 
-def _init_low_rank_input_projection_(matrix: torch.Tensor) -> None:
-    """Initialize [input_dim, rank] as a Linear(input_dim, rank) weight."""
-    if matrix.ndim != 2:
+def _init_low_rank_input_projection_(matrices: torch.Tensor) -> None:
+    """Initialize [..., input_dim, rank] with the true input fan-in."""
+    if matrices.ndim < 2:
         raise ValueError(
-            f"low-rank input projection must be 2D, got {tuple(matrix.shape)}"
+            "low-rank input projection must end in [input_dim, rank], got "
+            f"{tuple(matrices.shape)}"
         )
-    nn.init.kaiming_uniform_(matrix.transpose(0, 1), a=math.sqrt(5))
+    bound = 1.0 / math.sqrt(float(matrices.shape[-2]))
+    nn.init.uniform_(matrices, -bound, bound)
 
 
 class LayerwiseLowRankResidual(nn.Module):
@@ -399,8 +401,7 @@ class LayerwiseLowRankResidual(nn.Module):
             self.rank,
             output_dim,
         ))
-        for layer_matrix in self.A:
-            _init_low_rank_input_projection_(layer_matrix)
+        _init_low_rank_input_projection_(self.A)
 
     def forward(self, states: torch.Tensor) -> torch.Tensor:
         if states.ndim != 4 or states.shape[1] != self.layer_count:
@@ -866,8 +867,7 @@ class MMRL(nn.Module):
                 self.layer_lora_rank,
                 self.vision_token_dim,
             ))
-            for layer_matrix in self.layer_lora_A:
-                _init_low_rank_input_projection_(layer_matrix)
+            _init_low_rank_input_projection_(self.layer_lora_A)
         else:
             self.register_parameter("layer_lora_A", None)
             self.register_parameter("layer_lora_B", None)

@@ -563,6 +563,37 @@ case "$RUN_TARGET" in
     MMRL_RELATION_LOSS_WEIGHT=0.0 \
       run_slake || failures=$((failures + 1))
     ;;
+  slake_shared_direct_relation_sweep)
+    for relation_spec in \
+      "0.005:relation0005" \
+      "0.015:relation0015" \
+      "0.05:relation0050" \
+      "0.15:relation0150" \
+      "0.5:relation0500"
+    do
+      relation_weight="${relation_spec%%:*}"
+      relation_tag="${relation_spec##*:}"
+      SLAKE_EXPERIMENT_NAME="slake_mmrl_shared_direct_${relation_tag}" \
+      SLAKE_RUN_SEED=44 \
+      SLAKE_STAGE3_EPOCHS=3 \
+      SLAKE_MMRL_LR=6e-5 \
+      MMRL_RP_SPACE_LENGTH=40 \
+      MMRL_MEMORY_QUERY_COUNT=128 \
+      MMRL_MEMORY_ATTENTION_DIM=128 \
+      MMRL_MEMORY_POOLING_MODE=independent \
+      MMRL_MEMORY_SLOT_DIVERSITY_WEIGHT=0.0 \
+      MMRL_PROJECTOR_HIDDEN_DIM=1024 \
+      MMRL_CROSS_ATTENTION_HEADS=8 \
+      MMRL_QUERY_ARCHITECTURE=shared_direct_post_cross \
+      MMRL_REP_UPDATE_MODE=replace \
+      MMRL_LAYER_LORA_RANK=0 \
+      MMRL_CA_LAYER_LORA_TARGET=none \
+      MMRL_CA_LAYER_LORA_RANK=0 \
+      MMRL_CA_LAYER_LORA_ALPHA=1.0 \
+      MMRL_RELATION_LOSS_WEIGHT="$relation_weight" \
+        run_slake || failures=$((failures + 1))
+    done
+    ;;
   slake_force_g_one)
     run_slake_force_g_one || failures=$((failures + 1))
     ;;
@@ -576,7 +607,7 @@ case "$RUN_TARGET" in
     run_slake || failures=$((failures + 1))
     ;;
   *)
-    echo "[ERR] 未知目标: $RUN_TARGET，可选 train、slake、slake_shared_direct、slake_lowrank_matrix、slake_structure_matrix、slake_full_geometry_budget4、slake_memory_pooling_serial3、slake_memory_pooling_competitive128、slake_independent_layer_rep、slake_shared_layer_delta、slake_ca_ablation_serial3、slake_ca_corrected_serial3、slake_ca_corrected_lora2、slake_ca_ce_only_serial3、slake_force_g_one、train_shared_direct、all。" >&2
+    echo "[ERR] 未知目标: $RUN_TARGET，可选 train、slake、slake_shared_direct、slake_lowrank_matrix、slake_structure_matrix、slake_full_geometry_budget4、slake_memory_pooling_serial3、slake_memory_pooling_competitive128、slake_independent_layer_rep、slake_shared_layer_delta、slake_ca_ablation_serial3、slake_ca_corrected_serial3、slake_ca_corrected_lora2、slake_ca_ce_only_serial3、slake_shared_direct_relation_sweep、slake_force_g_one、train_shared_direct、all。" >&2
     exit 2
     ;;
 esac

@@ -156,6 +156,9 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
         self.mmrl_relation_loss = torch.tensor(0.0)
         self.mmrl_relation_gram_loss = torch.tensor(0.0)
         self.mmrl_variance_floor_loss = torch.tensor(0.0)
+        self.mmrl_relation_loss_weight = float(
+            getattr(self.cfg, "MMRL_RELATION_LOSS_WEIGHT", 0.0)
+        )
         self.mmrl_relation_max_tokens = int(getattr(self.cfg, "MMRL_RELATION_MAX_TOKENS", 64))
         self.mmrl_variance_floor_ratio = float(getattr(self.cfg, "MMRL_VARIANCE_FLOOR_RATIO", 0.50))
         self.mmrl_variance_floor_weight = float(getattr(self.cfg, "MMRL_VARIANCE_FLOOR_WEIGHT", 0.10))
@@ -735,7 +738,7 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
             # for i in range(cu_seqlens.size(0) - 1):
             #     hidden_states_with_rep = hidden_states_with_rep[cu_seqlens[i]:cu_seqlens[i+1]] * self.G_list[i]
             seqlens = cu_seqlens[1:] - cu_seqlens[:-1]
-            if self.training:
+            if self.training and self.mmrl_relation_loss_weight > 0.0:
                 (
                     self.mmrl_relation_loss,
                     self.mmrl_relation_gram_loss,

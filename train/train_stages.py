@@ -1866,10 +1866,27 @@ def run_stage3_full(model, processor, data_cfg, train_cfg, output_dir):
         "mmrl_relation_loss_weight",
         experiment_cfg.get("mmrl_relation_loss_weight", 0.0),
     ))
+    model.model.visual.mmrl_relation_loss_weight = model.mmrl_relation_loss_weight
     model.memory_slot_diversity_weight = float(train_cfg.get(
         "memory_slot_diversity_weight",
         experiment_cfg.get("memory_slot_diversity_weight", 0.0),
     ))
+    stage3_ce_only = (
+        model.ce_loss_weight == 1.0
+        and not model.enable_alpha_guide_loss
+        and model.alpha_loss_weight == 0.0
+        and model.mmrl_relation_loss_weight == 0.0
+        and model.memory_slot_diversity_weight == 0.0
+    )
+    print(
+        "[STAGE3_LOSS_AUDIT] "
+        f"ce_weight={model.ce_loss_weight} "
+        f"alpha_enabled={model.enable_alpha_guide_loss} "
+        f"alpha_weight={model.alpha_loss_weight} "
+        f"relation_weight={model.mmrl_relation_loss_weight} "
+        f"memory_diversity_weight={model.memory_slot_diversity_weight} "
+        f"ce_only={stage3_ce_only}"
+    )
     print(
         "[MMRL_RELATION] "
         f"weight={model.mmrl_relation_loss_weight} "

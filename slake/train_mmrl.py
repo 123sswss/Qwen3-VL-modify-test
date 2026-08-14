@@ -65,6 +65,7 @@ QUERY_ARCHITECTURES = (
 )
 REP_UPDATE_MODES = ("replace", "persistent_delta")
 CA_LAYER_LORA_TARGETS = ("none", "query", "output")
+RELATION_MODES = ("linear", "trust_region")
 
 
 def seed_everything(seed: int) -> None:
@@ -123,7 +124,9 @@ def build_experiment_config(args: argparse.Namespace) -> Dict[str, Any]:
         "ca_layer_lora_rank": args.ca_layer_lora_rank,
         "ca_layer_lora_alpha": args.ca_layer_lora_alpha,
         "mmrl_relation_loss_weight": args.relation_weight,
-        "mmrl_relation_max_tokens": 64,
+        "mmrl_relation_mode": args.relation_mode,
+        "mmrl_relation_threshold": args.relation_threshold,
+        "mmrl_relation_max_tokens": args.relation_max_tokens,
         "mmrl_variance_floor_ratio": 0.50,
         "mmrl_variance_floor_weight": 0.10,
         "enable_deepstack_mmrl_residual": False,
@@ -187,6 +190,8 @@ def build_train_config(
             "delta_to_org_ratio",
             "mmrl_delta_to_org_ratio",
             "mmrl_relation_loss_scaled",
+            "mmrl_relation_excess_loss",
+            "mmrl_relation_active_ratio",
             "memory_slot_diversity_loss",
             "memory_slot_diversity_loss_scaled",
             "mmrl_relation_gram_loss",
@@ -801,6 +806,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--mmrl-lr", type=float, default=6e-5)
     parser.add_argument("--relation-weight", type=float, default=0.050)
     parser.add_argument(
+        "--relation-mode",
+        choices=RELATION_MODES,
+        default="linear",
+    )
+    parser.add_argument("--relation-threshold", type=float, default=0.03)
+    parser.add_argument("--relation-max-tokens", type=int, default=64)
+    parser.add_argument(
         "--scheduler",
         choices=("constant_with_warmup", "cosine"),
         default="constant_with_warmup",
@@ -865,6 +877,12 @@ def parse_args() -> argparse.Namespace:
         parser.error("--ca-layer-lora-rank must be non-negative")
     if args.ca_layer_lora_alpha <= 0.0:
         parser.error("--ca-layer-lora-alpha must be positive")
+    if args.relation_weight < 0.0:
+        parser.error("--relation-weight must be non-negative")
+    if args.relation_threshold < 0.0:
+        parser.error("--relation-threshold must be non-negative")
+    if args.relation_max_tokens < 2:
+        parser.error("--relation-max-tokens must be at least 2")
     if (args.ca_layer_lora_target == "none") != (args.ca_layer_lora_rank == 0):
         parser.error(
             "--ca-layer-lora-target and --ca-layer-lora-rank must be enabled together"
@@ -934,6 +952,8 @@ def main() -> int:
         f"layer_lora_rank={args.layer_lora_rank} "
         f"ca_layer_lora={args.ca_layer_lora_target}:r{args.ca_layer_lora_rank}:"
         f"alpha{args.ca_layer_lora_alpha} "
+        f"relation={args.relation_mode}:weight{args.relation_weight}:"
+        f"threshold{args.relation_threshold}:max_tokens{args.relation_max_tokens} "
         f"stage1_batch={args.batch_size}x{args.gradient_accumulation} "
         f"stage3_batch={args.stage3_batch_size}x{args.stage3_gradient_accumulation} "
         f"stage3_workers={args.stage3_dataloader_workers} "
@@ -1028,6 +1048,9 @@ def main() -> int:
                 "memory_slot_cosine_max": args.memory_slot_cosine_max,
                 "stage3_epochs": args.stage3_epochs,
                 "relation_weight": args.relation_weight,
+                "relation_mode": args.relation_mode,
+                "relation_threshold": args.relation_threshold,
+                "relation_max_tokens": args.relation_max_tokens,
             },
         )
         print(f"[SLAKE_CHECKPOINT] saved={final_dir}")

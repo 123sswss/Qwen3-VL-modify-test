@@ -73,6 +73,9 @@ run_slake() {
   local epochs="${SLAKE_STAGE3_EPOCHS:-3}"
   local mmrl_lr="${SLAKE_MMRL_LR:-6e-5}"
   local relation_weight="${MMRL_RELATION_LOSS_WEIGHT:-0.05}"
+  local relation_mode="${MMRL_RELATION_MODE:-linear}"
+  local relation_threshold="${MMRL_RELATION_THRESHOLD:-0.03}"
+  local relation_max_tokens="${MMRL_RELATION_MAX_TOKENS:-64}"
   local memory_pooling_mode="${MMRL_MEMORY_POOLING_MODE:-independent}"
   local memory_slot_diversity_weight="${MMRL_MEMORY_SLOT_DIVERSITY_WEIGHT:-0.0}"
   local memory_slot_cosine_max="${MMRL_MEMORY_SLOT_COSINE_MAX:-0.995}"
@@ -93,7 +96,7 @@ run_slake() {
   local output_dir
   output_dir="$(available_output_dir "$SLAKE_OUTPUT_ROOT" "${experiment_name}_seed${run_seed}_${RUN_DATE}")"
   mkdir -p "$output_dir/eval"
-  echo "[SLAKE] experiment=$experiment_name seed=$run_seed epochs=$epochs mmrl_lr=$mmrl_lr relation=$relation_weight memory_pooling=$memory_pooling_mode memory_slot_weight=$memory_slot_diversity_weight memory_slot_cosine_max=$memory_slot_cosine_max query_architecture=$query_architecture rep_update_mode=$rep_update_mode independent_layer_rep=$independent_layer_rep layer_lora_rank=$layer_lora_rank ca_layer_lora=$ca_layer_lora_target:r$ca_layer_lora_rank:alpha$ca_layer_lora_alpha output=$output_dir"
+  echo "[SLAKE] experiment=$experiment_name seed=$run_seed epochs=$epochs mmrl_lr=$mmrl_lr relation=$relation_mode:weight$relation_weight:threshold$relation_threshold:max_tokens$relation_max_tokens memory_pooling=$memory_pooling_mode memory_slot_weight=$memory_slot_diversity_weight memory_slot_cosine_max=$memory_slot_cosine_max query_architecture=$query_architecture rep_update_mode=$rep_update_mode independent_layer_rep=$independent_layer_rep layer_lora_rank=$layer_lora_rank ca_layer_lora=$ca_layer_lora_target:r$ca_layer_lora_rank:alpha$ca_layer_lora_alpha output=$output_dir"
   (
     cd "$ROOT_DIR" || exit 1
     python slake/train_mmrl.py \
@@ -129,6 +132,9 @@ run_slake() {
       --ca-layer-lora-alpha "$ca_layer_lora_alpha" \
       --mmrl-lr "$mmrl_lr" \
       --relation-weight "$relation_weight" \
+      --relation-mode "$relation_mode" \
+      --relation-threshold "$relation_threshold" \
+      --relation-max-tokens "$relation_max_tokens" \
       --scheduler constant_with_warmup \
       --warmup-ratio 0.10 \
       2>&1 | tee "$output_dir/train.log"
@@ -594,6 +600,30 @@ case "$RUN_TARGET" in
         run_slake || failures=$((failures + 1))
     done
     ;;
+  slake_shared_direct_relation_trust_region)
+    SLAKE_EXPERIMENT_NAME="slake_mmrl_shared_direct_relation_trust_tau0030_w0050" \
+    SLAKE_RUN_SEED=44 \
+    SLAKE_STAGE3_EPOCHS=3 \
+    SLAKE_MMRL_LR=6e-5 \
+    MMRL_RP_SPACE_LENGTH=40 \
+    MMRL_MEMORY_QUERY_COUNT=128 \
+    MMRL_MEMORY_ATTENTION_DIM=128 \
+    MMRL_MEMORY_POOLING_MODE=independent \
+    MMRL_MEMORY_SLOT_DIVERSITY_WEIGHT=0.0 \
+    MMRL_PROJECTOR_HIDDEN_DIM=1024 \
+    MMRL_CROSS_ATTENTION_HEADS=8 \
+    MMRL_QUERY_ARCHITECTURE=shared_direct_post_cross \
+    MMRL_REP_UPDATE_MODE=replace \
+    MMRL_LAYER_LORA_RANK=0 \
+    MMRL_CA_LAYER_LORA_TARGET=none \
+    MMRL_CA_LAYER_LORA_RANK=0 \
+    MMRL_CA_LAYER_LORA_ALPHA=1.0 \
+    MMRL_RELATION_MODE=trust_region \
+    MMRL_RELATION_THRESHOLD=0.03 \
+    MMRL_RELATION_MAX_TOKENS=64 \
+    MMRL_RELATION_LOSS_WEIGHT=0.05 \
+      run_slake || failures=$((failures + 1))
+    ;;
   slake_force_g_one)
     run_slake_force_g_one || failures=$((failures + 1))
     ;;
@@ -607,7 +637,7 @@ case "$RUN_TARGET" in
     run_slake || failures=$((failures + 1))
     ;;
   *)
-    echo "[ERR] 未知目标: $RUN_TARGET，可选 train、slake、slake_shared_direct、slake_lowrank_matrix、slake_structure_matrix、slake_full_geometry_budget4、slake_memory_pooling_serial3、slake_memory_pooling_competitive128、slake_independent_layer_rep、slake_shared_layer_delta、slake_ca_ablation_serial3、slake_ca_corrected_serial3、slake_ca_corrected_lora2、slake_ca_ce_only_serial3、slake_shared_direct_relation_sweep、slake_force_g_one、train_shared_direct、all。" >&2
+    echo "[ERR] 未知目标: $RUN_TARGET，可选 train、slake、slake_shared_direct、slake_lowrank_matrix、slake_structure_matrix、slake_full_geometry_budget4、slake_memory_pooling_serial3、slake_memory_pooling_competitive128、slake_independent_layer_rep、slake_shared_layer_delta、slake_ca_ablation_serial3、slake_ca_corrected_serial3、slake_ca_corrected_lora2、slake_ca_ce_only_serial3、slake_shared_direct_relation_sweep、slake_shared_direct_relation_trust_region、slake_force_g_one、train_shared_direct、all。" >&2
     exit 2
     ;;
 esac

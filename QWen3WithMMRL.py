@@ -99,6 +99,16 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
                 "MMRL_CA_LAYER_LORA_ALPHA",
                 cfg.MMRL_CA_LAYER_LORA_ALPHA,
             ),
+            "MMRL_RELATION_MODE": _cfg_attr(
+                config,
+                "MMRL_RELATION_MODE",
+                cfg.MMRL_RELATION_MODE,
+            ),
+            "MMRL_RELATION_THRESHOLD": _cfg_attr(
+                config,
+                "MMRL_RELATION_THRESHOLD",
+                cfg.MMRL_RELATION_THRESHOLD,
+            ),
             "MMRL_RELATION_MAX_TOKENS": _cfg_attr(config, "MMRL_RELATION_MAX_TOKENS", 64),
             "MMRL_VARIANCE_FLOOR_RATIO": _cfg_attr(config, "MMRL_VARIANCE_FLOOR_RATIO", 0.50),
             "MMRL_VARIANCE_FLOOR_WEIGHT": _cfg_attr(config, "MMRL_VARIANCE_FLOOR_WEIGHT", 0.10),

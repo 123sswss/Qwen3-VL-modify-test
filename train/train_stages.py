@@ -67,6 +67,10 @@ def _build_experiment_context(train_cfg, output_dir, stage_id):
                 "mmrl_relation_loss_weight",
                 experiment_cfg.get("mmrl_relation_loss_weight"),
             ),
+            "mmrl_relation_mode": experiment_cfg.get("mmrl_relation_mode"),
+            "mmrl_relation_threshold": experiment_cfg.get(
+                "mmrl_relation_threshold"
+            ),
             "memory_pooling_mode": experiment_cfg.get("memory_pooling_mode"),
             "memory_slot_diversity_weight": train_cfg.get(
                 "memory_slot_diversity_weight",
@@ -1077,6 +1081,14 @@ def build_model_and_processor(model_path, experiment_cfg=None):
         "mmrl_relation_loss_weight",
         os.getenv("MMRL_RELATION_LOSS_WEIGHT", "0.0"),
     ))
+    config.MMRL_RELATION_MODE = str(experiment_cfg.get(
+        "mmrl_relation_mode",
+        os.getenv("MMRL_RELATION_MODE", "linear"),
+    ))
+    config.MMRL_RELATION_THRESHOLD = float(experiment_cfg.get(
+        "mmrl_relation_threshold",
+        os.getenv("MMRL_RELATION_THRESHOLD", "0.03"),
+    ))
     config.MMRL_RELATION_MAX_TOKENS = int(experiment_cfg.get(
         "mmrl_relation_max_tokens",
         os.getenv("MMRL_RELATION_MAX_TOKENS", "64"),
@@ -1109,6 +1121,14 @@ def build_model_and_processor(model_path, experiment_cfg=None):
     visual = model.model.visual
     mmrl = model.model.MMRL
     propagation_checks = {
+        "MMRL_RELATION_MODE": (
+            config.MMRL_RELATION_MODE,
+            visual.mmrl_relation_mode,
+        ),
+        "MMRL_RELATION_THRESHOLD": (
+            config.MMRL_RELATION_THRESHOLD,
+            visual.mmrl_relation_threshold,
+        ),
         "MMRL_RELATION_MAX_TOKENS": (
             config.MMRL_RELATION_MAX_TOKENS,
             visual.mmrl_relation_max_tokens,
@@ -1403,6 +1423,8 @@ def build_model_and_processor(model_path, experiment_cfg=None):
         f"memory_slot_cosine_max={config.MMRL_MEMORY_SLOT_COSINE_MAX} "
         f"projector_hidden_dim={config.MMRL_PROJECTOR_HIDDEN_DIM} "
         f"cross_attention_heads={config.MMRL_CROSS_ATTENTION_HEADS} "
+        f"mmrl_relation_mode={config.MMRL_RELATION_MODE} "
+        f"mmrl_relation_threshold={config.MMRL_RELATION_THRESHOLD} "
         f"mmrl_relation_loss_weight={config.MMRL_RELATION_LOSS_WEIGHT} "
         f"mmrl_variance_floor_ratio={config.MMRL_VARIANCE_FLOOR_RATIO} "
         f"mmrl_variance_floor_weight={config.MMRL_VARIANCE_FLOOR_WEIGHT} "
@@ -1889,7 +1911,9 @@ def run_stage3_full(model, processor, data_cfg, train_cfg, output_dir):
     )
     print(
         "[MMRL_RELATION] "
+        f"mode={model.model.visual.mmrl_relation_mode} "
         f"weight={model.mmrl_relation_loss_weight} "
+        f"threshold={model.model.visual.mmrl_relation_threshold} "
         f"max_tokens={model.model.visual.mmrl_relation_max_tokens} "
         f"variance_floor_ratio={model.model.visual.mmrl_variance_floor_ratio} "
         f"variance_floor_weight={model.model.visual.mmrl_variance_floor_weight}"

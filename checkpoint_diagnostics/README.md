@@ -74,3 +74,24 @@ This inference ablation still computes the trained 128-query pooling before
 collapsing its outputs. Accuracy directly tests whether slot diversity matters;
 its TTFT reduction is only a lower bound for a model retrained with one pooling
 query per modality.
+
+## Matched vs shuffled memory causality
+
+`test_memory_causality.py` keeps each sample's visual backbone and Rep queries
+fixed, then swaps visual memory, text memory, or both at the Cross-Attention
+boundary. It performs no optimization and reports whether a real memory change
+causes changes in attention, retrieved context, CA delta, dynamic Rep, supervised
+CE, and teacher-forced token decisions.
+
+```bash
+python checkpoint_diagnostics/test_memory_causality.py \
+  /root/autodl-tmp/Qwen3-VL-modify-test/slake/outputs/mmrl/EXPERIMENT/final \
+  --limit 256 --batch-size 2
+```
+
+Pass multiple checkpoints to produce a direct comparison table. The default
+forces `G=1`; use `--respect-gate` only when gate behavior is part of the test.
+The current SLAKE diagnostic requires one image per sample and drops an
+incomplete final batch so every sample has a mismatch partner. Pairing is
+randomized reproducibly with `--pair-seed` instead of using adjacent records,
+which may contain different questions about the same image.

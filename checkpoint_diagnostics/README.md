@@ -123,3 +123,19 @@ python checkpoint_diagnostics/test_memory_causality.py \
 `key_modality_mean` repeats one projected mean K inside each modality, retaining
 only visual-vs-text routing. `key_zero` makes attention uniform across all
 memory tokens. Both retain every original V token.
+
+Calibrated static routing removes Q/K from the effective forward. It estimates
+one visual mass per attention head, insertion layer, and Rep slot on a disjoint
+calibration subset, then reads all V tokens uniformly inside each modality:
+
+```bash
+python checkpoint_diagnostics/test_memory_causality.py \
+  /root/autodl-tmp/Qwen3-VL-modify-test/slake/outputs/mmrl/EXPERIMENT/final \
+  --limit 256 --batch-size 2 \
+  --static-routing-calibration-samples 64 \
+  --modes attention_static_modality key_modality_mean key_zero
+```
+
+The calibration split uses no labels and is excluded from the reported
+evaluation samples. The resulting fixed routing has at most
+`heads * layers * Rep_slots` independent visual-mass parameters.

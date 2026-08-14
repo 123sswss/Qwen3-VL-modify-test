@@ -17,7 +17,7 @@ from typing import Any, Iterable, Mapping, Sequence
 
 import torch
 import torch.nn.functional as F
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, Subset
 
 from dissect_dynamic_rep import (
     DEFAULT_BASE_MODEL,
@@ -41,11 +41,13 @@ MEMORY_SHUFFLE_MODES = ("visual", "text", "both")
 KEY_SHUFFLE_MODES = ("key_visual", "key_text", "key_both")
 VALUE_SHUFFLE_MODES = ("value_visual", "value_text", "value_both")
 KEY_STRUCTURE_MODES = ("key_modality_mean", "key_zero")
+STATIC_ROUTING_MODES = ("attention_static_modality",)
 SHUFFLE_MODES = (
     *MEMORY_SHUFFLE_MODES,
     *KEY_SHUFFLE_MODES,
     *VALUE_SHUFFLE_MODES,
     *KEY_STRUCTURE_MODES,
+    *STATIC_ROUTING_MODES,
 )
 SAMPLE_METRICS = (
     "baseline_ce",
@@ -110,6 +112,7 @@ class MemoryShuffleController:
         self.mode = "matched"
         self.last_permutation: torch.Tensor | None = None
         self.memory_split_index: int | None = None
+        self.static_visual_mass: torch.Tensor | None = None
         self.suspend_projection_hooks = False
         self.pre_handle = module.register_forward_pre_hook(
             self._hook,
@@ -121,11 +124,85 @@ class MemoryShuffleController:
         self.value_handle = module.value_projection.register_forward_hook(
             lambda _module, _args, output: self._projected_hook("value", output)
         )
+        self.output_handle = module.register_forward_hook(
+            self._static_routing_hook,
+            with_kwargs=True,
+        )
 
     def close(self) -> None:
         self.pre_handle.remove()
         self.key_handle.remove()
         self.value_handle.remove()
+        self.output_handle.remove()
+
+    def set_static_visual_mass(self, visual_mass: torch.Tensor) -> None:
+        if visual_mass.ndim != 3:
+            raise ValueError(
+                "Static visual mass must be [heads,layers,slots], got "
+                f"{tuple(visual_mass.shape)}"
+            )
+        self.static_visual_mass = visual_mass.detach().float().clamp(0.0, 1.0)
+
+    def static_attention_weights(
+        self,
+        batch_size: int,
+        memory_count: int,
+        device: torch.device,
+    ) -> torch.Tensor:
+        if self.static_visual_mass is None or self.memory_split_index is None:
+            raise RuntimeError("Static modality routing has not been calibrated")
+        split = self.memory_split_index
+        text_count = memory_count - split
+        if split < 1 or text_count < 1:
+            raise RuntimeError(f"Invalid static routing split {split}/{memory_count}")
+        visual_mass = self.static_visual_mass.to(device=device)
+        visual_weights = visual_mass.unsqueeze(-1).expand(
+            *visual_mass.shape,
+            split,
+        ) / float(split)
+        text_weights = (1.0 - visual_mass).unsqueeze(-1).expand(
+            *visual_mass.shape,
+            text_count,
+        ) / float(text_count)
+        weights = torch.cat((visual_weights, text_weights), dim=-1)
+        return weights.reshape(
+            1,
+            visual_mass.shape[0],
+            visual_mass.shape[1] * visual_mass.shape[2],
+            memory_count,
+        ).expand(batch_size, -1, -1, -1)
+
+    def _static_routing_hook(
+        self,
+        module: torch.nn.Module,
+        args: tuple[Any, ...],
+        kwargs: dict[str, Any],
+        output: tuple[torch.Tensor, torch.Tensor],
+    ) -> tuple[torch.Tensor, torch.Tensor] | None:
+        if self.mode != "attention_static_modality":
+            return None
+        queries = _get_call_value(args, kwargs, 0, "queries")
+        memory = _get_call_value(args, kwargs, 1, "memory")
+        group_shape = kwargs.get("query_group_shape")
+        if queries is None or memory is None or group_shape is None:
+            raise RuntimeError("Static routing hook did not receive CA inputs")
+        with torch.no_grad():
+            normalized_memory = module.memory_norm(memory)
+            value_states = module._split_heads(
+                module.value_projection(normalized_memory)
+            )
+            weights = self.static_attention_weights(
+                queries.shape[0],
+                memory.shape[1],
+                queries.device,
+            ).to(value_states.dtype)
+            context = torch.matmul(weights, value_states)
+            context = context.transpose(1, 2).contiguous().view_as(queries)
+            delta = module.output_projection(context)
+            if module.layer_lora_target == "output":
+                grouped_context = module._group_layers(context, group_shape)
+                delta = delta + module.layer_lora(grouped_context).reshape_as(delta)
+        return queries + delta, delta
 
     def _projected_hook(
         self,
@@ -294,14 +371,21 @@ class CrossAttentionStateCapture:
             query_heads = module._split_heads(projected_queries)
             key_heads = module._split_heads(projected_keys)
             value_heads = module._split_heads(projected_values)
-            scores = torch.matmul(query_heads, key_heads.transpose(-2, -1))
-            scores = scores.float() / math.sqrt(float(module.head_dim))
-            if logit_bias is not None:
-                scores = scores + logit_bias.to(
-                    device=scores.device,
-                    dtype=scores.dtype,
-                )[:, None, None, :]
-            weights = torch.softmax(scores, dim=-1)
+            if self.controller.mode == "attention_static_modality":
+                weights = self.controller.static_attention_weights(
+                    batch_size,
+                    memory.shape[1],
+                    queries.device,
+                )
+            else:
+                scores = torch.matmul(query_heads, key_heads.transpose(-2, -1))
+                scores = scores.float() / math.sqrt(float(module.head_dim))
+                if logit_bias is not None:
+                    scores = scores + logit_bias.to(
+                        device=scores.device,
+                        dtype=scores.dtype,
+                    )[:, None, None, :]
+                weights = torch.softmax(scores, dim=-1)
             context = torch.matmul(weights.to(value_heads.dtype), value_heads)
             context = context.transpose(1, 2).contiguous().view(
                 batch_size,
@@ -320,6 +404,12 @@ class CrossAttentionStateCapture:
                     slot_count,
                     memory.shape[1],
                 ).detach(),
+                "head_visual_mass": weights[..., :split].sum(dim=-1).reshape(
+                    batch_size,
+                    module.num_heads,
+                    layer_count,
+                    slot_count,
+                ).detach().float(),
                 "context": context.reshape(
                     batch_size,
                     layer_count,
@@ -412,6 +502,73 @@ def _mean(values: Sequence[float]) -> float:
     return float(sum(values) / len(values)) if values else float("nan")
 
 
+def _build_model_inputs(batch: Mapping[str, Any], device: torch.device) -> dict[str, Any]:
+    model_inputs = {
+        key: _to_device(batch[key], device)
+        for key in (
+            "input_ids",
+            "attention_mask",
+            "pixel_values",
+            "image_grid_thw",
+            "mmrl_gating_mask",
+        )
+    }
+    model_inputs["images_per_sample"] = batch["images_per_sample"]
+    return model_inputs
+
+
+def calibrate_static_modality_routing(
+    model: torch.nn.Module,
+    controller: MemoryShuffleController,
+    capture: CrossAttentionStateCapture,
+    loader: DataLoader,
+    device: torch.device,
+) -> dict[str, Any]:
+    mass_sum: torch.Tensor | None = None
+    sample_count = 0
+    controller.mode = "matched"
+    for batch_number, (_dataset_indices, batch) in enumerate(loader, start=1):
+        image_counts = [int(value) for value in batch["images_per_sample"]]
+        if any(value != 1 for value in image_counts):
+            raise RuntimeError(
+                "Static routing calibration requires one image per sample; "
+                f"got images_per_sample={image_counts}"
+            )
+        capture.latest = None
+        if hasattr(model.model, "rope_deltas"):
+            model.model.rope_deltas = None
+        with torch.inference_mode():
+            outputs = model(
+                **_build_model_inputs(batch, device),
+                use_cache=False,
+                return_dict=True,
+            )
+        if capture.latest is None:
+            raise RuntimeError("No CA state captured during static routing calibration")
+        visual_mass = capture.latest["head_visual_mass"]
+        batch_sum = visual_mass.sum(dim=0).cpu()
+        mass_sum = batch_sum if mass_sum is None else mass_sum + batch_sum
+        sample_count += visual_mass.shape[0]
+        del outputs
+        if batch_number == len(loader) or batch_number % 10 == 0:
+            print(
+                "[STATIC_ROUTING_CALIBRATION] "
+                f"batches={batch_number}/{len(loader)} samples={sample_count}"
+            )
+    if mass_sum is None or sample_count < 1:
+        raise RuntimeError("Static routing calibration produced no samples")
+    visual_mass = mass_sum / float(sample_count)
+    controller.set_static_visual_mass(visual_mass)
+    return {
+        "sample_count": sample_count,
+        "visual_mass_mean": float(visual_mass.mean().item()),
+        "visual_mass_std": float(visual_mass.std(unbiased=False).item()),
+        "visual_mass_min": float(visual_mass.min().item()),
+        "visual_mass_max": float(visual_mass.max().item()),
+        "shape": list(visual_mass.shape),
+    }
+
+
 def report_markdown(summary: Mapping[str, Any]) -> str:
     def mean(mode: str, metric: str) -> float:
         value = summary["modes"][mode]["sample_metrics"].get(metric, {})
@@ -424,7 +581,7 @@ def report_markdown(summary: Mapping[str, Any]) -> str:
         f"- Samples: {summary['sample_count']}",
         f"- Force G=1: {summary['force_g_one']}",
         "",
-        "| Shuffle | Visual memory change | Text memory change | K change | V change | Attention TV | Context change | Delta change | Rep change | CE delta | Token flip |",
+        "| Intervention | Visual memory change | Text memory change | K change | V change | Attention TV | Context change | Delta change | Rep change | CE delta | Token flip |",
         "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
     ]
     for mode in summary["shuffle_modes"]:
@@ -443,7 +600,7 @@ def report_markdown(summary: Mapping[str, Any]) -> str:
         )
     lines.extend([
         "",
-        "`CE delta > 0` means mismatched memory hurts the supervised answer. "
+        "`CE delta > 0` means the intervention hurts the supervised answer. "
         "Low output change is only evidence of CA insensitivity when the corresponding "
         "memory change is itself non-trivial.",
     ])
@@ -469,11 +626,19 @@ def analyze_checkpoint(
     if not args.respect_gate:
         visual.ablate_visual_gate = True
 
+    static_routing_requested = any(
+        mode in STATIC_ROUTING_MODES for mode in args.modes
+    )
+    calibration_limit = (
+        args.static_routing_calibration_samples
+        if static_routing_requested
+        else 0
+    )
     dataset = SLAKEDataset(
         processor=processor,
         image_root=str(args.image_root),
         questions_path=str(args.questions),
-        total_limit=args.limit,
+        total_limit=args.limit + calibration_limit,
         languages=None if args.language == "all" else (args.language,),
         base_types=None,
         splits=None,
@@ -482,21 +647,51 @@ def analyze_checkpoint(
         deterministic_sampling=True,
         max_length=args.max_length,
     )
+    if len(dataset) < args.limit + calibration_limit:
+        raise RuntimeError(
+            "Dataset returned fewer samples than requested for causality test: "
+            f"actual={len(dataset)} requested={args.limit + calibration_limit}"
+        )
+    indexed_dataset = IndexedDataset(dataset)
+    collator = IndexedCollator(SLAKEDataCollator(processor))
+    evaluation_indices = range(calibration_limit, calibration_limit + args.limit)
     loader = DataLoader(
-        IndexedDataset(dataset),
+        Subset(indexed_dataset, evaluation_indices),
         batch_size=args.batch_size,
         shuffle=True,
         num_workers=args.workers,
         pin_memory=True,
         drop_last=True,
         generator=torch.Generator().manual_seed(args.pair_seed),
-        collate_fn=IndexedCollator(SLAKEDataCollator(processor)),
+        collate_fn=collator,
     )
 
     cross_attention = model.model.MMRL.cross_attention
     controller = MemoryShuffleController(cross_attention)
     capture = CrossAttentionStateCapture(cross_attention, controller)
     device = next(model.parameters()).device
+    static_routing_calibration: dict[str, Any] | None = None
+    if static_routing_requested:
+        calibration_loader = DataLoader(
+            Subset(indexed_dataset, range(calibration_limit)),
+            batch_size=args.batch_size,
+            shuffle=False,
+            num_workers=args.workers,
+            pin_memory=True,
+            drop_last=True,
+            collate_fn=collator,
+        )
+        static_routing_calibration = calibrate_static_modality_routing(
+            model,
+            controller,
+            capture,
+            calibration_loader,
+            device,
+        )
+        print(
+            "[STATIC_ROUTING_CALIBRATION_DONE] "
+            f"{static_routing_calibration}"
+        )
     insert_layers = list(visual.insert_layers)
     sample_rows: list[dict[str, Any]] = []
     layer_rows: list[dict[str, Any]] = []
@@ -510,17 +705,7 @@ def analyze_checkpoint(
                     "This diagnostic currently requires one image per sample; "
                     f"got images_per_sample={image_counts}"
                 )
-            model_inputs = {
-                key: _to_device(batch[key], device)
-                for key in (
-                    "input_ids",
-                    "attention_mask",
-                    "pixel_values",
-                    "image_grid_thw",
-                    "mmrl_gating_mask",
-                )
-            }
-            model_inputs["images_per_sample"] = batch["images_per_sample"]
+            model_inputs = _build_model_inputs(batch, device)
             labels = batch["labels"].to(device)
             mode_payloads: dict[str, dict[str, Any]] = {}
 
@@ -721,6 +906,7 @@ def analyze_checkpoint(
         "sample_count": processed_samples,
         "batch_size": args.batch_size,
         "pair_seed": args.pair_seed,
+        "static_routing_calibration": static_routing_calibration,
         "shuffle_modes": list(args.modes),
         "force_g_one": not args.respect_gate,
         "insert_layers_0based": insert_layers,
@@ -746,7 +932,7 @@ def comparison_markdown(summaries: Sequence[Mapping[str, Any]]) -> str:
     lines = [
         "# Matched vs Shuffled Memory Comparison",
         "",
-        "| Checkpoint | Shuffle | Visual memory change | Text memory change | K change | V change | Attention TV | Context change | Delta change | Rep change | CE delta | Token flip |",
+        "| Checkpoint | Intervention | Visual memory change | Text memory change | K change | V change | Attention TV | Context change | Delta change | Rep change | CE delta | Token flip |",
         "|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
     ]
     metrics = (
@@ -794,6 +980,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-length", type=int, default=2048)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--pair-seed", type=int, default=20260814)
+    parser.add_argument("--static-routing-calibration-samples", type=int, default=64)
     parser.add_argument("--language", choices=("all", "en", "zh"), default="all")
     parser.add_argument(
         "--modes",
@@ -828,6 +1015,13 @@ def parse_args() -> argparse.Namespace:
         parser.error("--limit must be at least --batch-size")
     if args.batch_size < 2:
         parser.error("--batch-size must be at least 2 for derangement")
+    if (
+        any(mode in STATIC_ROUTING_MODES for mode in args.modes)
+        and args.static_routing_calibration_samples < args.batch_size
+    ):
+        parser.error(
+            "--static-routing-calibration-samples must be at least --batch-size"
+        )
     if args.workers < 0 or args.log_every < 1:
         parser.error("--workers must be non-negative and --log-every positive")
     if len(set(args.modes)) != len(args.modes):
@@ -855,6 +1049,10 @@ def main() -> int:
     print(f"  images={args.image_root}")
     print(f"  limit={args.limit} batch_size={args.batch_size} workers={args.workers}")
     print(f"  sample_seed={args.seed} pair_seed={args.pair_seed}")
+    print(
+        "  static_routing_calibration_samples="
+        f"{args.static_routing_calibration_samples}"
+    )
     print(f"  force_g_one={not args.respect_gate}")
     print(f"  output={args.output_dir}")
 

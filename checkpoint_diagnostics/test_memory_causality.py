@@ -40,10 +40,12 @@ from slake.data_pipeline import SLAKEDataCollator, SLAKEDataset
 MEMORY_SHUFFLE_MODES = ("visual", "text", "both")
 KEY_SHUFFLE_MODES = ("key_visual", "key_text", "key_both")
 VALUE_SHUFFLE_MODES = ("value_visual", "value_text", "value_both")
+KEY_STRUCTURE_MODES = ("key_modality_mean", "key_zero")
 SHUFFLE_MODES = (
     *MEMORY_SHUFFLE_MODES,
     *KEY_SHUFFLE_MODES,
     *VALUE_SHUFFLE_MODES,
+    *KEY_STRUCTURE_MODES,
 )
 SAMPLE_METRICS = (
     "baseline_ce",
@@ -146,11 +148,19 @@ class MemoryShuffleController:
             return projected
         if self.last_permutation is None or self.memory_split_index is None:
             raise RuntimeError("Projected K/V shuffle ran before CA metadata capture")
+        split = self.memory_split_index
+        if target == "key" and self.mode == "key_zero":
+            return torch.zeros_like(projected)
+        if target == "key" and self.mode == "key_modality_mean":
+            visual = projected[:, :split]
+            text = projected[:, split:]
+            visual = visual.mean(dim=1, keepdim=True).expand_as(visual)
+            text = text.mean(dim=1, keepdim=True).expand_as(text)
+            return torch.cat((visual, text), dim=1)
         modality = self.mode.removeprefix(expected_prefix)
         if modality not in MEMORY_SHUFFLE_MODES:
             raise RuntimeError(f"Unsupported projected shuffle mode: {self.mode}")
         permutation = self.last_permutation.to(projected.device)
-        split = self.memory_split_index
         visual = projected[:, :split]
         text = projected[:, split:]
         if modality in {"visual", "both"}:

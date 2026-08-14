@@ -109,3 +109,17 @@ python checkpoint_diagnostics/test_memory_causality.py \
 `key_*` changes attention routing but reads the original sample's V;
 `value_*` preserves the original attention routing but reads another sample's
 V. The report includes projected K/V change ratios to verify each intervention.
+
+Two K-structure modes isolate content addressing without changing V or memory
+token counts:
+
+```bash
+python checkpoint_diagnostics/test_memory_causality.py \
+  /root/autodl-tmp/Qwen3-VL-modify-test/slake/outputs/mmrl/EXPERIMENT/final \
+  --limit 256 --batch-size 2 \
+  --modes key_modality_mean key_zero key_both
+```
+
+`key_modality_mean` repeats one projected mean K inside each modality, retaining
+only visual-vs-text routing. `key_zero` makes attention uniform across all
+memory tokens. Both retain every original V token.

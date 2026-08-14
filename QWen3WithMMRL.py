@@ -78,6 +78,16 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
                 "MMRL_STATIC_MODALITY_VISUAL_PRIOR",
                 cfg.MMRL_STATIC_MODALITY_VISUAL_PRIOR,
             ),
+            "MMRL_FACTORIZED_VISUAL_RESIDUAL_SCALE": _cfg_attr(
+                config,
+                "MMRL_FACTORIZED_VISUAL_RESIDUAL_SCALE",
+                cfg.MMRL_FACTORIZED_VISUAL_RESIDUAL_SCALE,
+            ),
+            "MMRL_FACTORIZED_TEXT_RESIDUAL_SCALE": _cfg_attr(
+                config,
+                "MMRL_FACTORIZED_TEXT_RESIDUAL_SCALE",
+                cfg.MMRL_FACTORIZED_TEXT_RESIDUAL_SCALE,
+            ),
             "MMRL_QUERY_ARCHITECTURE": _cfg_attr(
                 config,
                 "MMRL_QUERY_ARCHITECTURE",

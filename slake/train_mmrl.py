@@ -65,7 +65,11 @@ QUERY_ARCHITECTURES = (
 )
 REP_UPDATE_MODES = ("replace", "persistent_delta")
 CA_LAYER_LORA_TARGETS = ("none", "query", "output")
-CROSS_ATTENTION_ROUTING_MODES = ("dynamic_qk", "static_modality")
+CROSS_ATTENTION_ROUTING_MODES = (
+    "dynamic_qk",
+    "factorized_modality",
+    "static_modality",
+)
 RELATION_MODES = ("linear", "trust_region")
 
 
@@ -119,6 +123,10 @@ def build_experiment_config(args: argparse.Namespace) -> Dict[str, Any]:
         "cross_attention_heads": args.cross_attention_heads,
         "cross_attention_routing_mode": args.cross_attention_routing_mode,
         "static_modality_visual_prior": args.static_modality_visual_prior,
+        "factorized_visual_residual_scale": (
+            args.factorized_visual_residual_scale
+        ),
+        "factorized_text_residual_scale": args.factorized_text_residual_scale,
         "query_architecture": args.query_architecture,
         "rep_update_mode": args.rep_update_mode,
         "ablate_direct_learnable_rep": args.independent_layer_rep,
@@ -311,6 +319,20 @@ def build_train_config(
             "static_modality_visual_mass_max",
             "static_modality_logits_param_norm",
             "static_modality_logits_grad_norm",
+            "factorized_visual_mass_std",
+            "factorized_visual_mass_min",
+            "factorized_visual_mass_max",
+            "factorized_modality_logit_mean",
+            "factorized_modality_logit_std",
+            "factorized_modality_logit_abs_mean",
+            "factorized_visual_attention_entropy_norm",
+            "factorized_text_attention_entropy_norm",
+            "factorized_visual_content_residual_norm_mean",
+            "factorized_text_content_residual_norm_mean",
+            "factorized_visual_content_to_mean_ratio",
+            "factorized_text_content_to_mean_ratio",
+            "factorized_visual_scaled_content_to_mean_ratio",
+            "factorized_text_scaled_content_to_mean_ratio",
             *[
                 f"{modality}_pooling_{metric}"
                 for modality in ("visual", "text")
@@ -792,6 +814,16 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--static-modality-visual-prior", type=float, default=0.44)
     parser.add_argument(
+        "--factorized-visual-residual-scale",
+        type=float,
+        default=1.0,
+    )
+    parser.add_argument(
+        "--factorized-text-residual-scale",
+        type=float,
+        default=1.0,
+    )
+    parser.add_argument(
         "--query-architecture",
         choices=QUERY_ARCHITECTURES,
         default="layer_mlp_post_cross",
@@ -888,6 +920,10 @@ def parse_args() -> argparse.Namespace:
         parser.error("--cross-attention-heads must be positive")
     if not 0.0 < args.static_modality_visual_prior < 1.0:
         parser.error("--static-modality-visual-prior must be in (0, 1)")
+    if args.factorized_visual_residual_scale < 0.0:
+        parser.error("--factorized-visual-residual-scale must be non-negative")
+    if args.factorized_text_residual_scale < 0.0:
+        parser.error("--factorized-text-residual-scale must be non-negative")
     if args.layer_lora_rank < 0:
         parser.error("--layer-lora-rank must be non-negative")
     if args.ca_layer_lora_rank < 0:
@@ -970,6 +1006,9 @@ def main() -> int:
         f"cross_attention_heads={args.cross_attention_heads} "
         f"cross_attention_routing={args.cross_attention_routing_mode} "
         f"static_visual_prior={args.static_modality_visual_prior} "
+        "factorized_residual_scales="
+        f"visual{args.factorized_visual_residual_scale}:"
+        f"text{args.factorized_text_residual_scale} "
         f"query_architecture={args.query_architecture} "
         f"rep_update_mode={args.rep_update_mode} "
         f"independent_layer_rep={args.independent_layer_rep} "
@@ -1061,6 +1100,12 @@ def main() -> int:
                 "query_architecture": args.query_architecture,
                 "cross_attention_routing_mode": args.cross_attention_routing_mode,
                 "static_modality_visual_prior": args.static_modality_visual_prior,
+                "factorized_visual_residual_scale": (
+                    args.factorized_visual_residual_scale
+                ),
+                "factorized_text_residual_scale": (
+                    args.factorized_text_residual_scale
+                ),
                 "rep_update_mode": args.rep_update_mode,
                 "ca_layer_lora_target": args.ca_layer_lora_target,
                 "ca_layer_lora_rank": args.ca_layer_lora_rank,

@@ -415,7 +415,11 @@ class LayerwiseLowRankResidual(nn.Module):
 
 class ResidualCrossAttention(nn.Module):
     LAYER_LORA_TARGETS = {"none", "query", "output"}
-    ROUTING_MODES = {"dynamic_qk", "static_modality"}
+    ROUTING_MODES = {
+        "dynamic_qk",
+        "factorized_modality",
+        "static_modality",
+    }
 
     def __init__(
         self,
@@ -425,6 +429,8 @@ class ResidualCrossAttention(nn.Module):
         slot_count: int,
         routing_mode: str = "dynamic_qk",
         static_visual_prior: float = 0.44,
+        factorized_visual_residual_scale: float = 1.0,
+        factorized_text_residual_scale: float = 1.0,
         layer_lora_target: str = "none",
         layer_lora_rank: int = 0,
         layer_lora_alpha: float = 1.0,
@@ -442,6 +448,12 @@ class ResidualCrossAttention(nn.Module):
         self.slot_count = int(slot_count)
         self.routing_mode = str(routing_mode).strip().lower()
         self.static_visual_prior = float(static_visual_prior)
+        self.factorized_visual_residual_scale = float(
+            factorized_visual_residual_scale
+        )
+        self.factorized_text_residual_scale = float(
+            factorized_text_residual_scale
+        )
         self.layer_lora_target = str(layer_lora_target).strip().lower()
         self.layer_lora_rank = int(layer_lora_rank)
         self.layer_lora_alpha = float(layer_lora_alpha)
@@ -462,6 +474,16 @@ class ResidualCrossAttention(nn.Module):
                 "static modality visual prior must be in (0, 1), got "
                 f"{self.static_visual_prior}"
             )
+        if self.factorized_visual_residual_scale < 0.0:
+            raise ValueError(
+                "factorized visual residual scale must be non-negative, got "
+                f"{self.factorized_visual_residual_scale}"
+            )
+        if self.factorized_text_residual_scale < 0.0:
+            raise ValueError(
+                "factorized text residual scale must be non-negative, got "
+                f"{self.factorized_text_residual_scale}"
+            )
         if self.routing_mode == "static_modality" and self.layer_lora_target == "query":
             raise ValueError("query LoRA is incompatible with static modality routing")
         if (self.layer_lora_target == "none") != (self.layer_lora_rank == 0):
@@ -470,7 +492,7 @@ class ResidualCrossAttention(nn.Module):
                 f"target={self.layer_lora_target!r} rank={self.layer_lora_rank}"
             )
         self.memory_norm = nn.LayerNorm(self.hidden_dim)
-        if self.routing_mode == "dynamic_qk":
+        if self.routing_mode != "static_modality":
             self.query_norm = nn.LayerNorm(self.hidden_dim)
             self.query_projection = nn.Linear(self.hidden_dim, self.hidden_dim)
             self.key_projection = nn.Linear(self.hidden_dim, self.hidden_dim)
@@ -655,6 +677,184 @@ class ResidualCrossAttention(nn.Module):
         self.debug_context = stats if self.training else {}
         return queries + delta, delta
 
+    def _forward_factorized_modality(
+        self,
+        queries: torch.Tensor,
+        scores: torch.Tensor,
+        value_states: torch.Tensor,
+        memory_split_index: int | None,
+        query_group_shape: tuple[int, int] | None,
+        stats: dict[str, torch.Tensor],
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        if memory_split_index is None:
+            raise ValueError("factorized modality routing requires a memory split")
+        split = int(memory_split_index)
+        if not 0 < split < scores.shape[-1]:
+            raise ValueError(
+                f"invalid factorized modality memory split {split}/{scores.shape[-1]}"
+            )
+
+        visual_scores = scores[..., :split]
+        text_scores = scores[..., split:]
+        visual_attention_float = torch.softmax(visual_scores, dim=-1)
+        text_attention_float = torch.softmax(text_scores, dim=-1)
+        visual_attention = visual_attention_float.to(value_states.dtype)
+        text_attention = text_attention_float.to(value_states.dtype)
+
+        visual_values = value_states[:, :, :split]
+        text_values = value_states[:, :, split:]
+        visual_mean = visual_values.mean(dim=2, keepdim=True)
+        text_mean = text_values.mean(dim=2, keepdim=True)
+        visual_selected = torch.matmul(visual_attention, visual_values)
+        text_selected = torch.matmul(text_attention, text_values)
+        visual_residual = visual_selected - visual_mean
+        text_residual = text_selected - text_mean
+        visual_context = visual_mean + (
+            self.factorized_visual_residual_scale * visual_residual
+        )
+        text_context = text_mean + (
+            self.factorized_text_residual_scale * text_residual
+        )
+
+        visual_modality_score = visual_scores.mean(dim=-1)
+        text_modality_score = text_scores.mean(dim=-1)
+        modality_logit = visual_modality_score - text_modality_score
+        visual_mass_float = torch.sigmoid(modality_logit)
+        visual_mass = visual_mass_float.to(value_states.dtype).unsqueeze(-1)
+        context_heads = (
+            visual_mass * visual_context
+            + (1.0 - visual_mass) * text_context
+        )
+        context = context_heads.transpose(1, 2).contiguous().view_as(queries)
+
+        if self.training:
+            with torch.no_grad():
+                full_weights = torch.cat((
+                    visual_mass_float.unsqueeze(-1) * visual_attention_float,
+                    (1.0 - visual_mass_float).unsqueeze(-1)
+                    * text_attention_float,
+                ), dim=-1)
+                query_stride = max(full_weights.shape[-2] // 40, 1)
+                sampled = full_weights[..., ::query_stride, :]
+                entropy = -(
+                    sampled * sampled.clamp_min(1e-8).log()
+                ).sum(dim=-1)
+                visual_entropy = -(
+                    visual_attention_float
+                    * visual_attention_float.clamp_min(1e-8).log()
+                ).sum(dim=-1)
+                text_entropy = -(
+                    text_attention_float
+                    * text_attention_float.clamp_min(1e-8).log()
+                ).sum(dim=-1)
+                if visual_attention_float.shape[-1] > 1:
+                    visual_entropy = visual_entropy / math.log(
+                        float(visual_attention_float.shape[-1])
+                    )
+                if text_attention_float.shape[-1] > 1:
+                    text_entropy = text_entropy / math.log(
+                        float(text_attention_float.shape[-1])
+                    )
+                visual_mean_norm = visual_mean.detach().float().norm(
+                    dim=-1
+                ).mean()
+                text_mean_norm = text_mean.detach().float().norm(dim=-1).mean()
+                visual_residual_norm = visual_residual.detach().float().norm(
+                    dim=-1
+                ).mean()
+                text_residual_norm = text_residual.detach().float().norm(
+                    dim=-1
+                ).mean()
+                gate = visual_mass_float.detach().float()
+                stats.update({
+                    "cross_attention_entropy_norm": (
+                        entropy / math.log(float(full_weights.shape[-1]))
+                    ).mean(),
+                    "cross_attention_peak_mean": sampled.max(
+                        dim=-1
+                    ).values.mean(),
+                    "cross_attention_visual_mass_mean": gate.mean(),
+                    "cross_attention_text_mass_mean": (1.0 - gate).mean(),
+                    "cross_attention_visual_mass_query_std": (
+                        gate.mean(dim=(0, 1)).std(unbiased=False)
+                    ),
+                    "factorized_visual_mass_std": gate.std(unbiased=False),
+                    "factorized_visual_mass_min": gate.min(),
+                    "factorized_visual_mass_max": gate.max(),
+                    "factorized_modality_logit_mean": (
+                        modality_logit.detach().float().mean()
+                    ),
+                    "factorized_modality_logit_std": (
+                        modality_logit.detach().float().std(unbiased=False)
+                    ),
+                    "factorized_modality_logit_abs_mean": (
+                        modality_logit.detach().float().abs().mean()
+                    ),
+                    "factorized_visual_attention_entropy_norm": (
+                        visual_entropy.mean()
+                    ),
+                    "factorized_text_attention_entropy_norm": text_entropy.mean(),
+                    "factorized_visual_content_residual_norm_mean": (
+                        visual_residual_norm
+                    ),
+                    "factorized_text_content_residual_norm_mean": (
+                        text_residual_norm
+                    ),
+                    "factorized_visual_content_to_mean_ratio": (
+                        visual_residual_norm / visual_mean_norm.clamp_min(1e-8)
+                    ),
+                    "factorized_text_content_to_mean_ratio": (
+                        text_residual_norm / text_mean_norm.clamp_min(1e-8)
+                    ),
+                    "factorized_visual_scaled_content_to_mean_ratio": (
+                        self.factorized_visual_residual_scale
+                        * visual_residual_norm
+                        / visual_mean_norm.clamp_min(1e-8)
+                    ),
+                    "factorized_text_scaled_content_to_mean_ratio": (
+                        self.factorized_text_residual_scale
+                        * text_residual_norm
+                        / text_mean_norm.clamp_min(1e-8)
+                    ),
+                })
+                if query_group_shape is not None:
+                    group_count, group_size = map(int, query_group_shape)
+                    if group_count * group_size != queries.shape[1]:
+                        raise ValueError(
+                            "query_group_shape does not match factorized CA "
+                            f"queries: groups={query_group_shape} "
+                            f"query_count={queries.shape[1]}"
+                        )
+                    grouped_attention = full_weights.mean(dim=1).reshape(
+                        queries.shape[0],
+                        group_count,
+                        group_size,
+                        full_weights.shape[-1],
+                    )
+                    stats.update(_grouped_token_geometry(
+                        grouped_attention,
+                        "cross_attention_map",
+                    ))
+                    stats.update(_layer_geometry_metrics(
+                        grouped_attention,
+                        "cross_attention_map",
+                    ))
+
+        delta = self.output_projection(context)
+        if self.layer_lora_target == "output":
+            grouped_context = self._group_layers(context, query_group_shape)
+            output_lora_delta = self.layer_lora(grouped_context)
+            if self.training:
+                with torch.no_grad():
+                    stats.update(self._lora_debug_metrics(
+                        self._group_layers(delta, query_group_shape),
+                        output_lora_delta,
+                        "ca_output_lora",
+                    ))
+            delta = delta + output_lora_delta.reshape_as(delta)
+        self.debug_context = stats if self.training else {}
+        return queries + delta, delta
+
     def forward(
         self,
         queries: torch.Tensor,
@@ -722,6 +922,15 @@ class ResidualCrossAttention(nn.Module):
                 device=scores.device,
                 dtype=scores.dtype,
             )[:, None, None, :]
+        if self.routing_mode == "factorized_modality":
+            return self._forward_factorized_modality(
+                queries,
+                scores,
+                value_states,
+                memory_split_index,
+                query_group_shape,
+                stats,
+            )
         weights = torch.softmax(scores, dim=-1).to(dtype=value_states.dtype)
         if self.training:
             with torch.no_grad():
@@ -913,6 +1122,12 @@ class MMRL(nn.Module):
         self.static_modality_visual_prior = float(
             getattr(cfg, "MMRL_STATIC_MODALITY_VISUAL_PRIOR", 0.44)
         )
+        self.factorized_visual_residual_scale = float(
+            getattr(cfg, "MMRL_FACTORIZED_VISUAL_RESIDUAL_SCALE", 1.0)
+        )
+        self.factorized_text_residual_scale = float(
+            getattr(cfg, "MMRL_FACTORIZED_TEXT_RESIDUAL_SCALE", 1.0)
+        )
         if (
             self.use_direct_learnable_rep
             and self.query_architecture == "lowdim_cross_layer_linear"
@@ -1043,6 +1258,10 @@ class MMRL(nn.Module):
             slot_count=self.rp_space_length,
             routing_mode=self.cross_attention_routing_mode,
             static_visual_prior=self.static_modality_visual_prior,
+            factorized_visual_residual_scale=(
+                self.factorized_visual_residual_scale
+            ),
+            factorized_text_residual_scale=self.factorized_text_residual_scale,
             layer_lora_target=self.ca_layer_lora_target,
             layer_lora_rank=self.ca_layer_lora_rank,
             layer_lora_alpha=self.ca_layer_lora_alpha,
@@ -1439,6 +1658,14 @@ class MMRL(nn.Module):
                 "  cross_attention_routing="
                 f"{self.cross_attention.routing_mode}"
             )
+            if self.cross_attention.routing_mode == "factorized_modality":
+                print(
+                    "  factorized_residual_scales="
+                    "visual"
+                    f"{self.cross_attention.factorized_visual_residual_scale}:"
+                    "text"
+                    f"{self.cross_attention.factorized_text_residual_scale}"
+                )
             print(f"  cross_attention_dim={self.cross_attention_dim}")
             print(f"  visual_memory_shape={tuple(visual_memory.shape)}")
             print(f"  text_memory_shape={tuple(text_memory.shape)}")

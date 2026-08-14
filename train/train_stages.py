@@ -78,6 +78,12 @@ def _build_experiment_context(train_cfg, output_dir, stage_id):
             "static_modality_visual_prior": experiment_cfg.get(
                 "static_modality_visual_prior"
             ),
+            "factorized_visual_residual_scale": experiment_cfg.get(
+                "factorized_visual_residual_scale"
+            ),
+            "factorized_text_residual_scale": experiment_cfg.get(
+                "factorized_text_residual_scale"
+            ),
             "memory_slot_diversity_weight": train_cfg.get(
                 "memory_slot_diversity_weight",
                 experiment_cfg.get("memory_slot_diversity_weight"),
@@ -1072,6 +1078,20 @@ def build_model_and_processor(model_path, experiment_cfg=None):
             cfg.MMRL_STATIC_MODALITY_VISUAL_PRIOR,
         )),
     ))
+    config.MMRL_FACTORIZED_VISUAL_RESIDUAL_SCALE = float(os.getenv(
+        "MMRL_FACTORIZED_VISUAL_RESIDUAL_SCALE",
+        str(experiment_cfg.get(
+            "factorized_visual_residual_scale",
+            cfg.MMRL_FACTORIZED_VISUAL_RESIDUAL_SCALE,
+        )),
+    ))
+    config.MMRL_FACTORIZED_TEXT_RESIDUAL_SCALE = float(os.getenv(
+        "MMRL_FACTORIZED_TEXT_RESIDUAL_SCALE",
+        str(experiment_cfg.get(
+            "factorized_text_residual_scale",
+            cfg.MMRL_FACTORIZED_TEXT_RESIDUAL_SCALE,
+        )),
+    ))
     config.MMRL_QUERY_ARCHITECTURE = os.getenv(
         "MMRL_QUERY_ARCHITECTURE",
         str(experiment_cfg.get(
@@ -1238,6 +1258,14 @@ def build_model_and_processor(model_path, experiment_cfg=None):
             config.MMRL_STATIC_MODALITY_VISUAL_PRIOR,
             mmrl.cross_attention.static_visual_prior,
         ),
+        "MMRL_FACTORIZED_VISUAL_RESIDUAL_SCALE": (
+            config.MMRL_FACTORIZED_VISUAL_RESIDUAL_SCALE,
+            mmrl.cross_attention.factorized_visual_residual_scale,
+        ),
+        "MMRL_FACTORIZED_TEXT_RESIDUAL_SCALE": (
+            config.MMRL_FACTORIZED_TEXT_RESIDUAL_SCALE,
+            mmrl.cross_attention.factorized_text_residual_scale,
+        ),
     }
     for name, (requested, actual) in propagation_checks.items():
         if isinstance(requested, str):
@@ -1266,6 +1294,9 @@ def build_model_and_processor(model_path, experiment_cfg=None):
         f"{config.MMRL_CROSS_ATTENTION_ROUTING_MODE} "
         "static_modality_visual_prior="
         f"{config.MMRL_STATIC_MODALITY_VISUAL_PRIOR} "
+        "factorized_residual_scales="
+        f"visual{config.MMRL_FACTORIZED_VISUAL_RESIDUAL_SCALE}:"
+        f"text{config.MMRL_FACTORIZED_TEXT_RESIDUAL_SCALE} "
         f"layer_lora_rank={config.MMRL_LAYER_LORA_RANK} "
         "ca_layer_lora="
         f"{config.MMRL_CA_LAYER_LORA_TARGET}:"
@@ -1446,6 +1477,24 @@ def build_model_and_processor(model_path, experiment_cfg=None):
             f"key_projection={mmrl.cross_attention.key_projection is not None} "
             "value_projection=True output_projection=True"
         )
+    if mmrl.cross_attention.routing_mode == "factorized_modality":
+        if (
+            mmrl.cross_attention.query_projection is None
+            or mmrl.cross_attention.key_projection is None
+        ):
+            raise RuntimeError(
+                "Factorized modality routing must retain Q/K projections"
+            )
+        print(
+            "[MMRL_FACTORIZED_MODALITY_INIT_AUDIT] "
+            "query_projection=True key_projection=True "
+            "value_projection=True output_projection=True "
+            "modality_gate=dynamic_mean_qk "
+            "within_modality_attention=separate_softmax "
+            "residual_scales="
+            f"visual{mmrl.cross_attention.factorized_visual_residual_scale}:"
+            f"text{mmrl.cross_attention.factorized_text_residual_scale}"
+        )
 
     del base
     torch.cuda.empty_cache()
@@ -1501,6 +1550,9 @@ def build_model_and_processor(model_path, experiment_cfg=None):
         f"{config.MMRL_CROSS_ATTENTION_ROUTING_MODE} "
         "static_modality_visual_prior="
         f"{config.MMRL_STATIC_MODALITY_VISUAL_PRIOR} "
+        "factorized_residual_scales="
+        f"visual{config.MMRL_FACTORIZED_VISUAL_RESIDUAL_SCALE}:"
+        f"text{config.MMRL_FACTORIZED_TEXT_RESIDUAL_SCALE} "
         f"mmrl_relation_mode={config.MMRL_RELATION_MODE} "
         f"mmrl_relation_threshold={config.MMRL_RELATION_THRESHOLD} "
         f"mmrl_relation_loss_weight={config.MMRL_RELATION_LOSS_WEIGHT} "

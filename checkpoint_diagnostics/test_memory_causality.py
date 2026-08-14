@@ -37,7 +37,14 @@ from inferEngine import ModelInterface
 from slake.data_pipeline import SLAKEDataCollator, SLAKEDataset
 
 
-SHUFFLE_MODES = ("visual", "text", "both")
+MEMORY_SHUFFLE_MODES = ("visual", "text", "both")
+KEY_SHUFFLE_MODES = ("key_visual", "key_text", "key_both")
+VALUE_SHUFFLE_MODES = ("value_visual", "value_text", "value_both")
+SHUFFLE_MODES = (
+    *MEMORY_SHUFFLE_MODES,
+    *KEY_SHUFFLE_MODES,
+    *VALUE_SHUFFLE_MODES,
+)
 SAMPLE_METRICS = (
     "baseline_ce",
     "shuffled_ce",
@@ -47,6 +54,8 @@ SAMPLE_METRICS = (
     "shuffled_token_accuracy",
     "visual_memory_change_ratio",
     "text_memory_change_ratio",
+    "key_change_ratio",
+    "value_change_ratio",
     "attention_tv_mean",
     "attention_js_mean",
     "context_change_ratio_mean",
@@ -93,18 +102,62 @@ def _replace_call_value(
 
 
 class MemoryShuffleController:
-    """Swap fixed-length visual/text memory between samples before CA."""
+    """Swap raw memory or projected K/V between samples at the CA boundary."""
 
     def __init__(self, module: torch.nn.Module) -> None:
         self.mode = "matched"
         self.last_permutation: torch.Tensor | None = None
-        self.handle = module.register_forward_pre_hook(
+        self.memory_split_index: int | None = None
+        self.suspend_projection_hooks = False
+        self.pre_handle = module.register_forward_pre_hook(
             self._hook,
             with_kwargs=True,
         )
+        self.key_handle = module.key_projection.register_forward_hook(
+            lambda _module, _args, output: self._projected_hook("key", output)
+        )
+        self.value_handle = module.value_projection.register_forward_hook(
+            lambda _module, _args, output: self._projected_hook("value", output)
+        )
 
     def close(self) -> None:
-        self.handle.remove()
+        self.pre_handle.remove()
+        self.key_handle.remove()
+        self.value_handle.remove()
+
+    def _projected_hook(
+        self,
+        target: str,
+        output: torch.Tensor,
+    ) -> torch.Tensor | None:
+        if self.suspend_projection_hooks:
+            return None
+        if not self.mode.startswith(f"{target}_"):
+            return None
+        return self.apply_projected_intervention(target, output)
+
+    def apply_projected_intervention(
+        self,
+        target: str,
+        projected: torch.Tensor,
+    ) -> torch.Tensor:
+        expected_prefix = f"{target}_"
+        if not self.mode.startswith(expected_prefix):
+            return projected
+        if self.last_permutation is None or self.memory_split_index is None:
+            raise RuntimeError("Projected K/V shuffle ran before CA metadata capture")
+        modality = self.mode.removeprefix(expected_prefix)
+        if modality not in MEMORY_SHUFFLE_MODES:
+            raise RuntimeError(f"Unsupported projected shuffle mode: {self.mode}")
+        permutation = self.last_permutation.to(projected.device)
+        split = self.memory_split_index
+        visual = projected[:, :split]
+        text = projected[:, split:]
+        if modality in {"visual", "both"}:
+            visual = visual.index_select(0, permutation)
+        if modality in {"text", "both"}:
+            text = text.index_select(0, permutation)
+        return torch.cat((visual, text), dim=1)
 
     def _hook(
         self,
@@ -122,16 +175,17 @@ class MemoryShuffleController:
         split = int(split_value)
         if not 0 < split < memory_count:
             raise RuntimeError(f"Invalid memory split {split}/{memory_count}")
+        self.memory_split_index = split
 
         permutation = torch.roll(
             torch.arange(batch_size, device=memory.device),
             shifts=1,
         )
         self.last_permutation = permutation.detach().cpu()
-        if self.mode == "matched":
+        if self.mode == "matched" or self.mode not in MEMORY_SHUFFLE_MODES:
+            if self.mode != "matched" and self.mode not in SHUFFLE_MODES:
+                raise RuntimeError(f"Unsupported shuffle mode: {self.mode}")
             return None
-        if self.mode not in SHUFFLE_MODES:
-            raise RuntimeError(f"Unsupported shuffle mode: {self.mode}")
 
         visual = memory[:, :split]
         text = memory[:, split:]
@@ -166,8 +220,13 @@ class MemoryShuffleController:
 class CrossAttentionStateCapture:
     """Capture exact CA outputs and inexpensive attention intermediates."""
 
-    def __init__(self, module: torch.nn.Module) -> None:
+    def __init__(
+        self,
+        module: torch.nn.Module,
+        controller: MemoryShuffleController,
+    ) -> None:
         self.latest: dict[str, torch.Tensor] | None = None
+        self.controller = controller
         self.handle = module.register_forward_hook(self._hook, with_kwargs=True)
 
     def close(self) -> None:
@@ -200,19 +259,31 @@ class CrossAttentionStateCapture:
             device_type=queries.device.type,
             enabled=False,
         ):
-            normalized_queries = module.query_norm(queries)
-            projected_queries = module.query_projection(normalized_queries)
-            if module.layer_lora_target == "query":
-                grouped = module._group_layers(normalized_queries, group_shape)
-                projected_queries = projected_queries + module.layer_lora(
-                    grouped
-                ).reshape_as(projected_queries)
-            query_heads = module._split_heads(projected_queries)
-            normalized_memory = module.memory_norm(memory)
-            key_heads = module._split_heads(module.key_projection(normalized_memory))
-            value_heads = module._split_heads(
-                module.value_projection(normalized_memory)
+            self.controller.suspend_projection_hooks = True
+            try:
+                normalized_queries = module.query_norm(queries)
+                projected_queries = module.query_projection(normalized_queries)
+                if module.layer_lora_target == "query":
+                    grouped = module._group_layers(normalized_queries, group_shape)
+                    projected_queries = projected_queries + module.layer_lora(
+                        grouped
+                    ).reshape_as(projected_queries)
+                normalized_memory = module.memory_norm(memory)
+                projected_keys = module.key_projection(normalized_memory)
+                projected_values = module.value_projection(normalized_memory)
+            finally:
+                self.controller.suspend_projection_hooks = False
+            projected_keys = self.controller.apply_projected_intervention(
+                "key",
+                projected_keys,
             )
+            projected_values = self.controller.apply_projected_intervention(
+                "value",
+                projected_values,
+            )
+            query_heads = module._split_heads(projected_queries)
+            key_heads = module._split_heads(projected_keys)
+            value_heads = module._split_heads(projected_values)
             scores = torch.matmul(query_heads, key_heads.transpose(-2, -1))
             scores = scores.float() / math.sqrt(float(module.head_dim))
             if logit_bias is not None:
@@ -231,6 +302,8 @@ class CrossAttentionStateCapture:
             self.latest = {
                 "visual_memory": memory[:, :split].detach().float(),
                 "text_memory": memory[:, split:].detach().float(),
+                "key": projected_keys.detach().float(),
+                "value": projected_values.detach().float(),
                 "attention": weights.mean(dim=1).reshape(
                     batch_size,
                     layer_count,
@@ -341,14 +414,16 @@ def report_markdown(summary: Mapping[str, Any]) -> str:
         f"- Samples: {summary['sample_count']}",
         f"- Force G=1: {summary['force_g_one']}",
         "",
-        "| Shuffle | Visual memory change | Text memory change | Attention TV | Context change | Delta change | Rep change | CE delta | Token flip |",
-        "|---|---:|---:|---:|---:|---:|---:|---:|---:|",
+        "| Shuffle | Visual memory change | Text memory change | K change | V change | Attention TV | Context change | Delta change | Rep change | CE delta | Token flip |",
+        "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
     ]
     for mode in summary["shuffle_modes"]:
         lines.append(
             f"| `{mode}` | "
             f"{mean(mode, 'visual_memory_change_ratio'):.6f} | "
             f"{mean(mode, 'text_memory_change_ratio'):.6f} | "
+            f"{mean(mode, 'key_change_ratio'):.6f} | "
+            f"{mean(mode, 'value_change_ratio'):.6f} | "
             f"{mean(mode, 'attention_tv_mean'):.6f} | "
             f"{mean(mode, 'context_change_ratio_mean'):.6f} | "
             f"{mean(mode, 'delta_change_ratio_mean'):.6f} | "
@@ -410,7 +485,7 @@ def analyze_checkpoint(
 
     cross_attention = model.model.MMRL.cross_attention
     controller = MemoryShuffleController(cross_attention)
-    capture = CrossAttentionStateCapture(cross_attention)
+    capture = CrossAttentionStateCapture(cross_attention, controller)
     device = next(model.parameters()).device
     insert_layers = list(visual.insert_layers)
     sample_rows: list[dict[str, Any]] = []
@@ -523,6 +598,14 @@ def analyze_checkpoint(
                         "text_memory_change_ratio": _relative_change(
                             base_states["text_memory"][batch_offset],
                             changed_states["text_memory"][batch_offset],
+                        ),
+                        "key_change_ratio": _relative_change(
+                            base_states["key"][batch_offset],
+                            changed_states["key"][batch_offset],
+                        ),
+                        "value_change_ratio": _relative_change(
+                            base_states["value"][batch_offset],
+                            changed_states["value"][batch_offset],
                         ),
                     }
                     per_sample_layer_metrics: dict[str, list[float]] = defaultdict(list)
@@ -653,12 +736,14 @@ def comparison_markdown(summaries: Sequence[Mapping[str, Any]]) -> str:
     lines = [
         "# Matched vs Shuffled Memory Comparison",
         "",
-        "| Checkpoint | Shuffle | Visual memory change | Text memory change | Attention TV | Context change | Delta change | Rep change | CE delta | Token flip |",
-        "|---|---|---:|---:|---:|---:|---:|---:|---:|---:|",
+        "| Checkpoint | Shuffle | Visual memory change | Text memory change | K change | V change | Attention TV | Context change | Delta change | Rep change | CE delta | Token flip |",
+        "|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
     ]
     metrics = (
         "visual_memory_change_ratio",
         "text_memory_change_ratio",
+        "key_change_ratio",
+        "value_change_ratio",
         "attention_tv_mean",
         "context_change_ratio_mean",
         "delta_change_ratio_mean",

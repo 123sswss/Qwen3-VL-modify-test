@@ -95,3 +95,17 @@ The current SLAKE diagnostic requires one image per sample and drops an
 incomplete final batch so every sample has a mismatch partner. Pairing is
 randomized reproducibly with `--pair-seed` instead of using adjacent records,
 which may contain different questions about the same image.
+
+To separate Q/K routing from V content transfer, shuffle projected K and V
+independently while leaving the other projection matched:
+
+```bash
+python checkpoint_diagnostics/test_memory_causality.py \
+  /root/autodl-tmp/Qwen3-VL-modify-test/slake/outputs/mmrl/EXPERIMENT/final \
+  --limit 256 --batch-size 2 \
+  --modes key_visual key_text key_both value_visual value_text value_both
+```
+
+`key_*` changes attention routing but reads the original sample's V;
+`value_*` preserves the original attention routing but reads another sample's
+V. The report includes projected K/V change ratios to verify each intervention.

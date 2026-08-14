@@ -68,6 +68,16 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
                 "MMRL_CROSS_ATTENTION_HEADS",
                 cfg.MMRL_CROSS_ATTENTION_HEADS,
             ),
+            "MMRL_CROSS_ATTENTION_ROUTING_MODE": _cfg_attr(
+                config,
+                "MMRL_CROSS_ATTENTION_ROUTING_MODE",
+                cfg.MMRL_CROSS_ATTENTION_ROUTING_MODE,
+            ),
+            "MMRL_STATIC_MODALITY_VISUAL_PRIOR": _cfg_attr(
+                config,
+                "MMRL_STATIC_MODALITY_VISUAL_PRIOR",
+                cfg.MMRL_STATIC_MODALITY_VISUAL_PRIOR,
+            ),
             "MMRL_QUERY_ARCHITECTURE": _cfg_attr(
                 config,
                 "MMRL_QUERY_ARCHITECTURE",

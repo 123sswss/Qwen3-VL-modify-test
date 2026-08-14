@@ -72,6 +72,12 @@ def _build_experiment_context(train_cfg, output_dir, stage_id):
                 "mmrl_relation_threshold"
             ),
             "memory_pooling_mode": experiment_cfg.get("memory_pooling_mode"),
+            "cross_attention_routing_mode": experiment_cfg.get(
+                "cross_attention_routing_mode"
+            ),
+            "static_modality_visual_prior": experiment_cfg.get(
+                "static_modality_visual_prior"
+            ),
             "memory_slot_diversity_weight": train_cfg.get(
                 "memory_slot_diversity_weight",
                 experiment_cfg.get("memory_slot_diversity_weight"),
@@ -730,6 +736,19 @@ class Qwen3VLMMRLForStages(Qwen3VLForConditionalGeneration):
             "cross_attention",
         )
         cross_attention = getattr(mmrl, "cross_attention", None)
+        static_visual_logits = getattr(
+            cross_attention,
+            "static_visual_logits",
+            None,
+        )
+        if static_visual_logits is not None:
+            result["static_modality_logits_param_norm"] = (
+                static_visual_logits.detach().float().norm()
+            )
+            if static_visual_logits.grad is not None:
+                result["static_modality_logits_grad_norm"] = (
+                    static_visual_logits.grad.detach().float().norm()
+                )
         output_projection = getattr(cross_attention, "output_projection", None)
         if output_projection is not None:
             result["cross_attention_output_weight_norm"] = (
@@ -1039,6 +1058,20 @@ def build_model_and_processor(model_path, experiment_cfg=None):
         "MMRL_CROSS_ATTENTION_HEADS",
         str(experiment_cfg.get("cross_attention_heads", 8)),
     ))
+    config.MMRL_CROSS_ATTENTION_ROUTING_MODE = os.getenv(
+        "MMRL_CROSS_ATTENTION_ROUTING_MODE",
+        str(experiment_cfg.get(
+            "cross_attention_routing_mode",
+            cfg.MMRL_CROSS_ATTENTION_ROUTING_MODE,
+        )),
+    )
+    config.MMRL_STATIC_MODALITY_VISUAL_PRIOR = float(os.getenv(
+        "MMRL_STATIC_MODALITY_VISUAL_PRIOR",
+        str(experiment_cfg.get(
+            "static_modality_visual_prior",
+            cfg.MMRL_STATIC_MODALITY_VISUAL_PRIOR,
+        )),
+    ))
     config.MMRL_QUERY_ARCHITECTURE = os.getenv(
         "MMRL_QUERY_ARCHITECTURE",
         str(experiment_cfg.get(
@@ -1197,6 +1230,14 @@ def build_model_and_processor(model_path, experiment_cfg=None):
             config.MMRL_CROSS_ATTENTION_HEADS,
             mmrl.cross_attention.num_heads,
         ),
+        "MMRL_CROSS_ATTENTION_ROUTING_MODE": (
+            config.MMRL_CROSS_ATTENTION_ROUTING_MODE,
+            mmrl.cross_attention.routing_mode,
+        ),
+        "MMRL_STATIC_MODALITY_VISUAL_PRIOR": (
+            config.MMRL_STATIC_MODALITY_VISUAL_PRIOR,
+            mmrl.cross_attention.static_visual_prior,
+        ),
     }
     for name, (requested, actual) in propagation_checks.items():
         if isinstance(requested, str):
@@ -1221,6 +1262,10 @@ def build_model_and_processor(model_path, experiment_cfg=None):
         f"memory_slot_cosine_max={config.MMRL_MEMORY_SLOT_COSINE_MAX} "
         f"projector_hidden_dim={config.MMRL_PROJECTOR_HIDDEN_DIM} "
         f"cross_attention_heads={config.MMRL_CROSS_ATTENTION_HEADS} "
+        "cross_attention_routing="
+        f"{config.MMRL_CROSS_ATTENTION_ROUTING_MODE} "
+        "static_modality_visual_prior="
+        f"{config.MMRL_STATIC_MODALITY_VISUAL_PRIOR} "
         f"layer_lora_rank={config.MMRL_LAYER_LORA_RANK} "
         "ca_layer_lora="
         f"{config.MMRL_CA_LAYER_LORA_TARGET}:"
@@ -1372,6 +1417,35 @@ def build_model_and_processor(model_path, experiment_cfg=None):
         f"output_weight_norm={cross_output_norm} "
         f"output_bias_norm={cross_output_bias_norm} residual_identity=True"
     )
+    if mmrl.cross_attention.routing_mode == "static_modality":
+        static_logits = mmrl.cross_attention.static_visual_logits
+        expected_shape = (
+            mmrl.cross_attention.num_heads,
+            mmrl.insert_layer_count,
+            mmrl.rp_space_length,
+        )
+        if tuple(static_logits.shape) != expected_shape:
+            raise RuntimeError(
+                "Static modality gate shape mismatch: "
+                f"expected={expected_shape} actual={tuple(static_logits.shape)}"
+            )
+        initial_visual_mass = float(
+            torch.sigmoid(static_logits.detach().float()).mean().item()
+        )
+        if abs(initial_visual_mass - mmrl.static_modality_visual_prior) > 2e-3:
+            raise RuntimeError(
+                "Static modality visual prior initialization mismatch: "
+                f"expected={mmrl.static_modality_visual_prior} "
+                f"actual={initial_visual_mass}"
+            )
+        print(
+            "[MMRL_STATIC_MODALITY_INIT_AUDIT] "
+            f"gate_shape={tuple(static_logits.shape)} "
+            f"initial_visual_mass={initial_visual_mass} "
+            f"query_projection={mmrl.cross_attention.query_projection is not None} "
+            f"key_projection={mmrl.cross_attention.key_projection is not None} "
+            "value_projection=True output_projection=True"
+        )
 
     del base
     torch.cuda.empty_cache()
@@ -1423,6 +1497,10 @@ def build_model_and_processor(model_path, experiment_cfg=None):
         f"memory_slot_cosine_max={config.MMRL_MEMORY_SLOT_COSINE_MAX} "
         f"projector_hidden_dim={config.MMRL_PROJECTOR_HIDDEN_DIM} "
         f"cross_attention_heads={config.MMRL_CROSS_ATTENTION_HEADS} "
+        "cross_attention_routing="
+        f"{config.MMRL_CROSS_ATTENTION_ROUTING_MODE} "
+        "static_modality_visual_prior="
+        f"{config.MMRL_STATIC_MODALITY_VISUAL_PRIOR} "
         f"mmrl_relation_mode={config.MMRL_RELATION_MODE} "
         f"mmrl_relation_threshold={config.MMRL_RELATION_THRESHOLD} "
         f"mmrl_relation_loss_weight={config.MMRL_RELATION_LOSS_WEIGHT} "

@@ -415,12 +415,16 @@ class LayerwiseLowRankResidual(nn.Module):
 
 class ResidualCrossAttention(nn.Module):
     LAYER_LORA_TARGETS = {"none", "query", "output"}
+    ROUTING_MODES = {"dynamic_qk", "static_modality"}
 
     def __init__(
         self,
         hidden_dim: int,
         num_heads: int,
         layer_count: int,
+        slot_count: int,
+        routing_mode: str = "dynamic_qk",
+        static_visual_prior: float = 0.44,
         layer_lora_target: str = "none",
         layer_lora_rank: int = 0,
         layer_lora_alpha: float = 1.0,
@@ -435,6 +439,9 @@ class ResidualCrossAttention(nn.Module):
         self.num_heads = int(num_heads)
         self.head_dim = self.hidden_dim // self.num_heads
         self.layer_count = int(layer_count)
+        self.slot_count = int(slot_count)
+        self.routing_mode = str(routing_mode).strip().lower()
+        self.static_visual_prior = float(static_visual_prior)
         self.layer_lora_target = str(layer_lora_target).strip().lower()
         self.layer_lora_rank = int(layer_lora_rank)
         self.layer_lora_alpha = float(layer_lora_alpha)
@@ -443,15 +450,42 @@ class ResidualCrossAttention(nn.Module):
                 f"unsupported CA layer LoRA target={self.layer_lora_target!r}; "
                 f"choices={sorted(self.LAYER_LORA_TARGETS)}"
             )
+        if self.routing_mode not in self.ROUTING_MODES:
+            raise ValueError(
+                f"unsupported CA routing mode={self.routing_mode!r}; "
+                f"choices={sorted(self.ROUTING_MODES)}"
+            )
+        if self.slot_count < 1:
+            raise ValueError(f"CA slot_count must be positive, got {self.slot_count}")
+        if not 0.0 < self.static_visual_prior < 1.0:
+            raise ValueError(
+                "static modality visual prior must be in (0, 1), got "
+                f"{self.static_visual_prior}"
+            )
+        if self.routing_mode == "static_modality" and self.layer_lora_target == "query":
+            raise ValueError("query LoRA is incompatible with static modality routing")
         if (self.layer_lora_target == "none") != (self.layer_lora_rank == 0):
             raise ValueError(
                 "CA layer LoRA target and rank must be enabled together, got "
                 f"target={self.layer_lora_target!r} rank={self.layer_lora_rank}"
             )
-        self.query_norm = nn.LayerNorm(self.hidden_dim)
         self.memory_norm = nn.LayerNorm(self.hidden_dim)
-        self.query_projection = nn.Linear(self.hidden_dim, self.hidden_dim)
-        self.key_projection = nn.Linear(self.hidden_dim, self.hidden_dim)
+        if self.routing_mode == "dynamic_qk":
+            self.query_norm = nn.LayerNorm(self.hidden_dim)
+            self.query_projection = nn.Linear(self.hidden_dim, self.hidden_dim)
+            self.key_projection = nn.Linear(self.hidden_dim, self.hidden_dim)
+            self.register_parameter("static_visual_logits", None)
+        else:
+            self.query_norm = nn.Identity()
+            self.query_projection = None
+            self.key_projection = None
+            prior_logit = math.log(
+                self.static_visual_prior / (1.0 - self.static_visual_prior)
+            )
+            self.static_visual_logits = nn.Parameter(torch.full(
+                (self.num_heads, self.layer_count, self.slot_count),
+                prior_logit,
+            ))
         self.value_projection = nn.Linear(self.hidden_dim, self.hidden_dim)
         self.output_projection = ZeroInitProjection(self.hidden_dim)
         self.layer_lora = (
@@ -518,6 +552,109 @@ class ResidualCrossAttention(nn.Module):
             self.head_dim,
         ).transpose(1, 2)
 
+    def _forward_static_modality(
+        self,
+        queries: torch.Tensor,
+        memory: torch.Tensor,
+        memory_split_index: int | None,
+        query_group_shape: tuple[int, int] | None,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        if memory_split_index is None or query_group_shape is None:
+            raise ValueError(
+                "static modality routing requires memory split and query grouping"
+            )
+        split = int(memory_split_index)
+        if not 0 < split < memory.shape[1]:
+            raise ValueError(
+                f"invalid static modality memory split {split}/{memory.shape[1]}"
+            )
+        group_count, group_size = map(int, query_group_shape)
+        if (
+            group_count != self.layer_count
+            or group_size != self.slot_count
+            or group_count * group_size != queries.shape[1]
+        ):
+            raise ValueError(
+                "static modality query grouping mismatch: "
+                f"configured=({self.layer_count}, {self.slot_count}) "
+                f"actual={query_group_shape} queries={queries.shape[1]}"
+            )
+
+        normalized_memory = self.memory_norm(memory)
+        value_states = self._split_heads(self.value_projection(normalized_memory))
+        visual_value = value_states[:, :, :split].mean(dim=2)
+        text_value = value_states[:, :, split:].mean(dim=2)
+        visual_mass = torch.sigmoid(self.static_visual_logits).to(value_states.dtype)
+        visual_mass_grouped = visual_mass.unsqueeze(0).unsqueeze(-1)
+        context = (
+            visual_mass_grouped * visual_value[:, :, None, None, :]
+            + (1.0 - visual_mass_grouped) * text_value[:, :, None, None, :]
+        )
+        context = context.reshape(
+            queries.shape[0],
+            self.num_heads,
+            queries.shape[1],
+            self.head_dim,
+        ).transpose(1, 2).contiguous().view_as(queries)
+
+        stats = {}
+        if self.training:
+            with torch.no_grad():
+                gate = visual_mass.detach().float()
+                text_count = memory.shape[1] - split
+                entropy = -(
+                    gate * (gate.clamp_min(1e-8) / float(split)).log()
+                    + (1.0 - gate)
+                    * ((1.0 - gate).clamp_min(1e-8) / float(text_count)).log()
+                )
+                attention = torch.cat((
+                    gate.unsqueeze(-1).expand(*gate.shape, split) / float(split),
+                    (1.0 - gate).unsqueeze(-1).expand(*gate.shape, text_count)
+                    / float(text_count),
+                ), dim=-1)
+                grouped_attention = attention.mean(dim=0).unsqueeze(0)
+                stats.update({
+                    "cross_attention_entropy_norm": (
+                        entropy / math.log(float(memory.shape[1]))
+                    ).mean(),
+                    "cross_attention_peak_mean": torch.maximum(
+                        gate / float(split),
+                        (1.0 - gate) / float(text_count),
+                    ).mean(),
+                    "cross_attention_visual_mass_mean": gate.mean(),
+                    "cross_attention_text_mass_mean": (1.0 - gate).mean(),
+                    "cross_attention_visual_mass_query_std": (
+                        gate.mean(dim=0).reshape(-1).std(unbiased=False)
+                    ),
+                    "static_modality_visual_mass_mean": gate.mean(),
+                    "static_modality_visual_mass_std": gate.std(unbiased=False),
+                    "static_modality_visual_mass_min": gate.min(),
+                    "static_modality_visual_mass_max": gate.max(),
+                })
+                stats.update(_grouped_token_geometry(
+                    grouped_attention,
+                    "cross_attention_map",
+                ))
+                stats.update(_layer_geometry_metrics(
+                    grouped_attention,
+                    "cross_attention_map",
+                ))
+
+        delta = self.output_projection(context)
+        if self.layer_lora_target == "output":
+            grouped_context = self._group_layers(context, query_group_shape)
+            output_lora_delta = self.layer_lora(grouped_context)
+            if self.training:
+                with torch.no_grad():
+                    stats.update(self._lora_debug_metrics(
+                        self._group_layers(delta, query_group_shape),
+                        output_lora_delta,
+                        "ca_output_lora",
+                    ))
+            delta = delta + output_lora_delta.reshape_as(delta)
+        self.debug_context = stats if self.training else {}
+        return queries + delta, delta
+
     def forward(
         self,
         queries: torch.Tensor,
@@ -535,6 +672,13 @@ class ResidualCrossAttention(nn.Module):
             raise ValueError(
                 "cross-attention batch mismatch: "
                 f"queries={queries.shape[0]} memory={memory.shape[0]}"
+            )
+        if self.routing_mode == "static_modality":
+            return self._forward_static_modality(
+                queries,
+                memory,
+                memory_split_index,
+                query_group_shape,
             )
 
         stats = {}
@@ -763,6 +907,12 @@ class MMRL(nn.Module):
         self.ca_layer_lora_alpha = float(
             getattr(cfg, "MMRL_CA_LAYER_LORA_ALPHA", 1.0)
         )
+        self.cross_attention_routing_mode = str(
+            getattr(cfg, "MMRL_CROSS_ATTENTION_ROUTING_MODE", "dynamic_qk")
+        ).strip().lower()
+        self.static_modality_visual_prior = float(
+            getattr(cfg, "MMRL_STATIC_MODALITY_VISUAL_PRIOR", 0.44)
+        )
         if (
             self.use_direct_learnable_rep
             and self.query_architecture == "lowdim_cross_layer_linear"
@@ -890,6 +1040,9 @@ class MMRL(nn.Module):
             hidden_dim=self.cross_attention_dim,
             num_heads=int(cfg.MMRL_CROSS_ATTENTION_HEADS),
             layer_count=self.insert_layer_count,
+            slot_count=self.rp_space_length,
+            routing_mode=self.cross_attention_routing_mode,
+            static_visual_prior=self.static_modality_visual_prior,
             layer_lora_target=self.ca_layer_lora_target,
             layer_lora_rank=self.ca_layer_lora_rank,
             layer_lora_alpha=self.ca_layer_lora_alpha,
@@ -1282,6 +1435,10 @@ class MMRL(nn.Module):
             print("[MMRL_DYNAMIC_REP_AUDIT]")
             print(f"  query_architecture={self.query_architecture}")
             print(f"  rep_update_mode={self.rep_update_mode}")
+            print(
+                "  cross_attention_routing="
+                f"{self.cross_attention.routing_mode}"
+            )
             print(f"  cross_attention_dim={self.cross_attention_dim}")
             print(f"  visual_memory_shape={tuple(visual_memory.shape)}")
             print(f"  text_memory_shape={tuple(text_memory.shape)}")

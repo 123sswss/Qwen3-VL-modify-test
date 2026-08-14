@@ -65,6 +65,7 @@ QUERY_ARCHITECTURES = (
 )
 REP_UPDATE_MODES = ("replace", "persistent_delta")
 CA_LAYER_LORA_TARGETS = ("none", "query", "output")
+CROSS_ATTENTION_ROUTING_MODES = ("dynamic_qk", "static_modality")
 RELATION_MODES = ("linear", "trust_region")
 
 
@@ -116,6 +117,8 @@ def build_experiment_config(args: argparse.Namespace) -> Dict[str, Any]:
         "memory_slot_cosine_max": args.memory_slot_cosine_max,
         "projector_hidden_dim": args.projector_hidden_dim,
         "cross_attention_heads": args.cross_attention_heads,
+        "cross_attention_routing_mode": args.cross_attention_routing_mode,
+        "static_modality_visual_prior": args.static_modality_visual_prior,
         "query_architecture": args.query_architecture,
         "rep_update_mode": args.rep_update_mode,
         "ablate_direct_learnable_rep": args.independent_layer_rep,
@@ -302,6 +305,12 @@ def build_train_config(
             "cross_attention_visual_mass_query_std",
             "cross_attention_entropy_norm",
             "cross_attention_peak_mean",
+            "static_modality_visual_mass_mean",
+            "static_modality_visual_mass_std",
+            "static_modality_visual_mass_min",
+            "static_modality_visual_mass_max",
+            "static_modality_logits_param_norm",
+            "static_modality_logits_grad_norm",
             *[
                 f"{modality}_pooling_{metric}"
                 for modality in ("visual", "text")
@@ -777,6 +786,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--projector-hidden-dim", type=int, default=1024)
     parser.add_argument("--cross-attention-heads", type=int, default=8)
     parser.add_argument(
+        "--cross-attention-routing-mode",
+        choices=CROSS_ATTENTION_ROUTING_MODES,
+        default="dynamic_qk",
+    )
+    parser.add_argument("--static-modality-visual-prior", type=float, default=0.44)
+    parser.add_argument(
         "--query-architecture",
         choices=QUERY_ARCHITECTURES,
         default="layer_mlp_post_cross",
@@ -871,6 +886,8 @@ def parse_args() -> argparse.Namespace:
         parser.error("--projector-hidden-dim must be positive")
     if args.cross_attention_heads < 1:
         parser.error("--cross-attention-heads must be positive")
+    if not 0.0 < args.static_modality_visual_prior < 1.0:
+        parser.error("--static-modality-visual-prior must be in (0, 1)")
     if args.layer_lora_rank < 0:
         parser.error("--layer-lora-rank must be non-negative")
     if args.ca_layer_lora_rank < 0:
@@ -887,6 +904,11 @@ def parse_args() -> argparse.Namespace:
         parser.error(
             "--ca-layer-lora-target and --ca-layer-lora-rank must be enabled together"
         )
+    if (
+        args.cross_attention_routing_mode == "static_modality"
+        and args.ca_layer_lora_target == "query"
+    ):
+        parser.error("static modality routing is incompatible with query CA LoRA")
     if (
         args.layer_lora_rank > 0
         and args.query_architecture != "shared_direct_post_cross"
@@ -946,6 +968,8 @@ def main() -> int:
         f"memory_slot_cosine_max={args.memory_slot_cosine_max} "
         f"projector_hidden_dim={args.projector_hidden_dim} "
         f"cross_attention_heads={args.cross_attention_heads} "
+        f"cross_attention_routing={args.cross_attention_routing_mode} "
+        f"static_visual_prior={args.static_modality_visual_prior} "
         f"query_architecture={args.query_architecture} "
         f"rep_update_mode={args.rep_update_mode} "
         f"independent_layer_rep={args.independent_layer_rep} "
@@ -1035,6 +1059,8 @@ def main() -> int:
                 "dataset": "SLAKE",
                 "language": args.language,
                 "query_architecture": args.query_architecture,
+                "cross_attention_routing_mode": args.cross_attention_routing_mode,
+                "static_modality_visual_prior": args.static_modality_visual_prior,
                 "rep_update_mode": args.rep_update_mode,
                 "ca_layer_lora_target": args.ca_layer_lora_target,
                 "ca_layer_lora_rank": args.ca_layer_lora_rank,

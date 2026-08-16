@@ -1485,12 +1485,18 @@ def build_model_and_processor(model_path, experiment_cfg=None):
             raise RuntimeError(
                 "Factorized modality routing must retain Q/K projections"
             )
+        mean_only = (
+            mmrl.cross_attention.factorized_visual_residual_scale == 0.0
+            and mmrl.cross_attention.factorized_text_residual_scale == 0.0
+        )
         print(
             "[MMRL_FACTORIZED_MODALITY_INIT_AUDIT] "
             "query_projection=True key_projection=True "
             "value_projection=True output_projection=True "
             "modality_gate=dynamic_mean_qk "
-            "within_modality_attention=separate_softmax "
+            "within_modality_attention="
+            f"{'mean_only_fast_path' if mean_only else 'separate_softmax'} "
+            f"projected_memory_tokens={'2' if mean_only else 'all'} "
             "residual_scales="
             f"visual{mmrl.cross_attention.factorized_visual_residual_scale}:"
             f"text{mmrl.cross_attention.factorized_text_residual_scale}"

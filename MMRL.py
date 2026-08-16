@@ -855,6 +855,144 @@ class ResidualCrossAttention(nn.Module):
         self.debug_context = stats if self.training else {}
         return queries + delta, delta
 
+    def _forward_factorized_mean_only(
+        self,
+        queries: torch.Tensor,
+        query_states: torch.Tensor,
+        normalized_memory: torch.Tensor,
+        memory_split_index: int | None,
+        query_group_shape: tuple[int, int] | None,
+        memory_logit_bias: torch.Tensor | None,
+        stats: dict[str, torch.Tensor],
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        if memory_split_index is None:
+            raise ValueError("factorized mean-only routing requires a memory split")
+        split = int(memory_split_index)
+        if not 0 < split < normalized_memory.shape[1]:
+            raise ValueError(
+                "invalid factorized mean-only memory split "
+                f"{split}/{normalized_memory.shape[1]}"
+            )
+
+        visual_count = split
+        text_count = normalized_memory.shape[1] - split
+        modality_memory = torch.stack((
+            normalized_memory[:, :split].mean(dim=1),
+            normalized_memory[:, split:].mean(dim=1),
+        ), dim=1)
+        modality_keys = self._split_heads(self.key_projection(modality_memory))
+        modality_values = self._split_heads(self.value_projection(modality_memory))
+        modality_scores = torch.matmul(
+            query_states,
+            modality_keys.transpose(-2, -1),
+        ).float() / math.sqrt(self.head_dim)
+        if memory_logit_bias is not None:
+            modality_bias = torch.stack((
+                memory_logit_bias[:, :split].mean(dim=1),
+                memory_logit_bias[:, split:].mean(dim=1),
+            ), dim=1)
+            modality_scores = modality_scores + modality_bias.to(
+                device=modality_scores.device,
+                dtype=modality_scores.dtype,
+            )[:, None, None, :]
+
+        modality_logit = modality_scores[..., 0] - modality_scores[..., 1]
+        visual_mass_float = torch.sigmoid(modality_logit)
+        visual_mass = visual_mass_float.to(modality_values.dtype).unsqueeze(-1)
+        context_heads = (
+            visual_mass * modality_values[:, :, None, 0]
+            + (1.0 - visual_mass) * modality_values[:, :, None, 1]
+        )
+        context = context_heads.transpose(1, 2).contiguous().view_as(queries)
+
+        if self.training:
+            with torch.no_grad():
+                gate = visual_mass_float.detach().float()
+                entropy = -(
+                    gate * (gate.clamp_min(1e-8) / float(visual_count)).log()
+                    + (1.0 - gate)
+                    * ((1.0 - gate).clamp_min(1e-8) / float(text_count)).log()
+                )
+                zero = gate.new_zeros(())
+                stats.update({
+                    "cross_attention_entropy_norm": (
+                        entropy / math.log(float(normalized_memory.shape[1]))
+                    ).mean(),
+                    "cross_attention_peak_mean": torch.maximum(
+                        gate / float(visual_count),
+                        (1.0 - gate) / float(text_count),
+                    ).mean(),
+                    "cross_attention_visual_mass_mean": gate.mean(),
+                    "cross_attention_text_mass_mean": (1.0 - gate).mean(),
+                    "cross_attention_visual_mass_query_std": (
+                        gate.mean(dim=(0, 1)).std(unbiased=False)
+                    ),
+                    "factorized_visual_mass_std": gate.std(unbiased=False),
+                    "factorized_visual_mass_min": gate.min(),
+                    "factorized_visual_mass_max": gate.max(),
+                    "factorized_modality_logit_mean": (
+                        modality_logit.detach().float().mean()
+                    ),
+                    "factorized_modality_logit_std": (
+                        modality_logit.detach().float().std(unbiased=False)
+                    ),
+                    "factorized_modality_logit_abs_mean": (
+                        modality_logit.detach().float().abs().mean()
+                    ),
+                    "factorized_visual_attention_entropy_norm": gate.new_ones(()),
+                    "factorized_text_attention_entropy_norm": gate.new_ones(()),
+                    "factorized_visual_content_residual_norm_mean": zero,
+                    "factorized_text_content_residual_norm_mean": zero,
+                    "factorized_visual_content_to_mean_ratio": zero,
+                    "factorized_text_content_to_mean_ratio": zero,
+                    "factorized_visual_scaled_content_to_mean_ratio": zero,
+                    "factorized_text_scaled_content_to_mean_ratio": zero,
+                })
+                if query_group_shape is not None:
+                    group_count, group_size = map(int, query_group_shape)
+                    if group_count * group_size != queries.shape[1]:
+                        raise ValueError(
+                            "query_group_shape does not match factorized mean-only "
+                            f"CA queries: groups={query_group_shape} "
+                            f"query_count={queries.shape[1]}"
+                        )
+                    grouped_gate = gate.mean(dim=1).reshape(
+                        queries.shape[0],
+                        group_count,
+                        group_size,
+                    )
+                    grouped_attention = torch.cat((
+                        grouped_gate.unsqueeze(-1).expand(
+                            -1, -1, -1, visual_count
+                        ) / float(visual_count),
+                        (1.0 - grouped_gate).unsqueeze(-1).expand(
+                            -1, -1, -1, text_count
+                        ) / float(text_count),
+                    ), dim=-1)
+                    stats.update(_grouped_token_geometry(
+                        grouped_attention,
+                        "cross_attention_map",
+                    ))
+                    stats.update(_layer_geometry_metrics(
+                        grouped_attention,
+                        "cross_attention_map",
+                    ))
+
+        delta = self.output_projection(context)
+        if self.layer_lora_target == "output":
+            grouped_context = self._group_layers(context, query_group_shape)
+            output_lora_delta = self.layer_lora(grouped_context)
+            if self.training:
+                with torch.no_grad():
+                    stats.update(self._lora_debug_metrics(
+                        self._group_layers(delta, query_group_shape),
+                        output_lora_delta,
+                        "ca_output_lora",
+                    ))
+            delta = delta + output_lora_delta.reshape_as(delta)
+        self.debug_context = stats if self.training else {}
+        return queries + delta, delta
+
     def forward(
         self,
         queries: torch.Tensor,
@@ -906,10 +1044,6 @@ class ResidualCrossAttention(nn.Module):
                     ))
         query_states = self._split_heads(projected_queries)
         normalized_memory = self.memory_norm(memory)
-        key_states = self._split_heads(self.key_projection(normalized_memory))
-        value_states = self._split_heads(self.value_projection(normalized_memory))
-        scores = torch.matmul(query_states, key_states.transpose(-2, -1))
-        scores = scores.float() / math.sqrt(self.head_dim)
         if memory_logit_bias is not None:
             expected_bias_shape = memory.shape[:2]
             if tuple(memory_logit_bias.shape) != tuple(expected_bias_shape):
@@ -918,6 +1052,25 @@ class ResidualCrossAttention(nn.Module):
                     f"bias={tuple(memory_logit_bias.shape)} "
                     f"memory={tuple(memory.shape)}"
                 )
+        if (
+            self.routing_mode == "factorized_modality"
+            and self.factorized_visual_residual_scale == 0.0
+            and self.factorized_text_residual_scale == 0.0
+        ):
+            return self._forward_factorized_mean_only(
+                queries,
+                query_states,
+                normalized_memory,
+                memory_split_index,
+                query_group_shape,
+                memory_logit_bias,
+                stats,
+            )
+        key_states = self._split_heads(self.key_projection(normalized_memory))
+        value_states = self._split_heads(self.value_projection(normalized_memory))
+        scores = torch.matmul(query_states, key_states.transpose(-2, -1))
+        scores = scores.float() / math.sqrt(self.head_dim)
+        if memory_logit_bias is not None:
             scores = scores + memory_logit_bias.to(
                 device=scores.device,
                 dtype=scores.dtype,

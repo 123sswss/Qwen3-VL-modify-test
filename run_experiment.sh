@@ -148,6 +148,34 @@ run_slake() {
       2>&1 | tee "$output_dir/train.log"
   ) || return 1
 
+  if [ "${SLAKE_EVAL_EPOCH_CHECKPOINTS:-0}" = "1" ]; then
+    local epoch_id
+    local checkpoint
+    local epoch_eval_dir
+    for ((epoch_id = 1; epoch_id < epochs; epoch_id++)); do
+      checkpoint="$output_dir/stage3/checkpoints/stage3_epoch_${epoch_id}"
+      if [ ! -d "$checkpoint" ]; then
+        echo "[ERR] 缺少 Stage 3 epoch checkpoint: $checkpoint" >&2
+        return 1
+      fi
+      epoch_eval_dir="$output_dir/eval_stage3_epoch_${epoch_id}"
+      mkdir -p "$epoch_eval_dir"
+      (
+        cd "$ROOT_DIR" || exit 1
+        python slake/slake_official_eval.py \
+          --backend mmrl \
+          --base-model "$MODEL_PATH" \
+          --checkpoint "$checkpoint" \
+          --questions "$SLAKE_DATA_ROOT/test.json" \
+          --image-root "$SLAKE_DATA_ROOT/imgs" \
+          --output-dir "$epoch_eval_dir" \
+          --language all \
+          --overwrite \
+          2>&1 | tee "$output_dir/eval_stage3_epoch_${epoch_id}.log"
+      ) || return 1
+    done
+  fi
+
   (
     cd "$ROOT_DIR" || exit 1
     python slake/slake_official_eval.py \
@@ -716,6 +744,39 @@ case "$RUN_TARGET" in
     MMRL_RELATION_LOSS_WEIGHT=0.05 \
       run_slake || failures=$((failures + 1))
     ;;
+  slake_shared_direct_repro_seeds3)
+    for repro_seed in 44 45 46
+    do
+      SLAKE_EXPERIMENT_NAME="slake_mmrl_shared_direct_relation0050_repro3" \
+      SLAKE_RUN_SEED="$repro_seed" \
+      SLAKE_STAGE3_EPOCHS=3 \
+      SLAKE_MMRL_LR=6e-5 \
+      SLAKE_STAGE1_BATCH_SIZE=4 \
+      SLAKE_STAGE1_GRAD_ACCUM=8 \
+      SLAKE_STAGE3_BATCH_SIZE=2 \
+      SLAKE_STAGE3_GRAD_ACCUM=16 \
+      SLAKE_EVAL_EPOCH_CHECKPOINTS=1 \
+      MMRL_RP_SPACE_LENGTH=40 \
+      MMRL_MEMORY_QUERY_COUNT=128 \
+      MMRL_MEMORY_ATTENTION_DIM=128 \
+      MMRL_MEMORY_POOLING_MODE=independent \
+      MMRL_MEMORY_SLOT_DIVERSITY_WEIGHT=0.0 \
+      MMRL_PROJECTOR_HIDDEN_DIM=1024 \
+      MMRL_CROSS_ATTENTION_HEADS=8 \
+      MMRL_CROSS_ATTENTION_ROUTING_MODE=dynamic_qk \
+      MMRL_QUERY_ARCHITECTURE=shared_direct_post_cross \
+      MMRL_REP_UPDATE_MODE=replace \
+      MMRL_INDEPENDENT_LAYER_REP=0 \
+      MMRL_LAYER_LORA_RANK=0 \
+      MMRL_CA_LAYER_LORA_TARGET=none \
+      MMRL_CA_LAYER_LORA_RANK=0 \
+      MMRL_CA_LAYER_LORA_ALPHA=1.0 \
+      MMRL_RELATION_MODE=linear \
+      MMRL_RELATION_MAX_TOKENS=64 \
+      MMRL_RELATION_LOSS_WEIGHT=0.05 \
+        run_slake || failures=$((failures + 1))
+    done
+    ;;
   slake_force_g_one)
     run_slake_force_g_one || failures=$((failures + 1))
     ;;
@@ -729,7 +790,7 @@ case "$RUN_TARGET" in
     run_slake || failures=$((failures + 1))
     ;;
   *)
-    echo "[ERR] 未知目标: $RUN_TARGET，可选 train、slake、slake_shared_direct、slake_lowrank_matrix、slake_structure_matrix、slake_full_geometry_budget4、slake_memory_pooling_serial3、slake_memory_pooling_competitive128、slake_independent_layer_rep、slake_shared_layer_delta、slake_ca_ablation_serial3、slake_ca_corrected_serial3、slake_ca_corrected_lora2、slake_ca_ce_only_serial3、slake_shared_direct_relation_sweep、slake_shared_direct_relation_trust_region、slake_shared_direct_static_modality_relation0050、slake_factorized_ca_serial2、slake_factorized_ca_mean_only、slake_force_g_one、train_shared_direct、all。" >&2
+    echo "[ERR] 未知目标: $RUN_TARGET，可选 train、slake、slake_shared_direct、slake_lowrank_matrix、slake_structure_matrix、slake_full_geometry_budget4、slake_memory_pooling_serial3、slake_memory_pooling_competitive128、slake_independent_layer_rep、slake_shared_layer_delta、slake_ca_ablation_serial3、slake_ca_corrected_serial3、slake_ca_corrected_lora2、slake_ca_ce_only_serial3、slake_shared_direct_relation_sweep、slake_shared_direct_relation_trust_region、slake_shared_direct_static_modality_relation0050、slake_factorized_ca_serial2、slake_factorized_ca_mean_only、slake_shared_direct_repro_seeds3、slake_force_g_one、train_shared_direct、all。" >&2
     exit 2
     ;;
 esac

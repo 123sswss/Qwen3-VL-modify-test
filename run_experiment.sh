@@ -67,6 +67,31 @@ run_train_dataset() {
   )
 }
 
+run_slake_checkpoint_eval() {
+  local checkpoint="$1"
+  local eval_output_dir="$2"
+  local eval_log="$3"
+  if [ ! -f "$checkpoint/mmrl_delta.safetensors" ]; then
+    echo "[ERR] checkpoint 缺少 mmrl_delta.safetensors: $checkpoint" >&2
+    return 1
+  fi
+  mkdir -p "$eval_output_dir"
+  echo "[SLAKE EVAL] checkpoint=$checkpoint output=$eval_output_dir"
+  (
+    cd "$ROOT_DIR" || exit 1
+    python slake/slake_official_eval.py \
+      --backend mmrl \
+      --base-model "$MODEL_PATH" \
+      --checkpoint "$checkpoint" \
+      --questions "$SLAKE_DATA_ROOT/test.json" \
+      --image-root "$SLAKE_DATA_ROOT/imgs" \
+      --output-dir "$eval_output_dir" \
+      --language all \
+      --overwrite \
+      2>&1 | tee "$eval_log"
+  )
+}
+
 run_slake() {
   local experiment_name="${SLAKE_EXPERIMENT_NAME:-slake_mmrl_dynamic_rep_cross_attention}"
   local run_seed="${SLAKE_RUN_SEED:-$SEED}"
@@ -153,42 +178,19 @@ run_slake() {
     local checkpoint
     local epoch_eval_dir
     for ((epoch_id = 1; epoch_id < epochs; epoch_id++)); do
-      checkpoint="$output_dir/stage3/checkpoints/stage3_epoch_${epoch_id}"
-      if [ ! -d "$checkpoint" ]; then
-        echo "[ERR] 缺少 Stage 3 epoch checkpoint: $checkpoint" >&2
-        return 1
-      fi
+      checkpoint="$output_dir/checkpoints/stage3_epoch_${epoch_id}"
       epoch_eval_dir="$output_dir/eval_stage3_epoch_${epoch_id}"
-      mkdir -p "$epoch_eval_dir"
-      (
-        cd "$ROOT_DIR" || exit 1
-        python slake/slake_official_eval.py \
-          --backend mmrl \
-          --base-model "$MODEL_PATH" \
-          --checkpoint "$checkpoint" \
-          --questions "$SLAKE_DATA_ROOT/test.json" \
-          --image-root "$SLAKE_DATA_ROOT/imgs" \
-          --output-dir "$epoch_eval_dir" \
-          --language all \
-          --overwrite \
-          2>&1 | tee "$output_dir/eval_stage3_epoch_${epoch_id}.log"
-      ) || return 1
+      run_slake_checkpoint_eval \
+        "$checkpoint" \
+        "$epoch_eval_dir" \
+        "$output_dir/eval_stage3_epoch_${epoch_id}.log" || return 1
     done
   fi
 
-  (
-    cd "$ROOT_DIR" || exit 1
-    python slake/slake_official_eval.py \
-      --backend mmrl \
-      --base-model "$MODEL_PATH" \
-      --checkpoint "$output_dir/final" \
-      --questions "$SLAKE_DATA_ROOT/test.json" \
-      --image-root "$SLAKE_DATA_ROOT/imgs" \
-      --output-dir "$output_dir/eval" \
-      --language all \
-      --overwrite \
-      2>&1 | tee "$output_dir/eval.log"
-  ) || return 1
+  run_slake_checkpoint_eval \
+    "$output_dir/final" \
+    "$output_dir/eval" \
+    "$output_dir/eval.log" || return 1
 
   if [ "${SLAKE_RUN_MEMORY_COLLAPSE_BOTH:-0}" = "1" ]; then
     mkdir -p "$output_dir/eval_memory_collapse_both"
@@ -207,6 +209,48 @@ run_slake() {
         2>&1 | tee "$output_dir/eval_memory_collapse_both.log"
     ) || return 1
   fi
+}
+
+run_existing_shared_direct_repro_evals() {
+  local eval_failures=0
+  local repro_seed
+  local candidate
+  local output_dir
+  local epoch_id
+  local checkpoint
+  for repro_seed in 44 45 46; do
+    output_dir=""
+    for candidate in \
+      "$SLAKE_OUTPUT_ROOT"/slake_mmrl_shared_direct_relation0050_repro3_seed${repro_seed}_*
+    do
+      if [ ! -d "$candidate" ]; then
+        continue
+      fi
+      if [ -z "$output_dir" ] || [ "$candidate" -nt "$output_dir" ]; then
+        output_dir="$candidate"
+      fi
+    done
+    if [ -z "$output_dir" ]; then
+      echo "[ERR] 未找到 seed $repro_seed 的已训练复现实验目录" >&2
+      eval_failures=$((eval_failures + 1))
+      continue
+    fi
+    echo "[SLAKE EXISTING REPRO EVAL] seed=$repro_seed experiment=$output_dir"
+    for epoch_id in 1 2; do
+      checkpoint="$output_dir/checkpoints/stage3_epoch_${epoch_id}"
+      run_slake_checkpoint_eval \
+        "$checkpoint" \
+        "$output_dir/eval_stage3_epoch_${epoch_id}" \
+        "$output_dir/eval_stage3_epoch_${epoch_id}.log" \
+        || eval_failures=$((eval_failures + 1))
+    done
+    run_slake_checkpoint_eval \
+      "$output_dir/final" \
+      "$output_dir/eval" \
+      "$output_dir/eval.log" \
+      || eval_failures=$((eval_failures + 1))
+  done
+  return "$eval_failures"
 }
 
 run_slake_force_g_one() {
@@ -777,6 +821,10 @@ case "$RUN_TARGET" in
         run_slake || failures=$((failures + 1))
     done
     ;;
+  slake_eval_shared_direct_repro_seeds3)
+    run_existing_shared_direct_repro_evals \
+      || failures=$((failures + 1))
+    ;;
   slake_force_g_one)
     run_slake_force_g_one || failures=$((failures + 1))
     ;;
@@ -790,7 +838,7 @@ case "$RUN_TARGET" in
     run_slake || failures=$((failures + 1))
     ;;
   *)
-    echo "[ERR] 未知目标: $RUN_TARGET，可选 train、slake、slake_shared_direct、slake_lowrank_matrix、slake_structure_matrix、slake_full_geometry_budget4、slake_memory_pooling_serial3、slake_memory_pooling_competitive128、slake_independent_layer_rep、slake_shared_layer_delta、slake_ca_ablation_serial3、slake_ca_corrected_serial3、slake_ca_corrected_lora2、slake_ca_ce_only_serial3、slake_shared_direct_relation_sweep、slake_shared_direct_relation_trust_region、slake_shared_direct_static_modality_relation0050、slake_factorized_ca_serial2、slake_factorized_ca_mean_only、slake_shared_direct_repro_seeds3、slake_force_g_one、train_shared_direct、all。" >&2
+    echo "[ERR] 未知目标: $RUN_TARGET，可选 train、slake、slake_shared_direct、slake_lowrank_matrix、slake_structure_matrix、slake_full_geometry_budget4、slake_memory_pooling_serial3、slake_memory_pooling_competitive128、slake_independent_layer_rep、slake_shared_layer_delta、slake_ca_ablation_serial3、slake_ca_corrected_serial3、slake_ca_corrected_lora2、slake_ca_ce_only_serial3、slake_shared_direct_relation_sweep、slake_shared_direct_relation_trust_region、slake_shared_direct_static_modality_relation0050、slake_factorized_ca_serial2、slake_factorized_ca_mean_only、slake_shared_direct_repro_seeds3、slake_eval_shared_direct_repro_seeds3、slake_force_g_one、train_shared_direct、all。" >&2
     exit 2
     ;;
 esac

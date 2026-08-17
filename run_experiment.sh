@@ -821,6 +821,41 @@ case "$RUN_TARGET" in
         run_slake || failures=$((failures + 1))
     done
     ;;
+  slake_layer_mlp_repro_seeds3)
+    for repro_seed in 44 45 46
+    do
+      SLAKE_EXPERIMENT_NAME="slake_mmrl_layer_mlp_full_ca_relation0050_repro3" \
+      SLAKE_RUN_SEED="$repro_seed" \
+      SLAKE_STAGE3_EPOCHS=3 \
+      SLAKE_MMRL_LR=6e-5 \
+      SLAKE_STAGE1_BATCH_SIZE=2 \
+      SLAKE_STAGE1_GRAD_ACCUM=16 \
+      SLAKE_STAGE1_WORKERS=4 \
+      SLAKE_STAGE3_BATCH_SIZE=2 \
+      SLAKE_STAGE3_GRAD_ACCUM=16 \
+      SLAKE_STAGE3_WORKERS=4 \
+      SLAKE_EVAL_EPOCH_CHECKPOINTS=1 \
+      MMRL_RP_SPACE_LENGTH=40 \
+      MMRL_MEMORY_QUERY_COUNT=128 \
+      MMRL_MEMORY_ATTENTION_DIM=128 \
+      MMRL_MEMORY_POOLING_MODE=independent \
+      MMRL_MEMORY_SLOT_DIVERSITY_WEIGHT=0.0 \
+      MMRL_PROJECTOR_HIDDEN_DIM=1024 \
+      MMRL_CROSS_ATTENTION_HEADS=8 \
+      MMRL_CROSS_ATTENTION_ROUTING_MODE=dynamic_qk \
+      MMRL_QUERY_ARCHITECTURE=layer_mlp_post_cross \
+      MMRL_REP_UPDATE_MODE=replace \
+      MMRL_INDEPENDENT_LAYER_REP=0 \
+      MMRL_LAYER_LORA_RANK=0 \
+      MMRL_CA_LAYER_LORA_TARGET=none \
+      MMRL_CA_LAYER_LORA_RANK=0 \
+      MMRL_CA_LAYER_LORA_ALPHA=1.0 \
+      MMRL_RELATION_MODE=linear \
+      MMRL_RELATION_MAX_TOKENS=64 \
+      MMRL_RELATION_LOSS_WEIGHT=0.05 \
+        run_slake || failures=$((failures + 1))
+    done
+    ;;
   slake_eval_shared_direct_repro_seeds3)
     run_existing_shared_direct_repro_evals \
       || failures=$((failures + 1))
@@ -838,7 +873,7 @@ case "$RUN_TARGET" in
     run_slake || failures=$((failures + 1))
     ;;
   *)
-    echo "[ERR] 未知目标: $RUN_TARGET，可选 train、slake、slake_shared_direct、slake_lowrank_matrix、slake_structure_matrix、slake_full_geometry_budget4、slake_memory_pooling_serial3、slake_memory_pooling_competitive128、slake_independent_layer_rep、slake_shared_layer_delta、slake_ca_ablation_serial3、slake_ca_corrected_serial3、slake_ca_corrected_lora2、slake_ca_ce_only_serial3、slake_shared_direct_relation_sweep、slake_shared_direct_relation_trust_region、slake_shared_direct_static_modality_relation0050、slake_factorized_ca_serial2、slake_factorized_ca_mean_only、slake_shared_direct_repro_seeds3、slake_eval_shared_direct_repro_seeds3、slake_force_g_one、train_shared_direct、all。" >&2
+    echo "[ERR] 未知目标: $RUN_TARGET，可选 train、slake、slake_shared_direct、slake_lowrank_matrix、slake_structure_matrix、slake_full_geometry_budget4、slake_memory_pooling_serial3、slake_memory_pooling_competitive128、slake_independent_layer_rep、slake_shared_layer_delta、slake_ca_ablation_serial3、slake_ca_corrected_serial3、slake_ca_corrected_lora2、slake_ca_ce_only_serial3、slake_shared_direct_relation_sweep、slake_shared_direct_relation_trust_region、slake_shared_direct_static_modality_relation0050、slake_factorized_ca_serial2、slake_factorized_ca_mean_only、slake_shared_direct_repro_seeds3、slake_layer_mlp_repro_seeds3、slake_eval_shared_direct_repro_seeds3、slake_force_g_one、train_shared_direct、all。" >&2
     exit 2
     ;;
 esac

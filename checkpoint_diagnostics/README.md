@@ -53,6 +53,21 @@ Outputs are written under `checkpoint_diagnostics/outputs/TIMESTAMP/`:
 - `report.md`: compact human-readable diagnosis;
 - `comparison.md`: checkpoint comparison table.
 
+## Matched-seed architecture comparison
+
+Compare two architectures across seeds 44/45/46 without loading a model. The
+script consumes the existing `eval/slake_comparisons.json` files and reports
+paired wins/losses, exact McNemar tests, category deltas, and cross-seed answer
+and correctness instability:
+
+```bash
+python checkpoint_diagnostics/compare_seeded_architectures.py
+```
+
+The defaults compare the shared-direct and layer-MLP three-seed reproduction
+runs under `slake/outputs/mmrl`. Use `--root`, `--left-prefix`, and
+`--right-prefix` to compare another pair of experiment families.
+
 ## Memory-count inference ablation
 
 Evaluate one trained checkpoint four times without retraining: original memory,

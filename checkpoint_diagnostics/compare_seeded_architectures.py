@@ -57,16 +57,36 @@ def resolve_comparisons(experiment: Path) -> Path:
     for path in candidates:
         if path.is_file():
             return path
-    recursive = sorted(
-        experiment.glob("**/slake_comparisons.json"),
-        key=lambda path: path.stat().st_mtime,
-        reverse=True,
+    raise FileNotFoundError(
+        f"No final slake_comparisons.json found under {experiment}"
     )
-    if not recursive:
+
+
+def resolve_latest_evaluated_experiment(
+    root: Path,
+    prefix: str,
+    seed: int,
+) -> tuple[Path, Path]:
+    candidates = [
+        path
+        for path in root.glob(f"{prefix}_seed{seed}_*")
+        if path.is_dir()
+    ]
+    evaluated = []
+    for experiment in candidates:
+        try:
+            comparisons = resolve_comparisons(experiment)
+        except FileNotFoundError:
+            continue
+        evaluated.append((comparisons.stat().st_mtime, experiment, comparisons))
+    if not evaluated:
+        candidate_names = [path.name for path in sorted(candidates)]
         raise FileNotFoundError(
-            f"No slake_comparisons.json found under {experiment}"
+            "No evaluated experiment matches "
+            f"{prefix}_seed{seed}_* under {root}; candidates={candidate_names}"
         )
-    return recursive[0]
+    _, experiment, comparisons = max(evaluated, key=lambda item: item[0])
+    return experiment, comparisons
 
 
 def load_rows(experiment: Path) -> dict[str, dict[str, Any]]:
@@ -380,8 +400,20 @@ def main() -> int:
     seed_results: dict[str, Any] = {}
 
     for seed in seeds:
-        left_experiment = resolve_latest_experiment(root, args.left_prefix, seed)
-        right_experiment = resolve_latest_experiment(root, args.right_prefix, seed)
+        left_experiment, left_comparisons = resolve_latest_evaluated_experiment(
+            root, args.left_prefix, seed
+        )
+        right_experiment, right_comparisons = resolve_latest_evaluated_experiment(
+            root, args.right_prefix, seed
+        )
+        print(
+            f"[SELECT] seed={seed} {args.left_name}={left_experiment.name} "
+            f"comparisons={left_comparisons}"
+        )
+        print(
+            f"[SELECT] seed={seed} {args.right_name}={right_experiment.name} "
+            f"comparisons={right_comparisons}"
+        )
         left_rows[seed] = load_rows(left_experiment)
         right_rows[seed] = load_rows(right_experiment)
         qids = validate_alignment(left_rows[seed], right_rows[seed])

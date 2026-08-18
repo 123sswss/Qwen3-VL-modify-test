@@ -66,7 +66,9 @@ python checkpoint_diagnostics/compare_seeded_architectures.py
 
 The defaults compare the shared-direct and layer-MLP three-seed reproduction
 runs under `slake/outputs/mmrl`. Use `--root`, `--left-prefix`, and
-`--right-prefix` to compare another pair of experiment families.
+`--right-prefix` to compare another pair of experiment families. If reruns add
+date or `_1` suffixes, the script selects the candidate with the newest completed
+`slake_comparisons.json` and prints all six selected paths before analysis.
 
 ## Memory-count inference ablation
 

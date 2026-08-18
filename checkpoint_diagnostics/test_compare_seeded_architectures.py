@@ -1,5 +1,6 @@
 import importlib.util
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -78,6 +79,32 @@ class SeededArchitectureComparisonTest(unittest.TestCase):
             self.assertEqual(latest, new)
             loaded = MODULE.load_rows(latest)
             self.assertEqual(set(loaded), {"1"})
+
+    def test_selects_latest_completed_evaluation(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            older_complete = root / "arch_seed44_20260817"
+            newer_complete = root / "arch_seed44_20260817_1"
+            newest_incomplete = root / "arch_seed44_20260817_2"
+            for experiment in (older_complete, newer_complete, newest_incomplete):
+                experiment.mkdir(parents=True)
+            for timestamp, experiment in (
+                (100.0, older_complete),
+                (200.0, newer_complete),
+            ):
+                eval_dir = experiment / "eval"
+                eval_dir.mkdir()
+                comparisons = eval_dir / "slake_comparisons.json"
+                with comparisons.open("w", encoding="utf-8") as handle:
+                    json.dump([row(1, True, "yes")], handle)
+                os.utime(comparisons, (timestamp, timestamp))
+            os.utime(newest_incomplete, (300.0, 300.0))
+
+            experiment, comparisons = MODULE.resolve_latest_evaluated_experiment(
+                root, "arch", 44
+            )
+            self.assertEqual(experiment, newer_complete)
+            self.assertEqual(comparisons, newer_complete / "eval" / "slake_comparisons.json")
 
 
 if __name__ == "__main__":

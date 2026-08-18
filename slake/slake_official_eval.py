@@ -496,6 +496,19 @@ def set_mmrl_cross_delta_scale(model: Any, scale: float) -> None:
     setter(scale)
 
 
+def transplant_mmrl_component(
+    model: Any,
+    donor_checkpoint: str,
+    component: str,
+) -> dict[str, Any]:
+    from mmrl_checkpoint import transplant_mmrl_component as transplant
+
+    generation_model = getattr(model, "model", None)
+    if generation_model is None:
+        raise RuntimeError("MMRL interface does not expose its generation model")
+    return transplant(generation_model, donor_checkpoint, component)
+
+
 def run_timing_warmup(
     records: Sequence[Mapping[str, Any]],
     model: Any,
@@ -682,6 +695,15 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--mmrl-component-donor",
+        help="Inference-only donor compact checkpoint for an MMRL component swap.",
+    )
+    parser.add_argument(
+        "--mmrl-component-swap",
+        choices=("query_generator", "layer_projectors"),
+        help="MMRL component copied from --mmrl-component-donor after loading.",
+    )
+    parser.add_argument(
         "--timing-warmup-runs",
         type=int,
         default=3,
@@ -712,6 +734,12 @@ def main() -> int:
         raise ValueError(
             "--mmrl-cross-delta-scale is only valid with --backend mmrl"
         )
+    if bool(args.mmrl_component_donor) != bool(args.mmrl_component_swap):
+        raise ValueError(
+            "--mmrl-component-donor and --mmrl-component-swap must be used together"
+        )
+    if args.mmrl_component_swap and args.backend != "mmrl":
+        raise ValueError("MMRL component swapping requires --backend mmrl")
 
     question_path = args.questions.expanduser().resolve()
     if not question_path.is_file():
@@ -751,6 +779,15 @@ def main() -> int:
         set_mmrl_memory_collapse(model, args.mmrl_memory_collapse)
         if args.mmrl_cross_delta_scale != 1.0:
             set_mmrl_cross_delta_scale(model, args.mmrl_cross_delta_scale)
+        component_transplant = None
+        if args.mmrl_component_swap:
+            component_transplant = transplant_mmrl_component(
+                model,
+                args.mmrl_component_donor,
+                args.mmrl_component_swap,
+            )
+    else:
+        component_transplant = None
     instruction = "" if args.no_instruction else args.instruction
     run_timing_warmup(
         records,
@@ -806,6 +843,7 @@ def main() -> int:
             "force_g_one": args.force_g_one,
             "mmrl_memory_collapse": args.mmrl_memory_collapse,
             "mmrl_cross_delta_scale": args.mmrl_cross_delta_scale,
+            "mmrl_component_transplant": component_transplant,
             "gate": gate_summary,
             "timing": timing_summary,
         }

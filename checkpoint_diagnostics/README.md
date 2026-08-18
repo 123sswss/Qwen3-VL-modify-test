@@ -88,6 +88,22 @@ than mixing a partial result with the existing full baseline. Reusing an
 existing `OUTPUT_ROOT` automatically resumes `slake_progress.jsonl` and skips
 scales that already have a final summary.
 
+## Query-generator checkpoint swap
+
+Swap the complete static query generator (`shared S`, eight layer MLPs, and
+layer embeddings) between two otherwise untouched checkpoints. This separates
+query-side seed quality from memory-pooling/Cross-Attention seed quality without
+training:
+
+```bash
+bash checkpoint_diagnostics/run_query_generator_swap_ablation.sh \
+  /path/to/seed44/final /path/to/seed45/final
+```
+
+The two original evaluations are reused. Only `Q44 + Rest45` and
+`Q45 + Rest44` are newly evaluated. Donor keys and tensor shapes are checked
+strictly before inference, and interrupted runs resume automatically.
+
 ## Memory-count inference ablation
 
 Evaluate one trained checkpoint four times without retraining: original memory,

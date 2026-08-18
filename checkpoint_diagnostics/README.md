@@ -84,7 +84,9 @@ bash checkpoint_diagnostics/run_cross_delta_scale_ablation.sh \
 
 The output table separates KVQA/VQA, answer type, and language. Set
 `SLAKE_LIMIT` for a smoke test; partial runs evaluate all three scales rather
-than mixing a partial result with the existing full baseline.
+than mixing a partial result with the existing full baseline. Reusing an
+existing `OUTPUT_ROOT` automatically resumes `slake_progress.jsonl` and skips
+scales that already have a final summary.
 
 ## Memory-count inference ablation
 

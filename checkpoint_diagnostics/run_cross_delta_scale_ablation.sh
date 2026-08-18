@@ -43,6 +43,15 @@ run_scale() {
   local tag="$2"
   local output_dir="$OUTPUT_ROOT/$tag"
   mkdir -p "$output_dir"
+  if [[ -f "$output_dir/slake_summary.json" ]]; then
+    echo "[CROSS_DELTA_SCALE] scale=$scale reused=$output_dir/slake_summary.json"
+    return 0
+  fi
+  local progress_args=(--overwrite)
+  if [[ -f "$output_dir/slake_progress.jsonl" ]]; then
+    progress_args=(--resume)
+    echo "[CROSS_DELTA_SCALE] scale=$scale resume=$output_dir/slake_progress.jsonl"
+  fi
   echo "[CROSS_DELTA_SCALE] scale=$scale checkpoint=$CHECKPOINT output=$output_dir"
   (
     cd "$ROOT_DIR" || exit 1
@@ -55,7 +64,7 @@ run_scale() {
       --output-dir "$output_dir" \
       --language all \
       --mmrl-cross-delta-scale "$scale" \
-      --overwrite \
+      "${progress_args[@]}" \
       "${LIMIT_ARGS[@]}" \
       2>&1 | tee "$output_dir/eval.log"
   )

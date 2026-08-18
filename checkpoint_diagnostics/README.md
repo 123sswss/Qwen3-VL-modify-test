@@ -70,6 +70,22 @@ runs under `slake/outputs/mmrl`. Use `--root`, `--left-prefix`, and
 date or `_1` suffixes, the script selects the candidate with the newest completed
 `slake_comparisons.json` and prints all six selected paths before analysis.
 
+## Cross-Attention delta scale ablation
+
+Keep the trained static Rep base queries fixed and evaluate
+`Rep = BaseQuery + scale * CrossAttentionDelta` at scales 0, 0.5, and 1. The
+runner reuses an existing full `scale=1` evaluation when possible, so a normal
+run adds only two evaluations:
+
+```bash
+bash checkpoint_diagnostics/run_cross_delta_scale_ablation.sh \
+  /root/autodl-tmp/Qwen3-VL-modify-test/slake/outputs/mmrl/EXPERIMENT
+```
+
+The output table separates KVQA/VQA, answer type, and language. Set
+`SLAKE_LIMIT` for a smoke test; partial runs evaluate all three scales rather
+than mixing a partial result with the existing full baseline.
+
 ## Memory-count inference ablation
 
 Evaluate one trained checkpoint four times without retraining: original memory,

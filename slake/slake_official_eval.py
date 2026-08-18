@@ -486,6 +486,16 @@ def set_mmrl_memory_collapse(model: Any, mode: str) -> None:
     setter(mode)
 
 
+def set_mmrl_cross_delta_scale(model: Any, scale: float) -> None:
+    generation_model = getattr(model, "model", None)
+    backbone = getattr(generation_model, "model", None)
+    mmrl = getattr(backbone, "MMRL", None)
+    setter = getattr(mmrl, "set_inference_cross_delta_scale", None)
+    if not callable(setter):
+        raise RuntimeError("MMRL interface does not expose Cross-Attention delta scaling")
+    setter(scale)
+
+
 def run_timing_warmup(
     records: Sequence[Mapping[str, Any]],
     model: Any,
@@ -663,6 +673,15 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--mmrl-cross-delta-scale",
+        type=float,
+        default=1.0,
+        help=(
+            "Inference-only multiplier for the learned Cross-Attention delta. "
+            "The static Rep base query is not scaled."
+        ),
+    )
+    parser.add_argument(
         "--timing-warmup-runs",
         type=int,
         default=3,
@@ -686,6 +705,12 @@ def main() -> int:
     if args.mmrl_memory_collapse != "none" and args.backend != "mmrl":
         raise ValueError(
             "--mmrl-memory-collapse is only valid with --backend mmrl"
+        )
+    if not math.isfinite(args.mmrl_cross_delta_scale) or args.mmrl_cross_delta_scale < 0.0:
+        raise ValueError("--mmrl-cross-delta-scale must be finite and non-negative")
+    if args.mmrl_cross_delta_scale != 1.0 and args.backend != "mmrl":
+        raise ValueError(
+            "--mmrl-cross-delta-scale is only valid with --backend mmrl"
         )
 
     question_path = args.questions.expanduser().resolve()
@@ -724,6 +749,8 @@ def main() -> int:
         force_mmrl_gate_one(model)
     if args.backend == "mmrl":
         set_mmrl_memory_collapse(model, args.mmrl_memory_collapse)
+        if args.mmrl_cross_delta_scale != 1.0:
+            set_mmrl_cross_delta_scale(model, args.mmrl_cross_delta_scale)
     instruction = "" if args.no_instruction else args.instruction
     run_timing_warmup(
         records,
@@ -778,6 +805,7 @@ def main() -> int:
             "partial_evaluation": args.limit is not None,
             "force_g_one": args.force_g_one,
             "mmrl_memory_collapse": args.mmrl_memory_collapse,
+            "mmrl_cross_delta_scale": args.mmrl_cross_delta_scale,
             "gate": gate_summary,
             "timing": timing_summary,
         }

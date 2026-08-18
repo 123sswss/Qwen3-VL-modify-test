@@ -1427,6 +1427,7 @@ class MMRL(nn.Module):
         self._printed_shape_audit = False
         self.inference_memory_collapse_mode = "none"
         self._printed_memory_collapse_audit = False
+        self.inference_cross_delta_scale = 1.0
         self.low_rank_debug_context = {}
         self.layer_rep_delta_debug_context = {}
         self.memory_slot_diversity_loss = torch.tensor(0.0)
@@ -1441,6 +1442,16 @@ class MMRL(nn.Module):
         self.inference_memory_collapse_mode = mode
         self._printed_memory_collapse_audit = False
         print(f"[MMRL_INFERENCE_MEMORY_COLLAPSE] mode={mode}")
+
+    def set_inference_cross_delta_scale(self, scale: float) -> None:
+        scale = float(scale)
+        if not math.isfinite(scale) or scale < 0.0:
+            raise ValueError(
+                "inference Cross-Attention delta scale must be finite and "
+                f"non-negative, got {scale}"
+            )
+        self.inference_cross_delta_scale = scale
+        print(f"[MMRL_INFERENCE_CROSS_DELTA_SCALE] scale={scale}")
 
     def _apply_inference_memory_collapse(
         self,
@@ -1755,6 +1766,14 @@ class MMRL(nn.Module):
             ),
             memory_logit_bias=memory_logit_bias,
         )
+        if self.training and self.inference_cross_delta_scale != 1.0:
+            raise RuntimeError(
+                "Cross-Attention delta scaling is inference-only and cannot "
+                "run while MMRL is training"
+            )
+        if self.inference_cross_delta_scale != 1.0:
+            cross_delta = cross_delta * self.inference_cross_delta_scale
+            dynamic_cross_queries = flat_queries + cross_delta
         dynamic_cross_queries = dynamic_cross_queries.reshape(
             image_count,
             self.insert_layer_count,
@@ -1820,6 +1839,10 @@ class MMRL(nn.Module):
                     f"{self.cross_attention.factorized_text_residual_scale}"
                 )
             print(f"  cross_attention_dim={self.cross_attention_dim}")
+            print(
+                "  inference_cross_delta_scale="
+                f"{self.inference_cross_delta_scale}"
+            )
             print(f"  visual_memory_shape={tuple(visual_memory.shape)}")
             print(f"  text_memory_shape={tuple(text_memory.shape)}")
             print(f"  combined_memory_shape={self.last_memory_shape}")

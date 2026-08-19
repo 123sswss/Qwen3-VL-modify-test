@@ -155,6 +155,10 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
         self.mmrl_relation_loss = torch.tensor(0.0)
         self.mmrl_relation_gram_loss = torch.tensor(0.0)
         self.mmrl_variance_floor_loss = torch.tensor(0.0)
+        self.mmrl_cross_relation_loss = torch.tensor(0.0)
+        self.mmrl_cross_relation_loss_weight = float(
+            getattr(self.cfg, "MMRL_CROSS_RELATION_LOSS_WEIGHT", 0.0)
+        )
         self.mmrl_relation_max_tokens = int(getattr(self.cfg, "MMRL_RELATION_MAX_TOKENS", 64))
         self.mmrl_variance_floor_ratio = float(getattr(self.cfg, "MMRL_VARIANCE_FLOOR_RATIO", 0.50))
         self.mmrl_variance_floor_weight = float(getattr(self.cfg, "MMRL_VARIANCE_FLOOR_WEIGHT", 0.10))
@@ -225,10 +229,11 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
     ):
         zero = adapted_states.new_tensor(0.0, dtype=torch.float32)
         if cu_seqlens is None or cu_seqlens.numel() <= 1:
-            return zero, zero, zero
+            return zero, zero, zero, zero
 
         relation_losses = []
         variance_losses = []
+        cross_relation_losses = []
         max_tokens = max(int(self.mmrl_relation_max_tokens), 2)
         starts = cu_seqlens[:-1].tolist()
         ends = cu_seqlens[1:].tolist()
@@ -255,6 +260,14 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
             adapted_gram = adapted_unit @ adapted_unit.transpose(0, 1)
             original_gram = original_unit @ original_unit.transpose(0, 1)
             relation_losses.append(F.mse_loss(adapted_gram, original_gram))
+            if (
+                self.mmrl_cross_relation_loss_weight > 0.0
+                and torch.is_grad_enabled()
+            ):
+                cross_gram = adapted_unit @ original_unit.transpose(0, 1)
+                cross_relation_losses.append(
+                    F.mse_loss(cross_gram, original_gram)
+                )
 
             adapted_centered = adapted_unit - adapted_unit.mean(dim=0, keepdim=True)
             original_centered = original_unit - original_unit.mean(dim=0, keepdim=True)
@@ -265,11 +278,16 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
             ).pow(2))
 
         if not relation_losses:
-            return zero, zero, zero
+            return zero, zero, zero, zero
         gram_loss = torch.stack(relation_losses).mean()
         variance_loss = torch.stack(variance_losses).mean()
+        cross_relation_loss = (
+            torch.stack(cross_relation_losses).mean()
+            if cross_relation_losses
+            else zero
+        )
         total = gram_loss + self.mmrl_variance_floor_weight * variance_loss
-        return total, gram_loss, variance_loss
+        return total, gram_loss, variance_loss, cross_relation_loss
 
     def _compute_absolute_alignment_metrics(
         self,
@@ -312,7 +330,7 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
                 metrics[f"{prefix}_pooled_cos_mean"] = pooled_cos.mean().to(device)
 
             if include_gram:
-                _, gram_loss, _ = self._compute_mmrl_relation_loss(
+                _, gram_loss, _, _ = self._compute_mmrl_relation_loss(
                     candidate,
                     original,
                     cu_seqlens,
@@ -739,6 +757,7 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
                     self.mmrl_relation_loss,
                     self.mmrl_relation_gram_loss,
                     self.mmrl_variance_floor_loss,
+                    self.mmrl_cross_relation_loss,
                 ) = self._compute_mmrl_relation_loss(
                     hidden_states_with_rep,
                     org_hidden_states,
@@ -748,6 +767,7 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
                 self.mmrl_relation_loss = hidden_states.new_tensor(0.0)
                 self.mmrl_relation_gram_loss = hidden_states.new_tensor(0.0)
                 self.mmrl_variance_floor_loss = hidden_states.new_tensor(0.0)
+                self.mmrl_cross_relation_loss = hidden_states.new_tensor(0.0)
             delta = hidden_states_with_rep - org_hidden_states
             G_mask = torch.repeat_interleave(self.G_list, seqlens, dim=0)
             final_delta = delta * G_mask
@@ -769,6 +789,7 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
             self.mmrl_relation_loss = hidden_states.new_tensor(0.0)
             self.mmrl_relation_gram_loss = hidden_states.new_tensor(0.0)
             self.mmrl_variance_floor_loss = hidden_states.new_tensor(0.0)
+            self.mmrl_cross_relation_loss = hidden_states.new_tensor(0.0)
 
         if self.training:
             mmrl_state_alignment = self._compute_absolute_alignment_metrics(
@@ -823,6 +844,9 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
                 "mmrl_relation_loss": self.mmrl_relation_loss.detach(),
                 "mmrl_relation_gram_loss": self.mmrl_relation_gram_loss.detach(),
                 "mmrl_variance_floor_loss": self.mmrl_variance_floor_loss.detach(),
+                "mmrl_cross_relation_loss": (
+                    self.mmrl_cross_relation_loss.detach()
+                ),
                 "deepstack_mmrl_residual_scale": hidden_states.new_tensor(float(self.deepstack_mmrl_residual_scale)),
                 "deepstack_delta_norm_mean": self.deepstack_delta_norm_mean.detach(),
                 "deepstack_delta_to_org_ratio": self.deepstack_delta_to_org_ratio.detach(),

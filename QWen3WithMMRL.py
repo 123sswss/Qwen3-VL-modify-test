@@ -66,6 +66,16 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
                 "MMRL_QUERY_ARCHITECTURE",
                 cfg.MMRL_QUERY_ARCHITECTURE,
             ),
+            "MMRL_SAME_INIT_LAYER_PROJECTORS": _cfg_attr(
+                config,
+                "MMRL_SAME_INIT_LAYER_PROJECTORS",
+                cfg.MMRL_SAME_INIT_LAYER_PROJECTORS,
+            ),
+            "MMRL_CROSS_RELATION_LOSS_WEIGHT": _cfg_attr(
+                config,
+                "MMRL_CROSS_RELATION_LOSS_WEIGHT",
+                cfg.MMRL_CROSS_RELATION_LOSS_WEIGHT,
+            ),
             "MMRL_RELATION_MAX_TOKENS": _cfg_attr(config, "MMRL_RELATION_MAX_TOKENS", 64),
             "MMRL_VARIANCE_FLOOR_RATIO": _cfg_attr(config, "MMRL_VARIANCE_FLOOR_RATIO", 0.50),
             "MMRL_VARIANCE_FLOOR_WEIGHT": _cfg_attr(config, "MMRL_VARIANCE_FLOOR_WEIGHT", 0.10),

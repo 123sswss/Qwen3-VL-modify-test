@@ -147,6 +147,13 @@ class MMRL(nn.Module):
         self.use_direct_shared_rep = (
             self.query_architecture == "shared_direct_post_cross"
         )
+        self.same_init_layer_projectors = bool(
+            getattr(cfg, "MMRL_SAME_INIT_LAYER_PROJECTORS", False)
+        )
+        if self.same_init_layer_projectors and self.use_direct_shared_rep:
+            raise ValueError(
+                "same layer-projector initialization requires layer_mlp_post_cross"
+            )
         self.insert_layer_count = len(cfg.INSERT_LAYER)
         self.rp_space_length = int(cfg.RP_SPACE_LENGTH)
         self.rp_space_dim = int(cfg.RP_SPACE_DIM)
@@ -219,6 +226,52 @@ class MMRL(nn.Module):
         self.last_rep_shape = None
         self.last_memory_shape = None
         self._printed_shape_audit = False
+
+    def synchronize_layer_projector_initialization(self):
+        if not self.same_init_layer_projectors:
+            return
+        if len(self.v_r_token_projector) != self.insert_layer_count:
+            raise RuntimeError(
+                "same initialization requires one independent projector per layer"
+            )
+        source = self.v_r_token_projector[0]
+        with torch.no_grad():
+            for projector in self.v_r_token_projector[1:]:
+                projector.load_state_dict(source.state_dict(), strict=True)
+
+        source_parameters = list(source.parameters())
+        max_difference = 0.0
+        shares_storage = False
+        for projector in self.v_r_token_projector[1:]:
+            for source_parameter, target_parameter in zip(
+                source_parameters,
+                projector.parameters(),
+            ):
+                max_difference = max(
+                    max_difference,
+                    float(
+                        (source_parameter - target_parameter)
+                        .detach()
+                        .float()
+                        .abs()
+                        .max()
+                        .item()
+                    ),
+                )
+                shares_storage = (
+                    shares_storage
+                    or source_parameter.data_ptr() == target_parameter.data_ptr()
+                )
+        if max_difference != 0.0 or shares_storage:
+            raise RuntimeError(
+                "layer projector synchronization audit failed: "
+                f"max_difference={max_difference} shares_storage={shares_storage}"
+            )
+        print(
+            "[MMRL_SAME_INIT_AUDIT] "
+            f"projectors={len(self.v_r_token_projector)} "
+            "max_difference=0.0 shared_storage=False"
+        )
 
     def _compute_base_queries(self):
         if self.use_direct_shared_rep:

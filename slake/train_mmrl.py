@@ -109,12 +109,18 @@ def build_experiment_config(args: argparse.Namespace) -> Dict[str, Any]:
         "projector_hidden_dim": args.projector_hidden_dim,
         "cross_attention_heads": args.cross_attention_heads,
         "query_architecture": args.query_architecture,
+        "same_init_layer_projectors": args.same_init_layer_projectors,
         "mmrl_relation_loss_weight": args.relation_weight,
+        "mmrl_cross_relation_loss_weight": args.cross_relation_weight,
         "mmrl_relation_max_tokens": args.relation_max_tokens,
         "mmrl_variance_floor_ratio": 0.50,
         "mmrl_variance_floor_weight": 0.10,
-        "enable_deepstack_mmrl_residual": False,
-        "deepstack_mmrl_residual_scale": 0.0,
+        "enable_deepstack_mmrl_residual": (
+            args.enable_deepstack_mmrl_residual
+        ),
+        "deepstack_mmrl_residual_scale": (
+            1.0 if args.enable_deepstack_mmrl_residual else 0.0
+        ),
         "ablate_visual_gate": False,
         "ablate_direct_learnable_rep": False,
         "stage3_learning_rate": args.mmrl_lr,
@@ -150,6 +156,7 @@ def build_train_config(
         "save_each_epoch": args.stage3_epochs > 1,
         "checkpoint_base_model_path": str(args.model_path),
         "mmrl_relation_loss_weight": args.relation_weight,
+        "mmrl_cross_relation_loss_weight": args.cross_relation_weight,
         "per_device_train_batch_size": args.batch_size,
         "gradient_accumulation_steps": args.gradient_accumulation,
         "dataloader_num_workers": args.dataloader_workers,
@@ -173,6 +180,8 @@ def build_train_config(
             "delta_to_org_ratio",
             "mmrl_delta_to_org_ratio",
             "mmrl_relation_loss_scaled",
+            "mmrl_cross_relation_loss",
+            "mmrl_cross_relation_loss_scaled",
             "dynamic_rep_base_norm_mean",
             "dynamic_rep_cross_delta_norm_mean",
             "dynamic_rep_cross_delta_ratio",
@@ -182,6 +191,10 @@ def build_train_config(
             "text_memory_pooling_grad_norm_mean",
             "cross_attention_grad_norm_mean",
             "cross_attention_output_weight_norm",
+            "deepstack_mmrl_residual_scale",
+            "deepstack_delta_norm_mean",
+            "deepstack_delta_to_org_ratio",
+            "deepstack_residual_layers",
             "temperature",
         ],
         "learning_rate": {
@@ -627,9 +640,20 @@ def parse_args() -> argparse.Namespace:
         choices=QUERY_ARCHITECTURES,
         default="layer_mlp_post_cross",
     )
+    parser.add_argument(
+        "--same-init-layer-projectors",
+        action="store_true",
+        help="Initialize all independent layer MLPs from the same post-init weights.",
+    )
+    parser.add_argument(
+        "--enable-deepstack-mmrl-residual",
+        action="store_true",
+        help="Route the complete gated MMRL state into the overlapping DeepStack layer.",
+    )
     parser.add_argument("--stage1-lr", type=float, default=1e-4)
     parser.add_argument("--mmrl-lr", type=float, default=6e-5)
     parser.add_argument("--relation-weight", type=float, default=0.050)
+    parser.add_argument("--cross-relation-weight", type=float, default=0.0)
     parser.add_argument("--relation-max-tokens", type=int, default=64)
     parser.add_argument(
         "--scheduler",
@@ -688,6 +712,15 @@ def parse_args() -> argparse.Namespace:
         parser.error("--cross-attention-heads must be positive")
     if args.relation_weight < 0.0:
         parser.error("--relation-weight must be non-negative")
+    if args.cross_relation_weight < 0.0:
+        parser.error("--cross-relation-weight must be non-negative")
+    if (
+        args.same_init_layer_projectors
+        and args.query_architecture != "layer_mlp_post_cross"
+    ):
+        parser.error(
+            "--same-init-layer-projectors requires layer_mlp_post_cross"
+        )
     if args.relation_max_tokens < 2:
         parser.error("--relation-max-tokens must be at least 2")
     if args.generation_checks < 0:
@@ -722,6 +755,12 @@ def main() -> int:
         f"projector_hidden_dim={args.projector_hidden_dim} "
         f"cross_attention_heads={args.cross_attention_heads} "
         f"query_architecture={args.query_architecture} "
+        f"same_init_layer_projectors={args.same_init_layer_projectors} "
+        "deepstack_mmrl_residual="
+        f"{args.enable_deepstack_mmrl_residual}:scale"
+        f"{1.0 if args.enable_deepstack_mmrl_residual else 0.0} "
+        f"relation={args.relation_weight} "
+        f"cross_relation={args.cross_relation_weight} "
         f"stage1_batch={args.batch_size}x{args.gradient_accumulation} "
         f"stage3_batch={args.stage3_batch_size}x{args.stage3_gradient_accumulation} "
         f"seed={args.seed} data_seed={args.data_seed}"
@@ -802,7 +841,14 @@ def main() -> int:
                 "dataset": "SLAKE",
                 "language": args.language,
                 "query_architecture": args.query_architecture,
+                "same_init_layer_projectors": (
+                    args.same_init_layer_projectors
+                ),
+                "enable_deepstack_mmrl_residual": (
+                    args.enable_deepstack_mmrl_residual
+                ),
                 "relation_weight": args.relation_weight,
+                "cross_relation_weight": args.cross_relation_weight,
                 "relation_max_tokens": args.relation_max_tokens,
             },
         )

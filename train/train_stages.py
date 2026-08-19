@@ -67,6 +67,10 @@ def _build_experiment_context(train_cfg, output_dir, stage_id):
                 "mmrl_relation_loss_weight",
                 experiment_cfg.get("mmrl_relation_loss_weight"),
             ),
+            "mmrl_cross_relation_loss_weight": train_cfg.get(
+                "mmrl_cross_relation_loss_weight",
+                experiment_cfg.get("mmrl_cross_relation_loss_weight"),
+            ),
             "mmrl_relation_max_tokens": train_cfg.get(
                 "mmrl_relation_max_tokens",
                 experiment_cfg.get("mmrl_relation_max_tokens"),
@@ -622,6 +626,7 @@ class Qwen3VLMMRLForStages(Qwen3VLForConditionalGeneration):
         hidden_size = config.text_config.hidden_size
         self.lm_head = nn.Linear(hidden_size, len(tokenizer), bias=False)
         self.post_init()
+        self.model.MMRL.synchronize_layer_projector_initialization()
         # 补充 generation_config，避免 save_pretrained 时报错
         from transformers import GenerationConfig
         self.generation_config = GenerationConfig.from_model_config(config)
@@ -633,6 +638,7 @@ class Qwen3VLMMRLForStages(Qwen3VLForConditionalGeneration):
         self.current_stage_progress = 0.0
         self.enable_alpha_guide_loss = False
         self.mmrl_relation_loss_weight = 0.0
+        self.mmrl_cross_relation_loss_weight = 0.0
 
         self.temperature_override = None
 
@@ -859,10 +865,31 @@ class Qwen3VLMMRLForStages(Qwen3VLForConditionalGeneration):
         else:
             mmrl_relation_loss = mmrl_relation_loss.to(device=input_ids.device, dtype=ce_loss.dtype)
         scaled_mmrl_relation_loss = mmrl_relation_loss * float(self.mmrl_relation_loss_weight)
+        mmrl_cross_relation_loss = getattr(
+            self.model.visual,
+            "mmrl_cross_relation_loss",
+            torch.tensor(0.0, device=input_ids.device),
+        )
+        if not torch.is_tensor(mmrl_cross_relation_loss):
+            mmrl_cross_relation_loss = torch.tensor(
+                mmrl_cross_relation_loss,
+                device=input_ids.device,
+                dtype=ce_loss.dtype,
+            )
+        else:
+            mmrl_cross_relation_loss = mmrl_cross_relation_loss.to(
+                device=input_ids.device,
+                dtype=ce_loss.dtype,
+            )
+        scaled_mmrl_cross_relation_loss = (
+            mmrl_cross_relation_loss
+            * float(self.mmrl_cross_relation_loss_weight)
+        )
         outputs.loss = (
             self.ce_loss_weight * ce_loss
             + alpha_guide_loss
             + scaled_mmrl_relation_loss
+            + scaled_mmrl_cross_relation_loss
         )
 
         # ---- cache metrics for external logger ----
@@ -883,6 +910,12 @@ class Qwen3VLMMRLForStages(Qwen3VLForConditionalGeneration):
                 "alpha_guide_loss": alpha_guide_loss.detach(),
                 "mmrl_relation_loss": mmrl_relation_loss.detach(),
                 "mmrl_relation_loss_scaled": scaled_mmrl_relation_loss.detach(),
+                "mmrl_cross_relation_loss": (
+                    mmrl_cross_relation_loss.detach()
+                ),
+                "mmrl_cross_relation_loss_scaled": (
+                    scaled_mmrl_cross_relation_loss.detach()
+                ),
                 "alpha_mae": alpha_mae.detach(),
                 "temperature": torch.tensor(float(self.temperature_override) if self.temperature_override is not None else float("nan"), device=input_ids.device),
                 "stage_progress": torch.tensor(float(getattr(self, "current_stage_progress", 0.0)), device=input_ids.device),
@@ -970,9 +1003,21 @@ def build_model_and_processor(model_path, experiment_cfg=None):
     config.DIRECT_SHARED_REP = (
         config.MMRL_QUERY_ARCHITECTURE == "shared_direct_post_cross"
     )
+    config.MMRL_SAME_INIT_LAYER_PROJECTORS = os.getenv(
+        "MMRL_SAME_INIT_LAYER_PROJECTORS",
+        (
+            "1"
+            if experiment_cfg.get("same_init_layer_projectors", False)
+            else "0"
+        ),
+    ) == "1"
     config.MMRL_RELATION_LOSS_WEIGHT = float(experiment_cfg.get(
         "mmrl_relation_loss_weight",
         os.getenv("MMRL_RELATION_LOSS_WEIGHT", "0.0"),
+    ))
+    config.MMRL_CROSS_RELATION_LOSS_WEIGHT = float(experiment_cfg.get(
+        "mmrl_cross_relation_loss_weight",
+        os.getenv("MMRL_CROSS_RELATION_LOSS_WEIGHT", "0.0"),
     ))
     config.MMRL_RELATION_MAX_TOKENS = int(experiment_cfg.get(
         "mmrl_relation_max_tokens",
@@ -1009,6 +1054,14 @@ def build_model_and_processor(model_path, experiment_cfg=None):
         "MMRL_RELATION_MAX_TOKENS": (
             config.MMRL_RELATION_MAX_TOKENS,
             visual.mmrl_relation_max_tokens,
+        ),
+        "MMRL_CROSS_RELATION_LOSS_WEIGHT": (
+            config.MMRL_CROSS_RELATION_LOSS_WEIGHT,
+            visual.mmrl_cross_relation_loss_weight,
+        ),
+        "MMRL_SAME_INIT_LAYER_PROJECTORS": (
+            config.MMRL_SAME_INIT_LAYER_PROJECTORS,
+            mmrl.same_init_layer_projectors,
         ),
         "MMRL_VARIANCE_FLOOR_RATIO": (
             config.MMRL_VARIANCE_FLOOR_RATIO,
@@ -1054,6 +1107,7 @@ def build_model_and_processor(model_path, experiment_cfg=None):
         f"projector_hidden_dim={config.MMRL_PROJECTOR_HIDDEN_DIM} "
         f"cross_attention_heads={config.MMRL_CROSS_ATTENTION_HEADS} "
         f"direct_shared_rep={config.DIRECT_SHARED_REP} "
+        f"same_init_layer_projectors={config.MMRL_SAME_INIT_LAYER_PROJECTORS} "
         "memory_tokens_per_image="
         f"{2 * config.MMRL_MEMORY_QUERY_COUNT}"
     )
@@ -1155,6 +1209,8 @@ def build_model_and_processor(model_path, experiment_cfg=None):
         f"projector_hidden_dim={config.MMRL_PROJECTOR_HIDDEN_DIM} "
         f"cross_attention_heads={config.MMRL_CROSS_ATTENTION_HEADS} "
         f"mmrl_relation_loss_weight={config.MMRL_RELATION_LOSS_WEIGHT} "
+        "mmrl_cross_relation_loss_weight="
+        f"{config.MMRL_CROSS_RELATION_LOSS_WEIGHT} "
         f"mmrl_variance_floor_ratio={config.MMRL_VARIANCE_FLOOR_RATIO} "
         f"mmrl_variance_floor_weight={config.MMRL_VARIANCE_FLOOR_WEIGHT} "
         f"enable_deepstack_mmrl_residual={config.ENABLE_DEEPSTACK_MMRL_RESIDUAL} "
@@ -1618,11 +1674,19 @@ def run_stage3_full(model, processor, data_cfg, train_cfg, output_dir):
         experiment_cfg.get("mmrl_relation_loss_weight", 0.0),
     ))
     model.model.visual.mmrl_relation_loss_weight = model.mmrl_relation_loss_weight
+    model.mmrl_cross_relation_loss_weight = float(train_cfg.get(
+        "mmrl_cross_relation_loss_weight",
+        experiment_cfg.get("mmrl_cross_relation_loss_weight", 0.0),
+    ))
+    model.model.visual.mmrl_cross_relation_loss_weight = (
+        model.mmrl_cross_relation_loss_weight
+    )
     stage3_ce_only = (
         model.ce_loss_weight == 1.0
         and not model.enable_alpha_guide_loss
         and model.alpha_loss_weight == 0.0
         and model.mmrl_relation_loss_weight == 0.0
+        and model.mmrl_cross_relation_loss_weight == 0.0
     )
     print(
         "[STAGE3_LOSS_AUDIT] "
@@ -1630,11 +1694,13 @@ def run_stage3_full(model, processor, data_cfg, train_cfg, output_dir):
         f"alpha_enabled={model.enable_alpha_guide_loss} "
         f"alpha_weight={model.alpha_loss_weight} "
         f"relation_weight={model.mmrl_relation_loss_weight} "
+        f"cross_relation_weight={model.mmrl_cross_relation_loss_weight} "
         f"ce_only={stage3_ce_only}"
     )
     print(
         "[MMRL_RELATION] "
         f"weight={model.mmrl_relation_loss_weight} "
+        f"cross_weight={model.mmrl_cross_relation_loss_weight} "
         f"max_tokens={model.model.visual.mmrl_relation_max_tokens} "
         f"variance_floor_ratio={model.model.visual.mmrl_variance_floor_ratio} "
         f"variance_floor_weight={model.model.visual.mmrl_variance_floor_weight}"

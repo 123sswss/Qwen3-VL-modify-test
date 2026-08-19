@@ -122,9 +122,112 @@ class ResidualCrossAttention(nn.Module):
         return queries + delta, delta
 
 
+class ReverseAssignmentAttention(nn.Module):
+    """Assign content tokens to layer-specific slots and aggregate content values."""
+
+    def __init__(self, hidden_dim, num_heads):
+        super().__init__()
+        if hidden_dim % num_heads != 0:
+            raise ValueError(
+                "reverse-attention hidden_dim must be divisible by num_heads, got "
+                f"hidden_dim={hidden_dim} num_heads={num_heads}"
+            )
+        self.hidden_dim = int(hidden_dim)
+        self.num_heads = int(num_heads)
+        self.head_dim = self.hidden_dim // self.num_heads
+        self.query_norm = nn.LayerNorm(self.hidden_dim)
+        self.memory_norm = nn.LayerNorm(self.hidden_dim)
+        self.query_projection = nn.Linear(self.hidden_dim, self.hidden_dim)
+        self.key_projection = nn.Linear(self.hidden_dim, self.hidden_dim)
+        self.value_projection = nn.Linear(self.hidden_dim, self.hidden_dim)
+        self.output_projection = ZeroInitProjection(self.hidden_dim)
+        self.debug_context = {}
+
+    @staticmethod
+    def _normalize_assignments(scores):
+        assignments = torch.softmax(scores.float(), dim=-1)
+        slot_weights = assignments / assignments.sum(
+            dim=-2, keepdim=True
+        ).clamp_min(1e-8)
+        return assignments, slot_weights
+
+    def forward(self, slots, memory):
+        if slots.ndim != 4 or memory.ndim != 3:
+            raise ValueError(
+                "reverse-attention expects slots=[B,L,R,D] and memory=[B,S,D], got "
+                f"slots={tuple(slots.shape)} memory={tuple(memory.shape)}"
+            )
+        if slots.shape[0] != memory.shape[0]:
+            raise ValueError(
+                "reverse-attention batch mismatch: "
+                f"slots={slots.shape[0]} memory={memory.shape[0]}"
+            )
+        if slots.shape[-1] != self.hidden_dim or memory.shape[-1] != self.hidden_dim:
+            raise ValueError(
+                "reverse-attention hidden dimension mismatch: "
+                f"expected={self.hidden_dim} slots={slots.shape[-1]} "
+                f"memory={memory.shape[-1]}"
+            )
+        if slots.shape[2] < 1 or memory.shape[1] < 1:
+            raise ValueError("reverse-attention requires non-empty slots and memory")
+
+        batch_size, layer_count, slot_count, _ = slots.shape
+        memory_length = memory.shape[1]
+        normalized_memory = self.query_norm(memory)
+        content_queries = self.query_projection(normalized_memory).view(
+            batch_size, memory_length, self.num_heads, self.head_dim
+        ).permute(0, 2, 1, 3)
+        content_values = self.value_projection(normalized_memory).view(
+            batch_size, memory_length, self.num_heads, self.head_dim
+        ).permute(0, 2, 1, 3)
+        slot_keys = self.key_projection(self.memory_norm(slots)).view(
+            batch_size,
+            layer_count,
+            slot_count,
+            self.num_heads,
+            self.head_dim,
+        ).permute(0, 1, 3, 2, 4)
+
+        scores = torch.matmul(
+            content_queries.unsqueeze(1),
+            slot_keys.transpose(-2, -1),
+        ) / math.sqrt(self.head_dim)
+        assignments, slot_weights = self._normalize_assignments(scores)
+        slot_weights = slot_weights.to(dtype=content_values.dtype)
+        context = torch.matmul(
+            slot_weights.transpose(-2, -1),
+            content_values.unsqueeze(1),
+        )
+        context = context.permute(0, 1, 3, 2, 4).contiguous().view(
+            batch_size, layer_count, slot_count, self.hidden_dim
+        )
+        delta = self.output_projection(context)
+
+        if self.training:
+            with torch.no_grad():
+                assignment_float = assignments.detach()
+                slot_mass = assignment_float.sum(dim=-2)
+                entropy = -(
+                    assignment_float
+                    * assignment_float.clamp_min(1e-8).log()
+                ).sum(dim=-1)
+                entropy = entropy / math.log(max(slot_count, 2))
+                self.debug_context = {
+                    "reverse_assignment_slot_mass_mean": slot_mass.mean(),
+                    "reverse_assignment_slot_mass_min": slot_mass.min(),
+                    "reverse_assignment_slot_mass_max": slot_mass.max(),
+                    "reverse_assignment_entropy_norm": entropy.mean(),
+                }
+        else:
+            self.debug_context = {}
+
+        return slots + delta, delta
+
+
 class MMRL(nn.Module):
     QUERY_ARCHITECTURES = {
         "layer_mlp_post_cross",
+        "layer_mlp_reverse_assignment",
         "shared_direct_post_cross",
     }
 
@@ -147,12 +250,15 @@ class MMRL(nn.Module):
         self.use_direct_shared_rep = (
             self.query_architecture == "shared_direct_post_cross"
         )
+        self.use_reverse_assignment = (
+            self.query_architecture == "layer_mlp_reverse_assignment"
+        )
         self.same_init_layer_projectors = bool(
             getattr(cfg, "MMRL_SAME_INIT_LAYER_PROJECTORS", False)
         )
         if self.same_init_layer_projectors and self.use_direct_shared_rep:
             raise ValueError(
-                "same layer-projector initialization requires layer_mlp_post_cross"
+                "same layer-projector initialization requires a layer MLP architecture"
             )
         self.insert_layer_count = len(cfg.INSERT_LAYER)
         self.rp_space_length = int(cfg.RP_SPACE_LENGTH)
@@ -216,9 +322,13 @@ class MMRL(nn.Module):
             self.memory_query_count,
             self.memory_attention_dim,
         )
-        self.cross_attention = ResidualCrossAttention(
-            self.vision_token_dim,
-            int(cfg.MMRL_CROSS_ATTENTION_HEADS),
+        attention_class = (
+            ReverseAssignmentAttention
+            if self.use_reverse_assignment
+            else ResidualCrossAttention
+        )
+        self.cross_attention = attention_class(
+            self.vision_token_dim, int(cfg.MMRL_CROSS_ATTENTION_HEADS)
         )
 
         self.cached_base_queries = None
@@ -342,17 +452,28 @@ class MMRL(nn.Module):
         base_queries = self._get_base_queries().to(
             device=visual_states.device, dtype=visual_states.dtype
         )
-        flat_queries = base_queries.reshape(
-            self.insert_layer_count * self.rp_space_length,
-            self.vision_token_dim,
-        ).unsqueeze(0).expand(image_count, -1, -1)
-        dynamic_queries, cross_delta = self.cross_attention(flat_queries, memory)
-        dynamic_queries = dynamic_queries.reshape(
-            image_count,
-            self.insert_layer_count,
-            self.rp_space_length,
-            self.vision_token_dim,
+        batched_queries = base_queries.unsqueeze(0).expand(
+            image_count, -1, -1, -1
         )
+        if self.use_reverse_assignment:
+            dynamic_queries, cross_delta = self.cross_attention(
+                batched_queries, memory
+            )
+        else:
+            flat_queries = batched_queries.reshape(
+                image_count,
+                self.insert_layer_count * self.rp_space_length,
+                self.vision_token_dim,
+            )
+            dynamic_queries, cross_delta = self.cross_attention(
+                flat_queries, memory
+            )
+            dynamic_queries = dynamic_queries.reshape(
+                image_count,
+                self.insert_layer_count,
+                self.rp_space_length,
+                self.vision_token_dim,
+            )
 
         self.last_memory_shape = tuple(memory.shape)
         self.last_rep_shape = tuple(dynamic_queries.shape)
@@ -375,7 +496,7 @@ class MMRL(nn.Module):
 
         if self.training:
             with torch.no_grad():
-                base_norm = flat_queries.detach().float().norm(dim=-1).mean()
+                base_norm = batched_queries.detach().float().norm(dim=-1).mean()
                 delta_norm = cross_delta.detach().float().norm(dim=-1).mean()
                 self.debug_context = {
                     "dynamic_rep_base_norm_mean": base_norm,
@@ -389,6 +510,7 @@ class MMRL(nn.Module):
                     "text_memory_norm_mean": (
                         text_memory.detach().float().norm(dim=-1).mean()
                     ),
+                    **getattr(self.cross_attention, "debug_context", {}),
                 }
         else:
             self.debug_context = {}

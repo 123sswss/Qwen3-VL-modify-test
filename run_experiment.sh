@@ -177,22 +177,33 @@ run_final_serial3() {
     "slake_mmrl_layer_mlp_cross_relation0010_relation0050" 0 0 0.01 || return 1
 }
 
+run_final_serial2() {
+  run_final_seed44 \
+    "slake_mmrl_layer_mlp_same_init_cross_relation_only0050" \
+    1 0 0.05 0.0 "layer_mlp_post_cross" || return 1
+  run_final_seed44 \
+    "slake_mmrl_layer_mlp_same_init_reverse_assignment_relation0050" \
+    1 0 0.0 0.05 "layer_mlp_reverse_assignment" || return 1
+}
+
 run_final_seed44() {
   local experiment_name="$1"
   local same_init="$2"
   local enable_deepstack="$3"
   local cross_relation_weight="$4"
+  local relation_weight="${5:-0.05}"
+  local architecture="${6:-layer_mlp_post_cross}"
   SLAKE_EXPERIMENT_NAME="$experiment_name" \
   SLAKE_RUN_SEED=44 \
   SLAKE_STAGE3_EPOCHS=3 \
   SLAKE_MMRL_LR=6e-5 \
-  MMRL_QUERY_ARCHITECTURE="layer_mlp_post_cross" \
+  MMRL_QUERY_ARCHITECTURE="$architecture" \
   MMRL_RP_SPACE_LENGTH=40 \
   MMRL_MEMORY_QUERY_COUNT=128 \
   MMRL_MEMORY_ATTENTION_DIM=128 \
   MMRL_PROJECTOR_HIDDEN_DIM=1024 \
   MMRL_CROSS_ATTENTION_HEADS=8 \
-  MMRL_RELATION_LOSS_WEIGHT=0.05 \
+  MMRL_RELATION_LOSS_WEIGHT="$relation_weight" \
   MMRL_RELATION_MAX_TOKENS=64 \
   MMRL_SAME_INIT_LAYER_PROJECTORS="$same_init" \
   MMRL_ENABLE_DEEPSTACK_MMRL_RESIDUAL="$enable_deepstack" \
@@ -233,6 +244,21 @@ case "$RUN_TARGET" in
       "slake_mmrl_layer_mlp_cross_relation0010_relation0050" 0 0 0.01 \
       || failures=$((failures + 1))
     ;;
+  slake_cross_relation_only)
+    run_final_seed44 \
+      "slake_mmrl_layer_mlp_same_init_cross_relation_only0050" \
+      1 0 0.05 0.0 "layer_mlp_post_cross" \
+      || failures=$((failures + 1))
+    ;;
+  slake_reverse_assignment)
+    run_final_seed44 \
+      "slake_mmrl_layer_mlp_same_init_reverse_assignment_relation0050" \
+      1 0 0.0 0.05 "layer_mlp_reverse_assignment" \
+      || failures=$((failures + 1))
+    ;;
+  slake_final_serial2)
+    run_final_serial2 || failures=$((failures + 1))
+    ;;
   slake_final_serial3)
     run_final_serial3 || failures=$((failures + 1))
     ;;
@@ -257,7 +283,7 @@ case "$RUN_TARGET" in
     run_slake || failures=$((failures + 1))
     ;;
   *)
-    echo "[ERR] 未知目标: $RUN_TARGET，可选 train、slake、slake_shared_direct、slake_current_control、slake_same_init、slake_deepstack、slake_cross_relation、slake_final_serial3、slake_layer_mlp_repro_seeds3、slake_shared_direct_repro_seeds3、train_shared_direct、all。" >&2
+    echo "[ERR] 未知目标: $RUN_TARGET，可选 train、slake、slake_shared_direct、slake_current_control、slake_same_init、slake_deepstack、slake_cross_relation、slake_cross_relation_only、slake_reverse_assignment、slake_final_serial2、slake_final_serial3、slake_layer_mlp_repro_seeds3、slake_shared_direct_repro_seeds3、train_shared_direct、all。" >&2
     exit 2
     ;;
 esac

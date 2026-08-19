@@ -59,6 +59,7 @@ DEFAULT_GENERAL_IMAGE_ROOTS = (
 
 QUERY_ARCHITECTURES = (
     "layer_mlp_post_cross",
+    "layer_mlp_reverse_assignment",
     "shared_direct_post_cross",
 )
 
@@ -185,6 +186,10 @@ def build_train_config(
             "dynamic_rep_base_norm_mean",
             "dynamic_rep_cross_delta_norm_mean",
             "dynamic_rep_cross_delta_ratio",
+            "reverse_assignment_slot_mass_mean",
+            "reverse_assignment_slot_mass_min",
+            "reverse_assignment_slot_mass_max",
+            "reverse_assignment_entropy_norm",
             "visual_memory_norm_mean",
             "text_memory_norm_mean",
             "visual_memory_pooling_grad_norm_mean",
@@ -716,10 +721,10 @@ def parse_args() -> argparse.Namespace:
         parser.error("--cross-relation-weight must be non-negative")
     if (
         args.same_init_layer_projectors
-        and args.query_architecture != "layer_mlp_post_cross"
+        and args.query_architecture == "shared_direct_post_cross"
     ):
         parser.error(
-            "--same-init-layer-projectors requires layer_mlp_post_cross"
+            "--same-init-layer-projectors requires a layer MLP architecture"
         )
     if args.relation_max_tokens < 2:
         parser.error("--relation-max-tokens must be at least 2")

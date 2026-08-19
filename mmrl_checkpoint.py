@@ -36,27 +36,9 @@ DELTA_PREFIXES = (
     "model.visual.Task_classifier.",
 )
 
-MMRL_COMPONENT_SELECTORS = {
-    "layer_projectors": (
-        "model.MMRL.v_r_token_projector.",
-    ),
-    "query_generator": (
-        "model.MMRL.shared_represent_space",
-        "model.MMRL.layer_embeddings",
-        "model.MMRL.v_r_token_projector.",
-    ),
-}
-
 
 def _is_delta_key(key: str) -> bool:
     return key.startswith(DELTA_PREFIXES)
-
-
-def _matches_component(key: str, selectors: tuple[str, ...]) -> bool:
-    return any(
-        key.startswith(selector) if selector.endswith(".") else key == selector
-        for selector in selectors
-    )
 
 
 def _sha256(path: Path) -> str:
@@ -278,88 +260,3 @@ def load_mmrl_delta(
         f"parameters={sum(tensor.numel() for tensor in state.values())}"
     )
     return manifest
-
-
-def transplant_mmrl_component(
-    model: torch.nn.Module,
-    donor_checkpoint_dir: str | Path,
-    component: str,
-) -> dict[str, Any]:
-    """Replace one inference component with tensors from a donor checkpoint."""
-
-    component = str(component).strip().lower()
-    if component not in MMRL_COMPONENT_SELECTORS:
-        raise ValueError(
-            f"Unsupported MMRL component={component!r}; "
-            f"choices={sorted(MMRL_COMPONENT_SELECTORS)}"
-        )
-    donor_checkpoint_dir = Path(donor_checkpoint_dir).expanduser().resolve()
-    manifest = load_mmrl_manifest(donor_checkpoint_dir)
-    donor_state = load_file(
-        str(donor_checkpoint_dir / WEIGHTS_NAME),
-        device="cpu",
-    )
-    saved_keys = set(donor_state)
-    manifest_keys = set(manifest["tensors"])
-    if saved_keys != manifest_keys:
-        raise RuntimeError(
-            "Donor checkpoint manifest does not match its tensor file: "
-            f"missing={sorted(manifest_keys - saved_keys)} "
-            f"unexpected={sorted(saved_keys - manifest_keys)}"
-        )
-
-    selectors = MMRL_COMPONENT_SELECTORS[component]
-    target_state = model.state_dict()
-    expected_keys = {
-        key for key in target_state if _matches_component(key, selectors)
-    }
-    donor_keys = {
-        key for key in donor_state if _matches_component(key, selectors)
-    }
-    if not expected_keys:
-        raise RuntimeError(
-            f"Recipient model exposes no tensors for component={component!r}"
-        )
-    if donor_keys != expected_keys:
-        raise RuntimeError(
-            f"Donor component={component!r} does not match the recipient: "
-            f"missing={sorted(expected_keys - donor_keys)} "
-            f"unexpected={sorted(donor_keys - expected_keys)}"
-        )
-    shape_mismatches = {
-        key: {
-            "recipient": tuple(target_state[key].shape),
-            "donor": tuple(donor_state[key].shape),
-        }
-        for key in sorted(expected_keys)
-        if tuple(target_state[key].shape) != tuple(donor_state[key].shape)
-    }
-    if shape_mismatches:
-        raise RuntimeError(
-            f"Donor component={component!r} shape mismatch: {shape_mismatches}"
-        )
-
-    component_state = {key: donor_state[key] for key in sorted(donor_keys)}
-    result = model.load_state_dict(component_state, strict=False)
-    if result.unexpected_keys:
-        raise RuntimeError(
-            f"Unexpected donor component keys: {result.unexpected_keys}"
-        )
-    mmrl = getattr(getattr(model, "model", None), "MMRL", None)
-    if mmrl is not None and hasattr(mmrl, "cached_base_queries"):
-        mmrl.cached_base_queries = None
-    audit = {
-        "component": component,
-        "donor": str(donor_checkpoint_dir),
-        "tensor_count": len(component_state),
-        "parameter_count": sum(
-            tensor.numel() for tensor in component_state.values()
-        ),
-        "tensor_keys": sorted(component_state),
-    }
-    print(
-        "[MMRL_COMPONENT_TRANSPLANT] "
-        f"component={component} donor={donor_checkpoint_dir} "
-        f"tensors={audit['tensor_count']} parameters={audit['parameter_count']}"
-    )
-    return audit

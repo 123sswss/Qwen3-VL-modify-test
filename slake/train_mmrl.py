@@ -55,22 +55,12 @@ DEFAULT_GENERAL_IMAGE_ROOTS = (
     Path("/root/autodl-tmp/dataset/gen/train2017"),
     Path("/root/autodl-tmp/dataset/gen/val2017"),
 )
+
+
 QUERY_ARCHITECTURES = (
     "layer_mlp_post_cross",
-    "layer_linear_post_cross",
-    "lowdim_cross_layer_linear",
-    "shared_mlp_post_cross",
     "shared_direct_post_cross",
-    "shared_delta_post_cross",
 )
-REP_UPDATE_MODES = ("replace", "persistent_delta")
-CA_LAYER_LORA_TARGETS = ("none", "query", "output")
-CROSS_ATTENTION_ROUTING_MODES = (
-    "dynamic_qk",
-    "factorized_modality",
-    "static_modality",
-)
-RELATION_MODES = ("linear", "trust_region")
 
 
 def seed_everything(seed: int) -> None:
@@ -116,27 +106,10 @@ def build_experiment_config(args: argparse.Namespace) -> Dict[str, Any]:
         "rp_space_length": args.rp_space_length,
         "memory_query_count": args.memory_query_count,
         "memory_attention_dim": args.memory_attention_dim,
-        "memory_pooling_mode": args.memory_pooling_mode,
-        "memory_slot_diversity_weight": args.memory_slot_diversity_weight,
-        "memory_slot_cosine_max": args.memory_slot_cosine_max,
         "projector_hidden_dim": args.projector_hidden_dim,
         "cross_attention_heads": args.cross_attention_heads,
-        "cross_attention_routing_mode": args.cross_attention_routing_mode,
-        "static_modality_visual_prior": args.static_modality_visual_prior,
-        "factorized_visual_residual_scale": (
-            args.factorized_visual_residual_scale
-        ),
-        "factorized_text_residual_scale": args.factorized_text_residual_scale,
         "query_architecture": args.query_architecture,
-        "rep_update_mode": args.rep_update_mode,
-        "ablate_direct_learnable_rep": args.independent_layer_rep,
-        "layer_lora_rank": args.layer_lora_rank,
-        "ca_layer_lora_target": args.ca_layer_lora_target,
-        "ca_layer_lora_rank": args.ca_layer_lora_rank,
-        "ca_layer_lora_alpha": args.ca_layer_lora_alpha,
         "mmrl_relation_loss_weight": args.relation_weight,
-        "mmrl_relation_mode": args.relation_mode,
-        "mmrl_relation_threshold": args.relation_threshold,
         "mmrl_relation_max_tokens": args.relation_max_tokens,
         "mmrl_variance_floor_ratio": 0.50,
         "mmrl_variance_floor_weight": 0.10,
@@ -177,7 +150,6 @@ def build_train_config(
         "save_each_epoch": args.stage3_epochs > 1,
         "checkpoint_base_model_path": str(args.model_path),
         "mmrl_relation_loss_weight": args.relation_weight,
-        "memory_slot_diversity_weight": args.memory_slot_diversity_weight,
         "per_device_train_batch_size": args.batch_size,
         "gradient_accumulation_steps": args.gradient_accumulation,
         "dataloader_num_workers": args.dataloader_workers,
@@ -201,157 +173,15 @@ def build_train_config(
             "delta_to_org_ratio",
             "mmrl_delta_to_org_ratio",
             "mmrl_relation_loss_scaled",
-            "mmrl_relation_excess_loss",
-            "mmrl_relation_active_ratio",
-            "memory_slot_diversity_loss",
-            "memory_slot_diversity_loss_scaled",
-            "mmrl_relation_gram_loss",
-            "mmrl_variance_floor_loss",
-            "delta_pool_common_mode_ratio",
-            "delta_pool_specificity_ratio",
             "dynamic_rep_base_norm_mean",
             "dynamic_rep_cross_delta_norm_mean",
             "dynamic_rep_cross_delta_ratio",
-            "dynamic_rep_layer_cos_mean",
-            "dynamic_rep_layer_cos_max",
-            "dynamic_rep_effective_rank",
-            "dynamic_rep_singular_top1_ratio",
-            "dynamic_rep_singular_top2_ratio",
-            *[
-                f"{prefix}_{suffix}"
-                for prefix in (
-                    "dynamic_rep",
-                    "cross_delta",
-                    "cross_attention_map",
-                )
-                for suffix in (
-                    "token_pair_cos_mean",
-                    "token_pair_cos_max",
-                    "token_effective_rank_mean",
-                    "token_effective_rank_min",
-                    "token_effective_rank_fraction_mean",
-                    "token_effective_rank_fraction_min",
-                    "token_centered_effective_rank_mean",
-                    "token_centered_effective_rank_min",
-                    "token_centered_effective_rank_fraction_mean",
-                    "token_centered_effective_rank_fraction_min",
-                    "token_singular_top1_ratio_mean",
-                    "token_singular_top5_ratio_mean",
-                    "token_common_mode_ratio_mean",
-                    "token_common_mode_ratio_max",
-                )
-            ],
-            "shared_rep_norm_mean",
-            "shared_rep_grad_norm",
-            "layer_embeddings_norm",
-            "layer_embeddings_grad_norm",
-            "v_projector_grad_norm_mean",
-            "v_projector_grad_norm_max",
-            "cross_delta_layer_cos_mean",
-            "cross_delta_layer_cos_max",
-            "cross_delta_effective_rank",
-            "cross_delta_singular_top1_ratio",
-            "cross_delta_singular_top2_ratio",
-            "low_rank_delta_norm_mean",
-            "low_rank_delta_to_base_ratio",
-            "low_rank_delta_layer_cos_mean",
-            "low_rank_delta_layer_cos_max",
-            "low_rank_delta_effective_rank",
-            "low_rank_delta_singular_top1_ratio",
-            "low_rank_delta_singular_top2_ratio",
-            "layer_lora_A_param_norm",
-            "layer_lora_A_grad_norm",
-            "layer_lora_A_grad_mean_abs",
-            "layer_lora_B_param_norm",
-            "layer_lora_B_grad_norm",
-            "layer_lora_B_grad_mean_abs",
-            *[
-                f"ca_{target}_lora_{metric}"
-                for target in ("query", "output")
-                for metric in (
-                    "base_norm_mean",
-                    "delta_norm_mean",
-                    "delta_to_base_ratio",
-                    "layer_cos_mean",
-                    "layer_cos_max",
-                    "effective_rank",
-                    "singular_top1_ratio",
-                    "singular_top2_ratio",
-                    "A_param_norm",
-                    "A_grad_norm",
-                    "A_grad_mean_abs",
-                    "B_param_norm",
-                    "B_grad_norm",
-                    "B_grad_mean_abs",
-                )
-            ],
-            "cross_attention_map_layer_cos_mean",
-            "cross_attention_map_layer_cos_max",
-            "cross_attention_map_effective_rank",
-            "cross_attention_map_singular_top1_ratio",
-            "cross_attention_map_singular_top2_ratio",
-            "layer_rep_delta_param_norm",
-            "layer_rep_delta_grad_norm",
-            "layer_rep_delta_grad_mean_abs",
-            "layer_rep_delta_norm_mean",
-            "layer_rep_delta_to_shared_ratio",
-            "layer_rep_delta_layer_cos_mean",
-            "layer_rep_delta_layer_cos_max",
-            "layer_rep_delta_effective_rank",
-            "layer_rep_delta_singular_top1_ratio",
-            "layer_rep_delta_singular_top2_ratio",
-            "layer_rep_delta_token_pair_cos_mean",
-            "layer_rep_delta_token_centered_effective_rank_mean",
             "visual_memory_norm_mean",
             "text_memory_norm_mean",
             "visual_memory_pooling_grad_norm_mean",
             "text_memory_pooling_grad_norm_mean",
             "cross_attention_grad_norm_mean",
             "cross_attention_output_weight_norm",
-            "cross_attention_visual_mass_mean",
-            "cross_attention_text_mass_mean",
-            "cross_attention_visual_mass_query_std",
-            "cross_attention_entropy_norm",
-            "cross_attention_peak_mean",
-            "static_modality_visual_mass_mean",
-            "static_modality_visual_mass_std",
-            "static_modality_visual_mass_min",
-            "static_modality_visual_mass_max",
-            "static_modality_logits_param_norm",
-            "static_modality_logits_grad_norm",
-            "factorized_visual_mass_std",
-            "factorized_visual_mass_min",
-            "factorized_visual_mass_max",
-            "factorized_modality_logit_mean",
-            "factorized_modality_logit_std",
-            "factorized_modality_logit_abs_mean",
-            "factorized_visual_attention_entropy_norm",
-            "factorized_text_attention_entropy_norm",
-            "factorized_visual_content_residual_norm_mean",
-            "factorized_text_content_residual_norm_mean",
-            "factorized_visual_content_to_mean_ratio",
-            "factorized_text_content_to_mean_ratio",
-            "factorized_visual_scaled_content_to_mean_ratio",
-            "factorized_text_scaled_content_to_mean_ratio",
-            *[
-                f"{modality}_pooling_{metric}"
-                for modality in ("visual", "text")
-                for metric in (
-                    "source_specificity_ratio",
-                    "attention_entropy_norm",
-                    "attention_token_pair_cos_mean",
-                    "attention_token_pair_cos_max",
-                    "attention_token_centered_effective_rank_mean",
-                    "attention_token_common_mode_ratio_mean",
-                    "output_specificity_ratio",
-                    "output_token_pair_cos_mean",
-                    "output_token_pair_cos_max",
-                    "output_token_centered_effective_rank_mean",
-                    "output_token_common_mode_ratio_mean",
-                    "query_token_pair_cos_mean",
-                    "query_token_centered_effective_rank_mean",
-                )
-            ],
             "temperature",
         ],
         "learning_rate": {
@@ -595,7 +425,7 @@ def audit_model_forward(
     expected_memory_shape = (
         expected_images,
         2 * mmrl.memory_query_count,
-        mmrl.cross_attention_dim,
+        mmrl.vision_token_dim,
     )
     if rep_shape != expected_rep_shape:
         raise RuntimeError(
@@ -790,74 +620,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--rp-space-length", type=int, default=40)
     parser.add_argument("--memory-query-count", type=int, default=128)
     parser.add_argument("--memory-attention-dim", type=int, default=128)
-    parser.add_argument(
-        "--memory-pooling-mode",
-        choices=("independent", "competitive"),
-        default="independent",
-    )
-    parser.add_argument(
-        "--memory-slot-diversity-weight",
-        type=float,
-        default=0.0,
-    )
-    parser.add_argument(
-        "--memory-slot-cosine-max",
-        type=float,
-        default=0.995,
-    )
     parser.add_argument("--projector-hidden-dim", type=int, default=1024)
     parser.add_argument("--cross-attention-heads", type=int, default=8)
-    parser.add_argument(
-        "--cross-attention-routing-mode",
-        choices=CROSS_ATTENTION_ROUTING_MODES,
-        default="dynamic_qk",
-    )
-    parser.add_argument("--static-modality-visual-prior", type=float, default=0.44)
-    parser.add_argument(
-        "--factorized-visual-residual-scale",
-        type=float,
-        default=1.0,
-    )
-    parser.add_argument(
-        "--factorized-text-residual-scale",
-        type=float,
-        default=1.0,
-    )
     parser.add_argument(
         "--query-architecture",
         choices=QUERY_ARCHITECTURES,
         default="layer_mlp_post_cross",
     )
-    parser.add_argument(
-        "--rep-update-mode",
-        choices=REP_UPDATE_MODES,
-        default="replace",
-    )
-    parser.add_argument(
-        "--independent-layer-rep",
-        action="store_true",
-        help=(
-            "Replace the eight layer MLP projectors with eight directly "
-            "learned [rep_length, vision_dim] Rep tables."
-        ),
-    )
-    parser.add_argument("--layer-lora-rank", type=int, default=0)
-    parser.add_argument(
-        "--ca-layer-lora-target",
-        choices=CA_LAYER_LORA_TARGETS,
-        default="none",
-    )
-    parser.add_argument("--ca-layer-lora-rank", type=int, default=0)
-    parser.add_argument("--ca-layer-lora-alpha", type=float, default=1.0)
     parser.add_argument("--stage1-lr", type=float, default=1e-4)
     parser.add_argument("--mmrl-lr", type=float, default=6e-5)
     parser.add_argument("--relation-weight", type=float, default=0.050)
-    parser.add_argument(
-        "--relation-mode",
-        choices=RELATION_MODES,
-        default="linear",
-    )
-    parser.add_argument("--relation-threshold", type=float, default=0.03)
     parser.add_argument("--relation-max-tokens", type=int, default=64)
     parser.add_argument(
         "--scheduler",
@@ -910,66 +682,14 @@ def parse_args() -> argparse.Namespace:
         parser.error("--memory-query-count must be positive")
     if args.memory_attention_dim < 1:
         parser.error("--memory-attention-dim must be positive")
-    if args.memory_slot_diversity_weight < 0.0:
-        parser.error("--memory-slot-diversity-weight must be non-negative")
-    if not -1.0 <= args.memory_slot_cosine_max <= 1.0:
-        parser.error("--memory-slot-cosine-max must be in [-1, 1]")
     if args.projector_hidden_dim < 1:
         parser.error("--projector-hidden-dim must be positive")
     if args.cross_attention_heads < 1:
         parser.error("--cross-attention-heads must be positive")
-    if not 0.0 < args.static_modality_visual_prior < 1.0:
-        parser.error("--static-modality-visual-prior must be in (0, 1)")
-    if args.factorized_visual_residual_scale < 0.0:
-        parser.error("--factorized-visual-residual-scale must be non-negative")
-    if args.factorized_text_residual_scale < 0.0:
-        parser.error("--factorized-text-residual-scale must be non-negative")
-    if args.layer_lora_rank < 0:
-        parser.error("--layer-lora-rank must be non-negative")
-    if args.ca_layer_lora_rank < 0:
-        parser.error("--ca-layer-lora-rank must be non-negative")
-    if args.ca_layer_lora_alpha <= 0.0:
-        parser.error("--ca-layer-lora-alpha must be positive")
     if args.relation_weight < 0.0:
         parser.error("--relation-weight must be non-negative")
-    if args.relation_threshold < 0.0:
-        parser.error("--relation-threshold must be non-negative")
     if args.relation_max_tokens < 2:
         parser.error("--relation-max-tokens must be at least 2")
-    if (args.ca_layer_lora_target == "none") != (args.ca_layer_lora_rank == 0):
-        parser.error(
-            "--ca-layer-lora-target and --ca-layer-lora-rank must be enabled together"
-        )
-    if (
-        args.cross_attention_routing_mode == "static_modality"
-        and args.ca_layer_lora_target == "query"
-    ):
-        parser.error("static modality routing is incompatible with query CA LoRA")
-    if (
-        args.layer_lora_rank > 0
-        and args.query_architecture != "shared_direct_post_cross"
-    ):
-        parser.error(
-            "--layer-lora-rank requires "
-            "--query-architecture shared_direct_post_cross"
-        )
-    if args.independent_layer_rep and args.query_architecture in {
-        "shared_direct_post_cross",
-        "shared_delta_post_cross",
-        "lowdim_cross_layer_linear",
-    }:
-        parser.error(
-            "--independent-layer-rep requires a full-dimensional Cross-Attention "
-            "query architecture"
-        )
-    if (
-        args.rep_update_mode == "persistent_delta"
-        and args.query_architecture != "layer_mlp_post_cross"
-    ):
-        parser.error(
-            "--rep-update-mode persistent_delta requires "
-            "--query-architecture layer_mlp_post_cross"
-        )
     if args.generation_checks < 0:
         parser.error("--generation-checks must be non-negative")
     return args
@@ -999,27 +719,11 @@ def main() -> int:
         f"rp_space_length={args.rp_space_length} "
         f"memory_query_count={args.memory_query_count} "
         f"memory_attention_dim={args.memory_attention_dim} "
-        f"memory_pooling_mode={args.memory_pooling_mode} "
-        f"memory_slot_diversity_weight={args.memory_slot_diversity_weight} "
-        f"memory_slot_cosine_max={args.memory_slot_cosine_max} "
         f"projector_hidden_dim={args.projector_hidden_dim} "
         f"cross_attention_heads={args.cross_attention_heads} "
-        f"cross_attention_routing={args.cross_attention_routing_mode} "
-        f"static_visual_prior={args.static_modality_visual_prior} "
-        "factorized_residual_scales="
-        f"visual{args.factorized_visual_residual_scale}:"
-        f"text{args.factorized_text_residual_scale} "
         f"query_architecture={args.query_architecture} "
-        f"rep_update_mode={args.rep_update_mode} "
-        f"independent_layer_rep={args.independent_layer_rep} "
-        f"layer_lora_rank={args.layer_lora_rank} "
-        f"ca_layer_lora={args.ca_layer_lora_target}:r{args.ca_layer_lora_rank}:"
-        f"alpha{args.ca_layer_lora_alpha} "
-        f"relation={args.relation_mode}:weight{args.relation_weight}:"
-        f"threshold{args.relation_threshold}:max_tokens{args.relation_max_tokens} "
         f"stage1_batch={args.batch_size}x{args.gradient_accumulation} "
         f"stage3_batch={args.stage3_batch_size}x{args.stage3_gradient_accumulation} "
-        f"stage3_workers={args.stage3_dataloader_workers} "
         f"seed={args.seed} data_seed={args.data_seed}"
     )
 
@@ -1098,29 +802,7 @@ def main() -> int:
                 "dataset": "SLAKE",
                 "language": args.language,
                 "query_architecture": args.query_architecture,
-                "cross_attention_routing_mode": args.cross_attention_routing_mode,
-                "static_modality_visual_prior": args.static_modality_visual_prior,
-                "factorized_visual_residual_scale": (
-                    args.factorized_visual_residual_scale
-                ),
-                "factorized_text_residual_scale": (
-                    args.factorized_text_residual_scale
-                ),
-                "rep_update_mode": args.rep_update_mode,
-                "ca_layer_lora_target": args.ca_layer_lora_target,
-                "ca_layer_lora_rank": args.ca_layer_lora_rank,
-                "ca_layer_lora_alpha": args.ca_layer_lora_alpha,
-                "independent_layer_rep": args.independent_layer_rep,
-                "memory_query_count": args.memory_query_count,
-                "memory_pooling_mode": args.memory_pooling_mode,
-                "memory_slot_diversity_weight": (
-                    args.memory_slot_diversity_weight
-                ),
-                "memory_slot_cosine_max": args.memory_slot_cosine_max,
-                "stage3_epochs": args.stage3_epochs,
                 "relation_weight": args.relation_weight,
-                "relation_mode": args.relation_mode,
-                "relation_threshold": args.relation_threshold,
                 "relation_max_tokens": args.relation_max_tokens,
             },
         )

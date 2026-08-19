@@ -67,30 +67,6 @@ def _build_experiment_context(train_cfg, output_dir, stage_id):
                 "mmrl_relation_loss_weight",
                 experiment_cfg.get("mmrl_relation_loss_weight"),
             ),
-            "mmrl_relation_mode": experiment_cfg.get("mmrl_relation_mode"),
-            "mmrl_relation_threshold": experiment_cfg.get(
-                "mmrl_relation_threshold"
-            ),
-            "memory_pooling_mode": experiment_cfg.get("memory_pooling_mode"),
-            "cross_attention_routing_mode": experiment_cfg.get(
-                "cross_attention_routing_mode"
-            ),
-            "static_modality_visual_prior": experiment_cfg.get(
-                "static_modality_visual_prior"
-            ),
-            "factorized_visual_residual_scale": experiment_cfg.get(
-                "factorized_visual_residual_scale"
-            ),
-            "factorized_text_residual_scale": experiment_cfg.get(
-                "factorized_text_residual_scale"
-            ),
-            "memory_slot_diversity_weight": train_cfg.get(
-                "memory_slot_diversity_weight",
-                experiment_cfg.get("memory_slot_diversity_weight"),
-            ),
-            "memory_slot_cosine_max": experiment_cfg.get(
-                "memory_slot_cosine_max"
-            ),
             "mmrl_relation_max_tokens": train_cfg.get(
                 "mmrl_relation_max_tokens",
                 experiment_cfg.get("mmrl_relation_max_tokens"),
@@ -657,7 +633,6 @@ class Qwen3VLMMRLForStages(Qwen3VLForConditionalGeneration):
         self.current_stage_progress = 0.0
         self.enable_alpha_guide_loss = False
         self.mmrl_relation_loss_weight = 0.0
-        self.memory_slot_diversity_weight = 0.0
 
         self.temperature_override = None
 
@@ -695,22 +670,6 @@ class Qwen3VLMMRLForStages(Qwen3VLForConditionalGeneration):
                     layer_embeddings.grad.detach().float().norm()
                 )
 
-        for parameter_name, metric_prefix in (
-            ("layer_lora_A", "layer_lora_A"),
-            ("layer_lora_B", "layer_lora_B"),
-            ("layer_rep_delta", "layer_rep_delta"),
-        ):
-            parameter = getattr(mmrl, parameter_name, None)
-            if parameter is None:
-                continue
-            result[f"{metric_prefix}_param_norm"] = (
-                parameter.detach().float().norm()
-            )
-            if parameter.grad is not None:
-                grad = parameter.grad.detach().float()
-                result[f"{metric_prefix}_grad_norm"] = grad.norm()
-                result[f"{metric_prefix}_grad_mean_abs"] = grad.abs().mean()
-
         def _grad_stats(modules, prefix):
             if modules is None:
                 modules = []
@@ -742,39 +701,11 @@ class Qwen3VLMMRLForStages(Qwen3VLForConditionalGeneration):
             "cross_attention",
         )
         cross_attention = getattr(mmrl, "cross_attention", None)
-        static_visual_logits = getattr(
-            cross_attention,
-            "static_visual_logits",
-            None,
-        )
-        if static_visual_logits is not None:
-            result["static_modality_logits_param_norm"] = (
-                static_visual_logits.detach().float().norm()
-            )
-            if static_visual_logits.grad is not None:
-                result["static_modality_logits_grad_norm"] = (
-                    static_visual_logits.grad.detach().float().norm()
-                )
         output_projection = getattr(cross_attention, "output_projection", None)
         if output_projection is not None:
             result["cross_attention_output_weight_norm"] = (
                 output_projection.weight.detach().float().norm()
             )
-        ca_layer_lora = getattr(cross_attention, "layer_lora", None)
-        if ca_layer_lora is not None:
-            prefix = f"ca_{cross_attention.layer_lora_target}_lora"
-            for parameter_name in ("A", "B"):
-                parameter = getattr(ca_layer_lora, parameter_name)
-                result[f"{prefix}_{parameter_name}_param_norm"] = (
-                    parameter.detach().float().norm()
-                )
-                if parameter.grad is not None:
-                    grad = parameter.grad.detach().float()
-                    result[f"{prefix}_{parameter_name}_grad_norm"] = grad.norm()
-                    result[f"{prefix}_{parameter_name}_grad_mean_abs"] = (
-                        grad.abs().mean()
-                    )
-
         visual = getattr(self.model, "visual", None)
         if visual is not None:
             def _module_grad_stats(module, prefix):
@@ -928,32 +859,10 @@ class Qwen3VLMMRLForStages(Qwen3VLForConditionalGeneration):
         else:
             mmrl_relation_loss = mmrl_relation_loss.to(device=input_ids.device, dtype=ce_loss.dtype)
         scaled_mmrl_relation_loss = mmrl_relation_loss * float(self.mmrl_relation_loss_weight)
-        memory_slot_diversity_loss = getattr(
-            self.model.MMRL,
-            "memory_slot_diversity_loss",
-            torch.tensor(0.0, device=input_ids.device),
-        )
-        if not torch.is_tensor(memory_slot_diversity_loss):
-            memory_slot_diversity_loss = torch.tensor(
-                memory_slot_diversity_loss,
-                device=input_ids.device,
-                dtype=ce_loss.dtype,
-            )
-        else:
-            memory_slot_diversity_loss = memory_slot_diversity_loss.to(
-                device=input_ids.device,
-                dtype=ce_loss.dtype,
-            )
-        scaled_memory_slot_diversity_loss = (
-            memory_slot_diversity_loss
-            * float(self.memory_slot_diversity_weight)
-        )
-
         outputs.loss = (
             self.ce_loss_weight * ce_loss
             + alpha_guide_loss
             + scaled_mmrl_relation_loss
-            + scaled_memory_slot_diversity_loss
         )
 
         # ---- cache metrics for external logger ----
@@ -974,12 +883,6 @@ class Qwen3VLMMRLForStages(Qwen3VLForConditionalGeneration):
                 "alpha_guide_loss": alpha_guide_loss.detach(),
                 "mmrl_relation_loss": mmrl_relation_loss.detach(),
                 "mmrl_relation_loss_scaled": scaled_mmrl_relation_loss.detach(),
-                "memory_slot_diversity_loss": (
-                    memory_slot_diversity_loss.detach()
-                ),
-                "memory_slot_diversity_loss_scaled": (
-                    scaled_memory_slot_diversity_loss.detach()
-                ),
                 "alpha_mae": alpha_mae.detach(),
                 "temperature": torch.tensor(float(self.temperature_override) if self.temperature_override is not None else float("nan"), device=input_ids.device),
                 "stage_progress": torch.tensor(float(getattr(self, "current_stage_progress", 0.0)), device=input_ids.device),
@@ -1038,21 +941,6 @@ def build_model_and_processor(model_path, experiment_cfg=None):
         "MMRL_MEMORY_ATTENTION_DIM",
         str(experiment_cfg.get("memory_attention_dim", 128)),
     ))
-    config.MMRL_MEMORY_POOLING_MODE = os.getenv(
-        "MMRL_MEMORY_POOLING_MODE",
-        str(experiment_cfg.get(
-            "memory_pooling_mode",
-            cfg.MMRL_MEMORY_POOLING_MODE,
-        )),
-    )
-    config.MMRL_MEMORY_SLOT_DIVERSITY_WEIGHT = float(os.getenv(
-        "MMRL_MEMORY_SLOT_DIVERSITY_WEIGHT",
-        str(experiment_cfg.get("memory_slot_diversity_weight", 0.0)),
-    ))
-    config.MMRL_MEMORY_SLOT_COSINE_MAX = float(os.getenv(
-        "MMRL_MEMORY_SLOT_COSINE_MAX",
-        str(experiment_cfg.get("memory_slot_cosine_max", 0.995)),
-    ))
     config.MMRL_PROJECTOR_HIDDEN_DIM = int(os.getenv(
         "MMRL_PROJECTOR_HIDDEN_DIM",
         str(experiment_cfg.get(
@@ -1064,48 +952,6 @@ def build_model_and_processor(model_path, experiment_cfg=None):
         "MMRL_CROSS_ATTENTION_HEADS",
         str(experiment_cfg.get("cross_attention_heads", 8)),
     ))
-    config.MMRL_CROSS_ATTENTION_ROUTING_MODE = os.getenv(
-        "MMRL_CROSS_ATTENTION_ROUTING_MODE",
-        str(experiment_cfg.get(
-            "cross_attention_routing_mode",
-            cfg.MMRL_CROSS_ATTENTION_ROUTING_MODE,
-        )),
-    )
-    config.MMRL_STATIC_MODALITY_VISUAL_PRIOR = float(os.getenv(
-        "MMRL_STATIC_MODALITY_VISUAL_PRIOR",
-        str(experiment_cfg.get(
-            "static_modality_visual_prior",
-            cfg.MMRL_STATIC_MODALITY_VISUAL_PRIOR,
-        )),
-    ))
-    config.MMRL_FACTORIZED_VISUAL_RESIDUAL_SCALE = float(os.getenv(
-        "MMRL_FACTORIZED_VISUAL_RESIDUAL_SCALE",
-        str(experiment_cfg.get(
-            "factorized_visual_residual_scale",
-            cfg.MMRL_FACTORIZED_VISUAL_RESIDUAL_SCALE,
-        )),
-    ))
-    config.MMRL_FACTORIZED_TEXT_RESIDUAL_SCALE = float(os.getenv(
-        "MMRL_FACTORIZED_TEXT_RESIDUAL_SCALE",
-        str(experiment_cfg.get(
-            "factorized_text_residual_scale",
-            cfg.MMRL_FACTORIZED_TEXT_RESIDUAL_SCALE,
-        )),
-    ))
-    config.MMRL_QUERY_ARCHITECTURE = os.getenv(
-        "MMRL_QUERY_ARCHITECTURE",
-        str(experiment_cfg.get(
-            "query_architecture",
-            cfg.MMRL_QUERY_ARCHITECTURE,
-        )),
-    )
-    config.MMRL_REP_UPDATE_MODE = os.getenv(
-        "MMRL_REP_UPDATE_MODE",
-        str(experiment_cfg.get(
-            "rep_update_mode",
-            cfg.MMRL_REP_UPDATE_MODE,
-        )),
-    )
     config.ABLATE_VISUAL_GATE = bool(experiment_cfg.get(
         "ablate_visual_gate",
         os.getenv("MMRL_ABLATE_VISUAL_GATE", "0") == "1"
@@ -1114,33 +960,19 @@ def build_model_and_processor(model_path, experiment_cfg=None):
         "ablate_direct_learnable_rep",
         os.getenv("MMRL_ABLATE_DIRECT_LEARNABLE_REP", "0") == "1"
     ))
-    config.MMRL_LAYER_LORA_RANK = int(os.getenv(
-        "MMRL_LAYER_LORA_RANK",
-        str(experiment_cfg.get("layer_lora_rank", 0)),
-    ))
-    config.MMRL_CA_LAYER_LORA_TARGET = os.getenv(
-        "MMRL_CA_LAYER_LORA_TARGET",
-        str(experiment_cfg.get("ca_layer_lora_target", "none")),
+    config.MMRL_QUERY_ARCHITECTURE = os.getenv(
+        "MMRL_QUERY_ARCHITECTURE",
+        str(experiment_cfg.get(
+            "query_architecture",
+            "layer_mlp_post_cross",
+        )),
     )
-    config.MMRL_CA_LAYER_LORA_RANK = int(os.getenv(
-        "MMRL_CA_LAYER_LORA_RANK",
-        str(experiment_cfg.get("ca_layer_lora_rank", 0)),
-    ))
-    config.MMRL_CA_LAYER_LORA_ALPHA = float(os.getenv(
-        "MMRL_CA_LAYER_LORA_ALPHA",
-        str(experiment_cfg.get("ca_layer_lora_alpha", 1.0)),
-    ))
+    config.DIRECT_SHARED_REP = (
+        config.MMRL_QUERY_ARCHITECTURE == "shared_direct_post_cross"
+    )
     config.MMRL_RELATION_LOSS_WEIGHT = float(experiment_cfg.get(
         "mmrl_relation_loss_weight",
         os.getenv("MMRL_RELATION_LOSS_WEIGHT", "0.0"),
-    ))
-    config.MMRL_RELATION_MODE = str(experiment_cfg.get(
-        "mmrl_relation_mode",
-        os.getenv("MMRL_RELATION_MODE", "linear"),
-    ))
-    config.MMRL_RELATION_THRESHOLD = float(experiment_cfg.get(
-        "mmrl_relation_threshold",
-        os.getenv("MMRL_RELATION_THRESHOLD", "0.03"),
     ))
     config.MMRL_RELATION_MAX_TOKENS = int(experiment_cfg.get(
         "mmrl_relation_max_tokens",
@@ -1174,14 +1006,6 @@ def build_model_and_processor(model_path, experiment_cfg=None):
     visual = model.model.visual
     mmrl = model.model.MMRL
     propagation_checks = {
-        "MMRL_RELATION_MODE": (
-            config.MMRL_RELATION_MODE,
-            visual.mmrl_relation_mode,
-        ),
-        "MMRL_RELATION_THRESHOLD": (
-            config.MMRL_RELATION_THRESHOLD,
-            visual.mmrl_relation_threshold,
-        ),
         "MMRL_RELATION_MAX_TOKENS": (
             config.MMRL_RELATION_MAX_TOKENS,
             visual.mmrl_relation_max_tokens,
@@ -1202,106 +1026,34 @@ def build_model_and_processor(model_path, experiment_cfg=None):
             config.MMRL_MEMORY_ATTENTION_DIM,
             mmrl.memory_attention_dim,
         ),
-        "MMRL_MEMORY_POOLING_MODE": (
-            config.MMRL_MEMORY_POOLING_MODE,
-            mmrl.memory_pooling_mode,
-        ),
-        "MMRL_MEMORY_SLOT_DIVERSITY_WEIGHT": (
-            config.MMRL_MEMORY_SLOT_DIVERSITY_WEIGHT,
-            mmrl.memory_slot_diversity_weight,
-        ),
-        "MMRL_MEMORY_SLOT_COSINE_MAX": (
-            config.MMRL_MEMORY_SLOT_COSINE_MAX,
-            mmrl.memory_slot_cosine_max,
-        ),
         "MMRL_PROJECTOR_HIDDEN_DIM": (
             config.MMRL_PROJECTOR_HIDDEN_DIM,
             mmrl.projector_hidden_dim,
         ),
-        "MMRL_QUERY_ARCHITECTURE": (
-            config.MMRL_QUERY_ARCHITECTURE,
-            mmrl.query_architecture,
-        ),
-        "MMRL_REP_UPDATE_MODE": (
-            config.MMRL_REP_UPDATE_MODE,
-            mmrl.rep_update_mode,
-        ),
-        "ABLATE_DIRECT_LEARNABLE_REP": (
-            config.ABLATE_DIRECT_LEARNABLE_REP,
-            mmrl.use_direct_learnable_rep,
-        ),
-        "MMRL_LAYER_LORA_RANK": (
-            config.MMRL_LAYER_LORA_RANK,
-            mmrl.layer_lora_rank,
-        ),
-        "MMRL_CA_LAYER_LORA_TARGET": (
-            config.MMRL_CA_LAYER_LORA_TARGET,
-            mmrl.ca_layer_lora_target,
-        ),
-        "MMRL_CA_LAYER_LORA_RANK": (
-            config.MMRL_CA_LAYER_LORA_RANK,
-            mmrl.ca_layer_lora_rank,
-        ),
-        "MMRL_CA_LAYER_LORA_ALPHA": (
-            config.MMRL_CA_LAYER_LORA_ALPHA,
-            mmrl.ca_layer_lora_alpha,
+        "DIRECT_SHARED_REP": (
+            config.DIRECT_SHARED_REP,
+            mmrl.use_direct_shared_rep,
         ),
         "MMRL_CROSS_ATTENTION_HEADS": (
             config.MMRL_CROSS_ATTENTION_HEADS,
             mmrl.cross_attention.num_heads,
         ),
-        "MMRL_CROSS_ATTENTION_ROUTING_MODE": (
-            config.MMRL_CROSS_ATTENTION_ROUTING_MODE,
-            mmrl.cross_attention.routing_mode,
-        ),
-        "MMRL_STATIC_MODALITY_VISUAL_PRIOR": (
-            config.MMRL_STATIC_MODALITY_VISUAL_PRIOR,
-            mmrl.cross_attention.static_visual_prior,
-        ),
-        "MMRL_FACTORIZED_VISUAL_RESIDUAL_SCALE": (
-            config.MMRL_FACTORIZED_VISUAL_RESIDUAL_SCALE,
-            mmrl.cross_attention.factorized_visual_residual_scale,
-        ),
-        "MMRL_FACTORIZED_TEXT_RESIDUAL_SCALE": (
-            config.MMRL_FACTORIZED_TEXT_RESIDUAL_SCALE,
-            mmrl.cross_attention.factorized_text_residual_scale,
-        ),
     }
     for name, (requested, actual) in propagation_checks.items():
-        if isinstance(requested, str):
-            mismatch = requested != actual
-        else:
-            mismatch = abs(float(requested) - float(actual)) > 1e-9
-        if mismatch:
+        if abs(float(requested) - float(actual)) > 1e-9:
             raise RuntimeError(
                 f"{name} config propagation failed: requested={requested} actual={actual}"
             )
     print(
         "[MMRL_STRUCTURE_AUDIT] "
-        f"query_architecture={config.MMRL_QUERY_ARCHITECTURE} "
-        f"rep_update_mode={config.MMRL_REP_UPDATE_MODE} "
-        f"cross_attention_dim={mmrl.cross_attention_dim} "
+        "query_parameterization="
+        f"{'shared_direct' if config.DIRECT_SHARED_REP else 'layer_mlp'} "
         f"rp_space_length={config.RP_SPACE_LENGTH} "
         f"memory_query_count={config.MMRL_MEMORY_QUERY_COUNT} "
         f"memory_attention_dim={config.MMRL_MEMORY_ATTENTION_DIM} "
-        f"memory_pooling_mode={config.MMRL_MEMORY_POOLING_MODE} "
-        "memory_slot_diversity_weight="
-        f"{config.MMRL_MEMORY_SLOT_DIVERSITY_WEIGHT} "
-        f"memory_slot_cosine_max={config.MMRL_MEMORY_SLOT_COSINE_MAX} "
         f"projector_hidden_dim={config.MMRL_PROJECTOR_HIDDEN_DIM} "
         f"cross_attention_heads={config.MMRL_CROSS_ATTENTION_HEADS} "
-        "cross_attention_routing="
-        f"{config.MMRL_CROSS_ATTENTION_ROUTING_MODE} "
-        "static_modality_visual_prior="
-        f"{config.MMRL_STATIC_MODALITY_VISUAL_PRIOR} "
-        "factorized_residual_scales="
-        f"visual{config.MMRL_FACTORIZED_VISUAL_RESIDUAL_SCALE}:"
-        f"text{config.MMRL_FACTORIZED_TEXT_RESIDUAL_SCALE} "
-        f"layer_lora_rank={config.MMRL_LAYER_LORA_RANK} "
-        "ca_layer_lora="
-        f"{config.MMRL_CA_LAYER_LORA_TARGET}:"
-        f"r{config.MMRL_CA_LAYER_LORA_RANK}:"
-        f"alpha{config.MMRL_CA_LAYER_LORA_ALPHA} "
+        f"direct_shared_rep={config.DIRECT_SHARED_REP} "
         "memory_tokens_per_image="
         f"{2 * config.MMRL_MEMORY_QUERY_COUNT}"
     )
@@ -1316,21 +1068,6 @@ def build_model_and_processor(model_path, experiment_cfg=None):
             parameter.numel()
             for parameter in model.model.MMRL.direct_v_tokens.parameters()
         ),
-        "layer_rep_delta": (
-            model.model.MMRL.layer_rep_delta.numel()
-            if model.model.MMRL.layer_rep_delta is not None
-            else 0
-        ),
-        "layer_lora_A": (
-            model.model.MMRL.layer_lora_A.numel()
-            if model.model.MMRL.layer_lora_A is not None
-            else 0
-        ),
-        "layer_lora_B": (
-            model.model.MMRL.layer_lora_B.numel()
-            if model.model.MMRL.layer_lora_B is not None
-            else 0
-        ),
         "visual_memory_pooling": sum(
             parameter.numel()
             for parameter in model.model.MMRL.visual_memory_pooling.parameters()
@@ -1341,13 +1078,7 @@ def build_model_and_processor(model_path, experiment_cfg=None):
         ),
         "cross_attention": sum(
             parameter.numel()
-            for name, parameter in model.model.MMRL.cross_attention.named_parameters()
-            if not name.startswith("layer_lora.")
-        ),
-        "ca_layer_lora": sum(
-            parameter.numel()
-            for name, parameter in model.model.MMRL.cross_attention.named_parameters()
-            if name.startswith("layer_lora.")
+            for parameter in model.model.MMRL.cross_attention.parameters()
         ),
     }
     print(
@@ -1355,71 +1086,6 @@ def build_model_and_processor(model_path, experiment_cfg=None):
         f"components={component_parameters} "
         f"total={sum(parameter.numel() for parameter in model.model.MMRL.parameters())}"
     )
-    if mmrl.layer_lora_rank > 0:
-        layer_lora_A = mmrl.layer_lora_A.detach().float()
-        expected_bound = 1.0 / math.sqrt(float(mmrl.layer_lora_A.shape[1]))
-        actual_max = float(layer_lora_A.abs().max().item())
-        normalized_rms = float(
-            layer_lora_A.square().mean().sqrt().item()
-            * math.sqrt(3.0 * float(mmrl.layer_lora_A.shape[1]))
-        )
-        if actual_max > expected_bound * 1.001:
-            raise RuntimeError(
-                "Layer LoRA A uses the wrong fan-in initialization: "
-                f"actual_max={actual_max} expected_bound={expected_bound}"
-            )
-        print(
-            "[MMRL_LAYER_LORA_INIT_AUDIT] "
-            f"rank={mmrl.layer_lora_rank} "
-            f"A_norm={float(layer_lora_A.norm().item())} "
-            f"A_abs_max={actual_max} "
-            f"expected_bound={expected_bound} "
-            f"normalized_rms={normalized_rms} "
-            f"B_norm={float(mmrl.layer_lora_B.detach().float().norm().item())} "
-            "residual_identity="
-            f"{bool(torch.count_nonzero(mmrl.layer_lora_B.detach()).item() == 0)}"
-        )
-    if mmrl.ca_layer_lora_rank > 0:
-        ca_lora = mmrl.cross_attention.layer_lora
-        ca_lora_A = ca_lora.A.detach().float()
-        expected_bound = 1.0 / math.sqrt(float(ca_lora.A.shape[1]))
-        actual_max = float(ca_lora_A.abs().max().item())
-        normalized_rms = float(
-            ca_lora_A.square().mean().sqrt().item()
-            * math.sqrt(3.0 * float(ca_lora.A.shape[1]))
-        )
-        if actual_max > expected_bound * 1.001:
-            raise RuntimeError(
-                "CA layer LoRA A uses the wrong fan-in initialization: "
-                f"actual_max={actual_max} expected_bound={expected_bound}"
-            )
-        print(
-            "[MMRL_CA_LAYER_LORA_INIT_AUDIT] "
-            f"target={mmrl.ca_layer_lora_target} "
-            f"rank={mmrl.ca_layer_lora_rank} "
-            f"alpha={mmrl.ca_layer_lora_alpha} "
-            f"A_norm={float(ca_lora_A.norm().item())} "
-            f"A_abs_max={actual_max} "
-            f"expected_bound={expected_bound} "
-            f"normalized_rms={normalized_rms} "
-            f"B_norm={float(ca_lora.B.detach().float().norm().item())} "
-            "residual_identity="
-            f"{bool(torch.count_nonzero(ca_lora.B.detach()).item() == 0)}"
-        )
-    if mmrl.layer_rep_delta is not None:
-        layer_rep_delta_norm = float(
-            mmrl.layer_rep_delta.detach().float().norm().item()
-        )
-        if layer_rep_delta_norm != 0.0:
-            raise RuntimeError(
-                "Layer Rep delta must start from the shared-direct baseline, "
-                f"got norm={layer_rep_delta_norm}"
-            )
-        print(
-            "[MMRL_LAYER_REP_DELTA_INIT_AUDIT] "
-            f"shape={tuple(mmrl.layer_rep_delta.shape)} "
-            f"norm={layer_rep_delta_norm} shared_identity=True"
-        )
     model.model.load_state_dict(base.model.state_dict(), strict=False)
     model.lm_head.load_state_dict(base.lm_head.state_dict(), strict=False)
 
@@ -1448,59 +1114,6 @@ def build_model_and_processor(model_path, experiment_cfg=None):
         f"output_weight_norm={cross_output_norm} "
         f"output_bias_norm={cross_output_bias_norm} residual_identity=True"
     )
-    if mmrl.cross_attention.routing_mode == "static_modality":
-        static_logits = mmrl.cross_attention.static_visual_logits
-        expected_shape = (
-            mmrl.cross_attention.num_heads,
-            mmrl.insert_layer_count,
-            mmrl.rp_space_length,
-        )
-        if tuple(static_logits.shape) != expected_shape:
-            raise RuntimeError(
-                "Static modality gate shape mismatch: "
-                f"expected={expected_shape} actual={tuple(static_logits.shape)}"
-            )
-        initial_visual_mass = float(
-            torch.sigmoid(static_logits.detach().float()).mean().item()
-        )
-        if abs(initial_visual_mass - mmrl.static_modality_visual_prior) > 2e-3:
-            raise RuntimeError(
-                "Static modality visual prior initialization mismatch: "
-                f"expected={mmrl.static_modality_visual_prior} "
-                f"actual={initial_visual_mass}"
-            )
-        print(
-            "[MMRL_STATIC_MODALITY_INIT_AUDIT] "
-            f"gate_shape={tuple(static_logits.shape)} "
-            f"initial_visual_mass={initial_visual_mass} "
-            f"query_projection={mmrl.cross_attention.query_projection is not None} "
-            f"key_projection={mmrl.cross_attention.key_projection is not None} "
-            "value_projection=True output_projection=True"
-        )
-    if mmrl.cross_attention.routing_mode == "factorized_modality":
-        if (
-            mmrl.cross_attention.query_projection is None
-            or mmrl.cross_attention.key_projection is None
-        ):
-            raise RuntimeError(
-                "Factorized modality routing must retain Q/K projections"
-            )
-        mean_only = (
-            mmrl.cross_attention.factorized_visual_residual_scale == 0.0
-            and mmrl.cross_attention.factorized_text_residual_scale == 0.0
-        )
-        print(
-            "[MMRL_FACTORIZED_MODALITY_INIT_AUDIT] "
-            "query_projection=True key_projection=True "
-            "value_projection=True output_projection=True "
-            "modality_gate=dynamic_mean_qk "
-            "within_modality_attention="
-            f"{'mean_only_fast_path' if mean_only else 'separate_softmax'} "
-            f"projected_memory_tokens={'2' if mean_only else 'all'} "
-            "residual_scales="
-            f"visual{mmrl.cross_attention.factorized_visual_residual_scale}:"
-            f"text{mmrl.cross_attention.factorized_text_residual_scale}"
-        )
 
     del base
     torch.cuda.empty_cache()
@@ -1535,32 +1148,12 @@ def build_model_and_processor(model_path, experiment_cfg=None):
     print(
         f"ablate_visual_gate={config.ABLATE_VISUAL_GATE} "
         f"ablate_direct_learnable_rep={config.ABLATE_DIRECT_LEARNABLE_REP} "
-        f"query_architecture={config.MMRL_QUERY_ARCHITECTURE} "
-        f"rep_update_mode={config.MMRL_REP_UPDATE_MODE} "
-        f"cross_attention_dim={mmrl.cross_attention_dim} "
-        f"layer_lora_rank={config.MMRL_LAYER_LORA_RANK} "
-        "ca_layer_lora="
-        f"{config.MMRL_CA_LAYER_LORA_TARGET}:"
-        f"r{config.MMRL_CA_LAYER_LORA_RANK}:"
-        f"alpha{config.MMRL_CA_LAYER_LORA_ALPHA} "
+        f"direct_shared_rep={config.DIRECT_SHARED_REP} "
         f"rp_space_length={config.RP_SPACE_LENGTH} "
         f"memory_query_count={config.MMRL_MEMORY_QUERY_COUNT} "
         f"memory_attention_dim={config.MMRL_MEMORY_ATTENTION_DIM} "
-        f"memory_pooling_mode={config.MMRL_MEMORY_POOLING_MODE} "
-        "memory_slot_diversity_weight="
-        f"{config.MMRL_MEMORY_SLOT_DIVERSITY_WEIGHT} "
-        f"memory_slot_cosine_max={config.MMRL_MEMORY_SLOT_COSINE_MAX} "
         f"projector_hidden_dim={config.MMRL_PROJECTOR_HIDDEN_DIM} "
         f"cross_attention_heads={config.MMRL_CROSS_ATTENTION_HEADS} "
-        "cross_attention_routing="
-        f"{config.MMRL_CROSS_ATTENTION_ROUTING_MODE} "
-        "static_modality_visual_prior="
-        f"{config.MMRL_STATIC_MODALITY_VISUAL_PRIOR} "
-        "factorized_residual_scales="
-        f"visual{config.MMRL_FACTORIZED_VISUAL_RESIDUAL_SCALE}:"
-        f"text{config.MMRL_FACTORIZED_TEXT_RESIDUAL_SCALE} "
-        f"mmrl_relation_mode={config.MMRL_RELATION_MODE} "
-        f"mmrl_relation_threshold={config.MMRL_RELATION_THRESHOLD} "
         f"mmrl_relation_loss_weight={config.MMRL_RELATION_LOSS_WEIGHT} "
         f"mmrl_variance_floor_ratio={config.MMRL_VARIANCE_FLOOR_RATIO} "
         f"mmrl_variance_floor_weight={config.MMRL_VARIANCE_FLOOR_WEIGHT} "
@@ -2025,16 +1618,11 @@ def run_stage3_full(model, processor, data_cfg, train_cfg, output_dir):
         experiment_cfg.get("mmrl_relation_loss_weight", 0.0),
     ))
     model.model.visual.mmrl_relation_loss_weight = model.mmrl_relation_loss_weight
-    model.memory_slot_diversity_weight = float(train_cfg.get(
-        "memory_slot_diversity_weight",
-        experiment_cfg.get("memory_slot_diversity_weight", 0.0),
-    ))
     stage3_ce_only = (
         model.ce_loss_weight == 1.0
         and not model.enable_alpha_guide_loss
         and model.alpha_loss_weight == 0.0
         and model.mmrl_relation_loss_weight == 0.0
-        and model.memory_slot_diversity_weight == 0.0
     )
     print(
         "[STAGE3_LOSS_AUDIT] "
@@ -2042,24 +1630,14 @@ def run_stage3_full(model, processor, data_cfg, train_cfg, output_dir):
         f"alpha_enabled={model.enable_alpha_guide_loss} "
         f"alpha_weight={model.alpha_loss_weight} "
         f"relation_weight={model.mmrl_relation_loss_weight} "
-        f"memory_diversity_weight={model.memory_slot_diversity_weight} "
         f"ce_only={stage3_ce_only}"
     )
     print(
         "[MMRL_RELATION] "
-        f"mode={model.model.visual.mmrl_relation_mode} "
         f"weight={model.mmrl_relation_loss_weight} "
-        f"threshold={model.model.visual.mmrl_relation_threshold} "
         f"max_tokens={model.model.visual.mmrl_relation_max_tokens} "
         f"variance_floor_ratio={model.model.visual.mmrl_variance_floor_ratio} "
         f"variance_floor_weight={model.model.visual.mmrl_variance_floor_weight}"
-    )
-    print(
-        "[MMRL_MEMORY_POOLING] "
-        f"mode={model.model.MMRL.memory_pooling_mode} "
-        f"slots_per_modality={model.model.MMRL.memory_query_count} "
-        f"diversity_weight={model.memory_slot_diversity_weight} "
-        f"cosine_max={model.model.MMRL.memory_slot_cosine_max}"
     )
     stage3_views = ("expert-mm",)
     print(f"[Stage{stage_id}] enable_views={stage3_views}")

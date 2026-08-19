@@ -13,7 +13,7 @@ import utils
 class MMRLVitBlock(qwen3_vl.Qwen3VLVisionBlock):
     def __init__(self, config):
         super(MMRLVitBlock, self).__init__(config)
-        self.rep_update_mode = config.mmrl_config["MMRL_REP_UPDATE_MODE"]
+        self.INSERT_METHOD = config.mmrl_config["insert_method"]
     def forward(self,
                 hidden_states: torch.Tensor,
                 cu_seqlens: torch.Tensor,
@@ -48,19 +48,18 @@ class MMRLVitBlock(qwen3_vl.Qwen3VLVisionBlock):
             hidden_states_split = torch.split(hidden_states, full_seq_lengths, dim=0)
             new_hidden_states_list = []
             for image_rep, seq_hidden in zip(r_token, hidden_states_split):
-                if self.rep_update_mode == "replace":
+                if self.INSERT_METHOD == "replace":
                     updated_seq = torch.cat(
                         [image_rep, seq_hidden[num_r_tokens:]],
                         dim=0,
                     )
-                elif self.rep_update_mode == "persistent_delta":
+                elif self.INSERT_METHOD == "add":
                     prefix = seq_hidden[:num_r_tokens] + image_rep
                     suffix = seq_hidden[num_r_tokens:]
                     updated_seq = torch.cat([prefix, suffix], dim=0)
                 else:
                     raise ValueError(
-                        "Unsupported MMRL_REP_UPDATE_MODE="
-                        f"{self.rep_update_mode!r}"
+                        f"Unsupported MMRL INSERT_METHOD={self.INSERT_METHOD!r}"
                     )
                 new_hidden_states_list.append(updated_seq)
             hidden_states = torch.cat(new_hidden_states_list, dim=0)
@@ -129,8 +128,6 @@ def _strip_r_token(hidden_states, original_lens, num_r_token):
     return torch.cat(clean_list, dim=0)
 
 class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
-    MMRL_RELATION_MODES = {"linear", "trust_region"}
-
     def __init__(self, config, *inputs, **kwargs):
         super().__init__(config, *inputs, **kwargs)
         self.cfg = SimpleNamespace(**config.mmrl_config)
@@ -157,28 +154,7 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
         #                                          self.cfg.gating_temperature)
         self.mmrl_relation_loss = torch.tensor(0.0)
         self.mmrl_relation_gram_loss = torch.tensor(0.0)
-        self.mmrl_relation_excess_loss = torch.tensor(0.0)
-        self.mmrl_relation_active_ratio = torch.tensor(0.0)
         self.mmrl_variance_floor_loss = torch.tensor(0.0)
-        self.mmrl_relation_loss_weight = float(
-            getattr(self.cfg, "MMRL_RELATION_LOSS_WEIGHT", 0.0)
-        )
-        self.mmrl_relation_mode = str(
-            getattr(self.cfg, "MMRL_RELATION_MODE", "linear")
-        ).strip().lower()
-        self.mmrl_relation_threshold = float(
-            getattr(self.cfg, "MMRL_RELATION_THRESHOLD", 0.03)
-        )
-        if self.mmrl_relation_mode not in self.MMRL_RELATION_MODES:
-            raise ValueError(
-                f"Unsupported MMRL_RELATION_MODE={self.mmrl_relation_mode!r}; "
-                f"choices={sorted(self.MMRL_RELATION_MODES)}"
-            )
-        if self.mmrl_relation_threshold < 0.0:
-            raise ValueError(
-                "MMRL_RELATION_THRESHOLD must be non-negative, got "
-                f"{self.mmrl_relation_threshold}"
-            )
         self.mmrl_relation_max_tokens = int(getattr(self.cfg, "MMRL_RELATION_MAX_TOKENS", 64))
         self.mmrl_variance_floor_ratio = float(getattr(self.cfg, "MMRL_VARIANCE_FLOOR_RATIO", 0.50))
         self.mmrl_variance_floor_weight = float(getattr(self.cfg, "MMRL_VARIANCE_FLOOR_WEIGHT", 0.10))
@@ -249,7 +225,7 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
     ):
         zero = adapted_states.new_tensor(0.0, dtype=torch.float32)
         if cu_seqlens is None or cu_seqlens.numel() <= 1:
-            return zero, zero, zero, zero, zero
+            return zero, zero, zero
 
         relation_losses = []
         variance_losses = []
@@ -289,24 +265,11 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
             ).pow(2))
 
         if not relation_losses:
-            return zero, zero, zero, zero, zero
-        per_image_gram = torch.stack(relation_losses)
-        gram_loss = per_image_gram.mean()
-        gram_excess = torch.relu(
-            per_image_gram - self.mmrl_relation_threshold
-        )
-        excess_loss = gram_excess.mean()
-        active_ratio = (
-            per_image_gram > self.mmrl_relation_threshold
-        ).float().mean()
+            return zero, zero, zero
+        gram_loss = torch.stack(relation_losses).mean()
         variance_loss = torch.stack(variance_losses).mean()
-        gram_penalty = (
-            excess_loss
-            if self.mmrl_relation_mode == "trust_region"
-            else gram_loss
-        )
-        total = gram_penalty + self.mmrl_variance_floor_weight * variance_loss
-        return total, gram_loss, variance_loss, excess_loss, active_ratio
+        total = gram_loss + self.mmrl_variance_floor_weight * variance_loss
+        return total, gram_loss, variance_loss
 
     def _compute_absolute_alignment_metrics(
         self,
@@ -349,7 +312,7 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
                 metrics[f"{prefix}_pooled_cos_mean"] = pooled_cos.mean().to(device)
 
             if include_gram:
-                _, gram_loss, _, _, _ = self._compute_mmrl_relation_loss(
+                _, gram_loss, _ = self._compute_mmrl_relation_loss(
                     candidate,
                     original,
                     cu_seqlens,
@@ -771,13 +734,11 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
             # for i in range(cu_seqlens.size(0) - 1):
             #     hidden_states_with_rep = hidden_states_with_rep[cu_seqlens[i]:cu_seqlens[i+1]] * self.G_list[i]
             seqlens = cu_seqlens[1:] - cu_seqlens[:-1]
-            if self.training and self.mmrl_relation_loss_weight > 0.0:
+            if self.training:
                 (
                     self.mmrl_relation_loss,
                     self.mmrl_relation_gram_loss,
                     self.mmrl_variance_floor_loss,
-                    self.mmrl_relation_excess_loss,
-                    self.mmrl_relation_active_ratio,
                 ) = self._compute_mmrl_relation_loss(
                     hidden_states_with_rep,
                     org_hidden_states,
@@ -787,8 +748,6 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
                 self.mmrl_relation_loss = hidden_states.new_tensor(0.0)
                 self.mmrl_relation_gram_loss = hidden_states.new_tensor(0.0)
                 self.mmrl_variance_floor_loss = hidden_states.new_tensor(0.0)
-                self.mmrl_relation_excess_loss = hidden_states.new_tensor(0.0)
-                self.mmrl_relation_active_ratio = hidden_states.new_tensor(0.0)
             delta = hidden_states_with_rep - org_hidden_states
             G_mask = torch.repeat_interleave(self.G_list, seqlens, dim=0)
             final_delta = delta * G_mask
@@ -810,8 +769,6 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
             self.mmrl_relation_loss = hidden_states.new_tensor(0.0)
             self.mmrl_relation_gram_loss = hidden_states.new_tensor(0.0)
             self.mmrl_variance_floor_loss = hidden_states.new_tensor(0.0)
-            self.mmrl_relation_excess_loss = hidden_states.new_tensor(0.0)
-            self.mmrl_relation_active_ratio = hidden_states.new_tensor(0.0)
 
         if self.training:
             mmrl_state_alignment = self._compute_absolute_alignment_metrics(
@@ -865,8 +822,6 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
                 "mmrl_delta_to_org_ratio": self.mmrl_delta_to_org_ratio.detach(),
                 "mmrl_relation_loss": self.mmrl_relation_loss.detach(),
                 "mmrl_relation_gram_loss": self.mmrl_relation_gram_loss.detach(),
-                "mmrl_relation_excess_loss": self.mmrl_relation_excess_loss.detach(),
-                "mmrl_relation_active_ratio": self.mmrl_relation_active_ratio.detach(),
                 "mmrl_variance_floor_loss": self.mmrl_variance_floor_loss.detach(),
                 "deepstack_mmrl_residual_scale": hidden_states.new_tensor(float(self.deepstack_mmrl_residual_scale)),
                 "deepstack_delta_norm_mean": self.deepstack_delta_norm_mean.detach(),

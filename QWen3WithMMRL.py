@@ -43,21 +43,6 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
                 "MMRL_MEMORY_ATTENTION_DIM",
                 cfg.MMRL_MEMORY_ATTENTION_DIM,
             ),
-            "MMRL_MEMORY_POOLING_MODE": _cfg_attr(
-                config,
-                "MMRL_MEMORY_POOLING_MODE",
-                cfg.MMRL_MEMORY_POOLING_MODE,
-            ),
-            "MMRL_MEMORY_SLOT_DIVERSITY_WEIGHT": _cfg_attr(
-                config,
-                "MMRL_MEMORY_SLOT_DIVERSITY_WEIGHT",
-                cfg.MMRL_MEMORY_SLOT_DIVERSITY_WEIGHT,
-            ),
-            "MMRL_MEMORY_SLOT_COSINE_MAX": _cfg_attr(
-                config,
-                "MMRL_MEMORY_SLOT_COSINE_MAX",
-                cfg.MMRL_MEMORY_SLOT_COSINE_MAX,
-            ),
             "MMRL_PROJECTOR_HIDDEN_DIM": _cfg_attr(
                 config,
                 "MMRL_PROJECTOR_HIDDEN_DIM",
@@ -68,66 +53,18 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
                 "MMRL_CROSS_ATTENTION_HEADS",
                 cfg.MMRL_CROSS_ATTENTION_HEADS,
             ),
-            "MMRL_CROSS_ATTENTION_ROUTING_MODE": _cfg_attr(
-                config,
-                "MMRL_CROSS_ATTENTION_ROUTING_MODE",
-                cfg.MMRL_CROSS_ATTENTION_ROUTING_MODE,
-            ),
-            "MMRL_STATIC_MODALITY_VISUAL_PRIOR": _cfg_attr(
-                config,
-                "MMRL_STATIC_MODALITY_VISUAL_PRIOR",
-                cfg.MMRL_STATIC_MODALITY_VISUAL_PRIOR,
-            ),
-            "MMRL_FACTORIZED_VISUAL_RESIDUAL_SCALE": _cfg_attr(
-                config,
-                "MMRL_FACTORIZED_VISUAL_RESIDUAL_SCALE",
-                cfg.MMRL_FACTORIZED_VISUAL_RESIDUAL_SCALE,
-            ),
-            "MMRL_FACTORIZED_TEXT_RESIDUAL_SCALE": _cfg_attr(
-                config,
-                "MMRL_FACTORIZED_TEXT_RESIDUAL_SCALE",
-                cfg.MMRL_FACTORIZED_TEXT_RESIDUAL_SCALE,
-            ),
+            "INSERT_METHOD": _cfg_attr(config, "INSERT_METHOD", cfg.INSERT_METHOD),
+            "GATING_MID_DIM": _cfg_attr(config, "GATING_MID_DIM", cfg.GATING_MID_DIM),
+            "stretching_length": _cfg_attr(config, "stretching_length", cfg.stretching_length),
+            "gating_temperature": _cfg_attr(config, "gating_temperature", cfg.gating_temperature),
+            "insert_method": _cfg_attr(config, "INSERT_METHOD", cfg.INSERT_METHOD),
+            "ABLATE_VISUAL_GATE": _cfg_attr(config, "ABLATE_VISUAL_GATE", False),
+            "ABLATE_DIRECT_LEARNABLE_REP": _cfg_attr(config, "ABLATE_DIRECT_LEARNABLE_REP", False),
+            "DIRECT_SHARED_REP": _cfg_attr(config, "DIRECT_SHARED_REP", False),
             "MMRL_QUERY_ARCHITECTURE": _cfg_attr(
                 config,
                 "MMRL_QUERY_ARCHITECTURE",
                 cfg.MMRL_QUERY_ARCHITECTURE,
-            ),
-            "MMRL_REP_UPDATE_MODE": _cfg_attr(
-                config,
-                "MMRL_REP_UPDATE_MODE",
-                cfg.MMRL_REP_UPDATE_MODE,
-            ),
-            "GATING_MID_DIM": _cfg_attr(config, "GATING_MID_DIM", cfg.GATING_MID_DIM),
-            "stretching_length": _cfg_attr(config, "stretching_length", cfg.stretching_length),
-            "gating_temperature": _cfg_attr(config, "gating_temperature", cfg.gating_temperature),
-            "ABLATE_VISUAL_GATE": _cfg_attr(config, "ABLATE_VISUAL_GATE", False),
-            "ABLATE_DIRECT_LEARNABLE_REP": _cfg_attr(config, "ABLATE_DIRECT_LEARNABLE_REP", False),
-            "MMRL_LAYER_LORA_RANK": _cfg_attr(config, "MMRL_LAYER_LORA_RANK", 0),
-            "MMRL_CA_LAYER_LORA_TARGET": _cfg_attr(
-                config,
-                "MMRL_CA_LAYER_LORA_TARGET",
-                cfg.MMRL_CA_LAYER_LORA_TARGET,
-            ),
-            "MMRL_CA_LAYER_LORA_RANK": _cfg_attr(
-                config,
-                "MMRL_CA_LAYER_LORA_RANK",
-                cfg.MMRL_CA_LAYER_LORA_RANK,
-            ),
-            "MMRL_CA_LAYER_LORA_ALPHA": _cfg_attr(
-                config,
-                "MMRL_CA_LAYER_LORA_ALPHA",
-                cfg.MMRL_CA_LAYER_LORA_ALPHA,
-            ),
-            "MMRL_RELATION_MODE": _cfg_attr(
-                config,
-                "MMRL_RELATION_MODE",
-                cfg.MMRL_RELATION_MODE,
-            ),
-            "MMRL_RELATION_THRESHOLD": _cfg_attr(
-                config,
-                "MMRL_RELATION_THRESHOLD",
-                cfg.MMRL_RELATION_THRESHOLD,
             ),
             "MMRL_RELATION_MAX_TOKENS": _cfg_attr(config, "MMRL_RELATION_MAX_TOKENS", 64),
             "MMRL_VARIANCE_FLOOR_RATIO": _cfg_attr(config, "MMRL_VARIANCE_FLOOR_RATIO", 0.50),
@@ -162,7 +99,8 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
             raise ValueError("tokenizer must be specified")
         ###################
         vision_config = getattr(config, "vision_config", config)
-        vision_config.mmrl_config = config.mmrl_config
+        if not hasattr(vision_config, "mmrl_config"):
+            vision_config.mmrl_config = config.mmrl_config
         original_visual = self.visual
         self.visual = vmmrl.VisionWithMMRL(vision_config)
         self.visual.load_state_dict(original_visual.state_dict(), strict=False)

@@ -213,6 +213,11 @@ case "$RUN_TARGET" in
     MMRL_QUERY_ARCHITECTURE="shared_direct_post_cross" \
       run_slake || failures=$((failures + 1))
     ;;
+  slake_current_control)
+    run_final_seed44 \
+      "slake_mmrl_layer_mlp_current_control_relation0050" 0 0 0.0 \
+      || failures=$((failures + 1))
+    ;;
   slake_same_init)
     run_final_seed44 \
       "slake_mmrl_layer_mlp_same_init_relation0050" 1 0 0.0 \
@@ -252,7 +257,7 @@ case "$RUN_TARGET" in
     run_slake || failures=$((failures + 1))
     ;;
   *)
-    echo "[ERR] 未知目标: $RUN_TARGET，可选 train、slake、slake_shared_direct、slake_same_init、slake_deepstack、slake_cross_relation、slake_final_serial3、slake_layer_mlp_repro_seeds3、slake_shared_direct_repro_seeds3、train_shared_direct、all。" >&2
+    echo "[ERR] 未知目标: $RUN_TARGET，可选 train、slake、slake_shared_direct、slake_current_control、slake_same_init、slake_deepstack、slake_cross_relation、slake_final_serial3、slake_layer_mlp_repro_seeds3、slake_shared_direct_repro_seeds3、train_shared_direct、all。" >&2
     exit 2
     ;;
 esac

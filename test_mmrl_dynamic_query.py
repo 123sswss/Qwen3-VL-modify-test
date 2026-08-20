@@ -130,11 +130,40 @@ class DynamicQueryPoolingTest(unittest.TestCase):
         self.assertEqual(len(layer_reps), 2)
         self.assertEqual(tuple(layer_reps[0].shape), (3, 3, 8))
         self.assertEqual(mmrl.last_memory_shape, (3, 3, 8))
+        expected_base = mmrl._compute_base_queries().detach()
+        for layer_index, layer_rep in enumerate(layer_reps):
+            torch.testing.assert_close(
+                layer_rep,
+                expected_base[layer_index].unsqueeze(0).expand(3, -1, -1),
+            )
         loss = sum(rep.square().mean() for rep in layer_reps)
         loss.backward()
+        self.assertIsNotNone(mmrl.dynamic_query_residual_scale.grad)
+        self.assertGreater(
+            float(mmrl.dynamic_query_residual_scale.grad.abs()), 0.0
+        )
         self.assertIsNotNone(mmrl.dynamic_query_seeds.grad)
         self.assertTrue(bool(torch.isfinite(mmrl.dynamic_query_seeds.grad).all()))
+        torch.testing.assert_close(
+            mmrl.dynamic_query_seeds.grad,
+            torch.zeros_like(mmrl.dynamic_query_seeds.grad),
+        )
         self.assertIsNotNone(mmrl.cross_attention.output_projection.weight.grad)
+
+        mmrl.zero_grad(set_to_none=True)
+        with torch.no_grad():
+            mmrl.dynamic_query_residual_scale.fill_(0.02)
+        opened_layer_reps = mmrl(
+            visual_states=visual_states,
+            cu_seqlens=cu_seqlens,
+            text_states=text_states,
+            text_mask=text_mask,
+            images_per_sample=[2, 1],
+        )
+        self.assertFalse(torch.allclose(opened_layer_reps[0], layer_reps[0]))
+        opened_loss = sum(rep.square().mean() for rep in opened_layer_reps)
+        opened_loss.backward()
+        self.assertGreater(float(mmrl.dynamic_query_seeds.grad.abs().sum()), 0.0)
 
 
 if __name__ == "__main__":

@@ -193,6 +193,8 @@ def build_train_config(
             "visual_dynamic_attention_entropy_norm",
             "visual_dynamic_output_specificity_ratio",
             "visual_dynamic_residual_gate_abs_mean",
+            "dynamic_query_residual_scale",
+            "dynamic_query_residual_scale_grad_abs",
             "visual_memory_norm_mean",
             "text_memory_norm_mean",
             "visual_memory_pooling_grad_norm_mean",

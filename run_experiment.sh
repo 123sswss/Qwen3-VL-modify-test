@@ -238,7 +238,7 @@ case "$RUN_TARGET" in
     ;;
   slake_dynamic_query_static_kv)
     run_final_seed44 \
-      "slake_mmrl_layer_mlp_same_init_dynamic_query_static_kv_relation0050" \
+      "slake_mmrl_layer_mlp_same_init_dynamic_query_zerogate_static_kv_relation0050" \
       1 0 0.0 0.05 "layer_mlp_dynamic_query_static_kv" 40 \
       || failures=$((failures + 1))
     ;;

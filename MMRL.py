@@ -318,6 +318,7 @@ class MMRL(nn.Module):
                 self.memory_query_count, self.vision_token_dim
             ))
             nn.init.normal_(self.dynamic_query_seeds, std=0.02)
+            self.dynamic_query_residual_scale = nn.Parameter(torch.zeros(()))
             self.dynamic_query_projection = nn.Sequential(
                 nn.LayerNorm(self.vision_token_dim),
                 nn.Linear(self.vision_token_dim, self.memory_attention_dim),
@@ -334,6 +335,7 @@ class MMRL(nn.Module):
             )
         else:
             self.register_parameter("dynamic_query_seeds", None)
+            self.register_parameter("dynamic_query_residual_scale", None)
             self.dynamic_query_projection = nn.Identity()
             self.visual_memory_pooling = MultiQueryAttentionPooling(
                 self.vision_token_dim,
@@ -499,9 +501,12 @@ class MMRL(nn.Module):
             image_count, -1, -1, -1
         )
         if self.use_dynamic_query_static_kv:
-            layer_queries = visual_memory.unsqueeze(1) + self.layer_embeddings.to(
-                device=visual_states.device, dtype=visual_states.dtype
-            ).unsqueeze(0)
+            # Preserve the proven static-query initialization and let optimization
+            # open the input-conditioned query path gradually.
+            layer_queries = (
+                batched_queries
+                + self.dynamic_query_residual_scale * visual_memory.unsqueeze(1)
+            )
             flat_layer_queries = layer_queries.reshape(
                 image_count * self.insert_layer_count,
                 self.rp_space_length,
@@ -589,6 +594,11 @@ class MMRL(nn.Module):
                     ),
                     "static_slot_memory_norm_mean": (
                         batched_queries.detach().float().norm(dim=-1).mean()
+                    ),
+                    "dynamic_query_residual_scale": (
+                        self.dynamic_query_residual_scale.detach().float()
+                        if self.dynamic_query_residual_scale is not None
+                        else visual_states.new_tensor(float("nan"))
                     ),
                     **text_pooling_debug,
                     **visual_pooling_debug,

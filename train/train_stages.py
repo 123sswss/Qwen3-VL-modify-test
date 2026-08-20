@@ -706,6 +706,16 @@ class Qwen3VLMMRLForStages(Qwen3VLForConditionalGeneration):
             getattr(mmrl, "dynamic_query_projection", None),
             "dynamic_query_projection",
         )
+        dynamic_query_residual_scale = getattr(
+            mmrl, "dynamic_query_residual_scale", None
+        )
+        if (
+            dynamic_query_residual_scale is not None
+            and dynamic_query_residual_scale.grad is not None
+        ):
+            result["dynamic_query_residual_scale_grad_abs"] = (
+                dynamic_query_residual_scale.grad.detach().float().abs()
+            )
         _grad_stats(
             getattr(mmrl, "cross_attention", None),
             "cross_attention",
@@ -1147,6 +1157,11 @@ def build_model_and_processor(model_path, experiment_cfg=None):
         "dynamic_query_projection": sum(
             parameter.numel()
             for parameter in model.model.MMRL.dynamic_query_projection.parameters()
+        ),
+        "dynamic_query_residual_scale": (
+            0
+            if model.model.MMRL.dynamic_query_residual_scale is None
+            else model.model.MMRL.dynamic_query_residual_scale.numel()
         ),
         "cross_attention": sum(
             parameter.numel()

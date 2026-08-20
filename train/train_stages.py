@@ -1113,7 +1113,7 @@ def build_model_and_processor(model_path, experiment_cfg=None):
             )
     memory_tokens_per_image = (
         config.RP_SPACE_LENGTH
-        if mmrl.use_dynamic_query_static_kv
+        if mmrl.use_static_kv_query
         else 2 * config.MMRL_MEMORY_QUERY_COUNT
     )
     print(

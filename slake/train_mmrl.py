@@ -59,6 +59,7 @@ DEFAULT_GENERAL_IMAGE_ROOTS = (
 
 QUERY_ARCHITECTURES = (
     "layer_mlp_dynamic_query_static_kv",
+    "layer_mlp_pooled_query_static_kv",
     "layer_mlp_post_cross",
     "shared_direct_post_cross",
 )
@@ -193,6 +194,10 @@ def build_train_config(
             "visual_dynamic_attention_entropy_norm",
             "visual_dynamic_output_specificity_ratio",
             "visual_dynamic_residual_gate_abs_mean",
+            "text_pooled_query_attention_entropy_norm",
+            "text_pooled_query_output_specificity_ratio",
+            "visual_pooled_query_attention_entropy_norm",
+            "visual_pooled_query_output_specificity_ratio",
             "dynamic_query_residual_scale",
             "dynamic_query_residual_scale_grad_abs",
             "visual_memory_norm_mean",
@@ -448,7 +453,7 @@ def audit_model_forward(
     )
     expected_memory_tokens = (
         mmrl.rp_space_length
-        if mmrl.use_dynamic_query_static_kv
+        if mmrl.use_static_kv_query
         else 2 * mmrl.memory_query_count
     )
     expected_memory_shape = (

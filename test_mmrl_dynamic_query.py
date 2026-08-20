@@ -165,6 +165,80 @@ class DynamicQueryPoolingTest(unittest.TestCase):
         opened_loss.backward()
         self.assertGreater(float(mmrl.dynamic_query_seeds.grad.abs().sum()), 0.0)
 
+    def test_pooled_query_ablation_preserves_static_warm_start(self):
+        config = SimpleNamespace(mmrl_config={
+            "DIRECT_SHARED_REP": False,
+            "MMRL_QUERY_ARCHITECTURE": "layer_mlp_pooled_query_static_kv",
+            "MMRL_SAME_INIT_LAYER_PROJECTORS": True,
+            "INSERT_LAYER": [0, 1],
+            "RP_SPACE_LENGTH": 3,
+            "RP_SPACE_DIM": 4,
+            "vision_token_dim": 8,
+            "text_token_dim": 6,
+            "MMRL_MEMORY_QUERY_COUNT": 3,
+            "MMRL_MEMORY_ATTENTION_DIM": 4,
+            "MMRL_PROJECTOR_HIDDEN_DIM": 8,
+            "MMRL_CROSS_ATTENTION_HEADS": 2,
+        })
+        mmrl = MMRL(config)
+        mmrl.synchronize_layer_projector_initialization()
+        mmrl.train()
+        torch.testing.assert_close(
+            mmrl.visual_memory_pooling.queries,
+            mmrl.text_memory_pooling.queries,
+        )
+        self.assertNotEqual(
+            mmrl.visual_memory_pooling.queries.data_ptr(),
+            mmrl.text_memory_pooling.queries.data_ptr(),
+        )
+
+        visual_states = torch.randn(12, 8)
+        cu_seqlens = torch.tensor([0, 4, 7, 12])
+        text_states = torch.randn(2, 6, 6)
+        text_mask = torch.tensor([
+            [True, True, True, True, False, False],
+            [True, True, True, True, True, False],
+        ])
+        forward_args = {
+            "visual_states": visual_states,
+            "cu_seqlens": cu_seqlens,
+            "text_states": text_states,
+            "text_mask": text_mask,
+            "images_per_sample": [2, 1],
+        }
+
+        layer_reps = mmrl(**forward_args)
+        expected_base = mmrl._compute_base_queries().detach()
+        for layer_index, layer_rep in enumerate(layer_reps):
+            torch.testing.assert_close(
+                layer_rep,
+                expected_base[layer_index].unsqueeze(0).expand(3, -1, -1),
+            )
+        self.assertEqual(mmrl.last_memory_shape, (3, 3, 8))
+        self.assertIn(
+            "visual_pooled_query_attention_entropy_norm",
+            mmrl.debug_context,
+        )
+
+        loss = sum(rep.square().mean() for rep in layer_reps)
+        loss.backward()
+        self.assertGreater(
+            float(mmrl.dynamic_query_residual_scale.grad.abs()), 0.0
+        )
+
+        mmrl.zero_grad(set_to_none=True)
+        with torch.no_grad():
+            mmrl.dynamic_query_residual_scale.fill_(0.02)
+        opened_layer_reps = mmrl(**forward_args)
+        self.assertFalse(torch.allclose(opened_layer_reps[0], layer_reps[0]))
+        sum(rep.square().mean() for rep in opened_layer_reps).backward()
+        self.assertGreater(
+            float(mmrl.visual_memory_pooling.queries.grad.abs().sum()), 0.0
+        )
+        self.assertGreater(
+            float(mmrl.text_memory_pooling.queries.grad.abs().sum()), 0.0
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

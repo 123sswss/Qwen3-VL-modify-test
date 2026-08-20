@@ -25,6 +25,7 @@ class MultiQueryAttentionPooling(nn.Module):
         self.key_projection = nn.Linear(input_dim, self.attention_dim)
         self.value_projection = nn.Linear(input_dim, output_dim)
         self.output_norm = nn.LayerNorm(output_dim)
+        self.debug_context = {}
 
     def forward(self, input_states, valid_mask):
         if input_states.ndim != 3:
@@ -54,7 +55,31 @@ class MultiQueryAttentionPooling(nn.Module):
         scores = scores.masked_fill(~valid_mask[:, None, :], float("-inf"))
         weights = torch.softmax(scores, dim=-1).to(dtype=values.dtype)
         pooled = torch.einsum("bqs,bsd->bqd", weights, values)
-        return self.output_norm(pooled)
+        output = self.output_norm(pooled)
+
+        if self.training:
+            with torch.no_grad():
+                weights_float = weights.detach().float()
+                entropy = -(
+                    weights_float * weights_float.clamp_min(1e-8).log()
+                ).sum(dim=-1)
+                entropy_denominator = valid_per_sample.float().clamp_min(2).log()
+                centered = output.detach().float() - output.detach().float().mean(
+                    dim=1, keepdim=True
+                )
+                self.debug_context = {
+                    "attention_entropy_norm": (
+                        entropy / entropy_denominator[:, None]
+                    ).mean(),
+                    "output_specificity_ratio": (
+                        centered.norm(dim=-1).mean()
+                        / output.detach().float().norm(dim=-1).mean().clamp_min(1e-8)
+                    ),
+                }
+        else:
+            self.debug_context = {}
+
+        return output
 
 
 class DynamicSourceAttentionPooling(nn.Module):
@@ -221,6 +246,7 @@ class ResidualCrossAttention(nn.Module):
 class MMRL(nn.Module):
     QUERY_ARCHITECTURES = {
         "layer_mlp_dynamic_query_static_kv",
+        "layer_mlp_pooled_query_static_kv",
         "layer_mlp_post_cross",
         "shared_direct_post_cross",
     }
@@ -247,6 +273,13 @@ class MMRL(nn.Module):
         self.use_dynamic_query_static_kv = (
             self.query_architecture == "layer_mlp_dynamic_query_static_kv"
         )
+        self.use_pooled_query_static_kv = (
+            self.query_architecture == "layer_mlp_pooled_query_static_kv"
+        )
+        self.use_static_kv_query = (
+            self.use_dynamic_query_static_kv
+            or self.use_pooled_query_static_kv
+        )
         self.same_init_layer_projectors = bool(
             getattr(cfg, "MMRL_SAME_INIT_LAYER_PROJECTORS", False)
         )
@@ -264,11 +297,11 @@ class MMRL(nn.Module):
         self.memory_attention_dim = int(cfg.MMRL_MEMORY_ATTENTION_DIM)
         self.projector_hidden_dim = int(cfg.MMRL_PROJECTOR_HIDDEN_DIM)
         if (
-            self.use_dynamic_query_static_kv
+            self.use_static_kv_query
             and self.memory_query_count != self.rp_space_length
         ):
             raise ValueError(
-                "dynamic query architecture requires memory_query_count to equal "
+                "static-KV query architectures require memory_query_count to equal "
                 f"rp_space_length, got memory={self.memory_query_count} "
                 f"rep={self.rp_space_length}"
             )
@@ -313,12 +346,15 @@ class MMRL(nn.Module):
             torch.empty(self.insert_layer_count, 1, self.vision_token_dim)
         )
         nn.init.normal_(self.layer_embeddings, std=0.02)
+        if self.use_static_kv_query:
+            self.dynamic_query_residual_scale = nn.Parameter(torch.zeros(()))
+        else:
+            self.register_parameter("dynamic_query_residual_scale", None)
         if self.use_dynamic_query_static_kv:
             self.dynamic_query_seeds = nn.Parameter(torch.empty(
                 self.memory_query_count, self.vision_token_dim
             ))
             nn.init.normal_(self.dynamic_query_seeds, std=0.02)
-            self.dynamic_query_residual_scale = nn.Parameter(torch.zeros(()))
             self.dynamic_query_projection = nn.Sequential(
                 nn.LayerNorm(self.vision_token_dim),
                 nn.Linear(self.vision_token_dim, self.memory_attention_dim),
@@ -335,7 +371,6 @@ class MMRL(nn.Module):
             )
         else:
             self.register_parameter("dynamic_query_seeds", None)
-            self.register_parameter("dynamic_query_residual_scale", None)
             self.dynamic_query_projection = nn.Identity()
             self.visual_memory_pooling = MultiQueryAttentionPooling(
                 self.vision_token_dim,
@@ -349,6 +384,11 @@ class MMRL(nn.Module):
                 self.memory_query_count,
                 self.memory_attention_dim,
             )
+            if self.use_pooled_query_static_kv:
+                with torch.no_grad():
+                    self.text_memory_pooling.queries.copy_(
+                        self.visual_memory_pooling.queries
+                    )
         self.cross_attention = ResidualCrossAttention(
             self.vision_token_dim, int(cfg.MMRL_CROSS_ATTENTION_HEADS)
         )
@@ -399,10 +439,35 @@ class MMRL(nn.Module):
                 "layer projector synchronization audit failed: "
                 f"max_difference={max_difference} shares_storage={shares_storage}"
             )
+        pooling_query_max_difference = 0.0
+        pooling_queries_share_storage = False
+        if self.use_pooled_query_static_kv:
+            with torch.no_grad():
+                self.text_memory_pooling.queries.copy_(
+                    self.visual_memory_pooling.queries
+                )
+            pooling_query_max_difference = float(
+                (
+                    self.visual_memory_pooling.queries
+                    - self.text_memory_pooling.queries
+                ).detach().float().abs().max().item()
+            )
+            pooling_queries_share_storage = (
+                self.visual_memory_pooling.queries.data_ptr()
+                == self.text_memory_pooling.queries.data_ptr()
+            )
+            if pooling_query_max_difference != 0.0 or pooling_queries_share_storage:
+                raise RuntimeError(
+                    "pooled-query synchronization audit failed: "
+                    f"max_difference={pooling_query_max_difference} "
+                    f"shares_storage={pooling_queries_share_storage}"
+                )
         print(
             "[MMRL_SAME_INIT_AUDIT] "
             f"projectors={len(self.v_r_token_projector)} "
-            "max_difference=0.0 shared_storage=False"
+            "max_difference=0.0 shared_storage=False "
+            f"pooling_query_max_difference={pooling_query_max_difference} "
+            f"pooling_query_shared_storage={pooling_queries_share_storage}"
         )
 
     def _compute_base_queries(self):
@@ -484,6 +549,18 @@ class MMRL(nn.Module):
                 visual_mask,
             )
             memory = visual_memory
+        elif self.use_pooled_query_static_kv:
+            visual_memory = self.visual_memory_pooling(
+                visual_padded, visual_mask
+            )
+            text_memory = self.text_memory_pooling(text_states, text_mask)
+            expanded_text_memory = torch.repeat_interleave(
+                text_memory, image_counts, dim=0
+            )
+            memory = F.layer_norm(
+                visual_memory + expanded_text_memory,
+                (self.vision_token_dim,),
+            )
         else:
             visual_memory = self.visual_memory_pooling(
                 visual_padded, visual_mask
@@ -500,12 +577,18 @@ class MMRL(nn.Module):
         batched_queries = base_queries.unsqueeze(0).expand(
             image_count, -1, -1, -1
         )
-        if self.use_dynamic_query_static_kv:
+        if self.use_static_kv_query:
+            input_conditioned_queries = (
+                visual_memory
+                if self.use_dynamic_query_static_kv
+                else memory
+            )
             # Preserve the proven static-query initialization and let optimization
             # open the input-conditioned query path gradually.
             layer_queries = (
                 batched_queries
-                + self.dynamic_query_residual_scale * visual_memory.unsqueeze(1)
+                + self.dynamic_query_residual_scale
+                * input_conditioned_queries.unsqueeze(1)
             )
             flat_layer_queries = layer_queries.reshape(
                 image_count * self.insert_layer_count,
@@ -568,14 +651,19 @@ class MMRL(nn.Module):
             with torch.no_grad():
                 base_norm = residual_queries.detach().float().norm(dim=-1).mean()
                 delta_norm = cross_delta.detach().float().norm(dim=-1).mean()
+                query_debug_prefix = (
+                    "dynamic"
+                    if self.use_dynamic_query_static_kv
+                    else "pooled_query"
+                )
                 text_pooling_debug = {
-                    f"text_dynamic_{key}": value
+                    f"text_{query_debug_prefix}_{key}": value
                     for key, value in getattr(
                         self.text_memory_pooling, "debug_context", {}
                     ).items()
                 }
                 visual_pooling_debug = {
-                    f"visual_dynamic_{key}": value
+                    f"visual_{query_debug_prefix}_{key}": value
                     for key, value in getattr(
                         self.visual_memory_pooling, "debug_context", {}
                     ).items()

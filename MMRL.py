@@ -57,6 +57,102 @@ class MultiQueryAttentionPooling(nn.Module):
         return self.output_norm(pooled)
 
 
+class DynamicSourceAttentionPooling(nn.Module):
+    """Refine dynamic queries with one masked source sequence."""
+
+    def __init__(self, input_dim, output_dim, attention_dim):
+        super().__init__()
+        self.output_dim = int(output_dim)
+        self.attention_dim = int(attention_dim)
+        self.source_norm = nn.LayerNorm(input_dim)
+        self.key_projection = nn.Linear(input_dim, self.attention_dim)
+        self.value_projection = nn.Linear(input_dim, self.output_dim)
+        self.residual_gate = nn.Parameter(torch.ones(self.output_dim))
+        self.output_norm = nn.LayerNorm(self.output_dim)
+        self.debug_context = {}
+
+    def forward(
+        self,
+        query_states,
+        projected_queries,
+        source_states,
+        valid_mask,
+    ):
+        if query_states.ndim != 3 or source_states.ndim != 3:
+            raise ValueError(
+                "dynamic pooling expects query/source states with shape [B,S,D], "
+                f"got queries={tuple(query_states.shape)} "
+                f"source={tuple(source_states.shape)}"
+            )
+        if projected_queries.shape != (
+            query_states.shape[0],
+            query_states.shape[1],
+            self.attention_dim,
+        ):
+            raise ValueError(
+                "dynamic pooling projected query shape mismatch: "
+                f"queries={tuple(query_states.shape)} "
+                f"projected={tuple(projected_queries.shape)}"
+            )
+        if source_states.shape[0] != query_states.shape[0]:
+            raise ValueError(
+                "dynamic pooling batch mismatch: "
+                f"queries={query_states.shape[0]} source={source_states.shape[0]}"
+            )
+        if valid_mask.shape != source_states.shape[:2]:
+            raise ValueError(
+                "dynamic pooling mask must match source [B,S], got "
+                f"source={tuple(source_states.shape)} mask={tuple(valid_mask.shape)}"
+            )
+
+        valid_mask = valid_mask.to(device=source_states.device, dtype=torch.bool)
+        valid_counts = valid_mask.sum(dim=1)
+        if bool((valid_counts == 0).any()):
+            empty = (valid_counts == 0).nonzero(as_tuple=True)[0].tolist()
+            raise RuntimeError(
+                "dynamic pooling received samples without valid source tokens: "
+                f"indices={empty}"
+            )
+
+        normalized_source = self.source_norm(source_states)
+        keys = self.key_projection(normalized_source)
+        values = self.value_projection(normalized_source)
+        scores = torch.einsum("bqa,bsa->bqs", projected_queries, keys)
+        scores = scores.float() / math.sqrt(self.attention_dim)
+        scores = scores.masked_fill(~valid_mask[:, None, :], float("-inf"))
+        weights = torch.softmax(scores, dim=-1)
+        context = torch.einsum(
+            "bqs,bsd->bqd", weights.to(dtype=values.dtype), values
+        )
+        output = self.output_norm(query_states + self.residual_gate * context)
+
+        if self.training:
+            with torch.no_grad():
+                weights_float = weights.detach()
+                entropy = -(
+                    weights_float * weights_float.clamp_min(1e-8).log()
+                ).sum(dim=-1)
+                entropy_denominator = valid_counts.float().clamp_min(2).log()
+                entropy = entropy / entropy_denominator[:, None]
+                centered = output.detach().float() - output.detach().float().mean(
+                    dim=1, keepdim=True
+                )
+                self.debug_context = {
+                    "attention_entropy_norm": entropy.mean(),
+                    "output_specificity_ratio": (
+                        centered.norm(dim=-1).mean()
+                        / output.detach().float().norm(dim=-1).mean().clamp_min(1e-8)
+                    ),
+                    "residual_gate_abs_mean": (
+                        self.residual_gate.detach().float().abs().mean()
+                    ),
+                }
+        else:
+            self.debug_context = {}
+
+        return output
+
+
 class ZeroInitProjection(nn.Module):
     """A trainable projection that remains zero through HF post_init()."""
 
@@ -122,112 +218,10 @@ class ResidualCrossAttention(nn.Module):
         return queries + delta, delta
 
 
-class ReverseAssignmentAttention(nn.Module):
-    """Assign content tokens to layer-specific slots and aggregate content values."""
-
-    def __init__(self, hidden_dim, num_heads):
-        super().__init__()
-        if hidden_dim % num_heads != 0:
-            raise ValueError(
-                "reverse-attention hidden_dim must be divisible by num_heads, got "
-                f"hidden_dim={hidden_dim} num_heads={num_heads}"
-            )
-        self.hidden_dim = int(hidden_dim)
-        self.num_heads = int(num_heads)
-        self.head_dim = self.hidden_dim // self.num_heads
-        self.query_norm = nn.LayerNorm(self.hidden_dim)
-        self.memory_norm = nn.LayerNorm(self.hidden_dim)
-        self.query_projection = nn.Linear(self.hidden_dim, self.hidden_dim)
-        self.key_projection = nn.Linear(self.hidden_dim, self.hidden_dim)
-        self.value_projection = nn.Linear(self.hidden_dim, self.hidden_dim)
-        self.output_projection = ZeroInitProjection(self.hidden_dim)
-        self.debug_context = {}
-
-    @staticmethod
-    def _normalize_assignments(scores):
-        assignments = torch.softmax(scores.float(), dim=-1)
-        slot_weights = assignments / assignments.sum(
-            dim=-2, keepdim=True
-        ).clamp_min(1e-8)
-        return assignments, slot_weights
-
-    def forward(self, slots, memory):
-        if slots.ndim != 4 or memory.ndim != 3:
-            raise ValueError(
-                "reverse-attention expects slots=[B,L,R,D] and memory=[B,S,D], got "
-                f"slots={tuple(slots.shape)} memory={tuple(memory.shape)}"
-            )
-        if slots.shape[0] != memory.shape[0]:
-            raise ValueError(
-                "reverse-attention batch mismatch: "
-                f"slots={slots.shape[0]} memory={memory.shape[0]}"
-            )
-        if slots.shape[-1] != self.hidden_dim or memory.shape[-1] != self.hidden_dim:
-            raise ValueError(
-                "reverse-attention hidden dimension mismatch: "
-                f"expected={self.hidden_dim} slots={slots.shape[-1]} "
-                f"memory={memory.shape[-1]}"
-            )
-        if slots.shape[2] < 1 or memory.shape[1] < 1:
-            raise ValueError("reverse-attention requires non-empty slots and memory")
-
-        batch_size, layer_count, slot_count, _ = slots.shape
-        memory_length = memory.shape[1]
-        normalized_memory = self.query_norm(memory)
-        content_queries = self.query_projection(normalized_memory).view(
-            batch_size, memory_length, self.num_heads, self.head_dim
-        ).permute(0, 2, 1, 3)
-        content_values = self.value_projection(normalized_memory).view(
-            batch_size, memory_length, self.num_heads, self.head_dim
-        ).permute(0, 2, 1, 3)
-        slot_keys = self.key_projection(self.memory_norm(slots)).view(
-            batch_size,
-            layer_count,
-            slot_count,
-            self.num_heads,
-            self.head_dim,
-        ).permute(0, 1, 3, 2, 4)
-
-        scores = torch.matmul(
-            content_queries.unsqueeze(1),
-            slot_keys.transpose(-2, -1),
-        ) / math.sqrt(self.head_dim)
-        assignments, slot_weights = self._normalize_assignments(scores)
-        slot_weights = slot_weights.to(dtype=content_values.dtype)
-        context = torch.matmul(
-            slot_weights.transpose(-2, -1),
-            content_values.unsqueeze(1),
-        )
-        context = context.permute(0, 1, 3, 2, 4).contiguous().view(
-            batch_size, layer_count, slot_count, self.hidden_dim
-        )
-        delta = self.output_projection(context)
-
-        if self.training:
-            with torch.no_grad():
-                assignment_float = assignments.detach()
-                slot_mass = assignment_float.sum(dim=-2)
-                entropy = -(
-                    assignment_float
-                    * assignment_float.clamp_min(1e-8).log()
-                ).sum(dim=-1)
-                entropy = entropy / math.log(max(slot_count, 2))
-                self.debug_context = {
-                    "reverse_assignment_slot_mass_mean": slot_mass.mean(),
-                    "reverse_assignment_slot_mass_min": slot_mass.min(),
-                    "reverse_assignment_slot_mass_max": slot_mass.max(),
-                    "reverse_assignment_entropy_norm": entropy.mean(),
-                }
-        else:
-            self.debug_context = {}
-
-        return slots + delta, delta
-
-
 class MMRL(nn.Module):
     QUERY_ARCHITECTURES = {
+        "layer_mlp_dynamic_query_static_kv",
         "layer_mlp_post_cross",
-        "layer_mlp_reverse_assignment",
         "shared_direct_post_cross",
     }
 
@@ -250,8 +244,8 @@ class MMRL(nn.Module):
         self.use_direct_shared_rep = (
             self.query_architecture == "shared_direct_post_cross"
         )
-        self.use_reverse_assignment = (
-            self.query_architecture == "layer_mlp_reverse_assignment"
+        self.use_dynamic_query_static_kv = (
+            self.query_architecture == "layer_mlp_dynamic_query_static_kv"
         )
         self.same_init_layer_projectors = bool(
             getattr(cfg, "MMRL_SAME_INIT_LAYER_PROJECTORS", False)
@@ -269,6 +263,15 @@ class MMRL(nn.Module):
         self.memory_query_count = int(cfg.MMRL_MEMORY_QUERY_COUNT)
         self.memory_attention_dim = int(cfg.MMRL_MEMORY_ATTENTION_DIM)
         self.projector_hidden_dim = int(cfg.MMRL_PROJECTOR_HIDDEN_DIM)
+        if (
+            self.use_dynamic_query_static_kv
+            and self.memory_query_count != self.rp_space_length
+        ):
+            raise ValueError(
+                "dynamic query architecture requires memory_query_count to equal "
+                f"rp_space_length, got memory={self.memory_query_count} "
+                f"rep={self.rp_space_length}"
+            )
 
         dimensions = {
             "insert_layer_count": self.insert_layer_count,
@@ -310,24 +313,41 @@ class MMRL(nn.Module):
             torch.empty(self.insert_layer_count, 1, self.vision_token_dim)
         )
         nn.init.normal_(self.layer_embeddings, std=0.02)
-        self.visual_memory_pooling = MultiQueryAttentionPooling(
-            self.vision_token_dim,
-            self.vision_token_dim,
-            self.memory_query_count,
-            self.memory_attention_dim,
-        )
-        self.text_memory_pooling = MultiQueryAttentionPooling(
-            self.text_token_dim,
-            self.vision_token_dim,
-            self.memory_query_count,
-            self.memory_attention_dim,
-        )
-        attention_class = (
-            ReverseAssignmentAttention
-            if self.use_reverse_assignment
-            else ResidualCrossAttention
-        )
-        self.cross_attention = attention_class(
+        if self.use_dynamic_query_static_kv:
+            self.dynamic_query_seeds = nn.Parameter(torch.empty(
+                self.memory_query_count, self.vision_token_dim
+            ))
+            nn.init.normal_(self.dynamic_query_seeds, std=0.02)
+            self.dynamic_query_projection = nn.Sequential(
+                nn.LayerNorm(self.vision_token_dim),
+                nn.Linear(self.vision_token_dim, self.memory_attention_dim),
+            )
+            self.visual_memory_pooling = DynamicSourceAttentionPooling(
+                self.vision_token_dim,
+                self.vision_token_dim,
+                self.memory_attention_dim,
+            )
+            self.text_memory_pooling = DynamicSourceAttentionPooling(
+                self.text_token_dim,
+                self.vision_token_dim,
+                self.memory_attention_dim,
+            )
+        else:
+            self.register_parameter("dynamic_query_seeds", None)
+            self.dynamic_query_projection = nn.Identity()
+            self.visual_memory_pooling = MultiQueryAttentionPooling(
+                self.vision_token_dim,
+                self.vision_token_dim,
+                self.memory_query_count,
+                self.memory_attention_dim,
+            )
+            self.text_memory_pooling = MultiQueryAttentionPooling(
+                self.text_token_dim,
+                self.vision_token_dim,
+                self.memory_query_count,
+                self.memory_attention_dim,
+            )
+        self.cross_attention = ResidualCrossAttention(
             self.vision_token_dim, int(cfg.MMRL_CROSS_ATTENTION_HEADS)
         )
 
@@ -427,27 +447,50 @@ class MMRL(nn.Module):
         visual_padded, visual_mask = self._pack_visual_states(
             visual_states, cu_seqlens
         )
-        visual_memory = self.visual_memory_pooling(visual_padded, visual_mask)
-        text_memory = self.text_memory_pooling(text_states, text_mask)
-
         image_counts = torch.as_tensor(
             images_per_sample, device=text_states.device, dtype=torch.long
         )
-        image_count = visual_memory.shape[0]
-        if image_counts.numel() != text_memory.shape[0]:
+        image_count = visual_padded.shape[0]
+        if image_counts.numel() != text_states.shape[0]:
             raise RuntimeError(
                 "images_per_sample must match the text batch, got "
-                f"counts={image_counts.numel()} text_batch={text_memory.shape[0]}"
+                f"counts={image_counts.numel()} text_batch={text_states.shape[0]}"
             )
         if bool((image_counts < 0).any()) or int(image_counts.sum().item()) != image_count:
             raise RuntimeError(
                 "images_per_sample does not match packed visual sequences: "
                 f"counts={image_counts.tolist()} images={image_count}"
             )
-        expanded_text_memory = torch.repeat_interleave(
-            text_memory, image_counts, dim=0
-        )
-        memory = torch.cat([visual_memory, expanded_text_memory], dim=1)
+
+        if self.use_dynamic_query_static_kv:
+            seed_queries = self.dynamic_query_seeds.to(
+                device=text_states.device, dtype=text_states.dtype
+            ).unsqueeze(0).expand(text_states.shape[0], -1, -1)
+            text_memory = self.text_memory_pooling(
+                seed_queries,
+                self.dynamic_query_projection(seed_queries),
+                text_states,
+                text_mask,
+            )
+            expanded_text_memory = torch.repeat_interleave(
+                text_memory, image_counts, dim=0
+            )
+            visual_memory = self.visual_memory_pooling(
+                expanded_text_memory,
+                self.dynamic_query_projection(expanded_text_memory),
+                visual_padded,
+                visual_mask,
+            )
+            memory = visual_memory
+        else:
+            visual_memory = self.visual_memory_pooling(
+                visual_padded, visual_mask
+            )
+            text_memory = self.text_memory_pooling(text_states, text_mask)
+            expanded_text_memory = torch.repeat_interleave(
+                text_memory, image_counts, dim=0
+            )
+            memory = torch.cat([visual_memory, expanded_text_memory], dim=1)
 
         base_queries = self._get_base_queries().to(
             device=visual_states.device, dtype=visual_states.dtype
@@ -455,10 +498,30 @@ class MMRL(nn.Module):
         batched_queries = base_queries.unsqueeze(0).expand(
             image_count, -1, -1, -1
         )
-        if self.use_reverse_assignment:
-            dynamic_queries, cross_delta = self.cross_attention(
-                batched_queries, memory
+        if self.use_dynamic_query_static_kv:
+            layer_queries = visual_memory.unsqueeze(1) + self.layer_embeddings.to(
+                device=visual_states.device, dtype=visual_states.dtype
+            ).unsqueeze(0)
+            flat_layer_queries = layer_queries.reshape(
+                image_count * self.insert_layer_count,
+                self.rp_space_length,
+                self.vision_token_dim,
             )
+            flat_slot_memory = batched_queries.reshape(
+                image_count * self.insert_layer_count,
+                self.rp_space_length,
+                self.vision_token_dim,
+            )
+            dynamic_queries, cross_delta = self.cross_attention(
+                flat_layer_queries, flat_slot_memory
+            )
+            dynamic_queries = dynamic_queries.reshape(
+                image_count,
+                self.insert_layer_count,
+                self.rp_space_length,
+                self.vision_token_dim,
+            )
+            residual_queries = layer_queries
         else:
             flat_queries = batched_queries.reshape(
                 image_count,
@@ -474,6 +537,7 @@ class MMRL(nn.Module):
                 self.rp_space_length,
                 self.vision_token_dim,
             )
+            residual_queries = batched_queries
 
         self.last_memory_shape = tuple(memory.shape)
         self.last_rep_shape = tuple(dynamic_queries.shape)
@@ -483,6 +547,7 @@ class MMRL(nn.Module):
             print(f"  visual_memory_shape={tuple(visual_memory.shape)}")
             print(f"  text_memory_shape={tuple(text_memory.shape)}")
             print(f"  combined_memory_shape={self.last_memory_shape}")
+            print(f"  static_slot_shape={tuple(batched_queries.shape)}")
             print(f"  dynamic_rep_shape={self.last_rep_shape}")
             print(
                 "  cross_output_weight_norm="
@@ -496,8 +561,20 @@ class MMRL(nn.Module):
 
         if self.training:
             with torch.no_grad():
-                base_norm = batched_queries.detach().float().norm(dim=-1).mean()
+                base_norm = residual_queries.detach().float().norm(dim=-1).mean()
                 delta_norm = cross_delta.detach().float().norm(dim=-1).mean()
+                text_pooling_debug = {
+                    f"text_dynamic_{key}": value
+                    for key, value in getattr(
+                        self.text_memory_pooling, "debug_context", {}
+                    ).items()
+                }
+                visual_pooling_debug = {
+                    f"visual_dynamic_{key}": value
+                    for key, value in getattr(
+                        self.visual_memory_pooling, "debug_context", {}
+                    ).items()
+                }
                 self.debug_context = {
                     "dynamic_rep_base_norm_mean": base_norm,
                     "dynamic_rep_cross_delta_norm_mean": delta_norm,
@@ -510,7 +587,11 @@ class MMRL(nn.Module):
                     "text_memory_norm_mean": (
                         text_memory.detach().float().norm(dim=-1).mean()
                     ),
-                    **getattr(self.cross_attention, "debug_context", {}),
+                    "static_slot_memory_norm_mean": (
+                        batched_queries.detach().float().norm(dim=-1).mean()
+                    ),
+                    **text_pooling_debug,
+                    **visual_pooling_debug,
                 }
         else:
             self.debug_context = {}

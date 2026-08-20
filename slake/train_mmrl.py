@@ -58,8 +58,8 @@ DEFAULT_GENERAL_IMAGE_ROOTS = (
 
 
 QUERY_ARCHITECTURES = (
+    "layer_mlp_dynamic_query_static_kv",
     "layer_mlp_post_cross",
-    "layer_mlp_reverse_assignment",
     "shared_direct_post_cross",
 )
 
@@ -186,14 +186,18 @@ def build_train_config(
             "dynamic_rep_base_norm_mean",
             "dynamic_rep_cross_delta_norm_mean",
             "dynamic_rep_cross_delta_ratio",
-            "reverse_assignment_slot_mass_mean",
-            "reverse_assignment_slot_mass_min",
-            "reverse_assignment_slot_mass_max",
-            "reverse_assignment_entropy_norm",
+            "static_slot_memory_norm_mean",
+            "text_dynamic_attention_entropy_norm",
+            "text_dynamic_output_specificity_ratio",
+            "text_dynamic_residual_gate_abs_mean",
+            "visual_dynamic_attention_entropy_norm",
+            "visual_dynamic_output_specificity_ratio",
+            "visual_dynamic_residual_gate_abs_mean",
             "visual_memory_norm_mean",
             "text_memory_norm_mean",
             "visual_memory_pooling_grad_norm_mean",
             "text_memory_pooling_grad_norm_mean",
+            "dynamic_query_projection_grad_norm_mean",
             "cross_attention_grad_norm_mean",
             "cross_attention_output_weight_norm",
             "deepstack_mmrl_residual_scale",
@@ -440,9 +444,14 @@ def audit_model_forward(
         mmrl.rp_space_length,
         mmrl.vision_token_dim,
     )
+    expected_memory_tokens = (
+        mmrl.rp_space_length
+        if mmrl.use_dynamic_query_static_kv
+        else 2 * mmrl.memory_query_count
+    )
     expected_memory_shape = (
         expected_images,
-        2 * mmrl.memory_query_count,
+        expected_memory_tokens,
         mmrl.vision_token_dim,
     )
     if rep_shape != expected_rep_shape:

@@ -703,6 +703,10 @@ class Qwen3VLMMRLForStages(Qwen3VLForConditionalGeneration):
             "text_memory_pooling",
         )
         _grad_stats(
+            getattr(mmrl, "dynamic_query_projection", None),
+            "dynamic_query_projection",
+        )
+        _grad_stats(
             getattr(mmrl, "cross_attention", None),
             "cross_attention",
         )
@@ -1097,8 +1101,14 @@ def build_model_and_processor(model_path, experiment_cfg=None):
             raise RuntimeError(
                 f"{name} config propagation failed: requested={requested} actual={actual}"
             )
+    memory_tokens_per_image = (
+        config.RP_SPACE_LENGTH
+        if mmrl.use_dynamic_query_static_kv
+        else 2 * config.MMRL_MEMORY_QUERY_COUNT
+    )
     print(
         "[MMRL_STRUCTURE_AUDIT] "
+        f"query_architecture={config.MMRL_QUERY_ARCHITECTURE} "
         "query_parameterization="
         f"{'shared_direct' if config.DIRECT_SHARED_REP else 'layer_mlp'} "
         f"rp_space_length={config.RP_SPACE_LENGTH} "
@@ -1108,8 +1118,7 @@ def build_model_and_processor(model_path, experiment_cfg=None):
         f"cross_attention_heads={config.MMRL_CROSS_ATTENTION_HEADS} "
         f"direct_shared_rep={config.DIRECT_SHARED_REP} "
         f"same_init_layer_projectors={config.MMRL_SAME_INIT_LAYER_PROJECTORS} "
-        "memory_tokens_per_image="
-        f"{2 * config.MMRL_MEMORY_QUERY_COUNT}"
+        f"memory_tokens_per_image={memory_tokens_per_image}"
     )
     component_parameters = {
         "shared_rep": model.model.MMRL.shared_represent_space.numel(),
@@ -1129,6 +1138,15 @@ def build_model_and_processor(model_path, experiment_cfg=None):
         "text_memory_pooling": sum(
             parameter.numel()
             for parameter in model.model.MMRL.text_memory_pooling.parameters()
+        ),
+        "dynamic_query_seeds": (
+            0
+            if model.model.MMRL.dynamic_query_seeds is None
+            else model.model.MMRL.dynamic_query_seeds.numel()
+        ),
+        "dynamic_query_projection": sum(
+            parameter.numel()
+            for parameter in model.model.MMRL.dynamic_query_projection.parameters()
         ),
         "cross_attention": sum(
             parameter.numel()

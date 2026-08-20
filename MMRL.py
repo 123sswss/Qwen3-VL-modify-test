@@ -85,7 +85,7 @@ class MultiQueryAttentionPooling(nn.Module):
 class DynamicSourceAttentionPooling(nn.Module):
     """Refine dynamic queries with one masked source sequence."""
 
-    ATTENTION_MODES = {"independent", "competitive"}
+    ATTENTION_MODES = {"independent", "dual_softmax"}
 
     def __init__(
         self,
@@ -159,17 +159,23 @@ class DynamicSourceAttentionPooling(nn.Module):
         scores = torch.einsum("bqa,bsa->bqs", projected_queries, keys)
         scores = scores.float() / math.sqrt(self.attention_dim)
         source_assignment = None
+        source_relevance = None
         if self.attention_mode == "independent":
             scores = scores.masked_fill(
                 ~valid_mask[:, None, :], float("-inf")
             )
             weights = torch.softmax(scores, dim=-1)
         else:
+            masked_scores = scores.masked_fill(
+                ~valid_mask[:, None, :], float("-inf")
+            )
+            source_relevance = torch.softmax(masked_scores, dim=-1)
             source_assignment = torch.softmax(scores, dim=1)
             source_assignment = source_assignment.masked_fill(
                 ~valid_mask[:, None, :], 0.0
             )
-            weights = source_assignment / source_assignment.sum(
+            joint_weights = source_relevance * source_assignment
+            weights = joint_weights / joint_weights.sum(
                 dim=-1, keepdim=True
             ).clamp_min(1e-8)
         context = torch.einsum(
@@ -213,6 +219,25 @@ class DynamicSourceAttentionPooling(nn.Module):
                         ),
                         "source_assignment_peak_mean": (
                             assignment_float.max(dim=1).values[valid_mask].mean()
+                        ),
+                    })
+                    relevance_float = source_relevance.detach().float()
+                    relevance_entropy = -(
+                        relevance_float
+                        * relevance_float.clamp_min(1e-8).log()
+                    ).sum(dim=-1)
+                    relevance_entropy = (
+                        relevance_entropy / entropy_denominator[:, None]
+                    )
+                    self.debug_context.update({
+                        "source_relevance_entropy_norm": (
+                            relevance_entropy.mean()
+                        ),
+                        "competition_tv_from_source_mean": (
+                            0.5
+                            * (
+                                weights_float - relevance_float
+                            ).abs().sum(dim=-1).mean()
                         ),
                     })
         else:
@@ -289,7 +314,7 @@ class ResidualCrossAttention(nn.Module):
 class MMRL(nn.Module):
     QUERY_ARCHITECTURES = {
         "layer_mlp_dynamic_query_static_kv",
-        "layer_mlp_dynamic_query_competitive_visual_static_kv",
+        "layer_mlp_dynamic_query_dual_softmax_visual_static_kv",
         "layer_mlp_pooled_query_static_kv",
         "layer_mlp_post_cross",
         "shared_direct_post_cross",
@@ -314,13 +339,13 @@ class MMRL(nn.Module):
         self.use_direct_shared_rep = (
             self.query_architecture == "shared_direct_post_cross"
         )
-        self.use_competitive_visual_dynamic_query = (
+        self.use_dual_softmax_visual_dynamic_query = (
             self.query_architecture
-            == "layer_mlp_dynamic_query_competitive_visual_static_kv"
+            == "layer_mlp_dynamic_query_dual_softmax_visual_static_kv"
         )
         self.use_dynamic_query_static_kv = self.query_architecture in {
             "layer_mlp_dynamic_query_static_kv",
-            "layer_mlp_dynamic_query_competitive_visual_static_kv",
+            "layer_mlp_dynamic_query_dual_softmax_visual_static_kv",
         }
         self.use_pooled_query_static_kv = (
             self.query_architecture == "layer_mlp_pooled_query_static_kv"
@@ -413,8 +438,8 @@ class MMRL(nn.Module):
                 self.vision_token_dim,
                 self.memory_attention_dim,
                 attention_mode=(
-                    "competitive"
-                    if self.use_competitive_visual_dynamic_query
+                    "dual_softmax"
+                    if self.use_dual_softmax_visual_dynamic_query
                     else "independent"
                 ),
             )

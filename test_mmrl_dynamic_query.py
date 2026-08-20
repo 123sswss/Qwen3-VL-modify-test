@@ -1,3 +1,4 @@
+import math
 import unittest
 from types import SimpleNamespace
 
@@ -39,13 +40,13 @@ class DynamicQueryPoolingTest(unittest.TestCase):
         self.assertGreaterEqual(float(entropy), 0.0)
         self.assertLessEqual(float(entropy), 1.0 + 1e-6)
 
-    def test_competitive_visual_attention_assigns_sources_across_queries(self):
+    def test_dual_softmax_visual_attention_matches_reference_formula(self):
         torch.manual_seed(9)
         pooling = DynamicSourceAttentionPooling(
             input_dim=6,
             output_dim=8,
             attention_dim=4,
-            attention_mode="competitive",
+            attention_mode="dual_softmax",
         )
         pooling.train()
         query_states = torch.randn(2, 3, 8)
@@ -64,15 +65,43 @@ class DynamicQueryPoolingTest(unittest.TestCase):
         )
 
         self.assertEqual(tuple(output.shape), (2, 3, 8))
+        normalized_source = pooling.source_norm(source_states)
+        keys = pooling.key_projection(normalized_source)
+        values = pooling.value_projection(normalized_source)
+        scores = torch.einsum("bqa,bsa->bqs", projected_queries, keys)
+        scores = scores.float() / math.sqrt(pooling.attention_dim)
+        source_relevance = torch.softmax(
+            scores.masked_fill(~valid_mask[:, None, :], float("-inf")),
+            dim=-1,
+        )
+        source_assignment = torch.softmax(scores, dim=1).masked_fill(
+            ~valid_mask[:, None, :], 0.0
+        )
+        expected_weights = source_relevance * source_assignment
+        expected_weights = expected_weights / expected_weights.sum(
+            dim=-1, keepdim=True
+        ).clamp_min(1e-8)
+        expected_context = torch.einsum(
+            "bqs,bsd->bqd", expected_weights.to(values.dtype), values
+        )
+        expected_output = pooling.output_norm(
+            query_states + pooling.residual_gate * expected_context
+        )
+        torch.testing.assert_close(output, expected_output)
         assignment_entropy = pooling.debug_context[
             "source_assignment_entropy_norm"
         ]
         assignment_peak = pooling.debug_context["source_assignment_peak_mean"]
+        competition_tv = pooling.debug_context[
+            "competition_tv_from_source_mean"
+        ]
         self.assertTrue(bool(torch.isfinite(assignment_entropy)))
         self.assertGreaterEqual(float(assignment_entropy), 0.0)
         self.assertLessEqual(float(assignment_entropy), 1.0 + 1e-6)
         self.assertGreaterEqual(float(assignment_peak), 1.0 / 3.0)
         self.assertLessEqual(float(assignment_peak), 1.0)
+        self.assertGreaterEqual(float(competition_tv), 0.0)
+        self.assertLessEqual(float(competition_tv), 1.0)
 
         changed_source = source_states.clone()
         changed_source[~valid_mask] = 1000.0
@@ -138,11 +167,11 @@ class DynamicQueryPoolingTest(unittest.TestCase):
             layer_queries.reshape(-1, query_count, hidden_dim),
         )
 
-    def test_competitive_architecture_changes_visual_stage_only(self):
+    def test_dual_softmax_architecture_changes_visual_stage_only(self):
         config = SimpleNamespace(mmrl_config={
             "DIRECT_SHARED_REP": False,
             "MMRL_QUERY_ARCHITECTURE": (
-                "layer_mlp_dynamic_query_competitive_visual_static_kv"
+                "layer_mlp_dynamic_query_dual_softmax_visual_static_kv"
             ),
             "MMRL_SAME_INIT_LAYER_PROJECTORS": True,
             "INSERT_LAYER": [0, 1],
@@ -159,9 +188,9 @@ class DynamicQueryPoolingTest(unittest.TestCase):
         mmrl = MMRL(config)
 
         self.assertTrue(mmrl.use_dynamic_query_static_kv)
-        self.assertTrue(mmrl.use_competitive_visual_dynamic_query)
+        self.assertTrue(mmrl.use_dual_softmax_visual_dynamic_query)
         self.assertEqual(
-            mmrl.visual_memory_pooling.attention_mode, "competitive"
+            mmrl.visual_memory_pooling.attention_mode, "dual_softmax"
         )
         self.assertEqual(mmrl.text_memory_pooling.attention_mode, "independent")
 

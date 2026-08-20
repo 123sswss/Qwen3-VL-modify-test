@@ -39,6 +39,51 @@ class DynamicQueryPoolingTest(unittest.TestCase):
         self.assertGreaterEqual(float(entropy), 0.0)
         self.assertLessEqual(float(entropy), 1.0 + 1e-6)
 
+    def test_competitive_visual_attention_assigns_sources_across_queries(self):
+        torch.manual_seed(9)
+        pooling = DynamicSourceAttentionPooling(
+            input_dim=6,
+            output_dim=8,
+            attention_dim=4,
+            attention_mode="competitive",
+        )
+        pooling.train()
+        query_states = torch.randn(2, 3, 8)
+        projected_queries = torch.randn(2, 3, 4)
+        source_states = torch.randn(2, 5, 6)
+        valid_mask = torch.tensor([
+            [True, True, True, False, False],
+            [True, True, True, True, False],
+        ])
+
+        output = pooling(
+            query_states,
+            projected_queries,
+            source_states,
+            valid_mask,
+        )
+
+        self.assertEqual(tuple(output.shape), (2, 3, 8))
+        assignment_entropy = pooling.debug_context[
+            "source_assignment_entropy_norm"
+        ]
+        assignment_peak = pooling.debug_context["source_assignment_peak_mean"]
+        self.assertTrue(bool(torch.isfinite(assignment_entropy)))
+        self.assertGreaterEqual(float(assignment_entropy), 0.0)
+        self.assertLessEqual(float(assignment_entropy), 1.0 + 1e-6)
+        self.assertGreaterEqual(float(assignment_peak), 1.0 / 3.0)
+        self.assertLessEqual(float(assignment_peak), 1.0)
+
+        changed_source = source_states.clone()
+        changed_source[~valid_mask] = 1000.0
+        changed_output = pooling(
+            query_states,
+            projected_queries,
+            changed_source,
+            valid_mask,
+        )
+        torch.testing.assert_close(changed_output, output)
+
     def test_dynamic_queries_feed_standard_cross_attention(self):
         torch.manual_seed(11)
         hidden_dim = 8
@@ -92,6 +137,33 @@ class DynamicQueryPoolingTest(unittest.TestCase):
             output,
             layer_queries.reshape(-1, query_count, hidden_dim),
         )
+
+    def test_competitive_architecture_changes_visual_stage_only(self):
+        config = SimpleNamespace(mmrl_config={
+            "DIRECT_SHARED_REP": False,
+            "MMRL_QUERY_ARCHITECTURE": (
+                "layer_mlp_dynamic_query_competitive_visual_static_kv"
+            ),
+            "MMRL_SAME_INIT_LAYER_PROJECTORS": True,
+            "INSERT_LAYER": [0, 1],
+            "RP_SPACE_LENGTH": 3,
+            "RP_SPACE_DIM": 4,
+            "vision_token_dim": 8,
+            "text_token_dim": 6,
+            "MMRL_MEMORY_QUERY_COUNT": 3,
+            "MMRL_MEMORY_ATTENTION_DIM": 4,
+            "MMRL_PROJECTOR_HIDDEN_DIM": 8,
+            "MMRL_CROSS_ATTENTION_HEADS": 2,
+        })
+
+        mmrl = MMRL(config)
+
+        self.assertTrue(mmrl.use_dynamic_query_static_kv)
+        self.assertTrue(mmrl.use_competitive_visual_dynamic_query)
+        self.assertEqual(
+            mmrl.visual_memory_pooling.attention_mode, "competitive"
+        )
+        self.assertEqual(mmrl.text_memory_pooling.attention_mode, "independent")
 
     def test_full_dynamic_mmrl_path_handles_multiple_images(self):
         config = SimpleNamespace(mmrl_config={

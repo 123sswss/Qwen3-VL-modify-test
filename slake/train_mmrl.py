@@ -59,6 +59,7 @@ DEFAULT_GENERAL_IMAGE_ROOTS = (
 
 QUERY_ARCHITECTURES = (
     "layer_mlp_dynamic_query_static_kv",
+    "layer_mlp_dynamic_query_competitive_visual_static_kv",
     "layer_mlp_pooled_query_static_kv",
     "layer_mlp_post_cross",
     "shared_direct_post_cross",
@@ -194,6 +195,8 @@ def build_train_config(
             "visual_dynamic_attention_entropy_norm",
             "visual_dynamic_output_specificity_ratio",
             "visual_dynamic_residual_gate_abs_mean",
+            "visual_dynamic_source_assignment_entropy_norm",
+            "visual_dynamic_source_assignment_peak_mean",
             "text_pooled_query_attention_entropy_norm",
             "text_pooled_query_output_specificity_ratio",
             "visual_pooled_query_attention_entropy_norm",

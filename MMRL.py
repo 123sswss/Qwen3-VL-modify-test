@@ -85,10 +85,24 @@ class MultiQueryAttentionPooling(nn.Module):
 class DynamicSourceAttentionPooling(nn.Module):
     """Refine dynamic queries with one masked source sequence."""
 
-    def __init__(self, input_dim, output_dim, attention_dim):
+    ATTENTION_MODES = {"independent", "competitive"}
+
+    def __init__(
+        self,
+        input_dim,
+        output_dim,
+        attention_dim,
+        attention_mode="independent",
+    ):
         super().__init__()
         self.output_dim = int(output_dim)
         self.attention_dim = int(attention_dim)
+        self.attention_mode = str(attention_mode).strip().lower()
+        if self.attention_mode not in self.ATTENTION_MODES:
+            raise ValueError(
+                f"unsupported dynamic attention mode={self.attention_mode!r}; "
+                f"choices={sorted(self.ATTENTION_MODES)}"
+            )
         self.source_norm = nn.LayerNorm(input_dim)
         self.key_projection = nn.Linear(input_dim, self.attention_dim)
         self.value_projection = nn.Linear(input_dim, self.output_dim)
@@ -144,8 +158,20 @@ class DynamicSourceAttentionPooling(nn.Module):
         values = self.value_projection(normalized_source)
         scores = torch.einsum("bqa,bsa->bqs", projected_queries, keys)
         scores = scores.float() / math.sqrt(self.attention_dim)
-        scores = scores.masked_fill(~valid_mask[:, None, :], float("-inf"))
-        weights = torch.softmax(scores, dim=-1)
+        source_assignment = None
+        if self.attention_mode == "independent":
+            scores = scores.masked_fill(
+                ~valid_mask[:, None, :], float("-inf")
+            )
+            weights = torch.softmax(scores, dim=-1)
+        else:
+            source_assignment = torch.softmax(scores, dim=1)
+            source_assignment = source_assignment.masked_fill(
+                ~valid_mask[:, None, :], 0.0
+            )
+            weights = source_assignment / source_assignment.sum(
+                dim=-1, keepdim=True
+            ).clamp_min(1e-8)
         context = torch.einsum(
             "bqs,bsd->bqd", weights.to(dtype=values.dtype), values
         )
@@ -172,6 +198,23 @@ class DynamicSourceAttentionPooling(nn.Module):
                         self.residual_gate.detach().float().abs().mean()
                     ),
                 }
+                if source_assignment is not None:
+                    assignment_float = source_assignment.detach().float()
+                    assignment_entropy = -(
+                        assignment_float
+                        * assignment_float.clamp_min(1e-8).log()
+                    ).sum(dim=1)
+                    assignment_entropy = assignment_entropy / math.log(
+                        float(max(query_states.shape[1], 2))
+                    )
+                    self.debug_context.update({
+                        "source_assignment_entropy_norm": (
+                            assignment_entropy[valid_mask].mean()
+                        ),
+                        "source_assignment_peak_mean": (
+                            assignment_float.max(dim=1).values[valid_mask].mean()
+                        ),
+                    })
         else:
             self.debug_context = {}
 
@@ -246,6 +289,7 @@ class ResidualCrossAttention(nn.Module):
 class MMRL(nn.Module):
     QUERY_ARCHITECTURES = {
         "layer_mlp_dynamic_query_static_kv",
+        "layer_mlp_dynamic_query_competitive_visual_static_kv",
         "layer_mlp_pooled_query_static_kv",
         "layer_mlp_post_cross",
         "shared_direct_post_cross",
@@ -270,9 +314,14 @@ class MMRL(nn.Module):
         self.use_direct_shared_rep = (
             self.query_architecture == "shared_direct_post_cross"
         )
-        self.use_dynamic_query_static_kv = (
-            self.query_architecture == "layer_mlp_dynamic_query_static_kv"
+        self.use_competitive_visual_dynamic_query = (
+            self.query_architecture
+            == "layer_mlp_dynamic_query_competitive_visual_static_kv"
         )
+        self.use_dynamic_query_static_kv = self.query_architecture in {
+            "layer_mlp_dynamic_query_static_kv",
+            "layer_mlp_dynamic_query_competitive_visual_static_kv",
+        }
         self.use_pooled_query_static_kv = (
             self.query_architecture == "layer_mlp_pooled_query_static_kv"
         )
@@ -363,6 +412,11 @@ class MMRL(nn.Module):
                 self.vision_token_dim,
                 self.vision_token_dim,
                 self.memory_attention_dim,
+                attention_mode=(
+                    "competitive"
+                    if self.use_competitive_visual_dynamic_query
+                    else "independent"
+                ),
             )
             self.text_memory_pooling = DynamicSourceAttentionPooling(
                 self.text_token_dim,

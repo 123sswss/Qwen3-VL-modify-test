@@ -242,6 +242,13 @@ case "$RUN_TARGET" in
       1 0 0.0 0.05 "layer_mlp_dynamic_query_static_kv" 40 \
       || failures=$((failures + 1))
     ;;
+  slake_dynamic_query_competitive_visual_static_kv)
+    run_final_seed44 \
+      "slake_mmrl_layer_mlp_same_init_dynamic_query_competitive_visual_zerogate_static_kv_relation0050" \
+      1 0 0.0 0.05 \
+      "layer_mlp_dynamic_query_competitive_visual_static_kv" 40 \
+      || failures=$((failures + 1))
+    ;;
   slake_pooled_query_static_kv)
     run_final_seed44 \
       "slake_mmrl_layer_mlp_same_init_pooled_query_zerogate_static_kv_relation0050" \
@@ -272,7 +279,7 @@ case "$RUN_TARGET" in
     run_slake || failures=$((failures + 1))
     ;;
   *)
-    echo "[ERR] 未知目标: $RUN_TARGET，可选 train、slake、slake_shared_direct、slake_current_control、slake_same_init、slake_deepstack、slake_cross_relation、slake_dynamic_query_static_kv、slake_pooled_query_static_kv、slake_final_serial3、slake_layer_mlp_repro_seeds3、slake_shared_direct_repro_seeds3、train_shared_direct、all。" >&2
+    echo "[ERR] 未知目标: $RUN_TARGET，可选 train、slake、slake_shared_direct、slake_current_control、slake_same_init、slake_deepstack、slake_cross_relation、slake_dynamic_query_static_kv、slake_dynamic_query_competitive_visual_static_kv、slake_pooled_query_static_kv、slake_final_serial3、slake_layer_mlp_repro_seeds3、slake_shared_direct_repro_seeds3、train_shared_direct、all。" >&2
     exit 2
     ;;
 esac

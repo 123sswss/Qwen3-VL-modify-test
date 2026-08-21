@@ -70,33 +70,41 @@ class attention_pooling(nn.Module):
     ):
         # x: [Total_Tokens, D]
         # batch_indices: [Total_Tokens]
-        qq = self.projector_q(self.query.to(dtype=x.dtype))          # [1, P]
-        kk = self.projector_e(x)                                     # [Total_Tokens, P]
-        logits = (kk * qq).sum(dim=-1) / math.sqrt(self.proj_dim)    # [Total_Tokens]
-        logits = logits.to(dtype=x.dtype)
+        if x.dim() != 2:
+            raise ValueError(f"x must have shape [tokens, dim], got {tuple(x.shape)}")
+        if batch_indices.dim() != 1 or batch_indices.shape[0] != x.shape[0]:
+            raise ValueError(
+                "batch_indices must have one entry per token, got "
+                f"{tuple(batch_indices.shape)} for x={tuple(x.shape)}"
+            )
+        if batch_size < 1:
+            raise ValueError(f"batch_size must be positive, got {batch_size}")
 
         if valid_mask is None:
-            valid_mask = torch.ones_like(logits, dtype=torch.bool)
+            valid_mask = torch.ones(x.shape[0], device=x.device, dtype=torch.bool)
         else:
+            if valid_mask.dim() != 1 or valid_mask.shape[0] != x.shape[0]:
+                raise ValueError(
+                    "valid_mask must have one entry per token, got "
+                    f"{tuple(valid_mask.shape)} for x={tuple(x.shape)}"
+                )
             valid_mask = valid_mask.to(device=x.device, dtype=torch.bool)
 
-        neg = torch.finfo(logits.dtype).min
-        masked_logits = torch.where(valid_mask, logits, torch.full_like(logits, neg))
+        qq = self.projector_q(self.query.to(dtype=x.dtype)).squeeze(0)
+        pooled = []
+        # CUDA index_add_/index_reduce_ use unordered atomics for repeated indices.
+        # A fixed per-sample reduction keeps the same attention formula reproducible.
+        for sample_index in range(batch_size):
+            sample_mask = (batch_indices == sample_index) & valid_mask
+            sample_tokens = x[sample_mask]
+            if sample_tokens.shape[0] == 0:
+                pooled.append(x.new_zeros(x.shape[-1]))
+                continue
 
-        max_logits = torch.full((batch_size,), neg, device=x.device, dtype=x.dtype)
-        max_logits.index_reduce_(0, batch_indices, masked_logits, reduce="amax", include_self=True)
-        gathered_max = max_logits[batch_indices]
+            keys = self.projector_e(sample_tokens)
+            logits = (keys * qq).sum(dim=-1) / math.sqrt(self.proj_dim)
+            weights = torch.softmax(logits.to(dtype=x.dtype), dim=0)
+            weights = weights / (weights.sum() + 1e-6)
+            pooled.append((sample_tokens * weights.unsqueeze(-1)).sum(dim=0))
 
-        exp_logits = (torch.exp(masked_logits - gathered_max) * valid_mask.to(x.dtype)).to(x.dtype)
-
-        sum_exp = torch.zeros(batch_size, device=x.device, dtype=x.dtype)
-        sum_exp.index_add_(0, batch_indices, exp_logits)
-        gathered_sum = sum_exp[batch_indices]
-
-        attn_weights = exp_logits / (gathered_sum + 1e-6)  # [Total_Tokens]
-
-        weighted_input = x * attn_weights.unsqueeze(-1)
-        output = torch.zeros(batch_size, x.shape[-1], device=x.device, dtype=x.dtype)
-        output.index_add_(0, batch_indices, weighted_input)
-
-        return self.ln(output)
+        return self.ln(torch.stack(pooled, dim=0))

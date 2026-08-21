@@ -47,6 +47,11 @@ class HardConcreteGate(nn.Module):
         self.lower_bound = 0 - stretching_length
         self.eps = eps
 
+    @staticmethod
+    def probability(logits: torch.Tensor) -> torch.Tensor:
+        """Return the deterministic classifier confidence before hardening."""
+        return torch.sigmoid(logits)
+
     # 传入 HardConcreteGate 的都必须是未经归一化的值
     def forward(self,
                 logits: torch.Tensor,

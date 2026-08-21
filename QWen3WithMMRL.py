@@ -59,6 +59,11 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
             "gating_temperature": _cfg_attr(config, "gating_temperature", cfg.gating_temperature),
             "insert_method": _cfg_attr(config, "INSERT_METHOD", cfg.INSERT_METHOD),
             "ABLATE_VISUAL_GATE": _cfg_attr(config, "ABLATE_VISUAL_GATE", False),
+            "USE_ALPHA_PROB_TRAIN_GATE": _cfg_attr(
+                config,
+                "USE_ALPHA_PROB_TRAIN_GATE",
+                False,
+            ),
             "ABLATE_DIRECT_LEARNABLE_REP": _cfg_attr(config, "ABLATE_DIRECT_LEARNABLE_REP", False),
             "DIRECT_SHARED_REP": _cfg_attr(config, "DIRECT_SHARED_REP", False),
             "MMRL_QUERY_ARCHITECTURE": _cfg_attr(

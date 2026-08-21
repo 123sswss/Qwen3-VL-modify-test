@@ -122,6 +122,7 @@ def build_experiment_config(args: argparse.Namespace) -> Dict[str, Any]:
             1.0 if args.enable_deepstack_mmrl_residual else 0.0
         ),
         "ablate_visual_gate": args.ablate_visual_gate,
+        "use_alpha_prob_train_gate": args.use_alpha_prob_train_gate,
         "ablate_direct_learnable_rep": False,
         "stage3_learning_rate": args.mmrl_lr,
         "stage3_mmrl_learning_rate": args.mmrl_lr,
@@ -177,6 +178,8 @@ def build_train_config(
         "grad_spike_cooldown_steps": 20,
         "mmrl_diagnostics_keep_keys": [
             "ce_loss",
+            "alpha_prob_mean",
+            "alpha_prob_std",
             "G_mean",
             "G_std",
             "delta_to_org_ratio",
@@ -653,6 +656,14 @@ def parse_args() -> argparse.Namespace:
         help="Skip Stage 1 and keep the MMRL visual gate fully open.",
     )
     parser.add_argument(
+        "--use-alpha-prob-train-gate",
+        action="store_true",
+        help=(
+            "Use sigmoid(alpha logit) as the deterministic Stage 3 training gate; "
+            "evaluation keeps the existing hard gate."
+        ),
+    )
+    parser.add_argument(
         "--enable-deepstack-mmrl-residual",
         action="store_true",
         help="Route the complete gated MMRL state into the overlapping DeepStack layer.",
@@ -764,6 +775,8 @@ def main() -> int:
         f"query_architecture={args.query_architecture} "
         f"same_init_layer_projectors={args.same_init_layer_projectors} "
         f"ablate_visual_gate={args.ablate_visual_gate} "
+        "train_gate_mode="
+        f"{'alpha_probability' if args.use_alpha_prob_train_gate else 'hard_concrete'} "
         "deepstack_mmrl_residual="
         f"{args.enable_deepstack_mmrl_residual}:scale"
         f"{1.0 if args.enable_deepstack_mmrl_residual else 0.0} "
@@ -866,6 +879,9 @@ def main() -> int:
                     args.same_init_layer_projectors
                 ),
                 "ablate_visual_gate": args.ablate_visual_gate,
+                "use_alpha_prob_train_gate": (
+                    args.use_alpha_prob_train_gate
+                ),
                 "enable_deepstack_mmrl_residual": (
                     args.enable_deepstack_mmrl_residual
                 ),

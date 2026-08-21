@@ -989,6 +989,10 @@ def build_model_and_processor(model_path, experiment_cfg=None):
         "ablate_visual_gate",
         os.getenv("MMRL_ABLATE_VISUAL_GATE", "0") == "1"
     ))
+    config.USE_ALPHA_PROB_TRAIN_GATE = bool(experiment_cfg.get(
+        "use_alpha_prob_train_gate",
+        os.getenv("MMRL_USE_ALPHA_PROB_TRAIN_GATE", "0") == "1",
+    ))
     config.ABLATE_DIRECT_LEARNABLE_REP = bool(experiment_cfg.get(
         "ablate_direct_learnable_rep",
         os.getenv("MMRL_ABLATE_DIRECT_LEARNABLE_REP", "0") == "1"
@@ -1071,6 +1075,10 @@ def build_model_and_processor(model_path, experiment_cfg=None):
             config.MMRL_VARIANCE_FLOOR_WEIGHT,
             visual.mmrl_variance_floor_weight,
         ),
+        "USE_ALPHA_PROB_TRAIN_GATE": (
+            config.USE_ALPHA_PROB_TRAIN_GATE,
+            visual.use_alpha_prob_train_gate,
+        ),
         "MMRL_MEMORY_QUERY_COUNT": (
             config.MMRL_MEMORY_QUERY_COUNT,
             mmrl.memory_query_count,
@@ -1108,6 +1116,8 @@ def build_model_and_processor(model_path, experiment_cfg=None):
         f"cross_attention_heads={config.MMRL_CROSS_ATTENTION_HEADS} "
         f"direct_shared_rep={config.DIRECT_SHARED_REP} "
         f"same_init_layer_projectors={config.MMRL_SAME_INIT_LAYER_PROJECTORS} "
+        "train_gate_mode="
+        f"{'alpha_probability' if config.USE_ALPHA_PROB_TRAIN_GATE else 'hard_concrete'} "
         "memory_tokens_per_image="
         f"{2 * config.MMRL_MEMORY_QUERY_COUNT}"
     )

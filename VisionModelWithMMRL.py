@@ -177,6 +177,9 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
         self.null_image_token = nn.Parameter(torch.zeros(1, self.cfg.vision_token_dim))
         nn.init.normal_(self.null_image_token, std=0.02)
         self.ablate_visual_gate = bool(getattr(self.cfg, "ABLATE_VISUAL_GATE", False))
+        self.use_alpha_prob_train_gate = bool(
+            getattr(self.cfg, "USE_ALPHA_PROB_TRAIN_GATE", False)
+        )
         self.debug_context = {}
 
     @staticmethod
@@ -607,11 +610,19 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
                         )
                         # G_list: [Total_Images, 1]
                         if self.training:
-                            # 训练时保留 soft gate，保证梯度可过
-                            self.G_list = self.visionGating(
-                                self.alpha_list,
-                                gating_temperature_override
-                            ).to(dtype=hidden_states.dtype)
+                            if self.use_alpha_prob_train_gate:
+                                # Deterministic classifier confidence directly scales
+                                # the MMRL residual and its CE gradient.
+                                self.G_list = self.visionGating.probability(
+                                    self.alpha_list
+                                ).to(
+                                    dtype=hidden_states.dtype
+                                )
+                            else:
+                                self.G_list = self.visionGating(
+                                    self.alpha_list,
+                                    gating_temperature_override
+                                ).to(dtype=hidden_states.dtype)
                         else:
                             raw_g = self.visionGating(
                                 self.alpha_list,

@@ -121,7 +121,7 @@ def build_experiment_config(args: argparse.Namespace) -> Dict[str, Any]:
         "deepstack_mmrl_residual_scale": (
             1.0 if args.enable_deepstack_mmrl_residual else 0.0
         ),
-        "ablate_visual_gate": False,
+        "ablate_visual_gate": args.ablate_visual_gate,
         "ablate_direct_learnable_rep": False,
         "stage3_learning_rate": args.mmrl_lr,
         "stage3_mmrl_learning_rate": args.mmrl_lr,
@@ -177,6 +177,8 @@ def build_train_config(
         "grad_spike_cooldown_steps": 20,
         "mmrl_diagnostics_keep_keys": [
             "ce_loss",
+            "G_mean",
+            "G_std",
             "delta_to_org_ratio",
             "mmrl_delta_to_org_ratio",
             "mmrl_relation_loss_scaled",
@@ -646,6 +648,11 @@ def parse_args() -> argparse.Namespace:
         help="Initialize all independent layer MLPs from the same post-init weights.",
     )
     parser.add_argument(
+        "--ablate-visual-gate",
+        action="store_true",
+        help="Skip Stage 1 and keep the MMRL visual gate fully open.",
+    )
+    parser.add_argument(
         "--enable-deepstack-mmrl-residual",
         action="store_true",
         help="Route the complete gated MMRL state into the overlapping DeepStack layer.",
@@ -748,7 +755,7 @@ def main() -> int:
         "[SLAKE_TRAIN_CONFIG] "
         f"questions={questions_path} images={image_root} "
         f"limit={200 if args.smoke_test else args.sample_limit} "
-        f"stages=(1,3) "
+        f"stages={'(3,)' if args.ablate_visual_gate else '(1,3)'} "
         f"rp_space_length={args.rp_space_length} "
         f"memory_query_count={args.memory_query_count} "
         f"memory_attention_dim={args.memory_attention_dim} "
@@ -756,6 +763,7 @@ def main() -> int:
         f"cross_attention_heads={args.cross_attention_heads} "
         f"query_architecture={args.query_architecture} "
         f"same_init_layer_projectors={args.same_init_layer_projectors} "
+        f"ablate_visual_gate={args.ablate_visual_gate} "
         "deepstack_mmrl_residual="
         f"{args.enable_deepstack_mmrl_residual}:scale"
         f"{1.0 if args.enable_deepstack_mmrl_residual else 0.0} "
@@ -776,11 +784,19 @@ def main() -> int:
         questions_path,
         image_root,
     )
-    stage1_dataset, stage1_collator, stage1_counts = build_stage1_dataset(
-        args,
-        processor,
-        dataset,
-    )
+    if args.ablate_visual_gate:
+        stage1_dataset = None
+        stage1_collator = None
+        stage1_counts = {
+            "skipped": True,
+            "reason": "ablate_visual_gate",
+        }
+    else:
+        stage1_dataset, stage1_collator, stage1_counts = build_stage1_dataset(
+            args,
+            processor,
+            dataset,
+        )
     template_report, audit_batch = audit_template_and_collator(
         dataset,
         collator,
@@ -793,21 +809,26 @@ def main() -> int:
         "stage3_dataset": dataset,
         "data_collator": collator,
     }
-    pooling_before = snapshot_stage1_pooling(model)
-    print("\n========== Running SLAKE Stage 1 ==========")
-    run_stage(
-        stage_id=1,
-        model=model,
-        processor=processor,
-        data_cfg=data_cfg,
-        train_cfg=train_cfg,
-        output_dir=str(output_dir),
-    )
-    stage1_pooling_update = audit_stage1_pooling_update(
-        model,
-        pooling_before,
-        require_update=True,
-    )
+    if args.ablate_visual_gate:
+        print("\n========== Skipping SLAKE Stage 1: visual gate ablated ==========")
+        print("[SLAKE_STAGE1_SKIPPED] reason=ablate_visual_gate gate_value=1")
+        stage1_pooling_update = {}
+    else:
+        pooling_before = snapshot_stage1_pooling(model)
+        print("\n========== Running SLAKE Stage 1 ==========")
+        run_stage(
+            stage_id=1,
+            model=model,
+            processor=processor,
+            data_cfg=data_cfg,
+            train_cfg=train_cfg,
+            output_dir=str(output_dir),
+        )
+        stage1_pooling_update = audit_stage1_pooling_update(
+            model,
+            pooling_before,
+            require_update=True,
+        )
     forward_report = audit_model_forward(model, audit_batch)
 
     print("\n========== Running SLAKE Stage 3 ==========")
@@ -844,6 +865,7 @@ def main() -> int:
                 "same_init_layer_projectors": (
                     args.same_init_layer_projectors
                 ),
+                "ablate_visual_gate": args.ablate_visual_gate,
                 "enable_deepstack_mmrl_residual": (
                     args.enable_deepstack_mmrl_residual
                 ),
@@ -861,8 +883,8 @@ def main() -> int:
         "image_root": image_root,
         "model_path": model_path,
         "output_dir": output_dir,
-        "stages": [1, 3],
-        "force_gate_open": False,
+        "stages": [3] if args.ablate_visual_gate else [1, 3],
+        "force_gate_open": args.ablate_visual_gate,
         "stage1_data": stage1_counts,
         "stage1_pooling_update": stage1_pooling_update,
         "experiment": experiment_cfg,

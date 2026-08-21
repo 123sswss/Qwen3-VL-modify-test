@@ -97,6 +97,7 @@ run_slake() {
   local architecture="${MMRL_QUERY_ARCHITECTURE:-layer_mlp_post_cross}"
   local epochs="${SLAKE_STAGE3_EPOCHS:-3}"
   local same_init="${MMRL_SAME_INIT_LAYER_PROJECTORS:-0}"
+  local ablate_visual_gate="${MMRL_ABLATE_VISUAL_GATE:-0}"
   local enable_deepstack="${MMRL_ENABLE_DEEPSTACK_MMRL_RESIDUAL:-0}"
   local cross_relation_weight="${MMRL_CROSS_RELATION_LOSS_WEIGHT:-0.0}"
   local extra_args=()
@@ -104,6 +105,12 @@ run_slake() {
     extra_args+=(--same-init-layer-projectors)
   elif [ "$same_init" != "0" ]; then
     echo "[ERR] MMRL_SAME_INIT_LAYER_PROJECTORS must be 0 or 1" >&2
+    return 2
+  fi
+  if [ "$ablate_visual_gate" = "1" ]; then
+    extra_args+=(--ablate-visual-gate)
+  elif [ "$ablate_visual_gate" != "0" ]; then
+    echo "[ERR] MMRL_ABLATE_VISUAL_GATE must be 0 or 1" >&2
     return 2
   fi
   if [ "$enable_deepstack" = "1" ]; then
@@ -115,7 +122,7 @@ run_slake() {
   local output_dir
   output_dir="$(available_output_dir "$SLAKE_OUTPUT_ROOT" "${experiment_name}_seed${run_seed}_${RUN_DATE}")"
   mkdir -p "$output_dir/eval"
-  echo "[SLAKE] experiment=$experiment_name seed=$run_seed architecture=$architecture same_init=$same_init deepstack=$enable_deepstack:scale1.0 relation=${MMRL_RELATION_LOSS_WEIGHT:-0.05} cross_relation=$cross_relation_weight output=$output_dir"
+  echo "[SLAKE] experiment=$experiment_name seed=$run_seed architecture=$architecture same_init=$same_init ablate_visual_gate=$ablate_visual_gate deepstack=$enable_deepstack:scale1.0 relation=${MMRL_RELATION_LOSS_WEIGHT:-0.05} cross_relation=$cross_relation_weight output=$output_dir"
   (
     cd "$ROOT_DIR" || exit 1
     python slake/train_mmrl.py \
@@ -183,6 +190,7 @@ run_final_seed() {
   local enable_deepstack="$3"
   local cross_relation_weight="$4"
   local run_seed="${5:-44}"
+  local ablate_visual_gate="${6:-0}"
   SLAKE_EXPERIMENT_NAME="$experiment_name" \
   SLAKE_RUN_SEED="$run_seed" \
   SLAKE_STAGE3_EPOCHS=3 \
@@ -196,6 +204,7 @@ run_final_seed() {
   MMRL_RELATION_LOSS_WEIGHT=0.05 \
   MMRL_RELATION_MAX_TOKENS=64 \
   MMRL_SAME_INIT_LAYER_PROJECTORS="$same_init" \
+  MMRL_ABLATE_VISUAL_GATE="$ablate_visual_gate" \
   MMRL_ENABLE_DEEPSTACK_MMRL_RESIDUAL="$enable_deepstack" \
   MMRL_CROSS_RELATION_LOSS_WEIGHT="$cross_relation_weight" \
     run_slake
@@ -246,6 +255,11 @@ case "$RUN_TARGET" in
   slake_same_init_repro_seeds4)
     run_same_init_repro_seeds4 || failures=$((failures + 1))
     ;;
+  slake_same_init_no_gate)
+    run_final_seed \
+      "slake_mmrl_layer_mlp_same_init_no_gate_relation0050" \
+      1 0 0.0 44 1 || failures=$((failures + 1))
+    ;;
   slake_final_serial3)
     run_final_serial3 || failures=$((failures + 1))
     ;;
@@ -270,7 +284,7 @@ case "$RUN_TARGET" in
     run_slake || failures=$((failures + 1))
     ;;
   *)
-    echo "[ERR] 未知目标: $RUN_TARGET，可选 train、slake、slake_shared_direct、slake_current_control、slake_same_init、slake_deepstack、slake_cross_relation、slake_same_init_repro_seeds4、slake_final_serial3、slake_layer_mlp_repro_seeds3、slake_shared_direct_repro_seeds3、train_shared_direct、all。" >&2
+    echo "[ERR] 未知目标: $RUN_TARGET，可选 train、slake、slake_shared_direct、slake_current_control、slake_same_init、slake_deepstack、slake_cross_relation、slake_same_init_repro_seeds4、slake_same_init_no_gate、slake_final_serial3、slake_layer_mlp_repro_seeds3、slake_shared_direct_repro_seeds3、train_shared_direct、all。" >&2
     exit 2
     ;;
 esac

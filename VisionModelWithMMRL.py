@@ -515,10 +515,12 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
 
 
         rotary_pos_emb_with_rep = None
-        gate_embedding_after_pooling = self.embedding_pooling(
-            embedding,
-            mask=text_pooling_mask,
-        )
+        gate_embedding_after_pooling = None
+        if not self.ablate_visual_gate:
+            gate_embedding_after_pooling = self.embedding_pooling(
+                embedding,
+                mask=text_pooling_mask,
+            )
         (
             hidden_states,
             cu_seqlens,
@@ -568,21 +570,6 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
                 if first_insert:
                     # cu_seqlens: [0, len0, len0+len1, ...]
                     img_seqlens = cu_seqlens[1:] - cu_seqlens[:-1]  # [Total_Images]
-                    img_indices = torch.repeat_interleave(
-                        torch.arange(total_pic_num, device=hidden_states.device),
-                        img_seqlens
-                    )
-                    gate_pooled_vision_states = self.hidden_state_pooling.forward_vectorized(
-                        hidden_states,
-                        img_indices,
-                        total_pic_num
-                    )  # [Total_Images, Dim]
-                    images_per_sample_tensor = torch.tensor(images_per_sample, device=hidden_states.device)
-                    expanded_gate_text_embedding = torch.repeat_interleave(
-                        gate_embedding_after_pooling,
-                        images_per_sample_tensor,
-                        dim=0
-                    )
                     if self.ablate_visual_gate:
                         self.alpha_list = torch.ones(
                             (total_pic_num, 1),
@@ -596,6 +583,24 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
                         )
                         run_mmrl_branch = rep_generator is not None
                     else:
+                        img_indices = torch.repeat_interleave(
+                            torch.arange(total_pic_num, device=hidden_states.device),
+                            img_seqlens
+                        )
+                        gate_pooled_vision_states = self.hidden_state_pooling.forward_vectorized(
+                            hidden_states,
+                            img_indices,
+                            total_pic_num
+                        )  # [Total_Images, Dim]
+                        images_per_sample_tensor = torch.tensor(
+                            images_per_sample,
+                            device=hidden_states.device,
+                        )
+                        expanded_gate_text_embedding = torch.repeat_interleave(
+                            gate_embedding_after_pooling,
+                            images_per_sample_tensor,
+                            dim=0
+                        )
                         self.alpha_list = self.Task_classifier(
                             gate_pooled_vision_states,
                             expanded_gate_text_embedding,

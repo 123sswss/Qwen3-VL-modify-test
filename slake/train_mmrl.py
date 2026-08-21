@@ -58,9 +58,6 @@ DEFAULT_GENERAL_IMAGE_ROOTS = (
 
 
 QUERY_ARCHITECTURES = (
-    "layer_mlp_dynamic_query_static_kv",
-    "layer_mlp_dynamic_query_dual_softmax_visual_static_kv",
-    "layer_mlp_pooled_query_static_kv",
     "layer_mlp_post_cross",
     "shared_direct_post_cross",
 )
@@ -188,28 +185,10 @@ def build_train_config(
             "dynamic_rep_base_norm_mean",
             "dynamic_rep_cross_delta_norm_mean",
             "dynamic_rep_cross_delta_ratio",
-            "static_slot_memory_norm_mean",
-            "text_dynamic_attention_entropy_norm",
-            "text_dynamic_output_specificity_ratio",
-            "text_dynamic_residual_gate_abs_mean",
-            "visual_dynamic_attention_entropy_norm",
-            "visual_dynamic_output_specificity_ratio",
-            "visual_dynamic_residual_gate_abs_mean",
-            "visual_dynamic_source_assignment_entropy_norm",
-            "visual_dynamic_source_assignment_peak_mean",
-            "visual_dynamic_source_relevance_entropy_norm",
-            "visual_dynamic_competition_tv_from_source_mean",
-            "text_pooled_query_attention_entropy_norm",
-            "text_pooled_query_output_specificity_ratio",
-            "visual_pooled_query_attention_entropy_norm",
-            "visual_pooled_query_output_specificity_ratio",
-            "dynamic_query_residual_scale",
-            "dynamic_query_residual_scale_grad_abs",
             "visual_memory_norm_mean",
             "text_memory_norm_mean",
             "visual_memory_pooling_grad_norm_mean",
             "text_memory_pooling_grad_norm_mean",
-            "dynamic_query_projection_grad_norm_mean",
             "cross_attention_grad_norm_mean",
             "cross_attention_output_weight_norm",
             "deepstack_mmrl_residual_scale",
@@ -456,14 +435,9 @@ def audit_model_forward(
         mmrl.rp_space_length,
         mmrl.vision_token_dim,
     )
-    expected_memory_tokens = (
-        mmrl.rp_space_length
-        if mmrl.use_static_kv_query
-        else 2 * mmrl.memory_query_count
-    )
     expected_memory_shape = (
         expected_images,
-        expected_memory_tokens,
+        2 * mmrl.memory_query_count,
         mmrl.vision_token_dim,
     )
     if rep_shape != expected_rep_shape:
@@ -742,10 +716,10 @@ def parse_args() -> argparse.Namespace:
         parser.error("--cross-relation-weight must be non-negative")
     if (
         args.same_init_layer_projectors
-        and args.query_architecture == "shared_direct_post_cross"
+        and args.query_architecture != "layer_mlp_post_cross"
     ):
         parser.error(
-            "--same-init-layer-projectors requires a layer MLP architecture"
+            "--same-init-layer-projectors requires layer_mlp_post_cross"
         )
     if args.relation_max_tokens < 2:
         parser.error("--relation-max-tokens must be at least 2")

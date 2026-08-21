@@ -115,7 +115,7 @@ run_slake() {
   local output_dir
   output_dir="$(available_output_dir "$SLAKE_OUTPUT_ROOT" "${experiment_name}_seed${run_seed}_${RUN_DATE}")"
   mkdir -p "$output_dir/eval"
-  echo "[SLAKE] experiment=$experiment_name seed=$run_seed architecture=$architecture same_init=$same_init deepstack=$enable_deepstack:scale1.0 memory_queries=${MMRL_MEMORY_QUERY_COUNT:-128} relation=${MMRL_RELATION_LOSS_WEIGHT:-0.05} cross_relation=$cross_relation_weight output=$output_dir"
+  echo "[SLAKE] experiment=$experiment_name seed=$run_seed architecture=$architecture same_init=$same_init deepstack=$enable_deepstack:scale1.0 relation=${MMRL_RELATION_LOSS_WEIGHT:-0.05} cross_relation=$cross_relation_weight output=$output_dir"
   (
     cd "$ROOT_DIR" || exit 1
     python slake/train_mmrl.py \
@@ -169,38 +169,45 @@ run_repro_seeds() {
 }
 
 run_final_serial3() {
-  run_final_seed44 \
+  run_final_seed \
     "slake_mmrl_layer_mlp_same_init_relation0050" 1 0 0.0 || return 1
-  run_final_seed44 \
+  run_final_seed \
     "slake_mmrl_layer_mlp_deepstack_relation0050" 0 1 0.0 || return 1
-  run_final_seed44 \
+  run_final_seed \
     "slake_mmrl_layer_mlp_cross_relation0010_relation0050" 0 0 0.01 || return 1
 }
 
-run_final_seed44() {
+run_final_seed() {
   local experiment_name="$1"
   local same_init="$2"
   local enable_deepstack="$3"
   local cross_relation_weight="$4"
-  local relation_weight="${5:-0.05}"
-  local architecture="${6:-layer_mlp_post_cross}"
-  local memory_query_count="${7:-128}"
+  local run_seed="${5:-44}"
   SLAKE_EXPERIMENT_NAME="$experiment_name" \
-  SLAKE_RUN_SEED=44 \
+  SLAKE_RUN_SEED="$run_seed" \
   SLAKE_STAGE3_EPOCHS=3 \
   SLAKE_MMRL_LR=6e-5 \
-  MMRL_QUERY_ARCHITECTURE="$architecture" \
+  MMRL_QUERY_ARCHITECTURE="layer_mlp_post_cross" \
   MMRL_RP_SPACE_LENGTH=40 \
-  MMRL_MEMORY_QUERY_COUNT="$memory_query_count" \
+  MMRL_MEMORY_QUERY_COUNT=128 \
   MMRL_MEMORY_ATTENTION_DIM=128 \
   MMRL_PROJECTOR_HIDDEN_DIM=1024 \
   MMRL_CROSS_ATTENTION_HEADS=8 \
-  MMRL_RELATION_LOSS_WEIGHT="$relation_weight" \
+  MMRL_RELATION_LOSS_WEIGHT=0.05 \
   MMRL_RELATION_MAX_TOKENS=64 \
   MMRL_SAME_INIT_LAYER_PROJECTORS="$same_init" \
   MMRL_ENABLE_DEEPSTACK_MMRL_RESIDUAL="$enable_deepstack" \
   MMRL_CROSS_RELATION_LOSS_WEIGHT="$cross_relation_weight" \
     run_slake
+}
+
+run_same_init_repro_seeds4() {
+  local seed
+  for seed in 44 45 46 47; do
+    run_final_seed \
+      "slake_mmrl_layer_mlp_same_init_relation0050_repro4" \
+      1 0 0.0 "$seed" || return 1
+  done
 }
 
 failures=0
@@ -217,43 +224,27 @@ case "$RUN_TARGET" in
       run_slake || failures=$((failures + 1))
     ;;
   slake_current_control)
-    run_final_seed44 \
+    run_final_seed \
       "slake_mmrl_layer_mlp_current_control_relation0050" 0 0 0.0 \
       || failures=$((failures + 1))
     ;;
   slake_same_init)
-    run_final_seed44 \
+    run_final_seed \
       "slake_mmrl_layer_mlp_same_init_relation0050" 1 0 0.0 \
       || failures=$((failures + 1))
     ;;
   slake_deepstack)
-    run_final_seed44 \
+    run_final_seed \
       "slake_mmrl_layer_mlp_deepstack_relation0050" 0 1 0.0 \
       || failures=$((failures + 1))
     ;;
   slake_cross_relation)
-    run_final_seed44 \
+    run_final_seed \
       "slake_mmrl_layer_mlp_cross_relation0010_relation0050" 0 0 0.01 \
       || failures=$((failures + 1))
     ;;
-  slake_dynamic_query_static_kv)
-    run_final_seed44 \
-      "slake_mmrl_layer_mlp_same_init_dynamic_query_zerogate_static_kv_relation0050" \
-      1 0 0.0 0.05 "layer_mlp_dynamic_query_static_kv" 40 \
-      || failures=$((failures + 1))
-    ;;
-  slake_dynamic_query_dual_softmax_visual_static_kv)
-    run_final_seed44 \
-      "slake_mmrl_layer_mlp_same_init_dynamic_query_dual_softmax_visual_zerogate_static_kv_relation0050" \
-      1 0 0.0 0.05 \
-      "layer_mlp_dynamic_query_dual_softmax_visual_static_kv" 40 \
-      || failures=$((failures + 1))
-    ;;
-  slake_pooled_query_static_kv)
-    run_final_seed44 \
-      "slake_mmrl_layer_mlp_same_init_pooled_query_zerogate_static_kv_relation0050" \
-      1 0 0.0 0.05 "layer_mlp_pooled_query_static_kv" 40 \
-      || failures=$((failures + 1))
+  slake_same_init_repro_seeds4)
+    run_same_init_repro_seeds4 || failures=$((failures + 1))
     ;;
   slake_final_serial3)
     run_final_serial3 || failures=$((failures + 1))
@@ -279,7 +270,7 @@ case "$RUN_TARGET" in
     run_slake || failures=$((failures + 1))
     ;;
   *)
-    echo "[ERR] 未知目标: $RUN_TARGET，可选 train、slake、slake_shared_direct、slake_current_control、slake_same_init、slake_deepstack、slake_cross_relation、slake_dynamic_query_static_kv、slake_dynamic_query_dual_softmax_visual_static_kv、slake_pooled_query_static_kv、slake_final_serial3、slake_layer_mlp_repro_seeds3、slake_shared_direct_repro_seeds3、train_shared_direct、all。" >&2
+    echo "[ERR] 未知目标: $RUN_TARGET，可选 train、slake、slake_shared_direct、slake_current_control、slake_same_init、slake_deepstack、slake_cross_relation、slake_same_init_repro_seeds4、slake_final_serial3、slake_layer_mlp_repro_seeds3、slake_shared_direct_repro_seeds3、train_shared_direct、all。" >&2
     exit 2
     ;;
 esac

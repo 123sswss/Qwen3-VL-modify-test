@@ -180,6 +180,13 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
         self.use_alpha_prob_train_gate = bool(
             getattr(self.cfg, "USE_ALPHA_PROB_TRAIN_GATE", False)
         )
+        self.use_alpha_mean_train_gate = bool(
+            getattr(self.cfg, "USE_ALPHA_MEAN_TRAIN_GATE", False)
+        )
+        if self.use_alpha_prob_train_gate and self.use_alpha_mean_train_gate:
+            raise ValueError(
+                "Alpha probability and Alpha batch-mean training gates are mutually exclusive"
+            )
         self.debug_context = {}
 
     @staticmethod
@@ -610,7 +617,11 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
                         )
                         # G_list: [Total_Images, 1]
                         if self.training:
-                            if self.use_alpha_prob_train_gate:
+                            if self.use_alpha_mean_train_gate:
+                                self.G_list = self.visionGating.batch_mean_probability(
+                                    self.alpha_list
+                                ).to(dtype=hidden_states.dtype)
+                            elif self.use_alpha_prob_train_gate:
                                 # Deterministic classifier confidence directly scales
                                 # the MMRL residual and its CE gradient.
                                 self.G_list = self.visionGating.probability(

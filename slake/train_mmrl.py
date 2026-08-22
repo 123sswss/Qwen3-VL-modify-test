@@ -123,6 +123,7 @@ def build_experiment_config(args: argparse.Namespace) -> Dict[str, Any]:
         ),
         "ablate_visual_gate": args.ablate_visual_gate,
         "use_alpha_prob_train_gate": args.use_alpha_prob_train_gate,
+        "use_alpha_mean_train_gate": args.use_alpha_mean_train_gate,
         "ablate_direct_learnable_rep": False,
         "stage3_learning_rate": args.mmrl_lr,
         "stage3_mmrl_learning_rate": args.mmrl_lr,
@@ -664,6 +665,14 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--use-alpha-mean-train-gate",
+        action="store_true",
+        help=(
+            "Use the batch mean of sigmoid(alpha logit) for every sample during "
+            "Stage 3; evaluation keeps the existing hard gate."
+        ),
+    )
+    parser.add_argument(
         "--enable-deepstack-mmrl-residual",
         action="store_true",
         help="Route the complete gated MMRL state into the overlapping DeepStack layer.",
@@ -701,6 +710,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--generation-checks", type=int, default=2)
     parser.add_argument("--no-save-final", action="store_true")
     args = parser.parse_args()
+
+    if args.use_alpha_prob_train_gate and args.use_alpha_mean_train_gate:
+        parser.error(
+            "--use-alpha-prob-train-gate and --use-alpha-mean-train-gate "
+            "are mutually exclusive"
+        )
 
     if args.sample_limit is not None and args.sample_limit < 1:
         parser.error("--sample-limit must be positive")
@@ -762,6 +777,13 @@ def main() -> int:
     seed_everything(args.seed)
     experiment_cfg = build_experiment_config(args)
     train_cfg = build_train_config(args, experiment_cfg)
+    train_gate_mode = (
+        "alpha_batch_mean"
+        if args.use_alpha_mean_train_gate
+        else "alpha_probability"
+        if args.use_alpha_prob_train_gate
+        else "hard_concrete"
+    )
     print(
         "[SLAKE_TRAIN_CONFIG] "
         f"questions={questions_path} images={image_root} "
@@ -775,8 +797,7 @@ def main() -> int:
         f"query_architecture={args.query_architecture} "
         f"same_init_layer_projectors={args.same_init_layer_projectors} "
         f"ablate_visual_gate={args.ablate_visual_gate} "
-        "train_gate_mode="
-        f"{'alpha_probability' if args.use_alpha_prob_train_gate else 'hard_concrete'} "
+        f"train_gate_mode={train_gate_mode} "
         "deepstack_mmrl_residual="
         f"{args.enable_deepstack_mmrl_residual}:scale"
         f"{1.0 if args.enable_deepstack_mmrl_residual else 0.0} "
@@ -881,6 +902,9 @@ def main() -> int:
                 "ablate_visual_gate": args.ablate_visual_gate,
                 "use_alpha_prob_train_gate": (
                     args.use_alpha_prob_train_gate
+                ),
+                "use_alpha_mean_train_gate": (
+                    args.use_alpha_mean_train_gate
                 ),
                 "enable_deepstack_mmrl_residual": (
                     args.enable_deepstack_mmrl_residual

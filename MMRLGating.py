@@ -52,6 +52,12 @@ class HardConcreteGate(nn.Module):
         """Return the deterministic classifier confidence before hardening."""
         return torch.sigmoid(logits)
 
+    @classmethod
+    def batch_mean_probability(cls, logits: torch.Tensor) -> torch.Tensor:
+        """Remove sample identity while preserving the batch-average gate."""
+        probability = cls.probability(logits)
+        return probability.mean().expand_as(probability)
+
     # 传入 HardConcreteGate 的都必须是未经归一化的值
     def forward(self,
                 logits: torch.Tensor,

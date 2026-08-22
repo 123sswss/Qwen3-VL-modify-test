@@ -25,6 +25,16 @@ class AlphaProbabilityGateTest(unittest.TestCase):
 
         torch.testing.assert_close(hard_gate, torch.tensor([[0.0], [1.0]]))
 
+    def test_batch_mean_gate_removes_sample_identity(self):
+        gate = HardConcreteGate(temperature=0.775)
+        logits = torch.tensor([[-2.0], [0.0], [2.0]])
+        probability = gate.probability(logits)
+
+        mean_gate = gate.batch_mean_probability(logits)
+
+        torch.testing.assert_close(mean_gate.mean(), probability.mean())
+        torch.testing.assert_close(mean_gate, mean_gate.mean().expand_as(mean_gate))
+
 
 if __name__ == "__main__":
     unittest.main()

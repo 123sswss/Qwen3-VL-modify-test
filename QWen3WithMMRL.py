@@ -64,6 +64,11 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
                 "USE_ALPHA_PROB_TRAIN_GATE",
                 False,
             ),
+            "USE_ALPHA_MEAN_TRAIN_GATE": _cfg_attr(
+                config,
+                "USE_ALPHA_MEAN_TRAIN_GATE",
+                False,
+            ),
             "ABLATE_DIRECT_LEARNABLE_REP": _cfg_attr(config, "ABLATE_DIRECT_LEARNABLE_REP", False),
             "DIRECT_SHARED_REP": _cfg_attr(config, "DIRECT_SHARED_REP", False),
             "MMRL_QUERY_ARCHITECTURE": _cfg_attr(

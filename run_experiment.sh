@@ -249,6 +249,21 @@ run_same_init_repro_seeds4() {
   done
 }
 
+run_same_init_gate_pair_seeds3() {
+  local seed
+  for seed in 45 46 47; do
+    echo "[GATE_PAIR] seed=$seed mode=hard_concrete"
+    run_final_seed \
+      "slake_mmrl_layer_mlp_same_init_hard_concrete_gate_relation0050_repro3" \
+      1 0 0.0 "$seed" 0 0 0 || return 1
+
+    echo "[GATE_PAIR] seed=$seed mode=alpha_probability"
+    run_final_seed \
+      "slake_mmrl_layer_mlp_same_init_alpha_prob_gate_relation0050_repro3" \
+      1 0 0.0 "$seed" 0 1 0 || return 1
+  done
+}
+
 failures=0
 case "$RUN_TARGET" in
   train)
@@ -300,6 +315,9 @@ case "$RUN_TARGET" in
       "slake_mmrl_layer_mlp_same_init_alpha_mean_gate_relation0050" \
       1 0 0.0 44 0 0 1 || failures=$((failures + 1))
     ;;
+  slake_same_init_gate_pair_seeds3)
+    run_same_init_gate_pair_seeds3 || failures=$((failures + 1))
+    ;;
   slake_final_serial3)
     run_final_serial3 || failures=$((failures + 1))
     ;;
@@ -324,7 +342,7 @@ case "$RUN_TARGET" in
     run_slake || failures=$((failures + 1))
     ;;
   *)
-    echo "[ERR] 未知目标: $RUN_TARGET，可选 train、slake、slake_shared_direct、slake_current_control、slake_same_init、slake_deepstack、slake_cross_relation、slake_same_init_repro_seeds4、slake_same_init_no_gate、slake_same_init_alpha_prob_gate、slake_same_init_alpha_mean_gate、slake_final_serial3、slake_layer_mlp_repro_seeds3、slake_shared_direct_repro_seeds3、train_shared_direct、all。" >&2
+    echo "[ERR] 未知目标: $RUN_TARGET，可选 train、slake、slake_shared_direct、slake_current_control、slake_same_init、slake_deepstack、slake_cross_relation、slake_same_init_repro_seeds4、slake_same_init_no_gate、slake_same_init_alpha_prob_gate、slake_same_init_alpha_mean_gate、slake_same_init_gate_pair_seeds3、slake_final_serial3、slake_layer_mlp_repro_seeds3、slake_shared_direct_repro_seeds3、train_shared_direct、all。" >&2
     exit 2
     ;;
 esac

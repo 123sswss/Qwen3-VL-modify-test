@@ -35,6 +35,19 @@ class AlphaProbabilityGateTest(unittest.TestCase):
         torch.testing.assert_close(mean_gate.mean(), probability.mean())
         torch.testing.assert_close(mean_gate, mean_gate.mean().expand_as(mean_gate))
 
+    def test_inverse_probability_weights_are_bounded_and_detached(self):
+        gate = HardConcreteGate(temperature=0.775)
+        logits = torch.tensor([[-10.0], [0.0], [10.0]], requires_grad=True)
+
+        weights = gate.inverse_probability_weights(logits, max_weight=2.0)
+
+        self.assertFalse(weights.requires_grad)
+        self.assertTrue(bool((weights >= 1.0).all()))
+        self.assertTrue(bool((weights <= 2.0).all()))
+        torch.testing.assert_close(weights[0], torch.tensor([2.0]))
+        torch.testing.assert_close(weights[1], torch.tensor([2.0]))
+        torch.testing.assert_close(weights[2], torch.tensor([1.0]), rtol=1e-4, atol=1e-4)
+
 
 if __name__ == "__main__":
     unittest.main()

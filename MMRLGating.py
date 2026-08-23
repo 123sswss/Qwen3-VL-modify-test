@@ -58,6 +58,18 @@ class HardConcreteGate(nn.Module):
         probability = cls.probability(logits)
         return probability.mean().expand_as(probability)
 
+    @classmethod
+    def inverse_probability_weights(
+        cls,
+        logits: torch.Tensor,
+        max_weight: float = 2.0,
+    ) -> torch.Tensor:
+        """Build bounded trust weights without propagating into the classifier."""
+        if max_weight < 1.0:
+            raise ValueError(f"max_weight must be at least 1, got {max_weight}")
+        probability = cls.probability(logits.detach().float())
+        return probability.clamp_min(1.0 / max_weight).reciprocal()
+
     # 传入 HardConcreteGate 的都必须是未经归一化的值
     def forward(self,
                 logits: torch.Tensor,

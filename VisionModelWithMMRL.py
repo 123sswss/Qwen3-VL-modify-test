@@ -183,10 +183,35 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
         self.use_alpha_mean_train_gate = bool(
             getattr(self.cfg, "USE_ALPHA_MEAN_TRAIN_GATE", False)
         )
-        if self.use_alpha_prob_train_gate and self.use_alpha_mean_train_gate:
+        self.force_open_train_gate = bool(
+            getattr(self.cfg, "FORCE_OPEN_TRAIN_GATE", False)
+        )
+        self.use_alpha_weighted_relation = bool(
+            getattr(self.cfg, "USE_ALPHA_WEIGHTED_RELATION", False)
+        )
+        self.alpha_relation_max_weight = float(
+            getattr(self.cfg, "ALPHA_RELATION_MAX_WEIGHT", 2.0)
+        )
+        active_train_gates = sum((
+            self.use_alpha_prob_train_gate,
+            self.use_alpha_mean_train_gate,
+            self.force_open_train_gate,
+        ))
+        if active_train_gates > 1:
             raise ValueError(
-                "Alpha probability and Alpha batch-mean training gates are mutually exclusive"
+                "Alpha probability, Alpha batch-mean, and force-open training gates "
+                "are mutually exclusive"
             )
+        if self.use_alpha_weighted_relation and not self.force_open_train_gate:
+            raise ValueError(
+                "Alpha-weighted Relation requires the force-open training gate"
+            )
+        if self.alpha_relation_max_weight < 1.0:
+            raise ValueError(
+                "ALPHA_RELATION_MAX_WEIGHT must be at least 1, got "
+                f"{self.alpha_relation_max_weight}"
+            )
+        self.alpha_relation_weights = None
         self.debug_context = {}
 
     @staticmethod
@@ -236,6 +261,7 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
         adapted_states: torch.Tensor,
         org_states: torch.Tensor,
         cu_seqlens: torch.Tensor,
+        relation_weights: Optional[torch.Tensor] = None,
     ):
         zero = adapted_states.new_tensor(0.0, dtype=torch.float32)
         if cu_seqlens is None or cu_seqlens.numel() <= 1:
@@ -244,10 +270,16 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
         relation_losses = []
         variance_losses = []
         cross_relation_losses = []
+        active_relation_weights = []
         max_tokens = max(int(self.mmrl_relation_max_tokens), 2)
         starts = cu_seqlens[:-1].tolist()
         ends = cu_seqlens[1:].tolist()
-        for start, end in zip(starts, ends):
+        if relation_weights is not None and relation_weights.numel() != len(starts):
+            raise RuntimeError(
+                "Relation weight count does not match visual image count: "
+                f"weights={relation_weights.numel()} images={len(starts)}"
+            )
+        for image_index, (start, end) in enumerate(zip(starts, ends)):
             start, end = int(start), int(end)
             token_count = end - start
             if token_count < 2:
@@ -270,6 +302,10 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
             adapted_gram = adapted_unit @ adapted_unit.transpose(0, 1)
             original_gram = original_unit @ original_unit.transpose(0, 1)
             relation_losses.append(F.mse_loss(adapted_gram, original_gram))
+            if relation_weights is not None:
+                active_relation_weights.append(
+                    relation_weights.reshape(-1)[image_index]
+                )
             if (
                 self.mmrl_cross_relation_loss_weight > 0.0
                 and torch.is_grad_enabled()
@@ -289,10 +325,20 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
 
         if not relation_losses:
             return zero, zero, zero, zero
-        gram_loss = torch.stack(relation_losses).mean()
-        variance_loss = torch.stack(variance_losses).mean()
+        def reduce_losses(losses):
+            stacked = torch.stack(losses)
+            if relation_weights is None:
+                return stacked.mean()
+            weights = torch.stack(active_relation_weights).to(
+                device=stacked.device,
+                dtype=stacked.dtype,
+            )
+            return (stacked * weights).sum() / weights.sum().clamp_min(1e-8)
+
+        gram_loss = reduce_losses(relation_losses)
+        variance_loss = reduce_losses(variance_losses)
         cross_relation_loss = (
-            torch.stack(cross_relation_losses).mean()
+            reduce_losses(cross_relation_losses)
             if cross_relation_losses
             else zero
         )
@@ -522,6 +568,7 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
         assert len(images_per_sample) == embedding.shape[0]
         self.alpha_list = None 
         self.G_list = []
+        self.alpha_relation_weights = None
 
 
         rotary_pos_emb_with_rep = None
@@ -617,7 +664,12 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
                         )
                         # G_list: [Total_Images, 1]
                         if self.training:
-                            if self.use_alpha_mean_train_gate:
+                            if self.force_open_train_gate:
+                                self.G_list = torch.ones_like(
+                                    self.alpha_list,
+                                    dtype=hidden_states.dtype,
+                                )
+                            elif self.use_alpha_mean_train_gate:
                                 self.G_list = self.visionGating.batch_mean_probability(
                                     self.alpha_list
                                 ).to(dtype=hidden_states.dtype)
@@ -634,6 +686,13 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
                                     self.alpha_list,
                                     gating_temperature_override
                                 ).to(dtype=hidden_states.dtype)
+                            if self.use_alpha_weighted_relation:
+                                self.alpha_relation_weights = (
+                                    self.visionGating.inverse_probability_weights(
+                                        self.alpha_list,
+                                        max_weight=self.alpha_relation_max_weight,
+                                    )
+                                )
                         else:
                             raw_g = self.visionGating(
                                 self.alpha_list,
@@ -789,6 +848,7 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
                     hidden_states_with_rep,
                     org_hidden_states,
                     cu_seqlens,
+                    relation_weights=self.alpha_relation_weights,
                 )
             else:
                 self.mmrl_relation_loss = hidden_states.new_tensor(0.0)
@@ -859,11 +919,36 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
                 org_hidden_states,
                 cu_seqlens,
             )
+            relation_weight_mean = (
+                self.alpha_relation_weights.detach().float().mean()
+                if self.alpha_relation_weights is not None
+                else hidden_states.new_tensor(1.0)
+            )
+            relation_weight_std = (
+                self.alpha_relation_weights.detach().float().std(unbiased=False)
+                if self.alpha_relation_weights is not None
+                and self.alpha_relation_weights.numel() > 1
+                else hidden_states.new_tensor(0.0)
+            )
+            relation_weight_min = (
+                self.alpha_relation_weights.detach().float().min()
+                if self.alpha_relation_weights is not None
+                else hidden_states.new_tensor(1.0)
+            )
+            relation_weight_max = (
+                self.alpha_relation_weights.detach().float().max()
+                if self.alpha_relation_weights is not None
+                else hidden_states.new_tensor(1.0)
+            )
             self.debug_context = {
                 "alpha_prob_mean": alpha_mean,
                 "alpha_prob_std": alpha_std,
                 "G_mean": g_mean,
                 "G_std": g_std,
+                "alpha_relation_weight_mean": relation_weight_mean,
+                "alpha_relation_weight_std": relation_weight_std,
+                "alpha_relation_weight_min": relation_weight_min,
+                "alpha_relation_weight_max": relation_weight_max,
                 "final_delta_norm_mean": final_delta_norm,
                 "org_hidden_norm_mean": org_hidden_norm,
                 "delta_to_org_ratio": delta_to_org_ratio,

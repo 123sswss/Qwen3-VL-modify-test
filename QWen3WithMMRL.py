@@ -69,6 +69,21 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
                 "USE_ALPHA_MEAN_TRAIN_GATE",
                 False,
             ),
+            "FORCE_OPEN_TRAIN_GATE": _cfg_attr(
+                config,
+                "FORCE_OPEN_TRAIN_GATE",
+                False,
+            ),
+            "USE_ALPHA_WEIGHTED_RELATION": _cfg_attr(
+                config,
+                "USE_ALPHA_WEIGHTED_RELATION",
+                False,
+            ),
+            "ALPHA_RELATION_MAX_WEIGHT": _cfg_attr(
+                config,
+                "ALPHA_RELATION_MAX_WEIGHT",
+                2.0,
+            ),
             "ABLATE_DIRECT_LEARNABLE_REP": _cfg_attr(config, "ABLATE_DIRECT_LEARNABLE_REP", False),
             "DIRECT_SHARED_REP": _cfg_attr(config, "DIRECT_SHARED_REP", False),
             "MMRL_QUERY_ARCHITECTURE": _cfg_attr(

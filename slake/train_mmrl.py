@@ -124,6 +124,9 @@ def build_experiment_config(args: argparse.Namespace) -> Dict[str, Any]:
         "ablate_visual_gate": args.ablate_visual_gate,
         "use_alpha_prob_train_gate": args.use_alpha_prob_train_gate,
         "use_alpha_mean_train_gate": args.use_alpha_mean_train_gate,
+        "force_open_train_gate": args.force_open_train_gate,
+        "use_alpha_weighted_relation": args.use_alpha_weighted_relation,
+        "alpha_relation_max_weight": 2.0,
         "ablate_direct_learnable_rep": False,
         "stage3_learning_rate": args.mmrl_lr,
         "stage3_mmrl_learning_rate": args.mmrl_lr,
@@ -181,6 +184,10 @@ def build_train_config(
             "ce_loss",
             "alpha_prob_mean",
             "alpha_prob_std",
+            "alpha_relation_weight_mean",
+            "alpha_relation_weight_std",
+            "alpha_relation_weight_min",
+            "alpha_relation_weight_max",
             "G_mean",
             "G_std",
             "delta_to_org_ratio",
@@ -673,6 +680,22 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--force-open-train-gate",
+        action="store_true",
+        help=(
+            "Keep the Stage 3 training residual fully open while evaluation uses "
+            "the existing hard gate."
+        ),
+    )
+    parser.add_argument(
+        "--use-alpha-weighted-relation",
+        action="store_true",
+        help=(
+            "With a force-open training gate, weight per-image Relation losses by "
+            "bounded inverse Alpha confidence."
+        ),
+    )
+    parser.add_argument(
         "--enable-deepstack-mmrl-residual",
         action="store_true",
         help="Route the complete gated MMRL state into the overlapping DeepStack layer.",
@@ -711,11 +734,18 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--no-save-final", action="store_true")
     args = parser.parse_args()
 
-    if args.use_alpha_prob_train_gate and args.use_alpha_mean_train_gate:
+    active_train_gates = sum((
+        args.use_alpha_prob_train_gate,
+        args.use_alpha_mean_train_gate,
+        args.force_open_train_gate,
+    ))
+    if active_train_gates > 1:
         parser.error(
-            "--use-alpha-prob-train-gate and --use-alpha-mean-train-gate "
+            "Alpha probability, Alpha batch-mean, and force-open training gates "
             "are mutually exclusive"
         )
+    if args.use_alpha_weighted_relation and not args.force_open_train_gate:
+        parser.error("--use-alpha-weighted-relation requires --force-open-train-gate")
 
     if args.sample_limit is not None and args.sample_limit < 1:
         parser.error("--sample-limit must be positive")
@@ -778,7 +808,9 @@ def main() -> int:
     experiment_cfg = build_experiment_config(args)
     train_cfg = build_train_config(args, experiment_cfg)
     train_gate_mode = (
-        "alpha_batch_mean"
+        "open_full_ce"
+        if args.force_open_train_gate
+        else "alpha_batch_mean"
         if args.use_alpha_mean_train_gate
         else "alpha_probability"
         if args.use_alpha_prob_train_gate
@@ -798,6 +830,8 @@ def main() -> int:
         f"same_init_layer_projectors={args.same_init_layer_projectors} "
         f"ablate_visual_gate={args.ablate_visual_gate} "
         f"train_gate_mode={train_gate_mode} "
+        "relation_mode="
+        f"{'alpha_weighted' if args.use_alpha_weighted_relation else 'uniform'} "
         "deepstack_mmrl_residual="
         f"{args.enable_deepstack_mmrl_residual}:scale"
         f"{1.0 if args.enable_deepstack_mmrl_residual else 0.0} "
@@ -906,6 +940,11 @@ def main() -> int:
                 "use_alpha_mean_train_gate": (
                     args.use_alpha_mean_train_gate
                 ),
+                "force_open_train_gate": args.force_open_train_gate,
+                "use_alpha_weighted_relation": (
+                    args.use_alpha_weighted_relation
+                ),
+                "alpha_relation_max_weight": 2.0,
                 "enable_deepstack_mmrl_residual": (
                     args.enable_deepstack_mmrl_residual
                 ),

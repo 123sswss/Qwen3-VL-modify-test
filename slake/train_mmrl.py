@@ -57,12 +57,6 @@ DEFAULT_GENERAL_IMAGE_ROOTS = (
 )
 
 
-QUERY_ARCHITECTURES = (
-    "layer_mlp_post_cross",
-    "shared_direct_post_cross",
-)
-
-
 def seed_everything(seed: int) -> None:
     random.seed(seed)
     np.random.seed(seed)
@@ -108,26 +102,11 @@ def build_experiment_config(args: argparse.Namespace) -> Dict[str, Any]:
         "memory_attention_dim": args.memory_attention_dim,
         "projector_hidden_dim": args.projector_hidden_dim,
         "cross_attention_heads": args.cross_attention_heads,
-        "query_architecture": args.query_architecture,
         "same_init_layer_projectors": args.same_init_layer_projectors,
         "mmrl_relation_loss_weight": args.relation_weight,
-        "mmrl_cross_relation_loss_weight": args.cross_relation_weight,
         "mmrl_relation_max_tokens": args.relation_max_tokens,
         "mmrl_variance_floor_ratio": 0.50,
         "mmrl_variance_floor_weight": 0.10,
-        "enable_deepstack_mmrl_residual": (
-            args.enable_deepstack_mmrl_residual
-        ),
-        "deepstack_mmrl_residual_scale": (
-            1.0 if args.enable_deepstack_mmrl_residual else 0.0
-        ),
-        "ablate_visual_gate": args.ablate_visual_gate,
-        "use_alpha_prob_train_gate": args.use_alpha_prob_train_gate,
-        "use_alpha_mean_train_gate": args.use_alpha_mean_train_gate,
-        "force_open_train_gate": args.force_open_train_gate,
-        "use_alpha_weighted_relation": args.use_alpha_weighted_relation,
-        "alpha_relation_max_weight": 2.0,
-        "ablate_direct_learnable_rep": False,
         "stage3_learning_rate": args.mmrl_lr,
         "stage3_mmrl_learning_rate": args.mmrl_lr,
         "stage3_schedule_epochs": args.stage3_epochs,
@@ -161,7 +140,6 @@ def build_train_config(
         "save_each_epoch": args.stage3_epochs > 1,
         "checkpoint_base_model_path": str(args.model_path),
         "mmrl_relation_loss_weight": args.relation_weight,
-        "mmrl_cross_relation_loss_weight": args.cross_relation_weight,
         "per_device_train_batch_size": args.batch_size,
         "gradient_accumulation_steps": args.gradient_accumulation,
         "dataloader_num_workers": args.dataloader_workers,
@@ -184,17 +162,11 @@ def build_train_config(
             "ce_loss",
             "alpha_prob_mean",
             "alpha_prob_std",
-            "alpha_relation_weight_mean",
-            "alpha_relation_weight_std",
-            "alpha_relation_weight_min",
-            "alpha_relation_weight_max",
             "G_mean",
             "G_std",
             "delta_to_org_ratio",
             "mmrl_delta_to_org_ratio",
             "mmrl_relation_loss_scaled",
-            "mmrl_cross_relation_loss",
-            "mmrl_cross_relation_loss_scaled",
             "dynamic_rep_base_norm_mean",
             "dynamic_rep_cross_delta_norm_mean",
             "dynamic_rep_cross_delta_ratio",
@@ -204,10 +176,6 @@ def build_train_config(
             "text_memory_pooling_grad_norm_mean",
             "cross_attention_grad_norm_mean",
             "cross_attention_output_weight_norm",
-            "deepstack_mmrl_residual_scale",
-            "deepstack_delta_norm_mean",
-            "deepstack_delta_to_org_ratio",
-            "deepstack_residual_layers",
             "temperature",
         ],
         "learning_rate": {
@@ -432,13 +400,14 @@ def audit_model_forward(
     forced_dynamic_audit = False
     if mmrl.last_rep_shape is None or mmrl.last_memory_shape is None:
         forced_dynamic_audit = True
-        original_ablation = model.model.visual.ablate_visual_gate
-        model.model.visual.ablate_visual_gate = True
+        visual = model.model.visual
+        original_training = visual.training
+        visual.train()
         try:
             with torch.no_grad():
                 model(**device_batch)
         finally:
-            model.model.visual.ablate_visual_gate = original_ablation
+            visual.train(original_training)
     rep_shape = mmrl.last_rep_shape
     memory_shape = mmrl.last_memory_shape
     expected_images = int(device_batch["image_grid_thw"].shape[0])
@@ -649,61 +618,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--projector-hidden-dim", type=int, default=1024)
     parser.add_argument("--cross-attention-heads", type=int, default=8)
     parser.add_argument(
-        "--query-architecture",
-        choices=QUERY_ARCHITECTURES,
-        default="layer_mlp_post_cross",
-    )
-    parser.add_argument(
         "--same-init-layer-projectors",
-        action="store_true",
+        action=argparse.BooleanOptionalAction,
+        default=True,
         help="Initialize all independent layer MLPs from the same post-init weights.",
-    )
-    parser.add_argument(
-        "--ablate-visual-gate",
-        action="store_true",
-        help="Skip Stage 1 and keep the MMRL visual gate fully open.",
-    )
-    parser.add_argument(
-        "--use-alpha-prob-train-gate",
-        action="store_true",
-        help=(
-            "Use sigmoid(alpha logit) as the deterministic Stage 3 training gate; "
-            "evaluation keeps the existing hard gate."
-        ),
-    )
-    parser.add_argument(
-        "--use-alpha-mean-train-gate",
-        action="store_true",
-        help=(
-            "Use the batch mean of sigmoid(alpha logit) for every sample during "
-            "Stage 3; evaluation keeps the existing hard gate."
-        ),
-    )
-    parser.add_argument(
-        "--force-open-train-gate",
-        action="store_true",
-        help=(
-            "Keep the Stage 3 training residual fully open while evaluation uses "
-            "the existing hard gate."
-        ),
-    )
-    parser.add_argument(
-        "--use-alpha-weighted-relation",
-        action="store_true",
-        help=(
-            "With a force-open training gate, weight per-image Relation losses by "
-            "bounded inverse Alpha confidence."
-        ),
-    )
-    parser.add_argument(
-        "--enable-deepstack-mmrl-residual",
-        action="store_true",
-        help="Route the complete gated MMRL state into the overlapping DeepStack layer.",
     )
     parser.add_argument("--stage1-lr", type=float, default=1e-4)
     parser.add_argument("--mmrl-lr", type=float, default=6e-5)
     parser.add_argument("--relation-weight", type=float, default=0.050)
-    parser.add_argument("--cross-relation-weight", type=float, default=0.0)
     parser.add_argument("--relation-max-tokens", type=int, default=64)
     parser.add_argument(
         "--scheduler",
@@ -734,19 +656,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--no-save-final", action="store_true")
     args = parser.parse_args()
 
-    active_train_gates = sum((
-        args.use_alpha_prob_train_gate,
-        args.use_alpha_mean_train_gate,
-        args.force_open_train_gate,
-    ))
-    if active_train_gates > 1:
-        parser.error(
-            "Alpha probability, Alpha batch-mean, and force-open training gates "
-            "are mutually exclusive"
-        )
-    if args.use_alpha_weighted_relation and not args.force_open_train_gate:
-        parser.error("--use-alpha-weighted-relation requires --force-open-train-gate")
-
     if args.sample_limit is not None and args.sample_limit < 1:
         parser.error("--sample-limit must be positive")
     if args.max_length < 32:
@@ -775,15 +684,6 @@ def parse_args() -> argparse.Namespace:
         parser.error("--cross-attention-heads must be positive")
     if args.relation_weight < 0.0:
         parser.error("--relation-weight must be non-negative")
-    if args.cross_relation_weight < 0.0:
-        parser.error("--cross-relation-weight must be non-negative")
-    if (
-        args.same_init_layer_projectors
-        and args.query_architecture != "layer_mlp_post_cross"
-    ):
-        parser.error(
-            "--same-init-layer-projectors requires layer_mlp_post_cross"
-        )
     if args.relation_max_tokens < 2:
         parser.error("--relation-max-tokens must be at least 2")
     if args.generation_checks < 0:
@@ -807,36 +707,20 @@ def main() -> int:
     seed_everything(args.seed)
     experiment_cfg = build_experiment_config(args)
     train_cfg = build_train_config(args, experiment_cfg)
-    train_gate_mode = (
-        "open_full_ce"
-        if args.force_open_train_gate
-        else "alpha_batch_mean"
-        if args.use_alpha_mean_train_gate
-        else "alpha_probability"
-        if args.use_alpha_prob_train_gate
-        else "hard_concrete"
-    )
     print(
         "[SLAKE_TRAIN_CONFIG] "
         f"questions={questions_path} images={image_root} "
         f"limit={200 if args.smoke_test else args.sample_limit} "
-        f"stages={'(3,)' if args.ablate_visual_gate else '(1,3)'} "
+        "stages=(1,3) "
         f"rp_space_length={args.rp_space_length} "
         f"memory_query_count={args.memory_query_count} "
         f"memory_attention_dim={args.memory_attention_dim} "
         f"projector_hidden_dim={args.projector_hidden_dim} "
         f"cross_attention_heads={args.cross_attention_heads} "
-        f"query_architecture={args.query_architecture} "
+        "query_architecture=layer_mlp_post_cross "
         f"same_init_layer_projectors={args.same_init_layer_projectors} "
-        f"ablate_visual_gate={args.ablate_visual_gate} "
-        f"train_gate_mode={train_gate_mode} "
-        "relation_mode="
-        f"{'alpha_weighted' if args.use_alpha_weighted_relation else 'uniform'} "
-        "deepstack_mmrl_residual="
-        f"{args.enable_deepstack_mmrl_residual}:scale"
-        f"{1.0 if args.enable_deepstack_mmrl_residual else 0.0} "
+        "train_gate_mode=open_full_ce relation_mode=uniform "
         f"relation={args.relation_weight} "
-        f"cross_relation={args.cross_relation_weight} "
         f"stage1_batch={args.batch_size}x{args.gradient_accumulation} "
         f"stage3_batch={args.stage3_batch_size}x{args.stage3_gradient_accumulation} "
         f"seed={args.seed} data_seed={args.data_seed}"
@@ -852,19 +736,11 @@ def main() -> int:
         questions_path,
         image_root,
     )
-    if args.ablate_visual_gate:
-        stage1_dataset = None
-        stage1_collator = None
-        stage1_counts = {
-            "skipped": True,
-            "reason": "ablate_visual_gate",
-        }
-    else:
-        stage1_dataset, stage1_collator, stage1_counts = build_stage1_dataset(
-            args,
-            processor,
-            dataset,
-        )
+    stage1_dataset, stage1_collator, stage1_counts = build_stage1_dataset(
+        args,
+        processor,
+        dataset,
+    )
     template_report, audit_batch = audit_template_and_collator(
         dataset,
         collator,
@@ -877,26 +753,21 @@ def main() -> int:
         "stage3_dataset": dataset,
         "data_collator": collator,
     }
-    if args.ablate_visual_gate:
-        print("\n========== Skipping SLAKE Stage 1: visual gate ablated ==========")
-        print("[SLAKE_STAGE1_SKIPPED] reason=ablate_visual_gate gate_value=1")
-        stage1_pooling_update = {}
-    else:
-        pooling_before = snapshot_stage1_pooling(model)
-        print("\n========== Running SLAKE Stage 1 ==========")
-        run_stage(
-            stage_id=1,
-            model=model,
-            processor=processor,
-            data_cfg=data_cfg,
-            train_cfg=train_cfg,
-            output_dir=str(output_dir),
-        )
-        stage1_pooling_update = audit_stage1_pooling_update(
-            model,
-            pooling_before,
-            require_update=True,
-        )
+    pooling_before = snapshot_stage1_pooling(model)
+    print("\n========== Running SLAKE Stage 1 ==========")
+    run_stage(
+        stage_id=1,
+        model=model,
+        processor=processor,
+        data_cfg=data_cfg,
+        train_cfg=train_cfg,
+        output_dir=str(output_dir),
+    )
+    stage1_pooling_update = audit_stage1_pooling_update(
+        model,
+        pooling_before,
+        require_update=True,
+    )
     forward_report = audit_model_forward(model, audit_batch)
 
     print("\n========== Running SLAKE Stage 3 ==========")
@@ -929,27 +800,12 @@ def main() -> int:
                 "data_seed": args.data_seed,
                 "dataset": "SLAKE",
                 "language": args.language,
-                "query_architecture": args.query_architecture,
+                "query_architecture": "layer_mlp_post_cross",
                 "same_init_layer_projectors": (
                     args.same_init_layer_projectors
                 ),
-                "ablate_visual_gate": args.ablate_visual_gate,
-                "use_alpha_prob_train_gate": (
-                    args.use_alpha_prob_train_gate
-                ),
-                "use_alpha_mean_train_gate": (
-                    args.use_alpha_mean_train_gate
-                ),
-                "force_open_train_gate": args.force_open_train_gate,
-                "use_alpha_weighted_relation": (
-                    args.use_alpha_weighted_relation
-                ),
-                "alpha_relation_max_weight": 2.0,
-                "enable_deepstack_mmrl_residual": (
-                    args.enable_deepstack_mmrl_residual
-                ),
+                "train_gate_mode": "open_full_ce",
                 "relation_weight": args.relation_weight,
-                "cross_relation_weight": args.cross_relation_weight,
                 "relation_max_tokens": args.relation_max_tokens,
             },
         )
@@ -962,8 +818,7 @@ def main() -> int:
         "image_root": image_root,
         "model_path": model_path,
         "output_dir": output_dir,
-        "stages": [3] if args.ablate_visual_gate else [1, 3],
-        "force_gate_open": args.ablate_visual_gate,
+        "stages": [1, 3],
         "stage1_data": stage1_counts,
         "stage1_pooling_update": stage1_pooling_update,
         "experiment": experiment_cfg,

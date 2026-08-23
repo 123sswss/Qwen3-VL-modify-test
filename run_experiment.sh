@@ -94,88 +94,24 @@ run_slake_checkpoint_eval() {
 }
 
 run_slake() {
-  local experiment_name="${SLAKE_EXPERIMENT_NAME:-slake_mmrl_layer_mlp_relation0050}"
+  local experiment_name="${SLAKE_EXPERIMENT_NAME:-slake_mmrl_layer_mlp_same_init_full_ce_uniform_relation0050}"
   local run_seed="${SLAKE_RUN_SEED:-$SEED}"
-  local architecture="${MMRL_QUERY_ARCHITECTURE:-layer_mlp_post_cross}"
   local epochs="${SLAKE_STAGE3_EPOCHS:-3}"
-  local same_init="${MMRL_SAME_INIT_LAYER_PROJECTORS:-0}"
-  local ablate_visual_gate="${MMRL_ABLATE_VISUAL_GATE:-0}"
-  local use_alpha_prob_train_gate="${MMRL_USE_ALPHA_PROB_TRAIN_GATE:-0}"
-  local use_alpha_mean_train_gate="${MMRL_USE_ALPHA_MEAN_TRAIN_GATE:-0}"
-  local force_open_train_gate="${MMRL_FORCE_OPEN_TRAIN_GATE:-0}"
-  local use_alpha_weighted_relation="${MMRL_USE_ALPHA_WEIGHTED_RELATION:-0}"
-  local enable_deepstack="${MMRL_ENABLE_DEEPSTACK_MMRL_RESIDUAL:-0}"
-  local cross_relation_weight="${MMRL_CROSS_RELATION_LOSS_WEIGHT:-0.0}"
+  local same_init="${MMRL_SAME_INIT_LAYER_PROJECTORS:-1}"
   local extra_args=()
   if [ "$same_init" = "1" ]; then
     extra_args+=(--same-init-layer-projectors)
-  elif [ "$same_init" != "0" ]; then
+  elif [ "$same_init" = "0" ]; then
+    extra_args+=(--no-same-init-layer-projectors)
+  else
     echo "[ERR] MMRL_SAME_INIT_LAYER_PROJECTORS must be 0 or 1" >&2
     return 2
   fi
-  if [ "$ablate_visual_gate" = "1" ]; then
-    extra_args+=(--ablate-visual-gate)
-  elif [ "$ablate_visual_gate" != "0" ]; then
-    echo "[ERR] MMRL_ABLATE_VISUAL_GATE must be 0 or 1" >&2
-    return 2
-  fi
-  if [ "$use_alpha_prob_train_gate" = "1" ]; then
-    extra_args+=(--use-alpha-prob-train-gate)
-  elif [ "$use_alpha_prob_train_gate" != "0" ]; then
-    echo "[ERR] MMRL_USE_ALPHA_PROB_TRAIN_GATE must be 0 or 1" >&2
-    return 2
-  fi
-  if [ "$use_alpha_mean_train_gate" = "1" ]; then
-    extra_args+=(--use-alpha-mean-train-gate)
-  elif [ "$use_alpha_mean_train_gate" != "0" ]; then
-    echo "[ERR] MMRL_USE_ALPHA_MEAN_TRAIN_GATE must be 0 or 1" >&2
-    return 2
-  fi
-  if [ "$force_open_train_gate" = "1" ]; then
-    extra_args+=(--force-open-train-gate)
-  elif [ "$force_open_train_gate" != "0" ]; then
-    echo "[ERR] MMRL_FORCE_OPEN_TRAIN_GATE must be 0 or 1" >&2
-    return 2
-  fi
-  if [ "$use_alpha_weighted_relation" = "1" ]; then
-    extra_args+=(--use-alpha-weighted-relation)
-  elif [ "$use_alpha_weighted_relation" != "0" ]; then
-    echo "[ERR] MMRL_USE_ALPHA_WEIGHTED_RELATION must be 0 or 1" >&2
-    return 2
-  fi
-  local active_train_gates=$((
-    use_alpha_prob_train_gate + use_alpha_mean_train_gate + force_open_train_gate
-  ))
-  if [ "$active_train_gates" -gt 1 ]; then
-    echo "[ERR] Alpha probability, Alpha batch-mean, and force-open gates are mutually exclusive" >&2
-    return 2
-  fi
-  if [ "$use_alpha_weighted_relation" = "1" ] && [ "$force_open_train_gate" != "1" ]; then
-    echo "[ERR] Alpha-weighted Relation requires the force-open training gate" >&2
-    return 2
-  fi
-  if [ "$enable_deepstack" = "1" ]; then
-    extra_args+=(--enable-deepstack-mmrl-residual)
-  elif [ "$enable_deepstack" != "0" ]; then
-    echo "[ERR] MMRL_ENABLE_DEEPSTACK_MMRL_RESIDUAL must be 0 or 1" >&2
-    return 2
-  fi
+
   local output_dir
   output_dir="$(available_output_dir "$SLAKE_OUTPUT_ROOT" "${experiment_name}_seed${run_seed}_${RUN_DATE}")"
   mkdir -p "$output_dir/eval"
-  local train_gate_mode="hard_concrete"
-  if [ "$use_alpha_prob_train_gate" = "1" ]; then
-    train_gate_mode="alpha_probability"
-  elif [ "$use_alpha_mean_train_gate" = "1" ]; then
-    train_gate_mode="alpha_batch_mean"
-  elif [ "$force_open_train_gate" = "1" ]; then
-    train_gate_mode="open_full_ce"
-  fi
-  local relation_mode="uniform"
-  if [ "$use_alpha_weighted_relation" = "1" ]; then
-    relation_mode="alpha_weighted:max2.0"
-  fi
-  echo "[SLAKE] experiment=$experiment_name seed=$run_seed architecture=$architecture same_init=$same_init ablate_visual_gate=$ablate_visual_gate train_gate=$train_gate_mode relation_mode=$relation_mode deepstack=$enable_deepstack:scale1.0 relation=${MMRL_RELATION_LOSS_WEIGHT:-0.05} cross_relation=$cross_relation_weight output=$output_dir"
+  echo "[SLAKE] experiment=$experiment_name seed=$run_seed same_init=$same_init train_gate=open_full_ce relation=${MMRL_RELATION_LOSS_WEIGHT:-0.05} output=$output_dir"
   (
     cd "$ROOT_DIR" || exit 1
     python slake/train_mmrl.py \
@@ -199,11 +135,9 @@ run_slake() {
       --memory-attention-dim "${MMRL_MEMORY_ATTENTION_DIM:-128}" \
       --projector-hidden-dim "${MMRL_PROJECTOR_HIDDEN_DIM:-1024}" \
       --cross-attention-heads "${MMRL_CROSS_ATTENTION_HEADS:-8}" \
-      --query-architecture "$architecture" \
       "${extra_args[@]}" \
       --mmrl-lr "${SLAKE_MMRL_LR:-6e-5}" \
       --relation-weight "${MMRL_RELATION_LOSS_WEIGHT:-0.05}" \
-      --cross-relation-weight "$cross_relation_weight" \
       --relation-max-tokens "${MMRL_RELATION_MAX_TOKENS:-64}" \
       --scheduler constant_with_warmup \
       --warmup-ratio 0.10 \
@@ -216,109 +150,10 @@ run_slake() {
     "$output_dir/eval.log"
 }
 
-run_repro_seeds() {
-  local architecture="$1"
-  local experiment_name="$2"
-  local seed
-  for seed in 44 45 46; do
-    SLAKE_RUN_SEED="$seed" \
-    SLAKE_EXPERIMENT_NAME="$experiment_name" \
-    MMRL_QUERY_ARCHITECTURE="$architecture" \
-      run_slake || return 1
-  done
-}
-
-run_final_serial3() {
-  run_final_seed \
-    "slake_mmrl_layer_mlp_same_init_relation0050" 1 0 0.0 || return 1
-  run_final_seed \
-    "slake_mmrl_layer_mlp_deepstack_relation0050" 0 1 0.0 || return 1
-  run_final_seed \
-    "slake_mmrl_layer_mlp_cross_relation0010_relation0050" 0 0 0.01 || return 1
-}
-
-run_final_seed() {
-  local experiment_name="$1"
-  local same_init="$2"
-  local enable_deepstack="$3"
-  local cross_relation_weight="$4"
-  local run_seed="${5:-44}"
-  local ablate_visual_gate="${6:-0}"
-  local use_alpha_prob_train_gate="${7:-0}"
-  local use_alpha_mean_train_gate="${8:-0}"
-  local force_open_train_gate="${9:-0}"
-  local use_alpha_weighted_relation="${10:-0}"
-  SLAKE_EXPERIMENT_NAME="$experiment_name" \
-  SLAKE_RUN_SEED="$run_seed" \
-  SLAKE_STAGE3_EPOCHS=3 \
-  SLAKE_MMRL_LR=6e-5 \
-  MMRL_QUERY_ARCHITECTURE="layer_mlp_post_cross" \
-  MMRL_RP_SPACE_LENGTH=40 \
-  MMRL_MEMORY_QUERY_COUNT=128 \
-  MMRL_MEMORY_ATTENTION_DIM=128 \
-  MMRL_PROJECTOR_HIDDEN_DIM=1024 \
-  MMRL_CROSS_ATTENTION_HEADS=8 \
-  MMRL_RELATION_LOSS_WEIGHT=0.05 \
-  MMRL_RELATION_MAX_TOKENS=64 \
-  MMRL_SAME_INIT_LAYER_PROJECTORS="$same_init" \
-  MMRL_ABLATE_VISUAL_GATE="$ablate_visual_gate" \
-  MMRL_USE_ALPHA_PROB_TRAIN_GATE="$use_alpha_prob_train_gate" \
-  MMRL_USE_ALPHA_MEAN_TRAIN_GATE="$use_alpha_mean_train_gate" \
-  MMRL_FORCE_OPEN_TRAIN_GATE="$force_open_train_gate" \
-  MMRL_USE_ALPHA_WEIGHTED_RELATION="$use_alpha_weighted_relation" \
-  MMRL_ENABLE_DEEPSTACK_MMRL_RESIDUAL="$enable_deepstack" \
-  MMRL_CROSS_RELATION_LOSS_WEIGHT="$cross_relation_weight" \
-    run_slake
-}
-
-run_same_init_repro_seeds4() {
+run_final_seeds4() {
   local seed
   for seed in 44 45 46 47; do
-    run_final_seed \
-      "slake_mmrl_layer_mlp_same_init_relation0050_repro4" \
-      1 0 0.0 "$seed" || return 1
-  done
-}
-
-run_same_init_gate_pair_seeds3() {
-  local seed
-  for seed in 45 46 47; do
-    echo "[GATE_PAIR] seed=$seed mode=hard_concrete"
-    run_final_seed \
-      "slake_mmrl_layer_mlp_same_init_hard_concrete_gate_relation0050_repro3" \
-      1 0 0.0 "$seed" 0 0 0 || return 1
-
-    echo "[GATE_PAIR] seed=$seed mode=alpha_probability"
-    run_final_seed \
-      "slake_mmrl_layer_mlp_same_init_alpha_prob_gate_relation0050_repro3" \
-      1 0 0.0 "$seed" 0 1 0 || return 1
-  done
-}
-
-run_alpha_relation_seed44_pair() {
-  echo "[ALPHA_RELATION_PAIR] seed=44 mode=full_ce_uniform_relation"
-  run_final_seed \
-    "slake_mmrl_layer_mlp_same_init_full_ce_uniform_relation0050" \
-    1 0 0.0 44 0 0 0 1 0 || return 1
-
-  echo "[ALPHA_RELATION_PAIR] seed=44 mode=full_ce_alpha_weighted_relation"
-  run_final_seed \
-    "slake_mmrl_layer_mlp_same_init_full_ce_alpha_weighted_relation0050" \
-    1 0 0.0 44 0 0 0 1 1 || return 1
-}
-
-run_alpha_relation_pair_seeds3() {
-  local seed
-  for seed in 45 46 47; do
-    echo "[ALPHA_RELATION_PAIR] seed=$seed mode=full_ce_uniform_relation"
-    run_final_seed \
-      "slake_mmrl_layer_mlp_same_init_full_ce_uniform_relation0050_repro3" \
-      1 0 0.0 "$seed" 0 0 0 1 0 || return 1
-
-    echo "[ALPHA_RELATION_PAIR] seed=$seed mode=full_ce_alpha_weighted_relation"
-    run_final_seed \
-      "slake_mmrl_layer_mlp_same_init_full_ce_alpha_weighted_relation0050_repro3" \
-      1 0 0.0 "$seed" 0 0 0 1 1 || return 1
+    SLAKE_RUN_SEED="$seed" run_slake || return 1
   done
 }
 
@@ -330,83 +165,15 @@ case "$RUN_TARGET" in
   slake)
     run_slake || failures=$((failures + 1))
     ;;
-  slake_shared_direct)
-    SLAKE_EXPERIMENT_NAME="slake_mmrl_shared_direct_relation0050" \
-    MMRL_QUERY_ARCHITECTURE="shared_direct_post_cross" \
-      run_slake || failures=$((failures + 1))
-    ;;
-  slake_current_control)
-    run_final_seed \
-      "slake_mmrl_layer_mlp_current_control_relation0050" 0 0 0.0 \
-      || failures=$((failures + 1))
-    ;;
-  slake_same_init)
-    run_final_seed \
-      "slake_mmrl_layer_mlp_same_init_relation0050" 1 0 0.0 \
-      || failures=$((failures + 1))
-    ;;
-  slake_deepstack)
-    run_final_seed \
-      "slake_mmrl_layer_mlp_deepstack_relation0050" 0 1 0.0 \
-      || failures=$((failures + 1))
-    ;;
-  slake_cross_relation)
-    run_final_seed \
-      "slake_mmrl_layer_mlp_cross_relation0010_relation0050" 0 0 0.01 \
-      || failures=$((failures + 1))
-    ;;
-  slake_same_init_repro_seeds4)
-    run_same_init_repro_seeds4 || failures=$((failures + 1))
-    ;;
-  slake_same_init_no_gate)
-    run_final_seed \
-      "slake_mmrl_layer_mlp_same_init_no_gate_relation0050" \
-      1 0 0.0 44 1 || failures=$((failures + 1))
-    ;;
-  slake_same_init_alpha_prob_gate)
-    run_final_seed \
-      "slake_mmrl_layer_mlp_same_init_alpha_prob_gate_relation0050" \
-      1 0 0.0 44 0 1 || failures=$((failures + 1))
-    ;;
-  slake_same_init_alpha_mean_gate)
-    run_final_seed \
-      "slake_mmrl_layer_mlp_same_init_alpha_mean_gate_relation0050" \
-      1 0 0.0 44 0 0 1 || failures=$((failures + 1))
-    ;;
-  slake_same_init_gate_pair_seeds3)
-    run_same_init_gate_pair_seeds3 || failures=$((failures + 1))
-    ;;
-  slake_alpha_relation_seed44_pair)
-    run_alpha_relation_seed44_pair || failures=$((failures + 1))
-    ;;
-  slake_alpha_relation_pair_seeds3)
-    run_alpha_relation_pair_seeds3 || failures=$((failures + 1))
-    ;;
-  slake_final_serial3)
-    run_final_serial3 || failures=$((failures + 1))
-    ;;
-  slake_layer_mlp_repro_seeds3)
-    run_repro_seeds \
-      "layer_mlp_post_cross" \
-      "slake_mmrl_layer_mlp_full_ca_relation0050_repro3" \
-      || failures=$((failures + 1))
-    ;;
-  slake_shared_direct_repro_seeds3)
-    run_repro_seeds \
-      "shared_direct_post_cross" \
-      "slake_mmrl_shared_direct_relation0050_repro3" \
-      || failures=$((failures + 1))
-    ;;
-  train_shared_direct)
-    MMRL_EXPERIMENT_NAME="dynamic_rep_shared_direct_v1" \
-      run_train_dataset || failures=$((failures + 1))
+  slake_final_seeds4)
+    run_final_seeds4 || failures=$((failures + 1))
     ;;
   all)
     run_train_dataset || failures=$((failures + 1))
     run_slake || failures=$((failures + 1))
     ;;
   *)
-    echo "[ERR] 未知目标: $RUN_TARGET，可选 train、slake、slake_shared_direct、slake_current_control、slake_same_init、slake_deepstack、slake_cross_relation、slake_same_init_repro_seeds4、slake_same_init_no_gate、slake_same_init_alpha_prob_gate、slake_same_init_alpha_mean_gate、slake_same_init_gate_pair_seeds3、slake_alpha_relation_seed44_pair、slake_alpha_relation_pair_seeds3、slake_final_serial3、slake_layer_mlp_repro_seeds3、slake_shared_direct_repro_seeds3、train_shared_direct、all。" >&2
+    echo "[ERR] 未知目标: $RUN_TARGET，可选 train、slake、slake_final_seeds4、all。" >&2
     exit 2
     ;;
 esac

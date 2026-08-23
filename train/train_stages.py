@@ -67,10 +67,6 @@ def _build_experiment_context(train_cfg, output_dir, stage_id):
                 "mmrl_relation_loss_weight",
                 experiment_cfg.get("mmrl_relation_loss_weight"),
             ),
-            "mmrl_cross_relation_loss_weight": train_cfg.get(
-                "mmrl_cross_relation_loss_weight",
-                experiment_cfg.get("mmrl_cross_relation_loss_weight"),
-            ),
             "mmrl_relation_max_tokens": train_cfg.get(
                 "mmrl_relation_max_tokens",
                 experiment_cfg.get("mmrl_relation_max_tokens"),
@@ -82,14 +78,6 @@ def _build_experiment_context(train_cfg, output_dir, stage_id):
             "mmrl_variance_floor_weight": train_cfg.get(
                 "mmrl_variance_floor_weight",
                 experiment_cfg.get("mmrl_variance_floor_weight"),
-            ),
-            "enable_deepstack_mmrl_residual": train_cfg.get(
-                "enable_deepstack_mmrl_residual",
-                experiment_cfg.get("enable_deepstack_mmrl_residual"),
-            ),
-            "deepstack_mmrl_residual_scale": train_cfg.get(
-                "deepstack_mmrl_residual_scale",
-                experiment_cfg.get("deepstack_mmrl_residual_scale"),
             ),
             "diag_every_steps": train_cfg.get("diag_every_steps"),
             "grad_spike_ema_alpha": train_cfg.get("grad_spike_ema_alpha"),
@@ -638,7 +626,6 @@ class Qwen3VLMMRLForStages(Qwen3VLForConditionalGeneration):
         self.current_stage_progress = 0.0
         self.enable_alpha_guide_loss = False
         self.mmrl_relation_loss_weight = 0.0
-        self.mmrl_cross_relation_loss_weight = 0.0
 
         self.temperature_override = None
 
@@ -865,31 +852,10 @@ class Qwen3VLMMRLForStages(Qwen3VLForConditionalGeneration):
         else:
             mmrl_relation_loss = mmrl_relation_loss.to(device=input_ids.device, dtype=ce_loss.dtype)
         scaled_mmrl_relation_loss = mmrl_relation_loss * float(self.mmrl_relation_loss_weight)
-        mmrl_cross_relation_loss = getattr(
-            self.model.visual,
-            "mmrl_cross_relation_loss",
-            torch.tensor(0.0, device=input_ids.device),
-        )
-        if not torch.is_tensor(mmrl_cross_relation_loss):
-            mmrl_cross_relation_loss = torch.tensor(
-                mmrl_cross_relation_loss,
-                device=input_ids.device,
-                dtype=ce_loss.dtype,
-            )
-        else:
-            mmrl_cross_relation_loss = mmrl_cross_relation_loss.to(
-                device=input_ids.device,
-                dtype=ce_loss.dtype,
-            )
-        scaled_mmrl_cross_relation_loss = (
-            mmrl_cross_relation_loss
-            * float(self.mmrl_cross_relation_loss_weight)
-        )
         outputs.loss = (
             self.ce_loss_weight * ce_loss
             + alpha_guide_loss
             + scaled_mmrl_relation_loss
-            + scaled_mmrl_cross_relation_loss
         )
 
         # ---- cache metrics for external logger ----
@@ -910,12 +876,6 @@ class Qwen3VLMMRLForStages(Qwen3VLForConditionalGeneration):
                 "alpha_guide_loss": alpha_guide_loss.detach(),
                 "mmrl_relation_loss": mmrl_relation_loss.detach(),
                 "mmrl_relation_loss_scaled": scaled_mmrl_relation_loss.detach(),
-                "mmrl_cross_relation_loss": (
-                    mmrl_cross_relation_loss.detach()
-                ),
-                "mmrl_cross_relation_loss_scaled": (
-                    scaled_mmrl_cross_relation_loss.detach()
-                ),
                 "alpha_mae": alpha_mae.detach(),
                 "temperature": torch.tensor(float(self.temperature_override) if self.temperature_override is not None else float("nan"), device=input_ids.device),
                 "stage_progress": torch.tensor(float(getattr(self, "current_stage_progress", 0.0)), device=input_ids.device),
@@ -985,71 +945,17 @@ def build_model_and_processor(model_path, experiment_cfg=None):
         "MMRL_CROSS_ATTENTION_HEADS",
         str(experiment_cfg.get("cross_attention_heads", 8)),
     ))
-    config.ABLATE_VISUAL_GATE = bool(experiment_cfg.get(
-        "ablate_visual_gate",
-        os.getenv("MMRL_ABLATE_VISUAL_GATE", "0") == "1"
-    ))
-    config.USE_ALPHA_PROB_TRAIN_GATE = bool(experiment_cfg.get(
-        "use_alpha_prob_train_gate",
-        os.getenv("MMRL_USE_ALPHA_PROB_TRAIN_GATE", "0") == "1",
-    ))
-    config.USE_ALPHA_MEAN_TRAIN_GATE = bool(experiment_cfg.get(
-        "use_alpha_mean_train_gate",
-        os.getenv("MMRL_USE_ALPHA_MEAN_TRAIN_GATE", "0") == "1",
-    ))
-    config.FORCE_OPEN_TRAIN_GATE = bool(experiment_cfg.get(
-        "force_open_train_gate",
-        os.getenv("MMRL_FORCE_OPEN_TRAIN_GATE", "0") == "1",
-    ))
-    config.USE_ALPHA_WEIGHTED_RELATION = bool(experiment_cfg.get(
-        "use_alpha_weighted_relation",
-        os.getenv("MMRL_USE_ALPHA_WEIGHTED_RELATION", "0") == "1",
-    ))
-    config.ALPHA_RELATION_MAX_WEIGHT = float(experiment_cfg.get(
-        "alpha_relation_max_weight",
-        os.getenv("MMRL_ALPHA_RELATION_MAX_WEIGHT", "2.0"),
-    ))
-    active_train_gates = sum((
-        config.USE_ALPHA_PROB_TRAIN_GATE,
-        config.USE_ALPHA_MEAN_TRAIN_GATE,
-        config.FORCE_OPEN_TRAIN_GATE,
-    ))
-    if active_train_gates > 1:
-        raise ValueError(
-            "Alpha probability, Alpha batch-mean, and force-open training gates "
-            "are mutually exclusive"
-        )
-    if config.USE_ALPHA_WEIGHTED_RELATION and not config.FORCE_OPEN_TRAIN_GATE:
-        raise ValueError("Alpha-weighted Relation requires the force-open training gate")
-    config.ABLATE_DIRECT_LEARNABLE_REP = bool(experiment_cfg.get(
-        "ablate_direct_learnable_rep",
-        os.getenv("MMRL_ABLATE_DIRECT_LEARNABLE_REP", "0") == "1"
-    ))
-    config.MMRL_QUERY_ARCHITECTURE = os.getenv(
-        "MMRL_QUERY_ARCHITECTURE",
-        str(experiment_cfg.get(
-            "query_architecture",
-            "layer_mlp_post_cross",
-        )),
-    )
-    config.DIRECT_SHARED_REP = (
-        config.MMRL_QUERY_ARCHITECTURE == "shared_direct_post_cross"
-    )
     config.MMRL_SAME_INIT_LAYER_PROJECTORS = os.getenv(
         "MMRL_SAME_INIT_LAYER_PROJECTORS",
         (
             "1"
-            if experiment_cfg.get("same_init_layer_projectors", False)
+            if experiment_cfg.get("same_init_layer_projectors", True)
             else "0"
         ),
     ) == "1"
     config.MMRL_RELATION_LOSS_WEIGHT = float(experiment_cfg.get(
         "mmrl_relation_loss_weight",
         os.getenv("MMRL_RELATION_LOSS_WEIGHT", "0.0"),
-    ))
-    config.MMRL_CROSS_RELATION_LOSS_WEIGHT = float(experiment_cfg.get(
-        "mmrl_cross_relation_loss_weight",
-        os.getenv("MMRL_CROSS_RELATION_LOSS_WEIGHT", "0.0"),
     ))
     config.MMRL_RELATION_MAX_TOKENS = int(experiment_cfg.get(
         "mmrl_relation_max_tokens",
@@ -1062,14 +968,6 @@ def build_model_and_processor(model_path, experiment_cfg=None):
     config.MMRL_VARIANCE_FLOOR_WEIGHT = float(experiment_cfg.get(
         "mmrl_variance_floor_weight",
         os.getenv("MMRL_VARIANCE_FLOOR_WEIGHT", "0.10"),
-    ))
-    config.ENABLE_DEEPSTACK_MMRL_RESIDUAL = os.getenv(
-        "MMRL_ENABLE_DEEPSTACK_MMRL_RESIDUAL",
-        "1" if experiment_cfg.get("enable_deepstack_mmrl_residual", False) else "0",
-    ) == "1"
-    config.DEEPSTACK_MMRL_RESIDUAL_SCALE = float(os.getenv(
-        "MMRL_DEEPSTACK_MMRL_RESIDUAL_SCALE",
-        str(experiment_cfg.get("deepstack_mmrl_residual_scale", 0.0)),
     ))
     tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
     image_processor = AutoImageProcessor.from_pretrained(model_path, trust_remote_code=True)
@@ -1087,10 +985,6 @@ def build_model_and_processor(model_path, experiment_cfg=None):
             config.MMRL_RELATION_MAX_TOKENS,
             visual.mmrl_relation_max_tokens,
         ),
-        "MMRL_CROSS_RELATION_LOSS_WEIGHT": (
-            config.MMRL_CROSS_RELATION_LOSS_WEIGHT,
-            visual.mmrl_cross_relation_loss_weight,
-        ),
         "MMRL_SAME_INIT_LAYER_PROJECTORS": (
             config.MMRL_SAME_INIT_LAYER_PROJECTORS,
             mmrl.same_init_layer_projectors,
@@ -1102,26 +996,6 @@ def build_model_and_processor(model_path, experiment_cfg=None):
         "MMRL_VARIANCE_FLOOR_WEIGHT": (
             config.MMRL_VARIANCE_FLOOR_WEIGHT,
             visual.mmrl_variance_floor_weight,
-        ),
-        "USE_ALPHA_PROB_TRAIN_GATE": (
-            config.USE_ALPHA_PROB_TRAIN_GATE,
-            visual.use_alpha_prob_train_gate,
-        ),
-        "USE_ALPHA_MEAN_TRAIN_GATE": (
-            config.USE_ALPHA_MEAN_TRAIN_GATE,
-            visual.use_alpha_mean_train_gate,
-        ),
-        "FORCE_OPEN_TRAIN_GATE": (
-            config.FORCE_OPEN_TRAIN_GATE,
-            visual.force_open_train_gate,
-        ),
-        "USE_ALPHA_WEIGHTED_RELATION": (
-            config.USE_ALPHA_WEIGHTED_RELATION,
-            visual.use_alpha_weighted_relation,
-        ),
-        "ALPHA_RELATION_MAX_WEIGHT": (
-            config.ALPHA_RELATION_MAX_WEIGHT,
-            visual.alpha_relation_max_weight,
         ),
         "MMRL_MEMORY_QUERY_COUNT": (
             config.MMRL_MEMORY_QUERY_COUNT,
@@ -1135,10 +1009,6 @@ def build_model_and_processor(model_path, experiment_cfg=None):
             config.MMRL_PROJECTOR_HIDDEN_DIM,
             mmrl.projector_hidden_dim,
         ),
-        "DIRECT_SHARED_REP": (
-            config.DIRECT_SHARED_REP,
-            mmrl.use_direct_shared_rep,
-        ),
         "MMRL_CROSS_ATTENTION_HEADS": (
             config.MMRL_CROSS_ATTENTION_HEADS,
             mmrl.cross_attention.num_heads,
@@ -1149,29 +1019,16 @@ def build_model_and_processor(model_path, experiment_cfg=None):
             raise RuntimeError(
                 f"{name} config propagation failed: requested={requested} actual={actual}"
             )
-    train_gate_mode = (
-        "open_full_ce"
-        if config.FORCE_OPEN_TRAIN_GATE
-        else "alpha_batch_mean"
-        if config.USE_ALPHA_MEAN_TRAIN_GATE
-        else "alpha_probability"
-        if config.USE_ALPHA_PROB_TRAIN_GATE
-        else "hard_concrete"
-    )
     print(
         "[MMRL_STRUCTURE_AUDIT] "
-        "query_parameterization="
-        f"{'shared_direct' if config.DIRECT_SHARED_REP else 'layer_mlp'} "
+        "query_parameterization=layer_mlp "
         f"rp_space_length={config.RP_SPACE_LENGTH} "
         f"memory_query_count={config.MMRL_MEMORY_QUERY_COUNT} "
         f"memory_attention_dim={config.MMRL_MEMORY_ATTENTION_DIM} "
         f"projector_hidden_dim={config.MMRL_PROJECTOR_HIDDEN_DIM} "
         f"cross_attention_heads={config.MMRL_CROSS_ATTENTION_HEADS} "
-        f"direct_shared_rep={config.DIRECT_SHARED_REP} "
         f"same_init_layer_projectors={config.MMRL_SAME_INIT_LAYER_PROJECTORS} "
-        f"train_gate_mode={train_gate_mode} "
-        "relation_mode="
-        f"{'alpha_weighted' if config.USE_ALPHA_WEIGHTED_RELATION else 'uniform'} "
+        "train_gate_mode=open_full_ce relation_mode=uniform "
         "memory_tokens_per_image="
         f"{2 * config.MMRL_MEMORY_QUERY_COUNT}"
     )
@@ -1181,10 +1038,6 @@ def build_model_and_processor(model_path, experiment_cfg=None):
         "layer_projectors": sum(
             parameter.numel()
             for parameter in model.model.MMRL.v_r_token_projector.parameters()
-        ),
-        "direct_rep": sum(
-            parameter.numel()
-            for parameter in model.model.MMRL.direct_v_tokens.parameters()
         ),
         "visual_memory_pooling": sum(
             parameter.numel()
@@ -1264,21 +1117,14 @@ def build_model_and_processor(model_path, experiment_cfg=None):
         image_processor=image_processor, tokenizer=tokenizer, cfg=cfg
     )
     print(
-        f"ablate_visual_gate={config.ABLATE_VISUAL_GATE} "
-        f"ablate_direct_learnable_rep={config.ABLATE_DIRECT_LEARNABLE_REP} "
-        f"direct_shared_rep={config.DIRECT_SHARED_REP} "
         f"rp_space_length={config.RP_SPACE_LENGTH} "
         f"memory_query_count={config.MMRL_MEMORY_QUERY_COUNT} "
         f"memory_attention_dim={config.MMRL_MEMORY_ATTENTION_DIM} "
         f"projector_hidden_dim={config.MMRL_PROJECTOR_HIDDEN_DIM} "
         f"cross_attention_heads={config.MMRL_CROSS_ATTENTION_HEADS} "
         f"mmrl_relation_loss_weight={config.MMRL_RELATION_LOSS_WEIGHT} "
-        "mmrl_cross_relation_loss_weight="
-        f"{config.MMRL_CROSS_RELATION_LOSS_WEIGHT} "
         f"mmrl_variance_floor_ratio={config.MMRL_VARIANCE_FLOOR_RATIO} "
-        f"mmrl_variance_floor_weight={config.MMRL_VARIANCE_FLOOR_WEIGHT} "
-        f"enable_deepstack_mmrl_residual={config.ENABLE_DEEPSTACK_MMRL_RESIDUAL} "
-        f"deepstack_mmrl_residual_scale={config.DEEPSTACK_MMRL_RESIDUAL_SCALE}"
+        f"mmrl_variance_floor_weight={config.MMRL_VARIANCE_FLOOR_WEIGHT}"
     )
     print("Processor built.")
     return model, processor
@@ -1738,19 +1584,11 @@ def run_stage3_full(model, processor, data_cfg, train_cfg, output_dir):
         experiment_cfg.get("mmrl_relation_loss_weight", 0.0),
     ))
     model.model.visual.mmrl_relation_loss_weight = model.mmrl_relation_loss_weight
-    model.mmrl_cross_relation_loss_weight = float(train_cfg.get(
-        "mmrl_cross_relation_loss_weight",
-        experiment_cfg.get("mmrl_cross_relation_loss_weight", 0.0),
-    ))
-    model.model.visual.mmrl_cross_relation_loss_weight = (
-        model.mmrl_cross_relation_loss_weight
-    )
     stage3_ce_only = (
         model.ce_loss_weight == 1.0
         and not model.enable_alpha_guide_loss
         and model.alpha_loss_weight == 0.0
         and model.mmrl_relation_loss_weight == 0.0
-        and model.mmrl_cross_relation_loss_weight == 0.0
     )
     print(
         "[STAGE3_LOSS_AUDIT] "
@@ -1758,13 +1596,11 @@ def run_stage3_full(model, processor, data_cfg, train_cfg, output_dir):
         f"alpha_enabled={model.enable_alpha_guide_loss} "
         f"alpha_weight={model.alpha_loss_weight} "
         f"relation_weight={model.mmrl_relation_loss_weight} "
-        f"cross_relation_weight={model.mmrl_cross_relation_loss_weight} "
         f"ce_only={stage3_ce_only}"
     )
     print(
         "[MMRL_RELATION] "
         f"weight={model.mmrl_relation_loss_weight} "
-        f"cross_weight={model.mmrl_cross_relation_loss_weight} "
         f"max_tokens={model.model.visual.mmrl_relation_max_tokens} "
         f"variance_floor_ratio={model.model.visual.mmrl_variance_floor_ratio} "
         f"variance_floor_weight={model.model.visual.mmrl_variance_floor_weight}"

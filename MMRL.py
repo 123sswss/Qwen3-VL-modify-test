@@ -123,37 +123,13 @@ class ResidualCrossAttention(nn.Module):
 
 
 class MMRL(nn.Module):
-    QUERY_ARCHITECTURES = {
-        "layer_mlp_post_cross",
-        "shared_direct_post_cross",
-    }
-
     def __init__(self, config):
         super().__init__()
         cfg = SimpleNamespace(**config.mmrl_config)
-        default_architecture = (
-            "shared_direct_post_cross"
-            if bool(getattr(cfg, "DIRECT_SHARED_REP", False))
-            else "layer_mlp_post_cross"
-        )
-        self.query_architecture = str(
-            getattr(cfg, "MMRL_QUERY_ARCHITECTURE", default_architecture)
-        )
-        if self.query_architecture not in self.QUERY_ARCHITECTURES:
-            raise ValueError(
-                "Unsupported MMRL_QUERY_ARCHITECTURE="
-                f"{self.query_architecture!r}; choices={sorted(self.QUERY_ARCHITECTURES)}"
-            )
-        self.use_direct_shared_rep = (
-            self.query_architecture == "shared_direct_post_cross"
-        )
+        self.query_architecture = "layer_mlp_post_cross"
         self.same_init_layer_projectors = bool(
-            getattr(cfg, "MMRL_SAME_INIT_LAYER_PROJECTORS", False)
+            getattr(cfg, "MMRL_SAME_INIT_LAYER_PROJECTORS", True)
         )
-        if self.same_init_layer_projectors and self.use_direct_shared_rep:
-            raise ValueError(
-                "same layer-projector initialization requires layer_mlp_post_cross"
-            )
         self.insert_layer_count = len(cfg.INSERT_LAYER)
         self.rp_space_length = int(cfg.RP_SPACE_LENGTH)
         self.rp_space_dim = int(cfg.RP_SPACE_DIM)
@@ -178,27 +154,18 @@ class MMRL(nn.Module):
         if invalid:
             raise ValueError(f"MMRL dimensions must be positive: {invalid}")
 
-        shared_rep_dim = (
-            self.vision_token_dim
-            if self.use_direct_shared_rep
-            else self.rp_space_dim
-        )
         self.shared_represent_space = nn.Parameter(
-            torch.empty(self.rp_space_length, shared_rep_dim)
+            torch.empty(self.rp_space_length, self.rp_space_dim)
         )
         nn.init.normal_(self.shared_represent_space, std=0.02)
-        if self.use_direct_shared_rep:
-            self.v_r_token_projector = nn.ModuleList()
-        else:
-            self.v_r_token_projector = nn.ModuleList([
-                nn.Sequential(
-                    nn.Linear(self.rp_space_dim, self.projector_hidden_dim),
-                    nn.GELU(),
-                    nn.Linear(self.projector_hidden_dim, self.vision_token_dim),
-                )
-                for _ in range(self.insert_layer_count)
-            ])
-        self.direct_v_tokens = nn.ParameterList()
+        self.v_r_token_projector = nn.ModuleList([
+            nn.Sequential(
+                nn.Linear(self.rp_space_dim, self.projector_hidden_dim),
+                nn.GELU(),
+                nn.Linear(self.projector_hidden_dim, self.vision_token_dim),
+            )
+            for _ in range(self.insert_layer_count)
+        ])
 
         self.layer_embeddings = nn.Parameter(
             torch.empty(self.insert_layer_count, 1, self.vision_token_dim)
@@ -274,15 +241,10 @@ class MMRL(nn.Module):
         )
 
     def _compute_base_queries(self):
-        if self.use_direct_shared_rep:
-            projected = self.shared_represent_space.unsqueeze(0).expand(
-                self.insert_layer_count, -1, -1
-            )
-        else:
-            projected = torch.stack([
-                projector(self.shared_represent_space)
-                for projector in self.v_r_token_projector
-            ], dim=0)
+        projected = torch.stack([
+            projector(self.shared_represent_space)
+            for projector in self.v_r_token_projector
+        ], dim=0)
         return projected + self.layer_embeddings
 
     def _get_base_queries(self):

@@ -58,54 +58,14 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
             "stretching_length": _cfg_attr(config, "stretching_length", cfg.stretching_length),
             "gating_temperature": _cfg_attr(config, "gating_temperature", cfg.gating_temperature),
             "insert_method": _cfg_attr(config, "INSERT_METHOD", cfg.INSERT_METHOD),
-            "ABLATE_VISUAL_GATE": _cfg_attr(config, "ABLATE_VISUAL_GATE", False),
-            "USE_ALPHA_PROB_TRAIN_GATE": _cfg_attr(
-                config,
-                "USE_ALPHA_PROB_TRAIN_GATE",
-                False,
-            ),
-            "USE_ALPHA_MEAN_TRAIN_GATE": _cfg_attr(
-                config,
-                "USE_ALPHA_MEAN_TRAIN_GATE",
-                False,
-            ),
-            "FORCE_OPEN_TRAIN_GATE": _cfg_attr(
-                config,
-                "FORCE_OPEN_TRAIN_GATE",
-                False,
-            ),
-            "USE_ALPHA_WEIGHTED_RELATION": _cfg_attr(
-                config,
-                "USE_ALPHA_WEIGHTED_RELATION",
-                False,
-            ),
-            "ALPHA_RELATION_MAX_WEIGHT": _cfg_attr(
-                config,
-                "ALPHA_RELATION_MAX_WEIGHT",
-                2.0,
-            ),
-            "ABLATE_DIRECT_LEARNABLE_REP": _cfg_attr(config, "ABLATE_DIRECT_LEARNABLE_REP", False),
-            "DIRECT_SHARED_REP": _cfg_attr(config, "DIRECT_SHARED_REP", False),
-            "MMRL_QUERY_ARCHITECTURE": _cfg_attr(
-                config,
-                "MMRL_QUERY_ARCHITECTURE",
-                cfg.MMRL_QUERY_ARCHITECTURE,
-            ),
             "MMRL_SAME_INIT_LAYER_PROJECTORS": _cfg_attr(
                 config,
                 "MMRL_SAME_INIT_LAYER_PROJECTORS",
                 cfg.MMRL_SAME_INIT_LAYER_PROJECTORS,
             ),
-            "MMRL_CROSS_RELATION_LOSS_WEIGHT": _cfg_attr(
-                config,
-                "MMRL_CROSS_RELATION_LOSS_WEIGHT",
-                cfg.MMRL_CROSS_RELATION_LOSS_WEIGHT,
-            ),
             "MMRL_RELATION_MAX_TOKENS": _cfg_attr(config, "MMRL_RELATION_MAX_TOKENS", 64),
             "MMRL_VARIANCE_FLOOR_RATIO": _cfg_attr(config, "MMRL_VARIANCE_FLOOR_RATIO", 0.50),
             "MMRL_VARIANCE_FLOOR_WEIGHT": _cfg_attr(config, "MMRL_VARIANCE_FLOOR_WEIGHT", 0.10),
-            "ENABLE_DEEPSTACK_MMRL_RESIDUAL": _cfg_attr(config, "ENABLE_DEEPSTACK_MMRL_RESIDUAL", False),
-            "DEEPSTACK_MMRL_RESIDUAL_SCALE": _cfg_attr(config, "DEEPSTACK_MMRL_RESIDUAL_SCALE", 0.0),
             "vision_token_dim": vision_dim,
             "text_token_dim": text_dim
         }

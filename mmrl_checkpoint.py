@@ -251,23 +251,6 @@ def load_mmrl_delta(
     result = model.load_state_dict(state, strict=False)
     if result.unexpected_keys:
         raise RuntimeError(f"Unexpected delta keys: {result.unexpected_keys}")
-    saved_gate_ablation = manifest.get("metadata", {}).get(
-        "ablate_visual_gate"
-    )
-    if saved_gate_ablation is not None:
-        actual_gate_ablation = bool(
-            model.model.visual.ablate_visual_gate
-        )
-        if actual_gate_ablation != bool(saved_gate_ablation):
-            raise RuntimeError(
-                "Visual-gate ablation mismatch between checkpoint and model: "
-                f"checkpoint={bool(saved_gate_ablation)} "
-                f"model={actual_gate_ablation}"
-            )
-        print(
-            "[MMRL_GATE_ABLATION_AUDIT] "
-            f"enabled={actual_gate_ablation}"
-        )
     mmrl = getattr(getattr(model, "model", None), "MMRL", None)
     if mmrl is not None and hasattr(mmrl, "cached_base_queries"):
         mmrl.cached_base_queries = None

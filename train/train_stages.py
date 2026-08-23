@@ -953,6 +953,18 @@ def build_model_and_processor(model_path, experiment_cfg=None):
             else "0"
         ),
     ) == "1"
+    config.MMRL_USE_DYNAMIC_CROSS_ATTENTION = os.getenv(
+        "MMRL_USE_DYNAMIC_CROSS_ATTENTION",
+        (
+            "1"
+            if experiment_cfg.get("use_dynamic_cross_attention", True)
+            else "0"
+        ),
+    ) == "1"
+    config.MMRL_MEMORY_POOLING_MODE = os.getenv(
+        "MMRL_MEMORY_POOLING_MODE",
+        str(experiment_cfg.get("memory_pooling_mode", "multi_query")),
+    )
     config.MMRL_RELATION_LOSS_WEIGHT = float(experiment_cfg.get(
         "mmrl_relation_loss_weight",
         os.getenv("MMRL_RELATION_LOSS_WEIGHT", "0.0"),
@@ -989,6 +1001,10 @@ def build_model_and_processor(model_path, experiment_cfg=None):
             config.MMRL_SAME_INIT_LAYER_PROJECTORS,
             mmrl.same_init_layer_projectors,
         ),
+        "MMRL_USE_DYNAMIC_CROSS_ATTENTION": (
+            config.MMRL_USE_DYNAMIC_CROSS_ATTENTION,
+            mmrl.use_dynamic_cross_attention,
+        ),
         "MMRL_VARIANCE_FLOOR_RATIO": (
             config.MMRL_VARIANCE_FLOOR_RATIO,
             visual.mmrl_variance_floor_ratio,
@@ -1019,6 +1035,19 @@ def build_model_and_processor(model_path, experiment_cfg=None):
             raise RuntimeError(
                 f"{name} config propagation failed: requested={requested} actual={actual}"
             )
+    if config.MMRL_MEMORY_POOLING_MODE != mmrl.memory_pooling_mode:
+        raise RuntimeError(
+            "MMRL_MEMORY_POOLING_MODE config propagation failed: "
+            f"requested={config.MMRL_MEMORY_POOLING_MODE} "
+            f"actual={mmrl.memory_pooling_mode}"
+        )
+    memory_tokens_per_image = 0
+    if config.MMRL_USE_DYNAMIC_CROSS_ATTENTION:
+        memory_tokens_per_image = (
+            2 * config.MMRL_MEMORY_QUERY_COUNT
+            if config.MMRL_MEMORY_POOLING_MODE == "multi_query"
+            else 2
+        )
     print(
         "[MMRL_STRUCTURE_AUDIT] "
         "query_parameterization=layer_mlp "
@@ -1028,9 +1057,12 @@ def build_model_and_processor(model_path, experiment_cfg=None):
         f"projector_hidden_dim={config.MMRL_PROJECTOR_HIDDEN_DIM} "
         f"cross_attention_heads={config.MMRL_CROSS_ATTENTION_HEADS} "
         f"same_init_layer_projectors={config.MMRL_SAME_INIT_LAYER_PROJECTORS} "
+        "dynamic_cross_attention="
+        f"{config.MMRL_USE_DYNAMIC_CROSS_ATTENTION} "
+        f"memory_pooling_mode={config.MMRL_MEMORY_POOLING_MODE} "
         "train_gate_mode=open_full_ce relation_mode=uniform "
         "memory_tokens_per_image="
-        f"{2 * config.MMRL_MEMORY_QUERY_COUNT}"
+        f"{memory_tokens_per_image}"
     )
     component_parameters = {
         "shared_rep": model.model.MMRL.shared_represent_space.numel(),
@@ -1122,6 +1154,9 @@ def build_model_and_processor(model_path, experiment_cfg=None):
         f"memory_attention_dim={config.MMRL_MEMORY_ATTENTION_DIM} "
         f"projector_hidden_dim={config.MMRL_PROJECTOR_HIDDEN_DIM} "
         f"cross_attention_heads={config.MMRL_CROSS_ATTENTION_HEADS} "
+        "dynamic_cross_attention="
+        f"{config.MMRL_USE_DYNAMIC_CROSS_ATTENTION} "
+        f"memory_pooling_mode={config.MMRL_MEMORY_POOLING_MODE} "
         f"mmrl_relation_loss_weight={config.MMRL_RELATION_LOSS_WEIGHT} "
         f"mmrl_variance_floor_ratio={config.MMRL_VARIANCE_FLOOR_RATIO} "
         f"mmrl_variance_floor_weight={config.MMRL_VARIANCE_FLOOR_WEIGHT}"

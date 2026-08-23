@@ -98,6 +98,8 @@ run_slake() {
   local run_seed="${SLAKE_RUN_SEED:-$SEED}"
   local epochs="${SLAKE_STAGE3_EPOCHS:-3}"
   local same_init="${MMRL_SAME_INIT_LAYER_PROJECTORS:-1}"
+  local dynamic_cross_attention="${MMRL_USE_DYNAMIC_CROSS_ATTENTION:-1}"
+  local memory_pooling_mode="${MMRL_MEMORY_POOLING_MODE:-multi_query}"
   local extra_args=()
   if [ "$same_init" = "1" ]; then
     extra_args+=(--same-init-layer-projectors)
@@ -107,11 +109,21 @@ run_slake() {
     echo "[ERR] MMRL_SAME_INIT_LAYER_PROJECTORS must be 0 or 1" >&2
     return 2
   fi
+  if [ "$dynamic_cross_attention" = "0" ]; then
+    extra_args+=(--disable-dynamic-cross-attention)
+  elif [ "$dynamic_cross_attention" != "1" ]; then
+    echo "[ERR] MMRL_USE_DYNAMIC_CROSS_ATTENTION must be 0 or 1" >&2
+    return 2
+  fi
+  if [ "$memory_pooling_mode" != "multi_query" ] && [ "$memory_pooling_mode" != "mean" ]; then
+    echo "[ERR] MMRL_MEMORY_POOLING_MODE must be multi_query or mean" >&2
+    return 2
+  fi
 
   local output_dir
   output_dir="$(available_output_dir "$SLAKE_OUTPUT_ROOT" "${experiment_name}_seed${run_seed}_${RUN_DATE}")"
   mkdir -p "$output_dir/eval"
-  echo "[SLAKE] experiment=$experiment_name seed=$run_seed same_init=$same_init train_gate=open_full_ce relation=${MMRL_RELATION_LOSS_WEIGHT:-0.05} output=$output_dir"
+  echo "[SLAKE] experiment=$experiment_name seed=$run_seed same_init=$same_init dynamic_cross_attention=$dynamic_cross_attention memory_pooling_mode=$memory_pooling_mode train_gate=open_full_ce relation=${MMRL_RELATION_LOSS_WEIGHT:-0.05} output=$output_dir"
   (
     cd "$ROOT_DIR" || exit 1
     python slake/train_mmrl.py \
@@ -135,6 +147,7 @@ run_slake() {
       --memory-attention-dim "${MMRL_MEMORY_ATTENTION_DIM:-128}" \
       --projector-hidden-dim "${MMRL_PROJECTOR_HIDDEN_DIM:-1024}" \
       --cross-attention-heads "${MMRL_CROSS_ATTENTION_HEADS:-8}" \
+      --memory-pooling-mode "$memory_pooling_mode" \
       "${extra_args[@]}" \
       --mmrl-lr "${SLAKE_MMRL_LR:-6e-5}" \
       --relation-weight "${MMRL_RELATION_LOSS_WEIGHT:-0.05}" \
@@ -157,6 +170,59 @@ run_final_seeds4() {
   done
 }
 
+run_ablation_no_relation_seeds2() {
+  local seed
+  for seed in 44 45; do
+    SLAKE_EXPERIMENT_NAME="slake_mmrl_ablation_no_relation" \
+    SLAKE_RUN_SEED="$seed" \
+    MMRL_SAME_INIT_LAYER_PROJECTORS=1 \
+    MMRL_USE_DYNAMIC_CROSS_ATTENTION=1 \
+    MMRL_MEMORY_POOLING_MODE=multi_query \
+    MMRL_RELATION_LOSS_WEIGHT=0.0 \
+      run_slake || return 1
+  done
+}
+
+run_ablation_independent_init_seeds2() {
+  local seed
+  for seed in 44 45; do
+    SLAKE_EXPERIMENT_NAME="slake_mmrl_ablation_independent_init_relation0050" \
+    SLAKE_RUN_SEED="$seed" \
+    MMRL_SAME_INIT_LAYER_PROJECTORS=0 \
+    MMRL_USE_DYNAMIC_CROSS_ATTENTION=1 \
+    MMRL_MEMORY_POOLING_MODE=multi_query \
+    MMRL_RELATION_LOSS_WEIGHT=0.05 \
+      run_slake || return 1
+  done
+}
+
+run_ablation_static_query_seed45() {
+  SLAKE_EXPERIMENT_NAME="slake_mmrl_ablation_static_query_relation0050" \
+  SLAKE_RUN_SEED=45 \
+  MMRL_SAME_INIT_LAYER_PROJECTORS=1 \
+  MMRL_USE_DYNAMIC_CROSS_ATTENTION=0 \
+  MMRL_MEMORY_POOLING_MODE=multi_query \
+  MMRL_RELATION_LOSS_WEIGHT=0.05 \
+    run_slake
+}
+
+run_ablation_mean_pooling_seed45() {
+  SLAKE_EXPERIMENT_NAME="slake_mmrl_ablation_mean_pooling_relation0050" \
+  SLAKE_RUN_SEED=45 \
+  MMRL_SAME_INIT_LAYER_PROJECTORS=1 \
+  MMRL_USE_DYNAMIC_CROSS_ATTENTION=1 \
+  MMRL_MEMORY_POOLING_MODE=mean \
+  MMRL_RELATION_LOSS_WEIGHT=0.05 \
+    run_slake
+}
+
+run_ablation_suite() {
+  run_ablation_no_relation_seeds2 || return 1
+  run_ablation_independent_init_seeds2 || return 1
+  run_ablation_static_query_seed45 || return 1
+  run_ablation_mean_pooling_seed45
+}
+
 failures=0
 case "$RUN_TARGET" in
   train)
@@ -168,12 +234,27 @@ case "$RUN_TARGET" in
   slake_final_seeds4)
     run_final_seeds4 || failures=$((failures + 1))
     ;;
+  slake_ablation_no_relation_seeds2)
+    run_ablation_no_relation_seeds2 || failures=$((failures + 1))
+    ;;
+  slake_ablation_independent_init_seeds2)
+    run_ablation_independent_init_seeds2 || failures=$((failures + 1))
+    ;;
+  slake_ablation_static_query_seed45)
+    run_ablation_static_query_seed45 || failures=$((failures + 1))
+    ;;
+  slake_ablation_mean_pooling_seed45)
+    run_ablation_mean_pooling_seed45 || failures=$((failures + 1))
+    ;;
+  slake_ablation_suite)
+    run_ablation_suite || failures=$((failures + 1))
+    ;;
   all)
     run_train_dataset || failures=$((failures + 1))
     run_slake || failures=$((failures + 1))
     ;;
   *)
-    echo "[ERR] 未知目标: $RUN_TARGET，可选 train、slake、slake_final_seeds4、all。" >&2
+    echo "[ERR] 未知目标: $RUN_TARGET，可选 train、slake、slake_final_seeds4、slake_ablation_no_relation_seeds2、slake_ablation_independent_init_seeds2、slake_ablation_static_query_seed45、slake_ablation_mean_pooling_seed45、slake_ablation_suite、all。" >&2
     exit 2
     ;;
 esac

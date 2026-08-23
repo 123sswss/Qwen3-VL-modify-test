@@ -37,6 +37,8 @@ EXPERIMENTS = {
         "projector_hidden_dim": 1024,
         "cross_attention_heads": 8,
         "same_init_layer_projectors": True,
+        "use_dynamic_cross_attention": True,
+        "memory_pooling_mode": "multi_query",
         "mmrl_relation_loss_weight": 0.05,
         "mmrl_relation_max_tokens": 64,
         "mmrl_variance_floor_ratio": 0.50,

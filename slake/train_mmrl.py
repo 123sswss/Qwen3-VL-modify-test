@@ -103,6 +103,8 @@ def build_experiment_config(args: argparse.Namespace) -> Dict[str, Any]:
         "projector_hidden_dim": args.projector_hidden_dim,
         "cross_attention_heads": args.cross_attention_heads,
         "same_init_layer_projectors": args.same_init_layer_projectors,
+        "use_dynamic_cross_attention": not args.disable_dynamic_cross_attention,
+        "memory_pooling_mode": args.memory_pooling_mode,
         "mmrl_relation_loss_weight": args.relation_weight,
         "mmrl_relation_max_tokens": args.relation_max_tokens,
         "mmrl_variance_floor_ratio": 0.50,
@@ -398,7 +400,14 @@ def audit_model_forward(
         raise RuntimeError("SLAKE forward produced a non-finite visual gate value")
     mmrl = model.model.MMRL
     forced_dynamic_audit = False
-    if mmrl.last_rep_shape is None or mmrl.last_memory_shape is None:
+    missing_active_state = (
+        mmrl.last_rep_shape is None
+        or (
+            mmrl.use_dynamic_cross_attention
+            and mmrl.last_memory_shape is None
+        )
+    )
+    if missing_active_state:
         forced_dynamic_audit = True
         visual = model.model.visual
         original_training = visual.training
@@ -417,11 +426,18 @@ def audit_model_forward(
         mmrl.rp_space_length,
         mmrl.vision_token_dim,
     )
-    expected_memory_shape = (
-        expected_images,
-        2 * mmrl.memory_query_count,
-        mmrl.vision_token_dim,
-    )
+    expected_memory_shape = None
+    if mmrl.use_dynamic_cross_attention:
+        memory_tokens = (
+            2 * mmrl.memory_query_count
+            if mmrl.memory_pooling_mode == "multi_query"
+            else 2
+        )
+        expected_memory_shape = (
+            expected_images,
+            memory_tokens,
+            mmrl.vision_token_dim,
+        )
     if rep_shape != expected_rep_shape:
         raise RuntimeError(
             "SLAKE dynamic Rep shape audit failed: "
@@ -453,7 +469,9 @@ def audit_model_forward(
         "batch_size": int(device_batch["input_ids"].shape[0]),
         "gate_values": gate.detach().float().reshape(-1).cpu().tolist(),
         "dynamic_rep_shape": list(rep_shape),
-        "dynamic_memory_shape": list(memory_shape),
+        "dynamic_memory_shape": (
+            list(memory_shape) if memory_shape is not None else None
+        ),
         "cross_output_weight_norm": cross_output_weight_norm,
         "cross_output_bias_norm": cross_output_bias_norm,
         "forced_dynamic_audit": forced_dynamic_audit,
@@ -623,6 +641,17 @@ def parse_args() -> argparse.Namespace:
         default=True,
         help="Initialize all independent layer MLPs from the same post-init weights.",
     )
+    parser.add_argument(
+        "--disable-dynamic-cross-attention",
+        action="store_true",
+        help="Use static S-derived queries without input-conditioned memory retrieval.",
+    )
+    parser.add_argument(
+        "--memory-pooling-mode",
+        choices=("multi_query", "mean"),
+        default="multi_query",
+        help="Compress each modality with learned slots or one masked-mean token.",
+    )
     parser.add_argument("--stage1-lr", type=float, default=1e-4)
     parser.add_argument("--mmrl-lr", type=float, default=6e-5)
     parser.add_argument("--relation-weight", type=float, default=0.050)
@@ -719,6 +748,9 @@ def main() -> int:
         f"cross_attention_heads={args.cross_attention_heads} "
         "query_architecture=layer_mlp_post_cross "
         f"same_init_layer_projectors={args.same_init_layer_projectors} "
+        "dynamic_cross_attention="
+        f"{not args.disable_dynamic_cross_attention} "
+        f"memory_pooling_mode={args.memory_pooling_mode} "
         "train_gate_mode=open_full_ce relation_mode=uniform "
         f"relation={args.relation_weight} "
         f"stage1_batch={args.batch_size}x{args.gradient_accumulation} "
@@ -804,6 +836,10 @@ def main() -> int:
                 "same_init_layer_projectors": (
                     args.same_init_layer_projectors
                 ),
+                "use_dynamic_cross_attention": (
+                    not args.disable_dynamic_cross_attention
+                ),
+                "memory_pooling_mode": args.memory_pooling_mode,
                 "train_gate_mode": "open_full_ce",
                 "relation_weight": args.relation_weight,
                 "relation_max_tokens": args.relation_max_tokens,

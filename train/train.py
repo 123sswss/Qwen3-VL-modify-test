@@ -215,6 +215,9 @@ CFG = {
             "text_guided_visual_attention_peak_mean",
             "text_guided_visual_slot_specificity_ratio",
             "text_guided_visual_slot_pairwise_cos_mean",
+            "text_guided_visual_query_norm_mean",
+            "text_guided_visual_context_norm_mean",
+            "text_guided_visual_context_to_query_ratio",
             "temperature",
         ],
         "learning_rate": {

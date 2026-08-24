@@ -126,7 +126,8 @@ class MMRLAblationTest(unittest.TestCase):
 
         self.assertEqual(len(outputs), 2)
         self.assertEqual(mmrl.last_rep_shape, (2, 2, 3, 4))
-        self.assertEqual(mmrl.last_memory_shape, (2, 3, 4))
+        self.assertEqual(mmrl.last_memory_shape, (2, 2, 4))
+        self.assertIsNone(mmrl.text_memory_pooling)
         self.assertIn(
             "text_guided_visual_attention_entropy_norm",
             mmrl.debug_context,

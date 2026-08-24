@@ -112,19 +112,24 @@ class TextGuidedVisualPooling(nn.Module):
         self.slot_count = int(slot_count)
         self.attention_dim = int(attention_dim)
         self.text_input_norm = nn.LayerNorm(text_dim)
-        self.text_query_projection = nn.Linear(text_dim, self.attention_dim)
+        self.text_query_projection = nn.Linear(text_dim, output_dim)
         self.role_queries = nn.Parameter(
-            torch.empty(self.slot_count, self.attention_dim)
+            torch.empty(self.slot_count, output_dim)
         )
         nn.init.normal_(self.role_queries, std=0.02)
         self.role_query_norm = nn.LayerNorm(
-            self.attention_dim,
+            output_dim,
             elementwise_affine=False,
         )
-        self.text_query_norm = nn.LayerNorm(self.attention_dim)
+        self.text_query_norm = nn.LayerNorm(output_dim)
+        self.query_projection = nn.Linear(output_dim, self.attention_dim)
         self.visual_input_norm = nn.LayerNorm(visual_dim)
         self.key_projection = nn.Linear(visual_dim, self.attention_dim)
-        self.value_projection = nn.Linear(visual_dim, output_dim)
+        self.value_projection = nn.Linear(visual_dim, self.attention_dim)
+        self.context_output_projection = nn.Linear(
+            self.attention_dim,
+            output_dim,
+        )
         self.output_norm = nn.LayerNorm(output_dim)
         self.debug_context = {}
 
@@ -197,19 +202,23 @@ class TextGuidedVisualPooling(nn.Module):
             device=text_query.device,
             dtype=text_query.dtype,
         )
-        queries = (
+        query_residual = (
             text_query.unsqueeze(1) + role_queries.unsqueeze(0)
         ) / math.sqrt(2.0)
 
         normalized_visual = self.visual_input_norm(visual_states)
+        queries = self.query_projection(query_residual)
         keys = self.key_projection(normalized_visual)
         values = self.value_projection(normalized_visual)
         scores = torch.einsum("bqa,bsa->bqs", queries, keys)
         scores = scores.float() / math.sqrt(self.attention_dim)
         scores = scores.masked_fill(~visual_mask[:, None, :], float("-inf"))
         weights = torch.softmax(scores, dim=-1).to(dtype=values.dtype)
-        pooled = torch.einsum("bqs,bsd->bqd", weights, values)
-        pooled = self.output_norm(pooled)
+        context = torch.einsum("bqs,bsa->bqa", weights, values)
+        context_output = self.context_output_projection(context)
+        pooled = self.output_norm(
+            query_residual + context_output
+        )
 
         if self.training:
             with torch.no_grad():
@@ -225,6 +234,8 @@ class TextGuidedVisualPooling(nn.Module):
                     torch.zeros_like(entropy),
                 )
                 pooled_float = pooled.detach().float()
+                query_norm = query_residual.detach().float().norm(dim=-1).mean()
+                context_norm = context_output.detach().float().norm(dim=-1).mean()
                 pooled_norm = pooled_float.norm(dim=-1).mean().clamp_min(1e-8)
                 centered = pooled_float - pooled_float.mean(dim=1, keepdim=True)
                 slot_specificity = centered.norm(dim=-1).mean() / pooled_norm
@@ -253,6 +264,11 @@ class TextGuidedVisualPooling(nn.Module):
                     ),
                     "text_guided_visual_slot_specificity_ratio": slot_specificity,
                     "text_guided_visual_slot_pairwise_cos_mean": pairwise_cos,
+                    "text_guided_visual_query_norm_mean": query_norm,
+                    "text_guided_visual_context_norm_mean": context_norm,
+                    "text_guided_visual_context_to_query_ratio": (
+                        context_norm / query_norm.clamp_min(1e-8)
+                    ),
                 }
         else:
             self.debug_context = {}
@@ -420,10 +436,7 @@ class MMRL(nn.Module):
                 self.memory_query_count,
                 self.memory_attention_dim,
             )
-            self.text_memory_pooling = MaskedMeanPooling(
-                self.text_token_dim,
-                self.vision_token_dim,
-            )
+            self.text_memory_pooling = None
         self.cross_attention = ResidualCrossAttention(
             self.vision_token_dim,
             int(cfg.MMRL_CROSS_ATTENTION_HEADS),
@@ -553,16 +566,22 @@ class MMRL(nn.Module):
                     text_mask,
                     image_counts,
                 )
+                memory = visual_memory
             else:
                 visual_memory = self.visual_memory_pooling(
                     visual_padded,
                     visual_mask,
                 )
-            text_memory = self.text_memory_pooling(text_states, text_mask)
-            expanded_text_memory = torch.repeat_interleave(
-                text_memory, image_counts, dim=0
-            )
-            memory = torch.cat([visual_memory, expanded_text_memory], dim=1)
+                text_memory = self.text_memory_pooling(text_states, text_mask)
+                expanded_text_memory = torch.repeat_interleave(
+                    text_memory,
+                    image_counts,
+                    dim=0,
+                )
+                memory = torch.cat(
+                    [visual_memory, expanded_text_memory],
+                    dim=1,
+                )
             dynamic_queries, cross_delta = self.cross_attention(flat_queries, memory)
         else:
             dynamic_queries = flat_queries
@@ -612,15 +631,14 @@ class MMRL(nn.Module):
                         delta_norm / base_norm.clamp_min(1e-8)
                     ),
                 }
-                if visual_memory is not None and text_memory is not None:
-                    self.debug_context.update({
-                        "visual_memory_norm_mean": (
-                            visual_memory.detach().float().norm(dim=-1).mean()
-                        ),
-                        "text_memory_norm_mean": (
-                            text_memory.detach().float().norm(dim=-1).mean()
-                        ),
-                    })
+                if visual_memory is not None:
+                    self.debug_context["visual_memory_norm_mean"] = (
+                        visual_memory.detach().float().norm(dim=-1).mean()
+                    )
+                if text_memory is not None:
+                    self.debug_context["text_memory_norm_mean"] = (
+                        text_memory.detach().float().norm(dim=-1).mean()
+                    )
                 pooling_debug = getattr(
                     self.visual_memory_pooling,
                     "debug_context",

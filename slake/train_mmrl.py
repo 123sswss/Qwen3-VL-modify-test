@@ -182,6 +182,9 @@ def build_train_config(
             "text_guided_visual_attention_peak_mean",
             "text_guided_visual_slot_specificity_ratio",
             "text_guided_visual_slot_pairwise_cos_mean",
+            "text_guided_visual_query_norm_mean",
+            "text_guided_visual_context_norm_mean",
+            "text_guided_visual_context_to_query_ratio",
             "temperature",
         ],
         "learning_rate": {
@@ -435,7 +438,7 @@ def audit_model_forward(
         if mmrl.memory_pooling_mode == "multi_query":
             memory_tokens = 2 * mmrl.memory_query_count
         elif mmrl.memory_pooling_mode == "text_guided":
-            memory_tokens = mmrl.memory_query_count + 1
+            memory_tokens = mmrl.memory_query_count
         else:
             memory_tokens = 2
         expected_memory_shape = (

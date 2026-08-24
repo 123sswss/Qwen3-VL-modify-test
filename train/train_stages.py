@@ -1046,7 +1046,7 @@ def build_model_and_processor(model_path, experiment_cfg=None):
         if config.MMRL_MEMORY_POOLING_MODE == "multi_query":
             memory_tokens_per_image = 2 * config.MMRL_MEMORY_QUERY_COUNT
         elif config.MMRL_MEMORY_POOLING_MODE == "text_guided":
-            memory_tokens_per_image = config.MMRL_MEMORY_QUERY_COUNT + 1
+            memory_tokens_per_image = config.MMRL_MEMORY_QUERY_COUNT
         else:
             memory_tokens_per_image = 2
     print(
@@ -1078,7 +1078,11 @@ def build_model_and_processor(model_path, experiment_cfg=None):
         ),
         "text_memory_pooling": sum(
             parameter.numel()
-            for parameter in model.model.MMRL.text_memory_pooling.parameters()
+            for parameter in (
+                model.model.MMRL.text_memory_pooling.parameters()
+                if model.model.MMRL.text_memory_pooling is not None
+                else []
+            )
         ),
         "cross_attention": sum(
             parameter.numel()

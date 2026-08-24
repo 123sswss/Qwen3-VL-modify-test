@@ -1043,11 +1043,12 @@ def build_model_and_processor(model_path, experiment_cfg=None):
         )
     memory_tokens_per_image = 0
     if config.MMRL_USE_DYNAMIC_CROSS_ATTENTION:
-        memory_tokens_per_image = (
-            2 * config.MMRL_MEMORY_QUERY_COUNT
-            if config.MMRL_MEMORY_POOLING_MODE == "multi_query"
-            else 2
-        )
+        if config.MMRL_MEMORY_POOLING_MODE == "multi_query":
+            memory_tokens_per_image = 2 * config.MMRL_MEMORY_QUERY_COUNT
+        elif config.MMRL_MEMORY_POOLING_MODE == "text_guided":
+            memory_tokens_per_image = config.MMRL_MEMORY_QUERY_COUNT + 1
+        else:
+            memory_tokens_per_image = 2
     print(
         "[MMRL_STRUCTURE_AUDIT] "
         "query_parameterization=layer_mlp "

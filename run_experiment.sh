@@ -115,8 +115,10 @@ run_slake() {
     echo "[ERR] MMRL_USE_DYNAMIC_CROSS_ATTENTION must be 0 or 1" >&2
     return 2
   fi
-  if [ "$memory_pooling_mode" != "multi_query" ] && [ "$memory_pooling_mode" != "mean" ]; then
-    echo "[ERR] MMRL_MEMORY_POOLING_MODE must be multi_query or mean" >&2
+  if [ "$memory_pooling_mode" != "multi_query" ] \
+    && [ "$memory_pooling_mode" != "mean" ] \
+    && [ "$memory_pooling_mode" != "text_guided" ]; then
+    echo "[ERR] MMRL_MEMORY_POOLING_MODE must be multi_query, mean, or text_guided" >&2
     return 2
   fi
 
@@ -216,6 +218,18 @@ run_ablation_mean_pooling_seed45() {
     run_slake
 }
 
+run_text_guided_visual_slots8_seed45() {
+  SLAKE_EXPERIMENT_NAME="slake_mmrl_text_guided_visual_slots8_relation0050" \
+  SLAKE_RUN_SEED=45 \
+  MMRL_SAME_INIT_LAYER_PROJECTORS=1 \
+  MMRL_USE_DYNAMIC_CROSS_ATTENTION=1 \
+  MMRL_MEMORY_POOLING_MODE=text_guided \
+  MMRL_MEMORY_QUERY_COUNT=8 \
+  MMRL_MEMORY_ATTENTION_DIM=128 \
+  MMRL_RELATION_LOSS_WEIGHT=0.05 \
+    run_slake
+}
+
 run_ablation_suite() {
   run_ablation_no_relation_seeds2 || return 1
   run_ablation_independent_init_seeds2 || return 1
@@ -246,6 +260,9 @@ case "$RUN_TARGET" in
   slake_ablation_mean_pooling_seed45)
     run_ablation_mean_pooling_seed45 || failures=$((failures + 1))
     ;;
+  slake_text_guided_visual_slots8_seed45)
+    run_text_guided_visual_slots8_seed45 || failures=$((failures + 1))
+    ;;
   slake_ablation_suite)
     run_ablation_suite || failures=$((failures + 1))
     ;;
@@ -254,7 +271,7 @@ case "$RUN_TARGET" in
     run_slake || failures=$((failures + 1))
     ;;
   *)
-    echo "[ERR] 未知目标: $RUN_TARGET，可选 train、slake、slake_final_seeds4、slake_ablation_no_relation_seeds2、slake_ablation_independent_init_seeds2、slake_ablation_static_query_seed45、slake_ablation_mean_pooling_seed45、slake_ablation_suite、all。" >&2
+    echo "[ERR] 未知目标: $RUN_TARGET，可选 train、slake、slake_final_seeds4、slake_ablation_no_relation_seeds2、slake_ablation_independent_init_seeds2、slake_ablation_static_query_seed45、slake_ablation_mean_pooling_seed45、slake_text_guided_visual_slots8_seed45、slake_ablation_suite、all。" >&2
     exit 2
     ;;
 esac

@@ -211,6 +211,10 @@ CFG = {
             "text_memory_pooling_grad_norm_mean",
             "cross_attention_grad_norm_mean",
             "cross_attention_output_weight_norm",
+            "text_guided_visual_attention_entropy_norm",
+            "text_guided_visual_attention_peak_mean",
+            "text_guided_visual_slot_specificity_ratio",
+            "text_guided_visual_slot_pairwise_cos_mean",
             "temperature",
         ],
         "learning_rate": {

@@ -178,6 +178,10 @@ def build_train_config(
             "text_memory_pooling_grad_norm_mean",
             "cross_attention_grad_norm_mean",
             "cross_attention_output_weight_norm",
+            "text_guided_visual_attention_entropy_norm",
+            "text_guided_visual_attention_peak_mean",
+            "text_guided_visual_slot_specificity_ratio",
+            "text_guided_visual_slot_pairwise_cos_mean",
             "temperature",
         ],
         "learning_rate": {
@@ -428,11 +432,12 @@ def audit_model_forward(
     )
     expected_memory_shape = None
     if mmrl.use_dynamic_cross_attention:
-        memory_tokens = (
-            2 * mmrl.memory_query_count
-            if mmrl.memory_pooling_mode == "multi_query"
-            else 2
-        )
+        if mmrl.memory_pooling_mode == "multi_query":
+            memory_tokens = 2 * mmrl.memory_query_count
+        elif mmrl.memory_pooling_mode == "text_guided":
+            memory_tokens = mmrl.memory_query_count + 1
+        else:
+            memory_tokens = 2
         expected_memory_shape = (
             expected_images,
             memory_tokens,
@@ -648,9 +653,12 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--memory-pooling-mode",
-        choices=("multi_query", "mean"),
+        choices=("multi_query", "mean", "text_guided"),
         default="multi_query",
-        help="Compress each modality with learned slots or one masked-mean token.",
+        help=(
+            "Use static learned slots, masked means, or text-guided visual "
+            "slots for Cross-Attention memory."
+        ),
     )
     parser.add_argument("--stage1-lr", type=float, default=1e-4)
     parser.add_argument("--mmrl-lr", type=float, default=6e-5)

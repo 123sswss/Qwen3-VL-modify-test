@@ -119,6 +119,39 @@ class MMRLAblationTest(unittest.TestCase):
         self.assertEqual(mmrl.last_rep_shape, (2, 2, 3, 4))
         self.assertEqual(mmrl.last_memory_shape, (2, 2, 4))
 
+    def test_text_guided_pooling_uses_dynamic_visual_slots(self):
+        mmrl = MMRL(self._config(pooling_mode="text_guided"))
+        inputs = self._inputs()
+        outputs = mmrl(**inputs)
+
+        self.assertEqual(len(outputs), 2)
+        self.assertEqual(mmrl.last_rep_shape, (2, 2, 3, 4))
+        self.assertEqual(mmrl.last_memory_shape, (2, 3, 4))
+        self.assertIn(
+            "text_guided_visual_attention_entropy_norm",
+            mmrl.debug_context,
+        )
+
+        visual_padded, visual_mask = mmrl._pack_visual_states(
+            inputs["visual_states"],
+            inputs["cu_seqlens"],
+        )
+        first = mmrl.visual_memory_pooling(
+            visual_padded,
+            visual_mask,
+            inputs["text_states"],
+            inputs["text_mask"],
+            inputs["images_per_sample"],
+        )
+        second = mmrl.visual_memory_pooling(
+            visual_padded,
+            visual_mask,
+            inputs["text_states"].flip(-1),
+            inputs["text_mask"],
+            inputs["images_per_sample"],
+        )
+        self.assertFalse(torch.allclose(first, second))
+
 
 if __name__ == "__main__":
     unittest.main()

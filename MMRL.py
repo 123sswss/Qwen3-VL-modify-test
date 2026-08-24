@@ -92,6 +92,174 @@ class MaskedMeanPooling(nn.Module):
         return self.output_norm(projected)
 
 
+class TextGuidedVisualPooling(nn.Module):
+    """Extract a small set of question-conditioned visual memory tokens."""
+
+    def __init__(
+        self,
+        text_dim,
+        visual_dim,
+        output_dim,
+        slot_count,
+        attention_dim,
+    ):
+        super().__init__()
+        if slot_count < 1 or attention_dim < 1:
+            raise ValueError(
+                "slot_count and attention_dim must be positive, got "
+                f"slot_count={slot_count} attention_dim={attention_dim}"
+            )
+        self.slot_count = int(slot_count)
+        self.attention_dim = int(attention_dim)
+        self.text_input_norm = nn.LayerNorm(text_dim)
+        self.text_query_projection = nn.Linear(text_dim, self.attention_dim)
+        self.role_queries = nn.Parameter(
+            torch.empty(self.slot_count, self.attention_dim)
+        )
+        nn.init.normal_(self.role_queries, std=0.02)
+        self.role_query_norm = nn.LayerNorm(
+            self.attention_dim,
+            elementwise_affine=False,
+        )
+        self.text_query_norm = nn.LayerNorm(self.attention_dim)
+        self.visual_input_norm = nn.LayerNorm(visual_dim)
+        self.key_projection = nn.Linear(visual_dim, self.attention_dim)
+        self.value_projection = nn.Linear(visual_dim, output_dim)
+        self.output_norm = nn.LayerNorm(output_dim)
+        self.debug_context = {}
+
+    def forward(
+        self,
+        visual_states,
+        visual_mask,
+        text_states,
+        text_mask,
+        images_per_sample,
+    ):
+        if visual_states.ndim != 3 or text_states.ndim != 3:
+            raise ValueError(
+                "text-guided pooling expects [B,S,D] states, got "
+                f"visual={tuple(visual_states.shape)} "
+                f"text={tuple(text_states.shape)}"
+            )
+        if visual_mask.shape != visual_states.shape[:2]:
+            raise ValueError(
+                "visual mask must match visual [B,S], got "
+                f"states={tuple(visual_states.shape)} "
+                f"mask={tuple(visual_mask.shape)}"
+            )
+        if text_mask.shape != text_states.shape[:2]:
+            raise ValueError(
+                "text mask must match text [B,S], got "
+                f"states={tuple(text_states.shape)} mask={tuple(text_mask.shape)}"
+            )
+
+        visual_mask = visual_mask.to(
+            device=visual_states.device,
+            dtype=torch.bool,
+        )
+        text_mask = text_mask.to(device=text_states.device, dtype=torch.bool)
+        visual_valid = visual_mask.sum(dim=1)
+        text_valid = text_mask.sum(dim=1)
+        if bool((visual_valid == 0).any()) or bool((text_valid == 0).any()):
+            raise RuntimeError(
+                "text-guided pooling received an empty sequence: "
+                f"visual_valid={visual_valid.tolist()} "
+                f"text_valid={text_valid.tolist()}"
+            )
+
+        image_counts = torch.as_tensor(
+            images_per_sample,
+            device=text_states.device,
+            dtype=torch.long,
+        )
+        if image_counts.numel() != text_states.shape[0]:
+            raise RuntimeError(
+                "images_per_sample must match text batch in text-guided pooling, "
+                f"counts={image_counts.numel()} text_batch={text_states.shape[0]}"
+            )
+        if bool((image_counts < 0).any()) or int(image_counts.sum().item()) != visual_states.shape[0]:
+            raise RuntimeError(
+                "images_per_sample must match visual batch in text-guided pooling, "
+                f"counts={image_counts.tolist()} visual_batch={visual_states.shape[0]}"
+            )
+
+        text_weights = text_mask.unsqueeze(-1).to(dtype=text_states.dtype)
+        text_summary = (text_states * text_weights).sum(dim=1)
+        text_summary = text_summary / text_valid.unsqueeze(-1).to(text_states.dtype)
+        text_query = self.text_query_projection(
+            self.text_input_norm(text_summary)
+        )
+        text_query = self.text_query_norm(text_query)
+        text_query = torch.repeat_interleave(text_query, image_counts, dim=0)
+
+        role_queries = self.role_query_norm(self.role_queries).to(
+            device=text_query.device,
+            dtype=text_query.dtype,
+        )
+        queries = (
+            text_query.unsqueeze(1) + role_queries.unsqueeze(0)
+        ) / math.sqrt(2.0)
+
+        normalized_visual = self.visual_input_norm(visual_states)
+        keys = self.key_projection(normalized_visual)
+        values = self.value_projection(normalized_visual)
+        scores = torch.einsum("bqa,bsa->bqs", queries, keys)
+        scores = scores.float() / math.sqrt(self.attention_dim)
+        scores = scores.masked_fill(~visual_mask[:, None, :], float("-inf"))
+        weights = torch.softmax(scores, dim=-1).to(dtype=values.dtype)
+        pooled = torch.einsum("bqs,bsd->bqd", weights, values)
+        pooled = self.output_norm(pooled)
+
+        if self.training:
+            with torch.no_grad():
+                weights_float = weights.detach().float()
+                entropy = -(
+                    weights_float
+                    * weights_float.clamp_min(1e-8).log()
+                ).sum(dim=-1)
+                max_entropy = visual_valid.detach().float().log().unsqueeze(1)
+                entropy_norm = torch.where(
+                    max_entropy > 0,
+                    entropy / max_entropy.clamp_min(1e-8),
+                    torch.zeros_like(entropy),
+                )
+                pooled_float = pooled.detach().float()
+                pooled_norm = pooled_float.norm(dim=-1).mean().clamp_min(1e-8)
+                centered = pooled_float - pooled_float.mean(dim=1, keepdim=True)
+                slot_specificity = centered.norm(dim=-1).mean() / pooled_norm
+
+                pooled_unit = F.normalize(pooled_float, dim=-1, eps=1e-8)
+                pairwise = pooled_unit @ pooled_unit.transpose(1, 2)
+                if self.slot_count > 1:
+                    pair_indices = torch.triu_indices(
+                        self.slot_count,
+                        self.slot_count,
+                        offset=1,
+                        device=pairwise.device,
+                    )
+                    pairwise_cos = pairwise[
+                        :, pair_indices[0], pair_indices[1]
+                    ].mean()
+                else:
+                    pairwise_cos = pairwise.new_tensor(1.0)
+
+                self.debug_context = {
+                    "text_guided_visual_attention_entropy_norm": (
+                        entropy_norm.mean()
+                    ),
+                    "text_guided_visual_attention_peak_mean": (
+                        weights_float.max(dim=-1).values.mean()
+                    ),
+                    "text_guided_visual_slot_specificity_ratio": slot_specificity,
+                    "text_guided_visual_slot_pairwise_cos_mean": pairwise_cos,
+                }
+        else:
+            self.debug_context = {}
+
+        return pooled
+
+
 class ZeroInitProjection(nn.Module):
     """A trainable projection that remains zero through HF post_init()."""
 
@@ -180,9 +348,14 @@ class MMRL(nn.Module):
         self.memory_pooling_mode = str(
             getattr(cfg, "MMRL_MEMORY_POOLING_MODE", "multi_query")
         )
-        if self.memory_pooling_mode not in {"multi_query", "mean"}:
+        if self.memory_pooling_mode not in {
+            "multi_query",
+            "mean",
+            "text_guided",
+        }:
             raise ValueError(
-                "MMRL_MEMORY_POOLING_MODE must be 'multi_query' or 'mean', got "
+                "MMRL_MEMORY_POOLING_MODE must be 'multi_query', 'mean', or "
+                "'text_guided', got "
                 f"{self.memory_pooling_mode!r}"
             )
 
@@ -230,10 +403,22 @@ class MMRL(nn.Module):
                 self.memory_query_count,
                 self.memory_attention_dim,
             )
-        else:
+        elif self.memory_pooling_mode == "mean":
             self.visual_memory_pooling = MaskedMeanPooling(
                 self.vision_token_dim,
                 self.vision_token_dim,
+            )
+            self.text_memory_pooling = MaskedMeanPooling(
+                self.text_token_dim,
+                self.vision_token_dim,
+            )
+        else:
+            self.visual_memory_pooling = TextGuidedVisualPooling(
+                self.text_token_dim,
+                self.vision_token_dim,
+                self.vision_token_dim,
+                self.memory_query_count,
+                self.memory_attention_dim,
             )
             self.text_memory_pooling = MaskedMeanPooling(
                 self.text_token_dim,
@@ -360,7 +545,19 @@ class MMRL(nn.Module):
             visual_padded, visual_mask = self._pack_visual_states(
                 visual_states, cu_seqlens
             )
-            visual_memory = self.visual_memory_pooling(visual_padded, visual_mask)
+            if self.memory_pooling_mode == "text_guided":
+                visual_memory = self.visual_memory_pooling(
+                    visual_padded,
+                    visual_mask,
+                    text_states,
+                    text_mask,
+                    image_counts,
+                )
+            else:
+                visual_memory = self.visual_memory_pooling(
+                    visual_padded,
+                    visual_mask,
+                )
             text_memory = self.text_memory_pooling(text_states, text_mask)
             expanded_text_memory = torch.repeat_interleave(
                 text_memory, image_counts, dim=0
@@ -424,6 +621,12 @@ class MMRL(nn.Module):
                             text_memory.detach().float().norm(dim=-1).mean()
                         ),
                     })
+                pooling_debug = getattr(
+                    self.visual_memory_pooling,
+                    "debug_context",
+                    {},
+                )
+                self.debug_context.update(pooling_debug)
         else:
             self.debug_context = {}
 

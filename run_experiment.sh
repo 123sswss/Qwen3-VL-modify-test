@@ -100,6 +100,7 @@ run_slake() {
   local same_init="${MMRL_SAME_INIT_LAYER_PROJECTORS:-1}"
   local dynamic_cross_attention="${MMRL_USE_DYNAMIC_CROSS_ATTENTION:-1}"
   local memory_pooling_mode="${MMRL_MEMORY_POOLING_MODE:-multi_query}"
+  local fusion_mode="${MMRL_FUSION_MODE:-cross_attention}"
   local extra_args=()
   if [ "$same_init" = "1" ]; then
     extra_args+=(--same-init-layer-projectors)
@@ -121,11 +122,19 @@ run_slake() {
     echo "[ERR] MMRL_MEMORY_POOLING_MODE must be multi_query, mean, or text_guided" >&2
     return 2
   fi
+  if [ "$fusion_mode" != "cross_attention" ] && [ "$fusion_mode" != "concat_mlp" ]; then
+    echo "[ERR] MMRL_FUSION_MODE must be cross_attention or concat_mlp" >&2
+    return 2
+  fi
+  if [ "$fusion_mode" = "concat_mlp" ] && [ "$memory_pooling_mode" != "mean" ]; then
+    echo "[ERR] concat_mlp fusion requires mean memory pooling" >&2
+    return 2
+  fi
 
   local output_dir
   output_dir="$(available_output_dir "$SLAKE_OUTPUT_ROOT" "${experiment_name}_seed${run_seed}_${RUN_DATE}")"
   mkdir -p "$output_dir/eval"
-  echo "[SLAKE] experiment=$experiment_name seed=$run_seed same_init=$same_init dynamic_cross_attention=$dynamic_cross_attention memory_pooling_mode=$memory_pooling_mode train_gate=open_full_ce relation=${MMRL_RELATION_LOSS_WEIGHT:-0.05} output=$output_dir"
+  echo "[SLAKE] experiment=$experiment_name seed=$run_seed same_init=$same_init dynamic_cross_attention=$dynamic_cross_attention memory_pooling_mode=$memory_pooling_mode fusion_mode=$fusion_mode train_gate=open_full_ce relation=${MMRL_RELATION_LOSS_WEIGHT:-0.05} output=$output_dir"
   (
     cd "$ROOT_DIR" || exit 1
     python slake/train_mmrl.py \
@@ -150,6 +159,7 @@ run_slake() {
       --projector-hidden-dim "${MMRL_PROJECTOR_HIDDEN_DIM:-1024}" \
       --cross-attention-heads "${MMRL_CROSS_ATTENTION_HEADS:-8}" \
       --memory-pooling-mode "$memory_pooling_mode" \
+      --fusion-mode "$fusion_mode" \
       "${extra_args[@]}" \
       --mmrl-lr "${SLAKE_MMRL_LR:-6e-5}" \
       --relation-weight "${MMRL_RELATION_LOSS_WEIGHT:-0.05}" \
@@ -277,7 +287,7 @@ run_prompt_tuning_seed44() {
   echo "[SLAKE_PROMPT_TUNING] experiment=$experiment_name seed=44 output=$output_dir"
   (
     cd "$ROOT_DIR" || exit 1
-    python slake/train_prompt_tuning.py \
+    python -m slake.train_prompt_tuning \
       --model-path "$MODEL_PATH" \
       --data-root "$SLAKE_DATA_ROOT" \
       --output-dir "$output_dir" \
@@ -303,6 +313,35 @@ run_prompt_tuning_seed44() {
       --overwrite \
       2>&1 | tee "$output_dir/eval.log"
   )
+}
+
+run_concat_mlp_fusion_seed45() {
+  SLAKE_EXPERIMENT_NAME="slake_mmrl_mean_pooling_concat_mlp_relation0050" \
+  SLAKE_RUN_SEED=45 \
+  MMRL_SAME_INIT_LAYER_PROJECTORS=1 \
+  MMRL_USE_DYNAMIC_CROSS_ATTENTION=1 \
+  MMRL_MEMORY_POOLING_MODE=mean \
+  MMRL_FUSION_MODE=concat_mlp \
+  MMRL_RELATION_LOSS_WEIGHT=0.05 \
+    run_slake
+}
+
+run_overnight_unit_tests() {
+  (
+    cd "$ROOT_DIR" || exit 1
+    python -m unittest test_attention_pooling.py test_prompt_tuning.py
+  )
+}
+
+run_overnight_prompt_and_concat_mlp() {
+  local suite_failures=0
+  run_overnight_unit_tests || suite_failures=$((suite_failures + 1))
+  run_prompt_tuning_seed44 || suite_failures=$((suite_failures + 1))
+  run_concat_mlp_fusion_seed45 || suite_failures=$((suite_failures + 1))
+  if [ "$suite_failures" -ne 0 ]; then
+    echo "[ERR] 今晚串行实验失败数=$suite_failures" >&2
+    return 1
+  fi
 }
 
 run_ablation_suite() {
@@ -344,6 +383,12 @@ case "$RUN_TARGET" in
   slake_prompt_tuning_seed44)
     run_prompt_tuning_seed44 || failures=$((failures + 1))
     ;;
+  slake_concat_mlp_fusion_seed45)
+    run_concat_mlp_fusion_seed45 || failures=$((failures + 1))
+    ;;
+  slake_overnight_prompt_and_concat_mlp)
+    run_overnight_prompt_and_concat_mlp || failures=$((failures + 1))
+    ;;
   slake_ablation_suite)
     run_ablation_suite || failures=$((failures + 1))
     ;;
@@ -352,7 +397,7 @@ case "$RUN_TARGET" in
     run_slake || failures=$((failures + 1))
     ;;
   *)
-    echo "[ERR] 未知目标: $RUN_TARGET，可选 train、slake、slake_final_seeds4、slake_ablation_no_relation_seeds2、slake_ablation_independent_init_seeds2、slake_ablation_static_query_seed45、slake_ablation_mean_pooling_seed45、slake_mean_final_completion_suite、slake_text_guided_balanced_fusion_slots8_seed45、slake_prompt_tuning_seed44、slake_ablation_suite、all。" >&2
+    echo "[ERR] 未知目标: $RUN_TARGET，可选 train、slake、slake_final_seeds4、slake_ablation_no_relation_seeds2、slake_ablation_independent_init_seeds2、slake_ablation_static_query_seed45、slake_ablation_mean_pooling_seed45、slake_mean_final_completion_suite、slake_text_guided_balanced_fusion_slots8_seed45、slake_prompt_tuning_seed44、slake_concat_mlp_fusion_seed45、slake_overnight_prompt_and_concat_mlp、slake_ablation_suite、all。" >&2
     exit 2
     ;;
 esac

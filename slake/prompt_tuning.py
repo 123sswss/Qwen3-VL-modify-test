@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import json
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, Iterator
 
 import torch
 from torch import nn
@@ -55,14 +56,7 @@ class StaticPromptTuningModel(nn.Module):
         batch_size = input_ids.shape[0]
         device = input_ids.device
 
-        token_embeddings = self.get_input_embeddings()(input_ids)
-        prompt = self.soft_prompt.to(
-            device=token_embeddings.device,
-            dtype=token_embeddings.dtype,
-        ).unsqueeze(0).expand(batch_size, -1, -1)
-        inputs_embeds = torch.cat((prompt, token_embeddings), dim=1)
-
-        # Dummy ids keep Qwen3-VL's image-placeholder mask aligned with inputs_embeds.
+        # The base model still builds multimodal embeddings from input_ids and pixels.
         pad_id = int(getattr(self.config, "pad_token_id", 0) or 0)
         prompt_ids = torch.full(
             (batch_size, self.prompt_length),
@@ -78,7 +72,6 @@ class StaticPromptTuningModel(nn.Module):
         expanded = {
             **batch,
             "input_ids": torch.cat((prompt_ids, input_ids), dim=1),
-            "inputs_embeds": inputs_embeds,
             "attention_mask": torch.cat((prompt_mask, attention_mask), dim=1),
         }
         if labels is not None:
@@ -91,11 +84,34 @@ class StaticPromptTuningModel(nn.Module):
             expanded["labels"] = torch.cat((ignored, labels), dim=1)
         return expanded
 
+    @contextmanager
+    def _inject_prompt_embeddings(self) -> Iterator[None]:
+        embeddings = self.get_input_embeddings()
+
+        def replace_prompt(_module: nn.Module, _inputs: Any, output: torch.Tensor):
+            if output.ndim != 3 or output.shape[1] < self.prompt_length:
+                return output
+            prompt = self.soft_prompt.to(
+                device=output.device,
+                dtype=output.dtype,
+            ).unsqueeze(0).expand(output.shape[0], -1, -1)
+            return torch.cat((prompt, output[:, self.prompt_length:]), dim=1)
+
+        handle = embeddings.register_forward_hook(replace_prompt)
+        try:
+            yield
+        finally:
+            handle.remove()
+
     def forward(self, **kwargs: Any) -> Any:
-        return self.base_model(**self._expand_inputs(dict(kwargs)))
+        expanded = self._expand_inputs(dict(kwargs))
+        with self._inject_prompt_embeddings():
+            return self.base_model(**expanded)
 
     def generate(self, **kwargs: Any) -> Any:
-        return self.base_model.generate(**self._expand_inputs(dict(kwargs)))
+        expanded = self._expand_inputs(dict(kwargs))
+        with self._inject_prompt_embeddings():
+            return self.base_model.generate(**expanded)
 
     def save_prompt(self, output_dir: str | Path) -> None:
         output_path = Path(output_dir)

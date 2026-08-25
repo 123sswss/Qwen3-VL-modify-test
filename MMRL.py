@@ -367,6 +367,48 @@ class ResidualCrossAttention(nn.Module):
         return queries + delta, delta
 
 
+class ResidualConcatMLPFusion(nn.Module):
+    """Fuse each prompt with mean-pooled visual and text tokens without attention."""
+
+    def __init__(self, hidden_dim):
+        super().__init__()
+        self.hidden_dim = int(hidden_dim)
+        self.input_norm = nn.LayerNorm(3 * self.hidden_dim)
+        self.input_projection = nn.Linear(3 * self.hidden_dim, self.hidden_dim)
+        self.output_projection = ZeroInitProjection(self.hidden_dim)
+
+    def forward(self, queries, memory):
+        if queries.ndim != 3 or memory.ndim != 3:
+            raise ValueError(
+                "concat-MLP fusion expects [B,S,D] tensors, got "
+                f"queries={tuple(queries.shape)} memory={tuple(memory.shape)}"
+            )
+        if queries.shape[0] != memory.shape[0]:
+            raise ValueError(
+                "concat-MLP fusion batch mismatch: "
+                f"queries={queries.shape[0]} memory={memory.shape[0]}"
+            )
+        if queries.shape[-1] != self.hidden_dim or memory.shape[-1] != self.hidden_dim:
+            raise ValueError(
+                "concat-MLP fusion hidden dimension mismatch: "
+                f"expected={self.hidden_dim} queries={queries.shape[-1]} "
+                f"memory={memory.shape[-1]}"
+            )
+        if memory.shape[1] != 2:
+            raise ValueError(
+                "concat-MLP fusion requires exactly two mean-pooled memory tokens "
+                f"(visual, text), got {memory.shape[1]}"
+            )
+
+        query_count = queries.shape[1]
+        visual = memory[:, 0:1].expand(-1, query_count, -1)
+        text = memory[:, 1:2].expand(-1, query_count, -1)
+        fused = torch.cat((queries, visual, text), dim=-1)
+        hidden = F.gelu(self.input_projection(self.input_norm(fused)))
+        delta = self.output_projection(hidden)
+        return queries + delta, delta
+
+
 class MMRL(nn.Module):
     def __init__(self, config):
         super().__init__()
@@ -398,6 +440,19 @@ class MMRL(nn.Module):
             raise ValueError(
                 "MMRL_MEMORY_POOLING_MODE must be 'multi_query', 'mean', or "
                 "'text_guided', got "
+                f"{self.memory_pooling_mode!r}"
+            )
+        self.fusion_mode = str(
+            getattr(cfg, "MMRL_FUSION_MODE", "cross_attention")
+        )
+        if self.fusion_mode not in {"cross_attention", "concat_mlp"}:
+            raise ValueError(
+                "MMRL_FUSION_MODE must be 'cross_attention' or 'concat_mlp', got "
+                f"{self.fusion_mode!r}"
+            )
+        if self.fusion_mode == "concat_mlp" and self.memory_pooling_mode != "mean":
+            raise ValueError(
+                "concat_mlp fusion requires MMRL_MEMORY_POOLING_MODE='mean', got "
                 f"{self.memory_pooling_mode!r}"
             )
 
@@ -463,9 +518,31 @@ class MMRL(nn.Module):
                 self.memory_attention_dim,
             )
             self.text_memory_pooling = None
-        self.cross_attention = ResidualCrossAttention(
-            self.vision_token_dim,
-            int(cfg.MMRL_CROSS_ATTENTION_HEADS),
+        if self.fusion_mode == "cross_attention":
+            self.cross_attention = ResidualCrossAttention(
+                self.vision_token_dim,
+                int(cfg.MMRL_CROSS_ATTENTION_HEADS),
+            )
+        else:
+            self.cross_attention = ResidualConcatMLPFusion(
+                self.vision_token_dim,
+            )
+        fusion_parameter_count = sum(
+            parameter.numel() for parameter in self.cross_attention.parameters()
+        )
+        expected_fusion_parameters = (
+            4 * self.vision_token_dim * self.vision_token_dim
+            + 8 * self.vision_token_dim
+        )
+        if fusion_parameter_count != expected_fusion_parameters:
+            raise RuntimeError(
+                "fusion parameter budget mismatch: "
+                f"mode={self.fusion_mode} expected={expected_fusion_parameters} "
+                f"actual={fusion_parameter_count}"
+            )
+        print(
+            "[MMRL_FUSION_PARAMETER_AUDIT] "
+            f"mode={self.fusion_mode} parameters={fusion_parameter_count}"
         )
 
         self.cached_base_queries = None
@@ -626,6 +703,7 @@ class MMRL(nn.Module):
             print(f"  query_architecture={self.query_architecture}")
             print(f"  dynamic_cross_attention={self.use_dynamic_cross_attention}")
             print(f"  memory_pooling_mode={self.memory_pooling_mode}")
+            print(f"  fusion_mode={self.fusion_mode}")
             print(
                 "  visual_memory_shape="
                 f"{None if visual_memory is None else tuple(visual_memory.shape)}"

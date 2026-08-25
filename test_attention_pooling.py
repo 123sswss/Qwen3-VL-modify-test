@@ -4,7 +4,12 @@ from types import SimpleNamespace
 import torch
 import torch.nn as nn
 
-from MMRL import MMRL, MaskedMeanPooling
+from MMRL import (
+    MMRL,
+    MaskedMeanPooling,
+    ResidualConcatMLPFusion,
+    ResidualCrossAttention,
+)
 from utils import attention_pooling
 
 
@@ -46,7 +51,12 @@ class AttentionPoolingTest(unittest.TestCase):
 
 class MMRLAblationTest(unittest.TestCase):
     @staticmethod
-    def _config(*, dynamic_cross_attention=True, pooling_mode="multi_query"):
+    def _config(
+        *,
+        dynamic_cross_attention=True,
+        pooling_mode="multi_query",
+        fusion_mode="cross_attention",
+    ):
         return SimpleNamespace(mmrl_config={
             "INSERT_LAYER": [1, 2],
             "RP_SPACE_LENGTH": 3,
@@ -60,6 +70,7 @@ class MMRLAblationTest(unittest.TestCase):
             "MMRL_SAME_INIT_LAYER_PROJECTORS": True,
             "MMRL_USE_DYNAMIC_CROSS_ATTENTION": dynamic_cross_attention,
             "MMRL_MEMORY_POOLING_MODE": pooling_mode,
+            "MMRL_FUSION_MODE": fusion_mode,
         })
 
     @staticmethod
@@ -117,6 +128,52 @@ class MMRLAblationTest(unittest.TestCase):
 
         self.assertEqual(len(outputs), 2)
         self.assertEqual(mmrl.last_rep_shape, (2, 2, 3, 4))
+        self.assertEqual(mmrl.last_memory_shape, (2, 2, 4))
+
+    def test_concat_mlp_matches_cross_attention_parameter_budget(self):
+        hidden_dim = 8
+        attention = ResidualCrossAttention(hidden_dim, num_heads=2)
+        concat_mlp = ResidualConcatMLPFusion(hidden_dim)
+
+        attention_parameters = sum(p.numel() for p in attention.parameters())
+        concat_parameters = sum(p.numel() for p in concat_mlp.parameters())
+        self.assertEqual(concat_parameters, attention_parameters)
+
+    def test_concat_mlp_is_zero_initialized_then_uses_both_modalities(self):
+        torch.manual_seed(11)
+        fusion = ResidualConcatMLPFusion(hidden_dim=4)
+        queries = torch.randn(2, 3, 4)
+        memory = torch.randn(2, 2, 4)
+
+        initial, initial_delta = fusion(queries, memory)
+        torch.testing.assert_close(initial, queries)
+        torch.testing.assert_close(initial_delta, torch.zeros_like(initial_delta))
+
+        with torch.no_grad():
+            fusion.output_projection.weight.copy_(torch.eye(4))
+        conditioned, _ = fusion(queries, memory)
+        visual_changed, _ = fusion(
+            queries,
+            torch.stack((memory[:, 0] + 1.0, memory[:, 1]), dim=1),
+        )
+        text_changed, _ = fusion(
+            queries,
+            torch.stack((memory[:, 0], memory[:, 1] - 1.0), dim=1),
+        )
+
+        self.assertFalse(torch.allclose(conditioned, visual_changed))
+        self.assertFalse(torch.allclose(conditioned, text_changed))
+
+    def test_concat_mlp_requires_mean_pooling(self):
+        with self.assertRaisesRegex(ValueError, "requires.*mean"):
+            MMRL(self._config(fusion_mode="concat_mlp"))
+
+        mmrl = MMRL(self._config(pooling_mode="mean", fusion_mode="concat_mlp"))
+        outputs = mmrl(**self._inputs())
+        self.assertEqual([tuple(output.shape) for output in outputs], [
+            (2, 3, 4),
+            (2, 3, 4),
+        ])
         self.assertEqual(mmrl.last_memory_shape, (2, 2, 4))
 
     def test_text_guided_pooling_uses_dynamic_visual_slots(self):

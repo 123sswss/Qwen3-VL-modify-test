@@ -105,6 +105,7 @@ def build_experiment_config(args: argparse.Namespace) -> Dict[str, Any]:
         "same_init_layer_projectors": args.same_init_layer_projectors,
         "use_dynamic_cross_attention": not args.disable_dynamic_cross_attention,
         "memory_pooling_mode": args.memory_pooling_mode,
+        "fusion_mode": args.fusion_mode,
         "mmrl_relation_loss_weight": args.relation_weight,
         "mmrl_relation_max_tokens": args.relation_max_tokens,
         "mmrl_variance_floor_ratio": 0.50,
@@ -666,6 +667,12 @@ def parse_args() -> argparse.Namespace:
             "slots for Cross-Attention memory."
         ),
     )
+    parser.add_argument(
+        "--fusion-mode",
+        choices=("cross_attention", "concat_mlp"),
+        default="cross_attention",
+        help="Fuse pooled memory into layer prompts with attention or an equal-parameter MLP.",
+    )
     parser.add_argument("--stage1-lr", type=float, default=1e-4)
     parser.add_argument("--mmrl-lr", type=float, default=6e-5)
     parser.add_argument("--relation-weight", type=float, default=0.050)
@@ -725,6 +732,8 @@ def parse_args() -> argparse.Namespace:
         parser.error("--projector-hidden-dim must be positive")
     if args.cross_attention_heads < 1:
         parser.error("--cross-attention-heads must be positive")
+    if args.fusion_mode == "concat_mlp" and args.memory_pooling_mode != "mean":
+        parser.error("--fusion-mode concat_mlp requires --memory-pooling-mode mean")
     if args.relation_weight < 0.0:
         parser.error("--relation-weight must be non-negative")
     if args.relation_max_tokens < 2:
@@ -765,6 +774,7 @@ def main() -> int:
         "dynamic_cross_attention="
         f"{not args.disable_dynamic_cross_attention} "
         f"memory_pooling_mode={args.memory_pooling_mode} "
+        f"fusion_mode={args.fusion_mode} "
         "train_gate_mode=open_full_ce relation_mode=uniform "
         f"relation={args.relation_weight} "
         f"stage1_batch={args.batch_size}x{args.gradient_accumulation} "
@@ -854,6 +864,7 @@ def main() -> int:
                     not args.disable_dynamic_cross_attention
                 ),
                 "memory_pooling_mode": args.memory_pooling_mode,
+                "fusion_mode": args.fusion_mode,
                 "train_gate_mode": "open_full_ce",
                 "relation_weight": args.relation_weight,
                 "relation_max_tokens": args.relation_max_tokens,

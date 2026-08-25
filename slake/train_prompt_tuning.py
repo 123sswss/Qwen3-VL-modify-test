@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import random
+import sys
 from pathlib import Path
 from typing import Any, Dict, List
 
@@ -13,6 +14,10 @@ import numpy as np
 import torch
 from torch import nn
 from transformers import AutoModelForImageTextToText, AutoProcessor, Trainer, TrainingArguments
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 
 from slake.data_pipeline import SLAKEDataCollator, SLAKEDataset
 from slake.prompt_tuning import StaticPromptTuningModel
@@ -126,4 +131,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

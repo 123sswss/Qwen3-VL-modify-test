@@ -73,6 +73,11 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
                 "MMRL_MEMORY_POOLING_MODE",
                 cfg.MMRL_MEMORY_POOLING_MODE,
             ),
+            "MMRL_FUSION_MODE": _cfg_attr(
+                config,
+                "MMRL_FUSION_MODE",
+                cfg.MMRL_FUSION_MODE,
+            ),
             "MMRL_RELATION_MAX_TOKENS": _cfg_attr(config, "MMRL_RELATION_MAX_TOKENS", 64),
             "MMRL_VARIANCE_FLOOR_RATIO": _cfg_attr(config, "MMRL_VARIANCE_FLOOR_RATIO", 0.50),
             "MMRL_VARIANCE_FLOOR_WEIGHT": _cfg_attr(config, "MMRL_VARIANCE_FLOOR_WEIGHT", 0.10),

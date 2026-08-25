@@ -965,6 +965,10 @@ def build_model_and_processor(model_path, experiment_cfg=None):
         "MMRL_MEMORY_POOLING_MODE",
         str(experiment_cfg.get("memory_pooling_mode", "multi_query")),
     )
+    config.MMRL_FUSION_MODE = os.getenv(
+        "MMRL_FUSION_MODE",
+        str(experiment_cfg.get("fusion_mode", "cross_attention")),
+    )
     config.MMRL_RELATION_LOSS_WEIGHT = float(experiment_cfg.get(
         "mmrl_relation_loss_weight",
         os.getenv("MMRL_RELATION_LOSS_WEIGHT", "0.0"),
@@ -1025,11 +1029,12 @@ def build_model_and_processor(model_path, experiment_cfg=None):
             config.MMRL_PROJECTOR_HIDDEN_DIM,
             mmrl.projector_hidden_dim,
         ),
-        "MMRL_CROSS_ATTENTION_HEADS": (
+    }
+    if config.MMRL_FUSION_MODE == "cross_attention":
+        propagation_checks["MMRL_CROSS_ATTENTION_HEADS"] = (
             config.MMRL_CROSS_ATTENTION_HEADS,
             mmrl.cross_attention.num_heads,
-        ),
-    }
+        )
     for name, (requested, actual) in propagation_checks.items():
         if abs(float(requested) - float(actual)) > 1e-9:
             raise RuntimeError(
@@ -1040,6 +1045,11 @@ def build_model_and_processor(model_path, experiment_cfg=None):
             "MMRL_MEMORY_POOLING_MODE config propagation failed: "
             f"requested={config.MMRL_MEMORY_POOLING_MODE} "
             f"actual={mmrl.memory_pooling_mode}"
+        )
+    if config.MMRL_FUSION_MODE != mmrl.fusion_mode:
+        raise RuntimeError(
+            "MMRL_FUSION_MODE config propagation failed: "
+            f"requested={config.MMRL_FUSION_MODE} actual={mmrl.fusion_mode}"
         )
     memory_tokens_per_image = 0
     if config.MMRL_USE_DYNAMIC_CROSS_ATTENTION:
@@ -1061,6 +1071,7 @@ def build_model_and_processor(model_path, experiment_cfg=None):
         "dynamic_cross_attention="
         f"{config.MMRL_USE_DYNAMIC_CROSS_ATTENTION} "
         f"memory_pooling_mode={config.MMRL_MEMORY_POOLING_MODE} "
+        f"fusion_mode={config.MMRL_FUSION_MODE} "
         "train_gate_mode=open_full_ce relation_mode=uniform "
         "memory_tokens_per_image="
         f"{memory_tokens_per_image}"
@@ -1162,6 +1173,7 @@ def build_model_and_processor(model_path, experiment_cfg=None):
         "dynamic_cross_attention="
         f"{config.MMRL_USE_DYNAMIC_CROSS_ATTENTION} "
         f"memory_pooling_mode={config.MMRL_MEMORY_POOLING_MODE} "
+        f"fusion_mode={config.MMRL_FUSION_MODE} "
         f"mmrl_relation_loss_weight={config.MMRL_RELATION_LOSS_WEIGHT} "
         f"mmrl_variance_floor_ratio={config.MMRL_VARIANCE_FLOOR_RATIO} "
         f"mmrl_variance_floor_weight={config.MMRL_VARIANCE_FLOOR_WEIGHT}"

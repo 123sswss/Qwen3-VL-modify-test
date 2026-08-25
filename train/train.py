@@ -218,6 +218,9 @@ CFG = {
             "text_guided_visual_query_norm_mean",
             "text_guided_visual_context_norm_mean",
             "text_guided_visual_context_to_query_ratio",
+            "text_guided_visual_fusion_text_norm_mean",
+            "text_guided_visual_fusion_context_norm_mean",
+            "text_guided_visual_fusion_cos_mean",
             "temperature",
         ],
         "learning_rate": {

@@ -132,6 +132,12 @@ class MMRLAblationTest(unittest.TestCase):
             "text_guided_visual_attention_entropy_norm",
             mmrl.debug_context,
         )
+        torch.testing.assert_close(
+            mmrl.debug_context["text_guided_visual_fusion_text_norm_mean"],
+            mmrl.debug_context["text_guided_visual_fusion_context_norm_mean"],
+            rtol=1e-3,
+            atol=1e-3,
+        )
 
         visual_padded, visual_mask = mmrl._pack_visual_states(
             inputs["visual_states"],
@@ -152,6 +158,28 @@ class MMRLAblationTest(unittest.TestCase):
             inputs["images_per_sample"],
         )
         self.assertFalse(torch.allclose(first, second))
+
+        pooling = mmrl.visual_memory_pooling
+        with torch.no_grad():
+            pooling.context_output_projection.weight.zero_()
+            pooling.context_output_projection.bias.zero_()
+        role_control = pooling(
+            visual_padded,
+            visual_mask,
+            inputs["text_states"],
+            inputs["text_mask"],
+            inputs["images_per_sample"],
+        )
+        with torch.no_grad():
+            pooling.role_queries.normal_(mean=0.0, std=1.0)
+        role_changed = pooling(
+            visual_padded,
+            visual_mask,
+            inputs["text_states"],
+            inputs["text_mask"],
+            inputs["images_per_sample"],
+        )
+        torch.testing.assert_close(role_control, role_changed)
 
 
 if __name__ == "__main__":

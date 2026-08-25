@@ -93,7 +93,7 @@ class MaskedMeanPooling(nn.Module):
 
 
 class TextGuidedVisualPooling(nn.Module):
-    """Extract a small set of question-conditioned visual memory tokens."""
+    """Fuse text with visual evidence while using roles only for routing."""
 
     def __init__(
         self,
@@ -129,6 +129,10 @@ class TextGuidedVisualPooling(nn.Module):
         self.context_output_projection = nn.Linear(
             self.attention_dim,
             output_dim,
+        )
+        self.context_fusion_norm = nn.LayerNorm(
+            output_dim,
+            elementwise_affine=False,
         )
         self.output_norm = nn.LayerNorm(output_dim)
         self.debug_context = {}
@@ -202,12 +206,12 @@ class TextGuidedVisualPooling(nn.Module):
             device=text_query.device,
             dtype=text_query.dtype,
         )
-        query_residual = (
+        routing_query = (
             text_query.unsqueeze(1) + role_queries.unsqueeze(0)
         ) / math.sqrt(2.0)
 
         normalized_visual = self.visual_input_norm(visual_states)
-        queries = self.query_projection(query_residual)
+        queries = self.query_projection(routing_query)
         keys = self.key_projection(normalized_visual)
         values = self.value_projection(normalized_visual)
         scores = torch.einsum("bqa,bsa->bqs", queries, keys)
@@ -216,8 +220,14 @@ class TextGuidedVisualPooling(nn.Module):
         weights = torch.softmax(scores, dim=-1).to(dtype=values.dtype)
         context = torch.einsum("bqs,bsa->bqa", weights, values)
         context_output = self.context_output_projection(context)
+        normalized_context = self.context_fusion_norm(context_output)
+        text_value = text_query.unsqueeze(1).expand(
+            -1,
+            self.slot_count,
+            -1,
+        )
         pooled = self.output_norm(
-            query_residual + context_output
+            (text_value + normalized_context) / math.sqrt(2.0)
         )
 
         if self.training:
@@ -234,8 +244,10 @@ class TextGuidedVisualPooling(nn.Module):
                     torch.zeros_like(entropy),
                 )
                 pooled_float = pooled.detach().float()
-                query_norm = query_residual.detach().float().norm(dim=-1).mean()
+                query_norm = routing_query.detach().float().norm(dim=-1).mean()
                 context_norm = context_output.detach().float().norm(dim=-1).mean()
+                fusion_text = text_value.detach().float()
+                fusion_context = normalized_context.detach().float()
                 pooled_norm = pooled_float.norm(dim=-1).mean().clamp_min(1e-8)
                 centered = pooled_float - pooled_float.mean(dim=1, keepdim=True)
                 slot_specificity = centered.norm(dim=-1).mean() / pooled_norm
@@ -268,6 +280,20 @@ class TextGuidedVisualPooling(nn.Module):
                     "text_guided_visual_context_norm_mean": context_norm,
                     "text_guided_visual_context_to_query_ratio": (
                         context_norm / query_norm.clamp_min(1e-8)
+                    ),
+                    "text_guided_visual_fusion_text_norm_mean": (
+                        fusion_text.norm(dim=-1).mean()
+                    ),
+                    "text_guided_visual_fusion_context_norm_mean": (
+                        fusion_context.norm(dim=-1).mean()
+                    ),
+                    "text_guided_visual_fusion_cos_mean": (
+                        F.cosine_similarity(
+                            fusion_text,
+                            fusion_context,
+                            dim=-1,
+                            eps=1e-8,
+                        ).mean()
                     ),
                 }
         else:

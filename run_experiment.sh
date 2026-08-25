@@ -269,6 +269,42 @@ run_text_guided_balanced_fusion_slots8_seed45() {
     run_slake
 }
 
+run_prompt_tuning_seed44() {
+  local experiment_name="slake_prompt_tuning_len20"
+  local output_dir
+  output_dir="$(available_output_dir "$SLAKE_OUTPUT_ROOT" "${experiment_name}_seed44_${RUN_DATE}")"
+  mkdir -p "$output_dir/eval"
+  echo "[SLAKE_PROMPT_TUNING] experiment=$experiment_name seed=44 output=$output_dir"
+  (
+    cd "$ROOT_DIR" || exit 1
+    python slake/train_prompt_tuning.py \
+      --model-path "$MODEL_PATH" \
+      --data-root "$SLAKE_DATA_ROOT" \
+      --output-dir "$output_dir" \
+      --prompt-length "${PROMPT_TUNING_LENGTH:-20}" \
+      --epochs "${PROMPT_TUNING_EPOCHS:-3}" \
+      --seed 44 \
+      --data-seed 42 \
+      --learning-rate "${PROMPT_TUNING_LR:-0.3}" \
+      --batch-size "${PROMPT_TUNING_BATCH_SIZE:-2}" \
+      --gradient-accumulation "${PROMPT_TUNING_GRAD_ACCUM:-16}" \
+      2>&1 | tee "$output_dir/train.log"
+  ) || return 1
+  (
+    cd "$ROOT_DIR" || exit 1
+    python slake/slake_official_eval.py \
+      --backend prompt-tuning \
+      --base-model "$MODEL_PATH" \
+      --checkpoint "$output_dir/final" \
+      --questions "$SLAKE_DATA_ROOT/test.json" \
+      --image-root "$SLAKE_DATA_ROOT/imgs" \
+      --output-dir "$output_dir/eval" \
+      --language all \
+      --overwrite \
+      2>&1 | tee "$output_dir/eval.log"
+  )
+}
+
 run_ablation_suite() {
   run_ablation_no_relation_seeds2 || return 1
   run_ablation_independent_init_seeds2 || return 1
@@ -305,6 +341,9 @@ case "$RUN_TARGET" in
   slake_text_guided_balanced_fusion_slots8_seed45)
     run_text_guided_balanced_fusion_slots8_seed45 || failures=$((failures + 1))
     ;;
+  slake_prompt_tuning_seed44)
+    run_prompt_tuning_seed44 || failures=$((failures + 1))
+    ;;
   slake_ablation_suite)
     run_ablation_suite || failures=$((failures + 1))
     ;;
@@ -313,7 +352,7 @@ case "$RUN_TARGET" in
     run_slake || failures=$((failures + 1))
     ;;
   *)
-    echo "[ERR] 未知目标: $RUN_TARGET，可选 train、slake、slake_final_seeds4、slake_ablation_no_relation_seeds2、slake_ablation_independent_init_seeds2、slake_ablation_static_query_seed45、slake_ablation_mean_pooling_seed45、slake_mean_final_completion_suite、slake_text_guided_balanced_fusion_slots8_seed45、slake_ablation_suite、all。" >&2
+    echo "[ERR] 未知目标: $RUN_TARGET，可选 train、slake、slake_final_seeds4、slake_ablation_no_relation_seeds2、slake_ablation_independent_init_seeds2、slake_ablation_static_query_seed45、slake_ablation_mean_pooling_seed45、slake_mean_final_completion_suite、slake_text_guided_balanced_fusion_slots8_seed45、slake_prompt_tuning_seed44、slake_ablation_suite、all。" >&2
     exit 2
     ;;
 esac

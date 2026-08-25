@@ -23,6 +23,10 @@ BACKEND_SPECS = {
     "dora-vision": ("loraTest/doraVisionTest.py", "DoraModelInterface"),
     "ia3": ("loraTest/ia3Test.py", "IA3ModelInterface"),
     "adapter": ("loraTest/adapterTest.py", "AdapterModelInterface"),
+    "prompt-tuning": (
+        "slake/prompt_tuning_interface.py",
+        "PromptTuningModelInterface",
+    ),
 }
 
 

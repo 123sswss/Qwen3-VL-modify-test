@@ -218,6 +218,45 @@ run_ablation_mean_pooling_seed45() {
     run_slake
 }
 
+run_mean_pooling_final_seeds46_47() {
+  local seed
+  for seed in 46 47; do
+    SLAKE_EXPERIMENT_NAME="slake_mmrl_ablation_mean_pooling_relation0050" \
+    SLAKE_RUN_SEED="$seed" \
+    MMRL_SAME_INIT_LAYER_PROJECTORS=1 \
+    MMRL_USE_DYNAMIC_CROSS_ATTENTION=1 \
+    MMRL_MEMORY_POOLING_MODE=mean \
+    MMRL_RELATION_LOSS_WEIGHT=0.05 \
+      run_slake || return 1
+  done
+}
+
+run_mean_pooling_no_relation_seed45() {
+  SLAKE_EXPERIMENT_NAME="slake_mmrl_mean_pooling_no_relation" \
+  SLAKE_RUN_SEED=45 \
+  MMRL_SAME_INIT_LAYER_PROJECTORS=1 \
+  MMRL_USE_DYNAMIC_CROSS_ATTENTION=1 \
+  MMRL_MEMORY_POOLING_MODE=mean \
+  MMRL_RELATION_LOSS_WEIGHT=0.0 \
+    run_slake
+}
+
+run_mean_pooling_independent_init_seed45() {
+  SLAKE_EXPERIMENT_NAME="slake_mmrl_mean_pooling_independent_init_relation0050" \
+  SLAKE_RUN_SEED=45 \
+  MMRL_SAME_INIT_LAYER_PROJECTORS=0 \
+  MMRL_USE_DYNAMIC_CROSS_ATTENTION=1 \
+  MMRL_MEMORY_POOLING_MODE=mean \
+  MMRL_RELATION_LOSS_WEIGHT=0.05 \
+    run_slake
+}
+
+run_mean_final_completion_suite() {
+  run_mean_pooling_final_seeds46_47 || return 1
+  run_mean_pooling_no_relation_seed45 || return 1
+  run_mean_pooling_independent_init_seed45
+}
+
 run_text_guided_balanced_fusion_slots8_seed45() {
   SLAKE_EXPERIMENT_NAME="slake_mmrl_text_guided_balanced_fusion_slots8_relation0050" \
   SLAKE_RUN_SEED=45 \
@@ -260,6 +299,9 @@ case "$RUN_TARGET" in
   slake_ablation_mean_pooling_seed45)
     run_ablation_mean_pooling_seed45 || failures=$((failures + 1))
     ;;
+  slake_mean_final_completion_suite)
+    run_mean_final_completion_suite || failures=$((failures + 1))
+    ;;
   slake_text_guided_balanced_fusion_slots8_seed45)
     run_text_guided_balanced_fusion_slots8_seed45 || failures=$((failures + 1))
     ;;
@@ -271,7 +313,7 @@ case "$RUN_TARGET" in
     run_slake || failures=$((failures + 1))
     ;;
   *)
-    echo "[ERR] 未知目标: $RUN_TARGET，可选 train、slake、slake_final_seeds4、slake_ablation_no_relation_seeds2、slake_ablation_independent_init_seeds2、slake_ablation_static_query_seed45、slake_ablation_mean_pooling_seed45、slake_text_guided_balanced_fusion_slots8_seed45、slake_ablation_suite、all。" >&2
+    echo "[ERR] 未知目标: $RUN_TARGET，可选 train、slake、slake_final_seeds4、slake_ablation_no_relation_seeds2、slake_ablation_independent_init_seeds2、slake_ablation_static_query_seed45、slake_ablation_mean_pooling_seed45、slake_mean_final_completion_suite、slake_text_guided_balanced_fusion_slots8_seed45、slake_ablation_suite、all。" >&2
     exit 2
     ;;
 esac

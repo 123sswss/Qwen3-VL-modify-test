@@ -9,13 +9,14 @@ SLAKE_OUTPUT_ROOT="${SLAKE_OUTPUT_ROOT:-$ROOT_DIR/slake/outputs/mmrl}"
 PATHVQA_DATA_ROOT="${PATHVQA_DATA_ROOT:-/root/autodl-tmp/dataset/pathVQA}"
 PATHVQA_CACHE_ROOT="${PATHVQA_CACHE_ROOT:-$PATHVQA_DATA_ROOT/.hf_cache}"
 PATHVQA_OUTPUT_ROOT="${PATHVQA_OUTPUT_ROOT:-$ROOT_DIR/pathvqa/outputs/mmrl}"
+PATHVQA_LORA_OUTPUT_ROOT="${PATHVQA_LORA_OUTPUT_ROOT:-$ROOT_DIR/pathvqa/outputs/lora}"
 ENV_RUN_TARGET="${RUN_TARGET:-}"
 RUN_TARGET="${1:-${ENV_RUN_TARGET:-${MMRL_RUN_TARGET:-all}}}"
 RUN_DATE="${MMRL_RUN_DATE:-$(date +%Y%m%d)}"
 SEED="${MMRL_FIXED_SEED:-44}"
 SHUTDOWN_ON_EXIT="${MMRL_SHUTDOWN_ON_EXIT:-1}"
 
-mkdir -p "$OUTPUT_ROOT" "$SLAKE_OUTPUT_ROOT" "$PATHVQA_OUTPUT_ROOT"
+mkdir -p "$OUTPUT_ROOT" "$SLAKE_OUTPUT_ROOT" "$PATHVQA_OUTPUT_ROOT" "$PATHVQA_LORA_OUTPUT_ROOT"
 echo "[RUN_TARGET] selected=$RUN_TARGET positional=${1:-<unset>} env=${ENV_RUN_TARGET:-<unset>} mmrl_env=${MMRL_RUN_TARGET:-<unset>}"
 
 cancel_shutdown_on_interrupt() {
@@ -289,6 +290,96 @@ run_pathvqa() {
     "$output_dir/eval.log"
 }
 
+run_pathvqa_lora_eval() {
+  local checkpoint="$1"
+  local split="$2"
+  local eval_output_dir="$3"
+  local eval_log="$4"
+  if [ ! -f "$checkpoint/adapter_config.json" ]; then
+    echo "[ERR] LoRA checkpoint 缺少 adapter_config.json: $checkpoint" >&2
+    return 1
+  fi
+  mkdir -p "$eval_output_dir"
+  (
+    cd "$ROOT_DIR" || exit 1
+    python pathvqa/pathvqa_official_eval.py \
+      --backend lora-vision \
+      --base-model "$MODEL_PATH" \
+      --checkpoint "$checkpoint" \
+      --data-root "$PATHVQA_DATA_ROOT" \
+      --cache-dir "$PATHVQA_CACHE_ROOT" \
+      --split "$split" \
+      --output-dir "$eval_output_dir" \
+      --overwrite \
+      2>&1 | tee "$eval_log"
+  )
+}
+
+run_pathvqa_lora_visual_attn_r128() {
+  local experiment_name="pathvqa_lora_visual_all_attention_r128"
+  local run_seed="${PATHVQA_RUN_SEED:-$SEED}"
+  local epochs="${PATHVQA_LORA_EPOCHS:-3}"
+  if ! python -c 'import datasets, pyarrow, peft' >/dev/null 2>&1; then
+    echo "[ERR] PathVQA LoRA 需要 datasets、pyarrow 和 peft。先运行: python -m pip install -r pathvqa/requirements.txt" >&2
+    return 2
+  fi
+
+  local output_dir
+  output_dir="$(available_output_dir "$PATHVQA_LORA_OUTPUT_ROOT" "${experiment_name}_seed${run_seed}_${RUN_DATE}")"
+  mkdir -p "$output_dir"
+  echo "[PATHVQA_LORA] experiment=$experiment_name seed=$run_seed scope=visual_all_attention rank=128 epochs=$epochs output=$output_dir"
+  (
+    cd "$ROOT_DIR" || exit 1
+    python -m pathvqa.train_visual_lora \
+      --data-root "$PATHVQA_DATA_ROOT" \
+      --cache-dir "$PATHVQA_CACHE_ROOT" \
+      --model-path "$MODEL_PATH" \
+      --output-dir "$output_dir" \
+      --epochs "$epochs" \
+      --seed "$run_seed" \
+      --data-seed 42 \
+      --learning-rate "${PATHVQA_LORA_LR:-1e-4}" \
+      --batch-size "${PATHVQA_LORA_BATCH_SIZE:-1}" \
+      --gradient-accumulation "${PATHVQA_LORA_GRAD_ACCUM:-32}" \
+      --dataloader-workers "${PATHVQA_LORA_WORKERS:-2}" \
+      2>&1 | tee "$output_dir/train.log"
+  ) || return 1
+
+  local epoch_id
+  for ((epoch_id = 1; epoch_id <= epochs; epoch_id++)); do
+    local checkpoint="$output_dir/checkpoints/epoch_${epoch_id}"
+    echo "[PATHVQA_LORA_VALIDATION] epoch=$epoch_id checkpoint=$checkpoint"
+    run_pathvqa_lora_eval \
+      "$checkpoint" \
+      validation \
+      "$output_dir/eval_validation/epoch_${epoch_id}" \
+      "$output_dir/eval_validation_epoch_${epoch_id}.log" || return 1
+  done
+
+  local selection
+  selection="$(python "$ROOT_DIR/pathvqa/select_best_epoch.py" --root "$output_dir" --epochs "$epochs")" || return 1
+  local best_epoch
+  local best_validation_score
+  IFS=$'\t' read -r best_epoch best_validation_score <<< "$selection"
+  local best_checkpoint="$output_dir/checkpoints/epoch_${best_epoch}"
+  echo "[PATHVQA_LORA_TEST] best_epoch=$best_epoch validation=$best_validation_score"
+  run_pathvqa_lora_eval \
+    "$best_checkpoint" \
+    test \
+    "$output_dir/eval_test/epoch_${best_epoch}" \
+    "$output_dir/eval_test_epoch_${best_epoch}.log" || return 1
+
+  local test_score
+  test_score="$(python -c 'import json,sys;print(json.load(open(sys.argv[1],encoding="utf-8"))["overall_accuracy"])' "$output_dir/eval_test/epoch_${best_epoch}/pathvqa_summary.json")" || return 1
+  printf 'experiment\tseed\tbest_epoch\tvalidation_accuracy\ttest_accuracy\tcheckpoint\n' \
+    > "$output_dir/selected_result.tsv"
+  printf '%s\t%s\t%s\t%s\t%s\t%s\n' \
+    "$experiment_name" "$run_seed" "$best_epoch" "$best_validation_score" \
+    "$test_score" "$best_checkpoint" \
+    >> "$output_dir/selected_result.tsv"
+  cat "$output_dir/selected_result.tsv"
+}
+
 run_final_seeds4() {
   local seed
   for seed in 44 45 46 47; do
@@ -509,12 +600,15 @@ case "$RUN_TARGET" in
   pathvqa)
     run_pathvqa || failures=$((failures + 1))
     ;;
+  pathvqa_lora_visual_attn_r128)
+    run_pathvqa_lora_visual_attn_r128 || failures=$((failures + 1))
+    ;;
   all)
     run_train_dataset || failures=$((failures + 1))
     run_slake || failures=$((failures + 1))
     ;;
   *)
-    echo "[ERR] 未知目标: $RUN_TARGET，可选 train、slake、pathvqa、slake_final_seeds4、slake_ablation_no_relation_seeds2、slake_ablation_independent_init_seeds2、slake_ablation_static_query_seed45、slake_ablation_mean_pooling_seed45、slake_mean_final_completion_suite、slake_text_guided_balanced_fusion_slots8_seed45、slake_prompt_tuning_seed44、slake_concat_mlp_fusion_seed45、slake_overnight_prompt_and_concat_mlp、slake_ablation_suite、all。" >&2
+    echo "[ERR] 未知目标: $RUN_TARGET，可选 train、slake、pathvqa、pathvqa_lora_visual_attn_r128、slake_final_seeds4、slake_ablation_no_relation_seeds2、slake_ablation_independent_init_seeds2、slake_ablation_static_query_seed45、slake_ablation_mean_pooling_seed45、slake_mean_final_completion_suite、slake_text_guided_balanced_fusion_slots8_seed45、slake_prompt_tuning_seed44、slake_concat_mlp_fusion_seed45、slake_overnight_prompt_and_concat_mlp、slake_ablation_suite、all。" >&2
     exit 2
     ;;
 esac

@@ -62,3 +62,19 @@ python pathvqa/pathvqa_official_eval.py \
 
 No PathVQA smoke-test target is provided. The first scheduled run is the full
 seed44 experiment.
+
+## Visual Attention LoRA-r128
+
+The first LoRA baseline is intentionally limited to one configuration: LoRA
+is attached to the qkv/proj attention linears in all 24 visual layers, while
+the language model and visual MLPs remain frozen. Rank is fixed at 128 and
+alpha at 256.
+
+```bash
+RUN_TARGET=pathvqa_lora_visual_attn_r128 bash run_experiment.sh
+```
+
+The run saves each of three adapter epochs, evaluates all three on the
+validation split, selects the highest validation Overall score with the
+earliest epoch as the tie-breaker, and evaluates only that checkpoint on test.
+The selected checkpoint and scores are written to `selected_result.tsv`.

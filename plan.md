@@ -59,7 +59,8 @@
 | Independent Init | seed44 | 复用已有结果 | 不跑 |
 | 归一化 Concat-MLP | seed44 | seed45 | 不跑 |
 
-- PathVQA Visual LoRA 首轮只运行 seed44：全部 24 个视觉层的 Attention qkv/proj、rank128；LoRA 完成后串行运行一次冻结 Base 模型的 test 推理，且在首轮结果确认前不排入其他 rank、视觉 MLP 或语言层 LoRA。
+- PathVQA 已完成的全部24层 Attention LoRA-r128 仅作为更宽作用域的上界。正式匹配基线必须运行 seed44 的视觉层17-24 Attention qkv/proj LoRA-r128，使作用层范围与 MMRL 一致；在该结果完成前不比较两种架构的优劣。
+- 当前优先队列固定为三项 seed44 串行实验：视觉层17-24 Attention LoRA-r128；极简 `7,927,808` 参数 MMRL（Mean Pooling、共享高维 `S` 直接进入共享 CA）Relation0；同一极简 MMRL Relation0.05。两项 MMRL 必须复用同一 Stage1 checkpoint 与初始 MMRL 状态，三项都按 validation 选择最佳 epoch 后仅测试一次。
 - 自建数据集只报告 Base、MMRL、Gated 三项，使用主实验超参，不根据结果调整。
 - 不再声称 128-slot Pooling 优于 Mean Pooling，除非 PathVQA 给出明确证据。
 - PathVQA 上的 MMRL 增益必须同时出现在 What 或非 Yes/No 问题中；若增益只来自 Yes/No，不得归因于视觉表征改进。

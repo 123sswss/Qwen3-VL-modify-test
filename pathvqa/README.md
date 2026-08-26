@@ -88,3 +88,22 @@ RUN_TARGET=pathvqa_lora_visual_attn_r128_then_base bash run_experiment.sh
 
 The Base result is stored separately under `pathvqa/outputs/base/`. To run or
 repeat only the Base inference, use `RUN_TARGET=pathvqa_base`.
+
+## Matched last8 comparison suite
+
+Run the three controlled seed44 experiments serially with one command:
+
+```bash
+RUN_TARGET=pathvqa_last8_lora_minimal_mmrl_relation_suite bash run_experiment.sh
+```
+
+The suite stops on the first failure and runs, in order:
+
+1. Attention LoRA-r128 on visual layers17-24 only (`qkv/proj`, 6,291,456 trainable parameters).
+2. Minimal 7,927,808-parameter MMRL with Mean Pooling, a shared full-dimensional `S` directly entering the shared residual CA, and Relation0.
+3. The identical minimal MMRL with Relation0.05.
+
+The two MMRL runs reuse one exact Stage1 checkpoint, so their Stage1 Gate,
+pooling weights, and initial MMRL state are identical. All three experiments
+evaluate epochs1-3 on PathVQA validation, select the best validation epoch,
+and evaluate test only once.

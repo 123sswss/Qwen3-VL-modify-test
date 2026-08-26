@@ -53,6 +53,11 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
                 "MMRL_CROSS_ATTENTION_HEADS",
                 cfg.MMRL_CROSS_ATTENTION_HEADS,
             ),
+            "MMRL_QUERY_ARCHITECTURE": _cfg_attr(
+                config,
+                "MMRL_QUERY_ARCHITECTURE",
+                cfg.MMRL_QUERY_ARCHITECTURE,
+            ),
             "INSERT_METHOD": _cfg_attr(config, "INSERT_METHOD", cfg.INSERT_METHOD),
             "GATING_MID_DIM": _cfg_attr(config, "GATING_MID_DIM", cfg.GATING_MID_DIM),
             "stretching_length": _cfg_attr(config, "stretching_length", cfg.stretching_length),

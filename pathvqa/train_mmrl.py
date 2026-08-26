@@ -29,7 +29,7 @@ for import_root in (REPO_ROOT, TRAIN_DIR):
 
 from data_pipeline import FourViewMMRLDataset
 from live_epoch_eval import _LiveModelInterface
-from mmrl_checkpoint import save_mmrl_checkpoint
+from mmrl_checkpoint import load_mmrl_delta, load_mmrl_manifest, save_mmrl_checkpoint
 from pathvqa.data_pipeline import (
     PathVQADataCollator,
     PathVQADataset,
@@ -292,6 +292,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--projector-hidden-dim", type=int, default=1024)
     parser.add_argument("--cross-attention-heads", type=int, default=8)
     parser.add_argument(
+        "--query-architecture",
+        choices=("layer_mlp_post_cross", "shared_direct_post_cross"),
+        default="layer_mlp_post_cross",
+    )
+    parser.add_argument("--expected-mmrl-parameters", type=int)
+    parser.add_argument(
         "--same-init-layer-projectors",
         action=argparse.BooleanOptionalAction,
         default=True,
@@ -325,6 +331,8 @@ def parse_args() -> argparse.Namespace:
         default=[],
     )
     parser.add_argument("--generation-checks", type=int, default=2)
+    parser.add_argument("--stage1-checkpoint-in", type=Path)
+    parser.add_argument("--stage1-checkpoint-out", type=Path)
     parser.add_argument("--no-save-final", action="store_true")
     args = parser.parse_args()
     args.smoke_test = False
@@ -361,7 +369,33 @@ def parse_args() -> argparse.Namespace:
         parser.error("--relation-max-tokens must be at least 2")
     if args.generation_checks < 0:
         parser.error("--generation-checks must be non-negative")
+    if args.expected_mmrl_parameters is not None and args.expected_mmrl_parameters < 1:
+        parser.error("--expected-mmrl-parameters must be positive")
     return args
+
+
+def validate_stage1_checkpoint(args: argparse.Namespace) -> Dict[str, Any]:
+    manifest = load_mmrl_manifest(args.stage1_checkpoint_in)
+    metadata = dict(manifest.get("metadata", {}))
+    expected = {
+        "stage": 1,
+        "dataset": "PathVQA",
+        "seed": args.seed,
+        "data_seed": args.data_seed,
+        "query_architecture": args.query_architecture,
+        "memory_pooling_mode": args.memory_pooling_mode,
+        "fusion_mode": args.fusion_mode,
+    }
+    mismatches = {
+        key: {"expected": value, "actual": metadata.get(key)}
+        for key, value in expected.items()
+        if metadata.get(key) != value
+    }
+    if mismatches:
+        raise RuntimeError(
+            f"Shared Stage1 checkpoint metadata mismatch: {mismatches}"
+        )
+    return manifest
 
 
 def main() -> int:
@@ -374,6 +408,10 @@ def main() -> int:
     )
     args.model_path = args.model_path.expanduser().resolve()
     args.output_dir = args.output_dir.expanduser().resolve()
+    if args.stage1_checkpoint_in is not None:
+        args.stage1_checkpoint_in = args.stage1_checkpoint_in.expanduser().resolve()
+    if args.stage1_checkpoint_out is not None:
+        args.stage1_checkpoint_out = args.stage1_checkpoint_out.expanduser().resolve()
     args.output_dir.mkdir(parents=True, exist_ok=True)
 
     seed_everything(args.seed)
@@ -388,7 +426,7 @@ def main() -> int:
         f"memory_attention_dim={args.memory_attention_dim} "
         f"projector_hidden_dim={args.projector_hidden_dim} "
         f"cross_attention_heads={args.cross_attention_heads} "
-        "query_architecture=layer_mlp_post_cross "
+        f"query_architecture={args.query_architecture} "
         f"same_init_layer_projectors={args.same_init_layer_projectors} "
         f"dynamic_cross_attention={not args.disable_dynamic_cross_attention} "
         f"memory_pooling_mode={args.memory_pooling_mode} "
@@ -397,7 +435,9 @@ def main() -> int:
         f"relation={args.relation_weight} "
         f"stage1_batch={args.batch_size}x{args.gradient_accumulation} "
         f"stage3_batch={args.stage3_batch_size}x{args.stage3_gradient_accumulation} "
-        f"seed={args.seed} data_seed={args.data_seed}"
+        f"seed={args.seed} data_seed={args.data_seed} "
+        f"stage1_checkpoint_in={args.stage1_checkpoint_in} "
+        f"stage1_checkpoint_out={args.stage1_checkpoint_out}"
     )
 
     model, processor = build_model_and_processor(
@@ -405,11 +445,15 @@ def main() -> int:
         experiment_cfg=experiment_cfg,
     )
     dataset, collator = build_dataset(args, processor)
-    stage1_dataset, stage1_collator, stage1_counts = build_stage1_dataset(
-        args,
-        processor,
-        dataset,
-    )
+    stage1_dataset = None
+    stage1_collator = None
+    stage1_counts: Dict[str, int] = {}
+    if args.stage1_checkpoint_in is None:
+        stage1_dataset, stage1_collator, stage1_counts = build_stage1_dataset(
+            args,
+            processor,
+            dataset,
+        )
     template_report, audit_batch = audit_template_and_collator(
         dataset,
         collator,
@@ -422,22 +466,62 @@ def main() -> int:
         "data_collator": collator,
     }
 
-    pooling_before = snapshot_stage1_pooling(model)
-    print("\n========== Running PathVQA Stage 1 ==========")
-    run_stage(
-        stage_id=1,
-        model=model,
-        processor=processor,
-        data_cfg=data_cfg,
-        train_cfg=train_cfg,
-        output_dir=str(args.output_dir),
-    )
-    stage1_pooling_update = audit_stage1_pooling_update(
-        model,
-        pooling_before,
-        require_update=True,
-        dataset_label="PATHVQA",
-    )
+    stage1_checkpoint_manifest = None
+    if args.stage1_checkpoint_in is None:
+        pooling_before = snapshot_stage1_pooling(model)
+        print("\n========== Running PathVQA Stage 1 ==========")
+        run_stage(
+            stage_id=1,
+            model=model,
+            processor=processor,
+            data_cfg=data_cfg,
+            train_cfg=train_cfg,
+            output_dir=str(args.output_dir),
+        )
+        stage1_pooling_update = audit_stage1_pooling_update(
+            model,
+            pooling_before,
+            require_update=True,
+            dataset_label="PATHVQA",
+        )
+        if args.stage1_checkpoint_out is not None:
+            stage1_checkpoint_manifest = save_mmrl_checkpoint(
+                model,
+                processor,
+                args.stage1_checkpoint_out,
+                args.model_path,
+                metadata={
+                    "experiment": args.experiment_name,
+                    "stage": 1,
+                    "dataset": "PathVQA",
+                    "seed": args.seed,
+                    "data_seed": args.data_seed,
+                    "query_architecture": args.query_architecture,
+                    "memory_pooling_mode": args.memory_pooling_mode,
+                    "fusion_mode": args.fusion_mode,
+                    "stage1_data": stage1_counts,
+                },
+            )
+            print(
+                "[PATHVQA_STAGE1_CHECKPOINT] "
+                f"saved={args.stage1_checkpoint_out}"
+            )
+    else:
+        stage1_checkpoint_manifest = validate_stage1_checkpoint(args)
+        loaded_manifest = load_mmrl_delta(model, args.stage1_checkpoint_in)
+        if loaded_manifest.get("weights_sha256") != stage1_checkpoint_manifest.get(
+            "weights_sha256"
+        ):
+            raise RuntimeError("Stage1 checkpoint changed between validation and load")
+        stage1_counts = dict(
+            stage1_checkpoint_manifest.get("metadata", {}).get("stage1_data", {})
+        )
+        stage1_pooling_update = None
+        print(
+            "[PATHVQA_STAGE1_REUSED] "
+            f"checkpoint={args.stage1_checkpoint_in} "
+            f"sha256={stage1_checkpoint_manifest.get('weights_sha256')}"
+        )
     forward_report = audit_model_forward(
         model,
         audit_batch,
@@ -474,7 +558,7 @@ def main() -> int:
                 "data_seed": args.data_seed,
                 "dataset": "PathVQA",
                 "split": args.split,
-                "query_architecture": "layer_mlp_post_cross",
+                "query_architecture": args.query_architecture,
                 "same_init_layer_projectors": args.same_init_layer_projectors,
                 "use_dynamic_cross_attention": (
                     not args.disable_dynamic_cross_attention
@@ -494,9 +578,11 @@ def main() -> int:
         "cache_dir": args.cache_dir,
         "model_path": args.model_path,
         "output_dir": args.output_dir,
-        "stages": [1, 3],
+        "stages": [3] if args.stage1_checkpoint_in is not None else [1, 3],
         "stage1_data": stage1_counts,
         "stage1_pooling_update": stage1_pooling_update,
+        "stage1_checkpoint": stage1_checkpoint_manifest,
+        "stage1_checkpoint_source": args.stage1_checkpoint_in,
         "experiment": experiment_cfg,
         "template_and_collator": template_report,
         "forward": forward_report,

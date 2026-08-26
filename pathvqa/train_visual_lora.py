@@ -50,6 +50,7 @@ VISION_LAYER_COUNT = 24
 RANK = 128
 LORA_ALPHA = 256
 LORA_DROPOUT = 0.05
+LAST8_EXPECTED_TRAINABLE_PARAMETERS = 6_291_456
 MODEL_BATCH_KEYS = (
     "input_ids",
     "attention_mask",
@@ -111,6 +112,11 @@ def parse_args() -> argparse.Namespace:
         default=Path(os.getenv("MMRL_MODEL_PATH", "/root/autodl-tmp/model")),
     )
     parser.add_argument("--output-dir", type=Path, required=True)
+    parser.add_argument(
+        "--experiment-name",
+        default="pathvqa_lora_visual_all_attention_r128",
+    )
+    parser.add_argument("--last-n-vision-layers", type=int, default=24)
     parser.add_argument("--epochs", type=int, default=3)
     parser.add_argument("--seed", type=int, default=44)
     parser.add_argument("--data-seed", type=int, default=42)
@@ -130,6 +136,10 @@ def parse_args() -> argparse.Namespace:
         parser.error("--dataloader-workers must be non-negative")
     if args.max_length < 32:
         parser.error("--max-length must be at least 32")
+    if not 1 <= args.last_n_vision_layers <= VISION_LAYER_COUNT:
+        parser.error(
+            f"--last-n-vision-layers must be in [1, {VISION_LAYER_COUNT}]"
+        )
     return args
 
 
@@ -192,7 +202,14 @@ def extract_vision_layer_index(module_name: str) -> int | None:
     return None
 
 
-def find_visual_attention_targets(model: nn.Module) -> tuple[List[str], List[int]]:
+def find_visual_attention_targets(
+    model: nn.Module,
+    last_n_layers: int = VISION_LAYER_COUNT,
+) -> tuple[List[str], List[int]]:
+    if not 1 <= last_n_layers <= VISION_LAYER_COUNT:
+        raise ValueError(
+            f"last_n_layers must be in [1, {VISION_LAYER_COUNT}], got {last_n_layers}"
+        )
     indexed_linears = [
         (name, extract_vision_layer_index(name))
         for name, module in model.named_modules()
@@ -212,11 +229,12 @@ def find_visual_attention_targets(model: nn.Module) -> tuple[List[str], List[int
             f"expected={expected_layers} actual={layer_indexes}"
         )
 
+    selected_layers = expected_layers[-last_n_layers:]
     targets = []
     per_layer: Counter[int] = Counter()
     for name, layer_index in indexed_linears:
         lowered = name.lower()
-        if layer_index is None:
+        if layer_index is None or layer_index not in selected_layers:
             continue
         if not (
             ".attn." in lowered
@@ -231,25 +249,25 @@ def find_visual_attention_targets(model: nn.Module) -> tuple[List[str], List[int
         targets.append(name)
         per_layer[layer_index] += 1
 
-    expected_target_count = VISION_LAYER_COUNT * 2
+    expected_target_count = last_n_layers * 2
     if len(targets) != expected_target_count:
         raise RuntimeError(
             "Visual attention target audit failed: "
             f"expected_targets={expected_target_count} actual={len(targets)} "
             f"per_layer={dict(per_layer)}"
         )
-    if any(per_layer[index] != 2 for index in expected_layers):
+    if any(per_layer[index] != 2 for index in selected_layers):
         raise RuntimeError(
             "Each visual layer must expose exactly qkv/proj attention targets; "
             f"per_layer={dict(per_layer)}"
         )
     print(
         "[PATHVQA_LORA_TARGET_AUDIT] "
-        f"selected_layers_0based={expected_layers} target_count={len(targets)}"
+        f"selected_layers_0based={selected_layers} target_count={len(targets)}"
     )
     for name in targets:
         print(f"  - {name}")
-    return targets, expected_layers
+    return targets, selected_layers
 
 
 def count_parameters(model: nn.Module) -> Dict[str, int | float]:
@@ -284,7 +302,10 @@ def main() -> int:
 
     seed_everything(args.seed, args.data_seed)
     model, processor = load_model_and_processor(model_path)
-    target_modules, selected_layers = find_visual_attention_targets(model)
+    target_modules, selected_layers = find_visual_attention_targets(
+        model,
+        last_n_layers=args.last_n_vision_layers,
+    )
     if len(target_modules) != len(set(target_modules)):
         raise RuntimeError("Duplicate visual LoRA target modules detected")
 
@@ -313,9 +334,27 @@ def main() -> int:
     )
     model = get_peft_model(model, peft_config)
     parameter_counts = count_parameters(model)
+    target_scope = (
+        "visual_all_attention"
+        if args.last_n_vision_layers == VISION_LAYER_COUNT
+        else f"visual_last{args.last_n_vision_layers}_attention"
+    )
+    if args.last_n_vision_layers == 8:
+        actual_trainable = int(parameter_counts["trainable"])
+        if actual_trainable != LAST8_EXPECTED_TRAINABLE_PARAMETERS:
+            raise RuntimeError(
+                "Last8 visual LoRA parameter audit failed: "
+                f"expected={LAST8_EXPECTED_TRAINABLE_PARAMETERS} "
+                f"actual={actual_trainable}"
+            )
+        print(
+            "[PATHVQA_LORA_EXPECTED_PARAMETER_AUDIT] "
+            f"expected={LAST8_EXPECTED_TRAINABLE_PARAMETERS} "
+            f"actual={actual_trainable} pass=True"
+        )
     print(
         "[PATHVQA_LORA_CONFIG] "
-        "method=lora target_scope=visual_all_attention "
+        f"method=lora target_scope={target_scope} "
         f"epochs={args.epochs} micro_batch={args.batch_size} "
         f"gradient_accumulation={args.gradient_accumulation} "
         f"rank={RANK} alpha={LORA_ALPHA} dropout={LORA_DROPOUT} "
@@ -362,9 +401,9 @@ def main() -> int:
 
     report = {
         "status": "pass",
-        "experiment": "pathvqa_lora_visual_all_attention_r128",
+        "experiment": args.experiment_name,
         "method": "lora",
-        "target_scope": "visual_all_attention",
+        "target_scope": target_scope,
         "rank": RANK,
         "alpha": LORA_ALPHA,
         "dropout": LORA_DROPOUT,

@@ -184,6 +184,7 @@ run_pathvqa_checkpoint_eval() {
   local checkpoint="$1"
   local eval_output_dir="$2"
   local eval_log="$3"
+  local split="${4:-test}"
   if [ ! -f "$checkpoint/mmrl_delta.safetensors" ]; then
     echo "[ERR] checkpoint 缺少 mmrl_delta.safetensors: $checkpoint" >&2
     return 1
@@ -197,7 +198,7 @@ run_pathvqa_checkpoint_eval() {
       --checkpoint "$checkpoint" \
       --data-root "$PATHVQA_DATA_ROOT" \
       --cache-dir "$PATHVQA_CACHE_ROOT" \
-      --split test \
+      --split "$split" \
       --output-dir "$eval_output_dir" \
       --overwrite \
       2>&1 | tee "$eval_log"
@@ -212,6 +213,7 @@ run_pathvqa() {
   local dynamic_cross_attention="${MMRL_USE_DYNAMIC_CROSS_ATTENTION:-1}"
   local memory_pooling_mode="${MMRL_MEMORY_POOLING_MODE:-multi_query}"
   local fusion_mode="${MMRL_FUSION_MODE:-cross_attention}"
+  local query_architecture="${MMRL_QUERY_ARCHITECTURE:-layer_mlp_post_cross}"
   local extra_args=()
 
   if ! python -c 'import datasets, pyarrow' >/dev/null 2>&1; then
@@ -246,11 +248,25 @@ run_pathvqa() {
     echo "[ERR] concat_mlp fusion requires mean memory pooling" >&2
     return 2
   fi
+  if [ "$query_architecture" != "layer_mlp_post_cross" ] \
+    && [ "$query_architecture" != "shared_direct_post_cross" ]; then
+    echo "[ERR] MMRL_QUERY_ARCHITECTURE must be layer_mlp_post_cross or shared_direct_post_cross" >&2
+    return 2
+  fi
+  if [ -n "${PATHVQA_EXPECTED_MMRL_PARAMETERS:-}" ]; then
+    extra_args+=(--expected-mmrl-parameters "$PATHVQA_EXPECTED_MMRL_PARAMETERS")
+  fi
+  if [ -n "${PATHVQA_STAGE1_CHECKPOINT_IN:-}" ]; then
+    extra_args+=(--stage1-checkpoint-in "$PATHVQA_STAGE1_CHECKPOINT_IN")
+  fi
+  if [ -n "${PATHVQA_STAGE1_CHECKPOINT_OUT:-}" ]; then
+    extra_args+=(--stage1-checkpoint-out "$PATHVQA_STAGE1_CHECKPOINT_OUT")
+  fi
 
   local output_dir
   output_dir="$(available_output_dir "$PATHVQA_OUTPUT_ROOT" "${experiment_name}_seed${run_seed}_${RUN_DATE}")"
   mkdir -p "$output_dir/eval"
-  echo "[PATHVQA] experiment=$experiment_name seed=$run_seed same_init=$same_init dynamic_cross_attention=$dynamic_cross_attention memory_pooling_mode=$memory_pooling_mode fusion_mode=$fusion_mode train_gate=open_full_ce relation=${MMRL_RELATION_LOSS_WEIGHT:-0.05} output=$output_dir"
+  echo "[PATHVQA] experiment=$experiment_name seed=$run_seed query_architecture=$query_architecture same_init=$same_init dynamic_cross_attention=$dynamic_cross_attention memory_pooling_mode=$memory_pooling_mode fusion_mode=$fusion_mode train_gate=open_full_ce relation=${MMRL_RELATION_LOSS_WEIGHT:-0.05} output=$output_dir"
   (
     cd "$ROOT_DIR" || exit 1
     python -m pathvqa.train_mmrl \
@@ -274,6 +290,7 @@ run_pathvqa() {
       --memory-attention-dim "${MMRL_MEMORY_ATTENTION_DIM:-128}" \
       --projector-hidden-dim "${MMRL_PROJECTOR_HIDDEN_DIM:-1024}" \
       --cross-attention-heads "${MMRL_CROSS_ATTENTION_HEADS:-8}" \
+      --query-architecture "$query_architecture" \
       --memory-pooling-mode "$memory_pooling_mode" \
       --fusion-mode "$fusion_mode" \
       "${extra_args[@]}" \
@@ -285,10 +302,45 @@ run_pathvqa() {
       2>&1 | tee "$output_dir/train.log"
   ) || return 1
 
-  run_pathvqa_checkpoint_eval \
-    "$output_dir/final" \
-    "$output_dir/eval" \
-    "$output_dir/eval.log"
+  if [ "${PATHVQA_SELECT_BEST_EPOCH:-0}" = "1" ]; then
+    local epoch_id
+    for ((epoch_id = 1; epoch_id <= epochs; epoch_id++)); do
+      local checkpoint="$output_dir/checkpoints/stage3_epoch_${epoch_id}"
+      echo "[PATHVQA_MMRL_VALIDATION] epoch=$epoch_id checkpoint=$checkpoint"
+      run_pathvqa_checkpoint_eval \
+        "$checkpoint" \
+        "$output_dir/eval_validation/epoch_${epoch_id}" \
+        "$output_dir/eval_validation_epoch_${epoch_id}.log" \
+        validation || return 1
+    done
+
+    local selection
+    selection="$(python "$ROOT_DIR/pathvqa/select_best_epoch.py" --root "$output_dir" --epochs "$epochs")" || return 1
+    local best_epoch
+    local best_validation_score
+    IFS=$'\t' read -r best_epoch best_validation_score <<< "$selection"
+    local best_checkpoint="$output_dir/checkpoints/stage3_epoch_${best_epoch}"
+    echo "[PATHVQA_MMRL_TEST] best_epoch=$best_epoch validation=$best_validation_score"
+    run_pathvqa_checkpoint_eval \
+      "$best_checkpoint" \
+      "$output_dir/eval_test/epoch_${best_epoch}" \
+      "$output_dir/eval_test_epoch_${best_epoch}.log" \
+      test || return 1
+    local test_score
+    test_score="$(python -c 'import json,sys;print(json.load(open(sys.argv[1],encoding="utf-8"))["overall_accuracy"])' "$output_dir/eval_test/epoch_${best_epoch}/pathvqa_summary.json")" || return 1
+    printf 'experiment\tseed\tbest_epoch\tvalidation_accuracy\ttest_accuracy\tcheckpoint\n' \
+      > "$output_dir/selected_result.tsv"
+    printf '%s\t%s\t%s\t%s\t%s\t%s\n' \
+      "$experiment_name" "$run_seed" "$best_epoch" "$best_validation_score" \
+      "$test_score" "$best_checkpoint" \
+      >> "$output_dir/selected_result.tsv"
+    cat "$output_dir/selected_result.tsv"
+  else
+    run_pathvqa_checkpoint_eval \
+      "$output_dir/final" \
+      "$output_dir/eval" \
+      "$output_dir/eval.log"
+  fi
 }
 
 run_pathvqa_lora_eval() {
@@ -342,7 +394,8 @@ run_pathvqa_base() {
 }
 
 run_pathvqa_lora_visual_attn_r128() {
-  local experiment_name="pathvqa_lora_visual_all_attention_r128"
+  local experiment_name="${PATHVQA_LORA_EXPERIMENT_NAME:-pathvqa_lora_visual_all_attention_r128}"
+  local last_n_layers="${PATHVQA_LORA_LAST_N_VISION_LAYERS:-24}"
   local run_seed="${PATHVQA_RUN_SEED:-$SEED}"
   local epochs="${PATHVQA_LORA_EPOCHS:-3}"
   if ! python -c 'import datasets, pyarrow, peft' >/dev/null 2>&1; then
@@ -353,7 +406,7 @@ run_pathvqa_lora_visual_attn_r128() {
   local output_dir
   output_dir="$(available_output_dir "$PATHVQA_LORA_OUTPUT_ROOT" "${experiment_name}_seed${run_seed}_${RUN_DATE}")"
   mkdir -p "$output_dir"
-  echo "[PATHVQA_LORA] experiment=$experiment_name seed=$run_seed scope=visual_all_attention rank=128 epochs=$epochs output=$output_dir"
+  echo "[PATHVQA_LORA] experiment=$experiment_name seed=$run_seed last_n_vision_layers=$last_n_layers rank=128 epochs=$epochs output=$output_dir"
   (
     cd "$ROOT_DIR" || exit 1
     python -m pathvqa.train_visual_lora \
@@ -361,6 +414,8 @@ run_pathvqa_lora_visual_attn_r128() {
       --cache-dir "$PATHVQA_CACHE_ROOT" \
       --model-path "$MODEL_PATH" \
       --output-dir "$output_dir" \
+      --experiment-name "$experiment_name" \
+      --last-n-vision-layers "$last_n_layers" \
       --epochs "$epochs" \
       --seed "$run_seed" \
       --data-seed 42 \
@@ -409,6 +464,47 @@ run_pathvqa_lora_visual_attn_r128() {
 run_pathvqa_lora_visual_attn_r128_then_base() {
   run_pathvqa_lora_visual_attn_r128 || return 1
   run_pathvqa_base
+}
+
+run_pathvqa_lora_visual_last8_attn_r128() {
+  PATHVQA_LORA_EXPERIMENT_NAME=pathvqa_lora_visual_last8_attention_r128 \
+  PATHVQA_LORA_LAST_N_VISION_LAYERS=8 \
+    run_pathvqa_lora_visual_attn_r128
+}
+
+run_pathvqa_last8_lora_minimal_mmrl_relation_suite() {
+  local suite_seed=44
+  local shared_stage1
+  shared_stage1="$(available_output_dir \
+    "$PATHVQA_OUTPUT_ROOT" \
+    "pathvqa_mmrl_minimal_shared_stage1_seed${suite_seed}_${RUN_DATE}")"
+
+  PATHVQA_RUN_SEED="$suite_seed" \
+    run_pathvqa_lora_visual_last8_attn_r128 || return 1
+
+  PATHVQA_EXPERIMENT_NAME=pathvqa_mmrl_minimal_shared_s_mean_relation0 \
+  PATHVQA_RUN_SEED="$suite_seed" \
+  MMRL_QUERY_ARCHITECTURE=shared_direct_post_cross \
+  MMRL_MEMORY_POOLING_MODE=mean \
+  MMRL_FUSION_MODE=cross_attention \
+  MMRL_SAME_INIT_LAYER_PROJECTORS=0 \
+  MMRL_RELATION_LOSS_WEIGHT=0 \
+  PATHVQA_EXPECTED_MMRL_PARAMETERS=7927808 \
+  PATHVQA_SELECT_BEST_EPOCH=1 \
+  PATHVQA_STAGE1_CHECKPOINT_OUT="$shared_stage1" \
+    run_pathvqa || return 1
+
+  PATHVQA_EXPERIMENT_NAME=pathvqa_mmrl_minimal_shared_s_mean_relation0050 \
+  PATHVQA_RUN_SEED="$suite_seed" \
+  MMRL_QUERY_ARCHITECTURE=shared_direct_post_cross \
+  MMRL_MEMORY_POOLING_MODE=mean \
+  MMRL_FUSION_MODE=cross_attention \
+  MMRL_SAME_INIT_LAYER_PROJECTORS=0 \
+  MMRL_RELATION_LOSS_WEIGHT=0.05 \
+  PATHVQA_EXPECTED_MMRL_PARAMETERS=7927808 \
+  PATHVQA_SELECT_BEST_EPOCH=1 \
+  PATHVQA_STAGE1_CHECKPOINT_IN="$shared_stage1" \
+    run_pathvqa
 }
 
 run_final_seeds4() {
@@ -640,12 +736,18 @@ case "$RUN_TARGET" in
   pathvqa_lora_visual_attn_r128_then_base)
     run_pathvqa_lora_visual_attn_r128_then_base || failures=$((failures + 1))
     ;;
+  pathvqa_lora_visual_last8_attn_r128)
+    run_pathvqa_lora_visual_last8_attn_r128 || failures=$((failures + 1))
+    ;;
+  pathvqa_last8_lora_minimal_mmrl_relation_suite)
+    run_pathvqa_last8_lora_minimal_mmrl_relation_suite || failures=$((failures + 1))
+    ;;
   all)
     run_train_dataset || failures=$((failures + 1))
     run_slake || failures=$((failures + 1))
     ;;
   *)
-    echo "[ERR] 未知目标: $RUN_TARGET，可选 train、slake、pathvqa、pathvqa_base、pathvqa_lora_visual_attn_r128、pathvqa_lora_visual_attn_r128_then_base、slake_final_seeds4、slake_ablation_no_relation_seeds2、slake_ablation_independent_init_seeds2、slake_ablation_static_query_seed45、slake_ablation_mean_pooling_seed45、slake_mean_final_completion_suite、slake_text_guided_balanced_fusion_slots8_seed45、slake_prompt_tuning_seed44、slake_concat_mlp_fusion_seed45、slake_overnight_prompt_and_concat_mlp、slake_ablation_suite、all。" >&2
+    echo "[ERR] 未知目标: $RUN_TARGET，可选 train、slake、pathvqa、pathvqa_base、pathvqa_lora_visual_attn_r128、pathvqa_lora_visual_attn_r128_then_base、pathvqa_lora_visual_last8_attn_r128、pathvqa_last8_lora_minimal_mmrl_relation_suite、slake_final_seeds4、slake_ablation_no_relation_seeds2、slake_ablation_independent_init_seeds2、slake_ablation_static_query_seed45、slake_ablation_mean_pooling_seed45、slake_mean_final_completion_suite、slake_text_guided_balanced_fusion_slots8_seed45、slake_prompt_tuning_seed44、slake_concat_mlp_fusion_seed45、slake_overnight_prompt_and_concat_mlp、slake_ablation_suite、all。" >&2
     exit 2
     ;;
 esac

@@ -15,7 +15,7 @@ This file is the persistent source of truth for completed experiments. Results a
 
 ## Current Snapshot
 
-- First complete PathVQA comparison: frozen Base **34.77**, MMRL seed44 **47.30**, and Visual Attention LoRA-r128 seed44 **55.45**. Both specialists materially improve Base, while LoRA remains8.16 points ahead of MMRL.
+- First PathVQA results: frozen Base **34.77**, last8-layer MMRL seed44 **47.30**, and all24-layer Visual Attention LoRA-r128 seed44 **55.45**. Both specialists materially improve Base, but the8.16-point gap is not scope-matched; last8-layer LoRA-r128 remains pending.
 - Strongest overall result: static Prompt Tuning, seed44, **74.40** with only 51,200 trainable parameters.
 - Strongest MMRL single run: 128-slot Attention Pooling + shared CA + same-initialized layer MLPs + Relation 0.05, seed44, **73.93**.
 - Final Mean Pooling MMRL across seeds44-47: **72.98 +/- 0.49**.
@@ -249,6 +249,8 @@ Interpretation: Prompt Tuning matches MMRL on VQA but gains heavily on KVQA and 
 - Conclusion: LoRA exceeds MMRL by8.16 Overall,3.72 Yes/No, and12.60 Free-form points, so visual specialization is learnable and MMRL transfers poorly relative to this standard baseline. Absolute performance remains low and epoch3 was still improving, but no rank/MLP/epoch expansion is scheduled before the frozen Base result establishes the real gain over the original model.
 - Output/log path: `/root/autodl-tmp/Qwen3-VL-modify-test/pathvqa/outputs/lora/pathvqa_lora_visual_all_attention_r128_seed44_20260826`; selected checkpoint `checkpoints/epoch_3`.
 
+Correction (2026-08-26): the intended scope-matched LoRA baseline is Attention LoRA-r128 on visual layers17-24, because MMRL also modifies only those last8 visual layers. This completed LoRA run targets all24 visual layers and must therefore be treated as a broader-scope upper-bound baseline, not as evidence that LoRA is intrinsically8.16 points better under matched adaptation scope. A last8-layer PathVQA LoRA-r128 run is required for the formal comparison.
+
 ### 2026-08-26 - pathvqa_base_20260826
 
 - Commit/config: commit `bc84ee3`; frozen original `/root/autodl-tmp/model`, no checkpoint and no training; generation/evaluation settings exactly match MMRL and LoRA.
@@ -271,7 +273,7 @@ Interpretation: Prompt Tuning matches MMRL on VQA but gains heavily on KVQA and 
 | MMRL seed44 | 1,816 | 80.62 | 1,546 | 84.86 | 4.24 |
 | Visual LoRA-r128 seed44 | 1,816 | 83.65 | 1,546 | 89.39 | 5.74 |
 
-The aggregate Yes/No score hides a severe Base bias toward `no`. MMRL removes most of this imbalance and therefore does not obtain82.57 by collapsing to one class. It nevertheless trails LoRA by3.03 points on `yes` and4.53 points on `no`. Same-question paired exact McNemar tests reject a tie for both classes: on `yes`, MMRL-only/LoRA-only correct counts are127/182 (`p=0.0021`); on `no`,64/134 (`p=7.29e-7`). Since Stage3 MMRL trains20.998M parameters plus a separate Stage1 Gate path, versus18.874M LoRA parameters, the current MMRL is less accurate and not smaller than the direct visual-attention baseline.
+The aggregate Yes/No score hides a severe Base bias toward `no`. MMRL removes most of this imbalance and therefore does not obtain82.57 by collapsing to one class. It nevertheless trails the all24-layer LoRA run by3.03 points on `yes` and4.53 points on `no`. Same-question paired exact McNemar tests reject a tie for this unmatched comparison: on `yes`, MMRL-only/LoRA-only correct counts are127/182 (`p=0.0021`); on `no`,64/134 (`p=7.29e-7`). These statistics remain valid for the completed models but cannot establish a scope-matched architectural advantage because MMRL acts on visual layers17-24 while this LoRA acts on all24 layers.
 
 ## Rejected / Superseded Directions
 

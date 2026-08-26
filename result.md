@@ -26,7 +26,7 @@ This file is the concise experiment memory shared by the user and Codex. The com
 
 | Method | Seed | Overall | Yes/No | Free-form | Summary |
 |---|---:|---:|---:|---:|---|
-| Visual Attention LoRA-r128 | 44 | **55.45** | 86.29 | 24.58 | +20.69 Overall over Base and +8.16 over MMRL; strongest PathVQA method so far. |
+| Visual Attention LoRA-r128, all24 layers | 44 | **55.45** | 86.29 | 24.58 | +20.69 Overall over Base, but broader in scope than last8-layer MMRL; treat as an upper bound rather than the formal matched baseline. |
 | 128-slot MMRL + Relation0.05 | 44 | **47.30** | 82.57 | 11.97 | +12.53 Overall over Base, proving the method adapts, but Free-form learning is much weaker than LoRA. |
 | Frozen Base | - | **34.77** | 67.34 | 2.14 | PathVQA open exact-match is extremely difficult for the original model; no training or checkpoint. |
 
@@ -58,7 +58,8 @@ This file is the concise experiment memory shared by the user and Codex. The com
 - SLAKE mixes visual VQA, knowledge questions, and two languages. Prompt Tuning outperforming MMRL suggests that SLAKE is not a pure visual-specialization benchmark.
 - Learned 128-slot pooling has no stable SLAKE advantage over Mean Pooling.
 - Relation, pooling, and routing claims require confirmation on another public dataset before being generalized.
-- PathVQA is the primary public dataset and SLAKE is the secondary robustness dataset. Visual LoRA-r128 scores55.45, MMRL47.30, and frozen Base34.77: both specialists work, but LoRA is clearly stronger.
-- Separate binary classes confirm that MMRL is balanced rather than exploiting label bias: Yes/No accuracies are80.62/84.86, versus LoRA83.65/89.39 and Base53.30/83.83. MMRL still loses both classes to LoRA despite using more trainable parameters and a separate Gate stage.
+- PathVQA is the primary public dataset and SLAKE is the secondary robustness dataset. All24-layer Visual LoRA-r128 scores55.45, last8-layer MMRL47.30, and frozen Base34.77; both specialists work, but the available LoRA/MMRL comparison is not layer-scope matched.
+- Correction: the55.45 LoRA run updates Attention in all24 visual layers, whereas MMRL injects only into layers17-24. The formal LoRA comparison must use last8-layer Attention LoRA-r128; the current8.16-point gap is not scope-matched.
+- Separate binary classes confirm that MMRL is balanced rather than exploiting label bias: Yes/No accuracies are80.62/84.86, versus all24-layer LoRA83.65/89.39 and Base53.30/83.83. The all24-layer LoRA wins both classes, but this remains a broader-scope diagnostic rather than the formal matched comparison.
 - PathVQA Free-form normalized exact-match is unusually harsh: Base reaches only2.14, and qualitative outputs can contain plausible pathology phrases that miss the single reference. Add semantic/error analysis as a supplement, not a replacement for the official metric.
 - The in-house dataset will be reported as a single-seed internal application case and will not support the main statistical claims.

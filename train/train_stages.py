@@ -945,6 +945,10 @@ def build_model_and_processor(model_path, experiment_cfg=None):
         "MMRL_CROSS_ATTENTION_HEADS",
         str(experiment_cfg.get("cross_attention_heads", 8)),
     ))
+    config.MMRL_QUERY_ARCHITECTURE = os.getenv(
+        "MMRL_QUERY_ARCHITECTURE",
+        str(experiment_cfg.get("query_architecture", "layer_mlp_post_cross")),
+    )
     config.MMRL_SAME_INIT_LAYER_PROJECTORS = os.getenv(
         "MMRL_SAME_INIT_LAYER_PROJECTORS",
         (
@@ -1051,6 +1055,12 @@ def build_model_and_processor(model_path, experiment_cfg=None):
             "MMRL_FUSION_MODE config propagation failed: "
             f"requested={config.MMRL_FUSION_MODE} actual={mmrl.fusion_mode}"
         )
+    if config.MMRL_QUERY_ARCHITECTURE != mmrl.query_architecture:
+        raise RuntimeError(
+            "MMRL_QUERY_ARCHITECTURE config propagation failed: "
+            f"requested={config.MMRL_QUERY_ARCHITECTURE} "
+            f"actual={mmrl.query_architecture}"
+        )
     memory_tokens_per_image = 0
     if config.MMRL_USE_DYNAMIC_CROSS_ATTENTION:
         if config.MMRL_MEMORY_POOLING_MODE == "multi_query":
@@ -1061,7 +1071,7 @@ def build_model_and_processor(model_path, experiment_cfg=None):
             memory_tokens_per_image = 2
     print(
         "[MMRL_STRUCTURE_AUDIT] "
-        "query_parameterization=layer_mlp "
+        f"query_architecture={config.MMRL_QUERY_ARCHITECTURE} "
         f"rp_space_length={config.RP_SPACE_LENGTH} "
         f"memory_query_count={config.MMRL_MEMORY_QUERY_COUNT} "
         f"memory_attention_dim={config.MMRL_MEMORY_ATTENTION_DIM} "
@@ -1105,6 +1115,22 @@ def build_model_and_processor(model_path, experiment_cfg=None):
         f"components={component_parameters} "
         f"total={sum(parameter.numel() for parameter in model.model.MMRL.parameters())}"
     )
+    expected_mmrl_parameters = experiment_cfg.get("expected_mmrl_parameters")
+    if expected_mmrl_parameters is not None:
+        actual_mmrl_parameters = sum(
+            parameter.numel() for parameter in model.model.MMRL.parameters()
+        )
+        if actual_mmrl_parameters != int(expected_mmrl_parameters):
+            raise RuntimeError(
+                "MMRL parameter count audit failed: "
+                f"expected={int(expected_mmrl_parameters)} "
+                f"actual={actual_mmrl_parameters} components={component_parameters}"
+            )
+        print(
+            "[MMRL_EXPECTED_PARAMETER_AUDIT] "
+            f"expected={int(expected_mmrl_parameters)} "
+            f"actual={actual_mmrl_parameters} pass=True"
+        )
     model.model.load_state_dict(base.model.state_dict(), strict=False)
     model.lm_head.load_state_dict(base.lm_head.state_dict(), strict=False)
 
@@ -1170,6 +1196,7 @@ def build_model_and_processor(model_path, experiment_cfg=None):
         f"memory_attention_dim={config.MMRL_MEMORY_ATTENTION_DIM} "
         f"projector_hidden_dim={config.MMRL_PROJECTOR_HIDDEN_DIM} "
         f"cross_attention_heads={config.MMRL_CROSS_ATTENTION_HEADS} "
+        f"query_architecture={config.MMRL_QUERY_ARCHITECTURE} "
         "dynamic_cross_attention="
         f"{config.MMRL_USE_DYNAMIC_CROSS_ATTENTION} "
         f"memory_pooling_mode={config.MMRL_MEMORY_POOLING_MODE} "

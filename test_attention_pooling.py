@@ -56,6 +56,7 @@ class MMRLAblationTest(unittest.TestCase):
         dynamic_cross_attention=True,
         pooling_mode="multi_query",
         fusion_mode="cross_attention",
+        query_architecture="layer_mlp_post_cross",
     ):
         return SimpleNamespace(mmrl_config={
             "INSERT_LAYER": [1, 2],
@@ -67,6 +68,7 @@ class MMRLAblationTest(unittest.TestCase):
             "MMRL_MEMORY_ATTENTION_DIM": 3,
             "MMRL_PROJECTOR_HIDDEN_DIM": 5,
             "MMRL_CROSS_ATTENTION_HEADS": 2,
+            "MMRL_QUERY_ARCHITECTURE": query_architecture,
             "MMRL_SAME_INIT_LAYER_PROJECTORS": True,
             "MMRL_USE_DYNAMIC_CROSS_ATTENTION": dynamic_cross_attention,
             "MMRL_MEMORY_POOLING_MODE": pooling_mode,
@@ -129,6 +131,30 @@ class MMRLAblationTest(unittest.TestCase):
         self.assertEqual(len(outputs), 2)
         self.assertEqual(mmrl.last_rep_shape, (2, 2, 3, 4))
         self.assertEqual(mmrl.last_memory_shape, (2, 2, 4))
+
+    def test_shared_direct_queries_remove_layer_projectors(self):
+        mmrl = MMRL(self._config(
+            pooling_mode="mean",
+            query_architecture="shared_direct_post_cross",
+        ))
+        self.assertEqual(tuple(mmrl.shared_represent_space.shape), (3, 4))
+        self.assertEqual(len(mmrl.v_r_token_projector), 0)
+        expected = (
+            mmrl.shared_represent_space.unsqueeze(0).expand(2, -1, -1)
+            + mmrl.layer_embeddings
+        )
+        torch.testing.assert_close(mmrl._compute_base_queries(), expected)
+
+        outputs = mmrl(**self._inputs())
+        self.assertEqual([tuple(output.shape) for output in outputs], [
+            (2, 3, 4),
+            (2, 3, 4),
+        ])
+        self.assertEqual(mmrl.last_memory_shape, (2, 2, 4))
+
+    def test_invalid_query_architecture_is_rejected(self):
+        with self.assertRaisesRegex(ValueError, "Unsupported MMRL_QUERY_ARCHITECTURE"):
+            MMRL(self._config(query_architecture="not_an_architecture"))
 
     def test_concat_mlp_matches_cross_attention_parameter_budget(self):
         hidden_dim = 8

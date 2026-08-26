@@ -102,6 +102,10 @@ def build_experiment_config(args: argparse.Namespace) -> Dict[str, Any]:
         "memory_attention_dim": args.memory_attention_dim,
         "projector_hidden_dim": args.projector_hidden_dim,
         "cross_attention_heads": args.cross_attention_heads,
+        "query_architecture": getattr(
+            args, "query_architecture", "layer_mlp_post_cross"
+        ),
+        "expected_mmrl_parameters": getattr(args, "expected_mmrl_parameters", None),
         "same_init_layer_projectors": args.same_init_layer_projectors,
         "use_dynamic_cross_attention": not args.disable_dynamic_cross_attention,
         "memory_pooling_mode": args.memory_pooling_mode,
@@ -652,6 +656,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--projector-hidden-dim", type=int, default=1024)
     parser.add_argument("--cross-attention-heads", type=int, default=8)
     parser.add_argument(
+        "--query-architecture",
+        choices=("layer_mlp_post_cross", "shared_direct_post_cross"),
+        default="layer_mlp_post_cross",
+    )
+    parser.add_argument("--expected-mmrl-parameters", type=int)
+    parser.add_argument(
         "--same-init-layer-projectors",
         action=argparse.BooleanOptionalAction,
         default=True,
@@ -773,7 +783,7 @@ def main() -> int:
         f"memory_attention_dim={args.memory_attention_dim} "
         f"projector_hidden_dim={args.projector_hidden_dim} "
         f"cross_attention_heads={args.cross_attention_heads} "
-        "query_architecture=layer_mlp_post_cross "
+        f"query_architecture={args.query_architecture} "
         f"same_init_layer_projectors={args.same_init_layer_projectors} "
         "dynamic_cross_attention="
         f"{not args.disable_dynamic_cross_attention} "
@@ -860,7 +870,7 @@ def main() -> int:
                 "data_seed": args.data_seed,
                 "dataset": "SLAKE",
                 "language": args.language,
-                "query_architecture": "layer_mlp_post_cross",
+                "query_architecture": args.query_architecture,
                 "same_init_layer_projectors": (
                     args.same_init_layer_projectors
                 ),

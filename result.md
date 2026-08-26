@@ -59,5 +59,6 @@ This file is the concise experiment memory shared by the user and Codex. The com
 - Learned 128-slot pooling has no stable SLAKE advantage over Mean Pooling.
 - Relation, pooling, and routing claims require confirmation on another public dataset before being generalized.
 - PathVQA is the primary public dataset and SLAKE is the secondary robustness dataset. Visual LoRA-r128 scores55.45, MMRL47.30, and frozen Base34.77: both specialists work, but LoRA is clearly stronger.
+- Separate binary classes confirm that MMRL is balanced rather than exploiting label bias: Yes/No accuracies are80.62/84.86, versus LoRA83.65/89.39 and Base53.30/83.83. MMRL still loses both classes to LoRA despite using more trainable parameters and a separate Gate stage.
 - PathVQA Free-form normalized exact-match is unusually harsh: Base reaches only2.14, and qualitative outputs can contain plausible pathology phrases that miss the single reference. Add semantic/error analysis as a supplement, not a replacement for the official metric.
 - The in-house dataset will be reported as a single-seed internal application case and will not support the main statistical claims.

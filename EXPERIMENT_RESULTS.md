@@ -263,6 +263,16 @@ Interpretation: Prompt Tuning matches MMRL on VQA but gains heavily on KVQA and 
 - Conclusion: PathVQA is genuinely difficult for the original model, especially under normalized exact-match for open answers. MMRL is not a failed or dead adaptation: it delivers a large gain over Base. However, standard visual-only LoRA learns the task substantially better, especially on Free-form answers, so the current MMRL cannot claim superior effectiveness on the primary dataset. Qualitative Base outputs also show plausible pathology phrases that may be semantically related but fail the single-reference exact match; semantic scoring or a blinded error sample should supplement, not replace, the official metric.
 - Output/log path: `/root/autodl-tmp/Qwen3-VL-modify-test/pathvqa/outputs/base/pathvqa_base_20260826`.
 
+### PathVQA Yes/No Class-Balance Audit
+
+| Method | Yes count | Yes accuracy | No count | No accuracy | Class gap |
+|---|---:|---:|---:|---:|---:|
+| Frozen Base | 1,816 | 53.30 | 1,546 | 83.83 | 30.53 |
+| MMRL seed44 | 1,816 | 80.62 | 1,546 | 84.86 | 4.24 |
+| Visual LoRA-r128 seed44 | 1,816 | 83.65 | 1,546 | 89.39 | 5.74 |
+
+The aggregate Yes/No score hides a severe Base bias toward `no`. MMRL removes most of this imbalance and therefore does not obtain82.57 by collapsing to one class. It nevertheless trails LoRA by3.03 points on `yes` and4.53 points on `no`. Since Stage3 MMRL trains20.998M parameters plus a separate Stage1 Gate path, versus18.874M LoRA parameters, the current MMRL is less accurate and not smaller than the direct visual-attention baseline.
+
 ## Rejected / Superseded Directions
 
 - DeepStack residual injection: large regression to68.53.

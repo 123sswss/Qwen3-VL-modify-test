@@ -7,3 +7,8 @@
 - After recording an experiment, commit the ledger together with any related code change and push the current branch to `origin`, unless the user explicitly says not to push or an external authentication/network failure blocks it.
 - If a push fails, report the unpushed commit hash clearly.
 - Read and write text files with explicit UTF-8 encoding when using PowerShell.
+- Treat the Windows workspace as the only source of truth: edit and test locally, commit and push locally, then update the AutoDL checkout only with a fast-forward pull.
+- Before any server-side Git pull, run `source /etc/network_turbo`; the standard sync command is `source /etc/network_turbo; git pull --ff-only`.
+- Do not edit source files or start experiments on the server unless the user explicitly authorizes that specific run.
+- Add every completed experiment to both records: keep the full exact record in `EXPERIMENT_RESULTS.md` and the concise conclusion in `result.md`.
+- Add, remove, or reschedule planned experiments in `plan.md`.

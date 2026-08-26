@@ -15,7 +15,7 @@ This file is the persistent source of truth for completed experiments. Results a
 
 ## Current Snapshot
 
-- First PathVQA comparison: MMRL seed44 scores **47.30** Overall and Visual Attention LoRA-r128 seed44 scores **55.45**. LoRA improves Free-form from **11.97** to **24.58**, but the frozen Base control is still required to establish whether either specialist is useful.
+- First complete PathVQA comparison: frozen Base **34.77**, MMRL seed44 **47.30**, and Visual Attention LoRA-r128 seed44 **55.45**. Both specialists materially improve Base, while LoRA remains8.16 points ahead of MMRL.
 - Strongest overall result: static Prompt Tuning, seed44, **74.40** with only 51,200 trainable parameters.
 - Strongest MMRL single run: 128-slot Attention Pooling + shared CA + same-initialized layer MLPs + Relation 0.05, seed44, **73.93**.
 - Final Mean Pooling MMRL across seeds44-47: **72.98 +/- 0.49**.
@@ -249,6 +249,20 @@ Interpretation: Prompt Tuning matches MMRL on VQA but gains heavily on KVQA and 
 - Conclusion: LoRA exceeds MMRL by8.16 Overall,3.72 Yes/No, and12.60 Free-form points, so visual specialization is learnable and MMRL transfers poorly relative to this standard baseline. Absolute performance remains low and epoch3 was still improving, but no rank/MLP/epoch expansion is scheduled before the frozen Base result establishes the real gain over the original model.
 - Output/log path: `/root/autodl-tmp/Qwen3-VL-modify-test/pathvqa/outputs/lora/pathvqa_lora_visual_all_attention_r128_seed44_20260826`; selected checkpoint `checkpoints/epoch_3`.
 
+### 2026-08-26 - pathvqa_base_20260826
+
+- Commit/config: commit `bc84ee3`; frozen original `/root/autodl-tmp/model`, no checkpoint and no training; generation/evaluation settings exactly match MMRL and LoRA.
+- Dataset and split: PathVQA official test, all6,719 questions and858 image clusters.
+- Seed: not applicable; deterministic greedy decoding with temperature0.0.
+- Controlled change: unadapted Base control for the first PathVQA method comparison.
+- Overall: **34.77**; image-clustered 95% bootstrap CI **[33.79, 35.81]**.
+- Yes/No / Free-form: **67.34 / 2.14**.
+- Per question type: how2.16, other0.00, what1.35, when0.00, where7.42, why0.00, yes/no67.34; Free-form question-type macro1.82.
+- Evaluation timing: TTFT mean0.0484s, TPOT0.02166s/token,46.18 decode tokens/s, request mean0.1171s.
+- Three-way deltas: MMRL versus Base is **+12.53 Overall, +15.23 Yes/No, +9.83 Free-form**; LoRA versus Base is **+20.69 Overall, +18.95 Yes/No, +22.43 Free-form**; LoRA versus MMRL is **+8.16 Overall**.
+- Conclusion: PathVQA is genuinely difficult for the original model, especially under normalized exact-match for open answers. MMRL is not a failed or dead adaptation: it delivers a large gain over Base. However, standard visual-only LoRA learns the task substantially better, especially on Free-form answers, so the current MMRL cannot claim superior effectiveness on the primary dataset. Qualitative Base outputs also show plausible pathology phrases that may be semantically related but fail the single-reference exact match; semantic scoring or a blinded error sample should supplement, not replace, the official metric.
+- Output/log path: `/root/autodl-tmp/Qwen3-VL-modify-test/pathvqa/outputs/base/pathvqa_base_20260826`.
+
 ## Rejected / Superseded Directions
 
 - DeepStack residual injection: large regression to68.53.
@@ -264,9 +278,9 @@ These results remain useful negative evidence and should not be rerun unless a n
 ## Pending Experiments
 
 1. Fair CA replacement: separately normalize Q, visual memory, and text memory before the equal-parameter Concat-MLP; run seed45 only.
-2. Complete the frozen PathVQA Base evaluation before interpreting the MMRL47.30 and Visual LoRA55.45 results.
-3. Run the minimal PathVQA `Pooling x Relation` 2x2 matrix only after the method/control comparison establishes a viable score level.
-4. Final comparison table: base VLM, LoRA, static Prompt Tuning, nearest visual prompt/adapter baseline, and MMRL.
+2. Add a supplementary semantic metric or blinded manual sample for PathVQA Free-form answers while retaining normalized exact-match as the official primary metric.
+3. Decide whether to run the minimal PathVQA `Pooling x Relation` 2x2 matrix now that both MMRL and LoRA show real gains over Base.
+4. Final comparison table: Base VLM, Visual LoRA, Static Prompt Tuning, nearest visual prompt/adapter baseline, and MMRL.
 
 ## Update Template
 

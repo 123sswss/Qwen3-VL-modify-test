@@ -26,8 +26,9 @@ This file is the concise experiment memory shared by the user and Codex. The com
 
 | Method | Seed | Overall | Yes/No | Free-form | Summary |
 |---|---:|---:|---:|---:|---|
-| Visual Attention LoRA-r128 | 44 | **55.45** | 86.29 | 24.58 | Best of the two trained PathVQA methods so far; +8.16 Overall and +12.60 Free-form over MMRL, but frozen Base is pending. |
-| 128-slot MMRL + Relation0.05 | 44 | **47.30** | 82.57 | 11.97 | First completed PathVQA result. Gradient flow was active, but open answers were very weak; wait for matched Visual LoRA-r128 and Base before assigning the failure to MMRL. |
+| Visual Attention LoRA-r128 | 44 | **55.45** | 86.29 | 24.58 | +20.69 Overall over Base and +8.16 over MMRL; strongest PathVQA method so far. |
+| 128-slot MMRL + Relation0.05 | 44 | **47.30** | 82.57 | 11.97 | +12.53 Overall over Base, proving the method adapts, but Free-form learning is much weaker than LoRA. |
+| Frozen Base | - | **34.77** | 67.34 | 2.14 | PathVQA open exact-match is extremely difficult for the original model; no training or checkpoint. |
 
 ## Core Ablations
 
@@ -57,5 +58,6 @@ This file is the concise experiment memory shared by the user and Codex. The com
 - SLAKE mixes visual VQA, knowledge questions, and two languages. Prompt Tuning outperforming MMRL suggests that SLAKE is not a pure visual-specialization benchmark.
 - Learned 128-slot pooling has no stable SLAKE advantage over Mean Pooling.
 - Relation, pooling, and routing claims require confirmation on another public dataset before being generalized.
-- PathVQA is the primary public dataset and SLAKE is the secondary robustness dataset. Visual LoRA-r128 scores55.45 versus MMRL47.30, but both require the pending frozen Base result before specialist gains can be claimed.
+- PathVQA is the primary public dataset and SLAKE is the secondary robustness dataset. Visual LoRA-r128 scores55.45, MMRL47.30, and frozen Base34.77: both specialists work, but LoRA is clearly stronger.
+- PathVQA Free-form normalized exact-match is unusually harsh: Base reaches only2.14, and qualitative outputs can contain plausible pathology phrases that miss the single reference. Add semantic/error analysis as a supplement, not a replacement for the official metric.
 - The in-house dataset will be reported as a single-seed internal application case and will not support the main statistical claims.

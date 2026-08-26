@@ -15,6 +15,7 @@ This file is the persistent source of truth for completed experiments. Results a
 
 ## Current Snapshot
 
+- First completed PathVQA result: MMRL seed44 scores **47.30** Overall, with **82.57** Yes/No but only **11.97** Free-form. LoRA and Base controls are still running, so this result does not yet isolate an MMRL-specific regression.
 - Strongest overall result: static Prompt Tuning, seed44, **74.40** with only 51,200 trainable parameters.
 - Strongest MMRL single run: 128-slot Attention Pooling + shared CA + same-initialized layer MLPs + Relation 0.05, seed44, **73.93**.
 - Final Mean Pooling MMRL across seeds44-47: **72.98 +/- 0.49**.
@@ -215,6 +216,23 @@ Training audit:
 
 Interpretation: Prompt Tuning matches MMRL on VQA but gains heavily on KVQA and OPEN questions. It directly conditions the LLM's knowledge and answer space, while MMRL primarily specializes the visual path. This is now the strongest SLAKE baseline and must be included in future comparisons.
 
+## PathVQA Results
+
+### 2026-08-26 - pathvqa_mmrl_layer_mlp_same_init_full_ce_uniform_relation0050_seed44_20260826
+
+- Commit/config: PathVQA MMRL pipeline at commit `bc84ee3`; 128-slot Attention Pooling, shared Cross-Attention, same-initialized layer MLPs, 40 Rep tokens in visual layers17-24, `open_full_ce`, uniform Relation weight0.05.
+- Dataset and split: PathVQA official test, all6,719 questions, 858 image clusters; train contains19,654 samples.
+- Seed / data seed: 44 / 42.
+- Controlled change: first formal transfer of the frozen-LLM MMRL method from SLAKE to PathVQA.
+- Overall: **47.30**; image-clustered 95% bootstrap CI **[46.08, 48.49]**.
+- Yes/No / Free-form: **82.57 / 11.97**.
+- Per question type: how10.79, other0.00, what6.82, when0.00, where46.40, why0.00, yes/no82.57; Free-form question-type macro10.67.
+- Stage-3 trainable MMRL parameters:20,998,400; compact checkpoint stores24,288,513 parameters including the trained Stage-1 Gate path.
+- Evaluation timing: TTFT mean0.0577s, TPOT0.02095s/token,47.74 decode tokens/s, request mean0.1103s.
+- Diagnostics: 1,845 steps, 8 windows, no malformed rows; CE mean0.8668 and first/last windows1.5247/0.7966; Cross-Attention grad norm mean0.7225; `delta_to_org_ratio`0.6176; Cross-Attention delta/base ratio6.781; text/visual pooling grad norms0.4438/0.1285; scaled Relation loss0.001577; `G=1` throughout Stage3 as required by `open_full_ce`.
+- Conclusion: training and gradient flow were active, but performance is sharply split between Yes/No and open answers. The result is poor as an absolute score, yet attribution is deferred until the matched Visual LoRA-r128 and frozen Base evaluations finish; if all three have low Free-form accuracy, the bottleneck is likely the frozen LLM/answer-space interface rather than an MMRL-only failure.
+- Output/log path: `/root/autodl-tmp/Qwen3-VL-modify-test/pathvqa/outputs/mmrl/pathvqa_mmrl_layer_mlp_same_init_full_ce_uniform_relation0050_seed44_20260826`.
+
 ## Rejected / Superseded Directions
 
 - DeepStack residual injection: large regression to68.53.
@@ -230,8 +248,8 @@ These results remain useful negative evidence and should not be rerun unless a n
 ## Pending Experiments
 
 1. Fair CA replacement: separately normalize Q, visual memory, and text memory before the equal-parameter Concat-MLP; run seed45 only.
-2. Add a second medical VQA dataset and run the minimal `Pooling x Relation` 2x2 matrix.
-3. Re-run or replicate Prompt Tuning on the second dataset; add another SLAKE seed only if needed for the final statistical table.
+2. Complete the matched PathVQA Visual LoRA-r128 and frozen Base evaluations before interpreting the MMRL47.30 result.
+3. Run the minimal PathVQA `Pooling x Relation` 2x2 matrix only after the method/control comparison establishes a viable score level.
 4. Final comparison table: base VLM, LoRA, static Prompt Tuning, nearest visual prompt/adapter baseline, and MMRL.
 
 ## Update Template

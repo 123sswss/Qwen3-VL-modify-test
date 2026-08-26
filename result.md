@@ -22,6 +22,12 @@ This file is the concise experiment memory shared by the user and Codex. The com
 | Hard Concrete Gate | 44/45/46/47 | **72.71 +/- 1.03** | Scores: 72.59, 71.30, 73.50, 73.45. Higher variance than continuous alpha. |
 | Alpha-weighted Relation | 45/46/47 | **72.62 +/- 0.46** | Scores: 72.73, 72.11, 73.02. Did not improve uniform Relation weighting. |
 
+## PathVQA Snapshot
+
+| Method | Seed | Overall | Yes/No | Free-form | Summary |
+|---|---:|---:|---:|---:|---|
+| 128-slot MMRL + Relation0.05 | 44 | **47.30** | 82.57 | 11.97 | First completed PathVQA result. Gradient flow was active, but open answers were very weak; wait for matched Visual LoRA-r128 and Base before assigning the failure to MMRL. |
+
 ## Core Ablations
 
 | Controlled change | Result | Conclusion |
@@ -50,5 +56,5 @@ This file is the concise experiment memory shared by the user and Codex. The com
 - SLAKE mixes visual VQA, knowledge questions, and two languages. Prompt Tuning outperforming MMRL suggests that SLAKE is not a pure visual-specialization benchmark.
 - Learned 128-slot pooling has no stable SLAKE advantage over Mean Pooling.
 - Relation, pooling, and routing claims require confirmation on another public dataset before being generalized.
-- PathVQA is the planned primary public dataset; SLAKE becomes the secondary robustness dataset. No PathVQA experiment has been completed yet.
+- PathVQA is the primary public dataset and SLAKE is the secondary robustness dataset. The first PathVQA MMRL run completed at47.30 Overall, but its meaning remains unresolved until Visual LoRA-r128 and Base controls finish.
 - The in-house dataset will be reported as a single-seed internal application case and will not support the main statistical claims.

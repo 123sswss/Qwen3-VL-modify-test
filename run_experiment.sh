@@ -10,13 +10,14 @@ PATHVQA_DATA_ROOT="${PATHVQA_DATA_ROOT:-/root/autodl-tmp/dataset/pathVQA}"
 PATHVQA_CACHE_ROOT="${PATHVQA_CACHE_ROOT:-$PATHVQA_DATA_ROOT/.hf_cache}"
 PATHVQA_OUTPUT_ROOT="${PATHVQA_OUTPUT_ROOT:-$ROOT_DIR/pathvqa/outputs/mmrl}"
 PATHVQA_LORA_OUTPUT_ROOT="${PATHVQA_LORA_OUTPUT_ROOT:-$ROOT_DIR/pathvqa/outputs/lora}"
+PATHVQA_BASE_OUTPUT_ROOT="${PATHVQA_BASE_OUTPUT_ROOT:-$ROOT_DIR/pathvqa/outputs/base}"
 ENV_RUN_TARGET="${RUN_TARGET:-}"
 RUN_TARGET="${1:-${ENV_RUN_TARGET:-${MMRL_RUN_TARGET:-all}}}"
 RUN_DATE="${MMRL_RUN_DATE:-$(date +%Y%m%d)}"
 SEED="${MMRL_FIXED_SEED:-44}"
 SHUTDOWN_ON_EXIT="${MMRL_SHUTDOWN_ON_EXIT:-1}"
 
-mkdir -p "$OUTPUT_ROOT" "$SLAKE_OUTPUT_ROOT" "$PATHVQA_OUTPUT_ROOT" "$PATHVQA_LORA_OUTPUT_ROOT"
+mkdir -p "$OUTPUT_ROOT" "$SLAKE_OUTPUT_ROOT" "$PATHVQA_OUTPUT_ROOT" "$PATHVQA_LORA_OUTPUT_ROOT" "$PATHVQA_BASE_OUTPUT_ROOT"
 echo "[RUN_TARGET] selected=$RUN_TARGET positional=${1:-<unset>} env=${ENV_RUN_TARGET:-<unset>} mmrl_env=${MMRL_RUN_TARGET:-<unset>}"
 
 cancel_shutdown_on_interrupt() {
@@ -315,6 +316,31 @@ run_pathvqa_lora_eval() {
   )
 }
 
+run_pathvqa_base() {
+  local experiment_name="pathvqa_base"
+  if ! python -c 'import datasets, pyarrow' >/dev/null 2>&1; then
+    echo "[ERR] PathVQA Base 推理需要 datasets 和 pyarrow。先运行: python -m pip install -r pathvqa/requirements.txt" >&2
+    return 2
+  fi
+
+  local output_dir
+  output_dir="$(available_output_dir "$PATHVQA_BASE_OUTPUT_ROOT" "${experiment_name}_${RUN_DATE}")"
+  mkdir -p "$output_dir"
+  echo "[PATHVQA_BASE] experiment=$experiment_name split=test output=$output_dir"
+  (
+    cd "$ROOT_DIR" || exit 1
+    python pathvqa/pathvqa_official_eval.py \
+      --backend base \
+      --base-model "$MODEL_PATH" \
+      --data-root "$PATHVQA_DATA_ROOT" \
+      --cache-dir "$PATHVQA_CACHE_ROOT" \
+      --split test \
+      --output-dir "$output_dir" \
+      --overwrite \
+      2>&1 | tee "$output_dir/eval.log"
+  )
+}
+
 run_pathvqa_lora_visual_attn_r128() {
   local experiment_name="pathvqa_lora_visual_all_attention_r128"
   local run_seed="${PATHVQA_RUN_SEED:-$SEED}"
@@ -378,6 +404,11 @@ run_pathvqa_lora_visual_attn_r128() {
     "$test_score" "$best_checkpoint" \
     >> "$output_dir/selected_result.tsv"
   cat "$output_dir/selected_result.tsv"
+}
+
+run_pathvqa_lora_visual_attn_r128_then_base() {
+  run_pathvqa_lora_visual_attn_r128 || return 1
+  run_pathvqa_base
 }
 
 run_final_seeds4() {
@@ -600,15 +631,21 @@ case "$RUN_TARGET" in
   pathvqa)
     run_pathvqa || failures=$((failures + 1))
     ;;
+  pathvqa_base)
+    run_pathvqa_base || failures=$((failures + 1))
+    ;;
   pathvqa_lora_visual_attn_r128)
     run_pathvqa_lora_visual_attn_r128 || failures=$((failures + 1))
+    ;;
+  pathvqa_lora_visual_attn_r128_then_base)
+    run_pathvqa_lora_visual_attn_r128_then_base || failures=$((failures + 1))
     ;;
   all)
     run_train_dataset || failures=$((failures + 1))
     run_slake || failures=$((failures + 1))
     ;;
   *)
-    echo "[ERR] 未知目标: $RUN_TARGET，可选 train、slake、pathvqa、pathvqa_lora_visual_attn_r128、slake_final_seeds4、slake_ablation_no_relation_seeds2、slake_ablation_independent_init_seeds2、slake_ablation_static_query_seed45、slake_ablation_mean_pooling_seed45、slake_mean_final_completion_suite、slake_text_guided_balanced_fusion_slots8_seed45、slake_prompt_tuning_seed44、slake_concat_mlp_fusion_seed45、slake_overnight_prompt_and_concat_mlp、slake_ablation_suite、all。" >&2
+    echo "[ERR] 未知目标: $RUN_TARGET，可选 train、slake、pathvqa、pathvqa_base、pathvqa_lora_visual_attn_r128、pathvqa_lora_visual_attn_r128_then_base、slake_final_seeds4、slake_ablation_no_relation_seeds2、slake_ablation_independent_init_seeds2、slake_ablation_static_query_seed45、slake_ablation_mean_pooling_seed45、slake_mean_final_completion_suite、slake_text_guided_balanced_fusion_slots8_seed45、slake_prompt_tuning_seed44、slake_concat_mlp_fusion_seed45、slake_overnight_prompt_and_concat_mlp、slake_ablation_suite、all。" >&2
     exit 2
     ;;
 esac

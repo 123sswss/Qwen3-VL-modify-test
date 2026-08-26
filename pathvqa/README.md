@@ -78,3 +78,13 @@ The run saves each of three adapter epochs, evaluates all three on the
 validation split, selects the highest validation Overall score with the
 earliest epoch as the tie-breaker, and evaluates only that checkpoint on test.
 The selected checkpoint and scores are written to `selected_result.tsv`.
+
+Run the LoRA experiment and then the frozen Base-model test inference in one
+serial job:
+
+```bash
+RUN_TARGET=pathvqa_lora_visual_attn_r128_then_base bash run_experiment.sh
+```
+
+The Base result is stored separately under `pathvqa/outputs/base/`. To run or
+repeat only the Base inference, use `RUN_TARGET=pathvqa_base`.

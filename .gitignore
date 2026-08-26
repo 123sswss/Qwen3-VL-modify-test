@@ -4,6 +4,7 @@ __pycache__/
 eval/
 mmrl_output/
 experiment_outputs/
+pathvqa/outputs/
 loraTest/runs/
 tmp/
 els-cas-templates/

@@ -375,19 +375,22 @@ def move_batch_to_device(batch: Dict[str, Any], device: torch.device) -> Dict[st
 def audit_model_forward(
     model: Any,
     batch: Dict[str, Any],
+    dataset_label: str = "SLAKE",
 ) -> Dict[str, Any]:
+    label = dataset_label.strip().upper()
+    audit_context = "slake_smoke" if label == "SLAKE" else f"{label.lower()}_preflight"
     device = next(model.parameters()).device
     device_batch = move_batch_to_device(batch, device)
     text_pooling_mask = model.model.build_mmrl_text_pooling_mask(
         input_ids=device_batch["input_ids"],
         attention_mask=device_batch["attention_mask"],
         mmrl_gating_mask=device_batch["mmrl_gating_mask"],
-        audit_context="slake_smoke",
+        audit_context=audit_context,
     )
     for token_name, token_id in model.model.mmrl_visual_template_token_ids.items():
         if bool((text_pooling_mask & device_batch["input_ids"].eq(token_id)).any()):
             raise RuntimeError(
-                f"SLAKE text pooling still includes visual token {token_name}"
+                f"{label} text pooling still includes visual token {token_name}"
             )
 
     model.current_stage_id = 3
@@ -403,12 +406,12 @@ def audit_model_forward(
     with torch.no_grad():
         outputs = model(**device_batch)
     if outputs.loss is None or not bool(torch.isfinite(outputs.loss)):
-        raise RuntimeError(f"SLAKE preflight forward produced invalid loss: {outputs.loss}")
+        raise RuntimeError(f"{label} preflight forward produced invalid loss: {outputs.loss}")
     gate = model.model.visual.G_list
     if not torch.is_tensor(gate) or gate.numel() == 0:
-        raise RuntimeError("SLAKE forward did not produce a visual gate value")
+        raise RuntimeError(f"{label} forward did not produce a visual gate value")
     if not bool(torch.isfinite(gate).all()):
-        raise RuntimeError("SLAKE forward produced a non-finite visual gate value")
+        raise RuntimeError(f"{label} forward produced a non-finite visual gate value")
     mmrl = model.model.MMRL
     forced_dynamic_audit = False
     missing_active_state = (
@@ -452,12 +455,12 @@ def audit_model_forward(
         )
     if rep_shape != expected_rep_shape:
         raise RuntimeError(
-            "SLAKE dynamic Rep shape audit failed: "
+            f"{label} dynamic Rep shape audit failed: "
             f"expected={expected_rep_shape} actual={rep_shape}"
         )
     if memory_shape != expected_memory_shape:
         raise RuntimeError(
-            "SLAKE dynamic memory shape audit failed: "
+            f"{label} dynamic memory shape audit failed: "
             f"expected={expected_memory_shape} actual={memory_shape}"
         )
     cross_output_weight_norm = float(
@@ -489,7 +492,7 @@ def audit_model_forward(
         "forced_dynamic_audit": forced_dynamic_audit,
     }
     print(
-        "[SLAKE_FORWARD_AUDIT_PASS] "
+        f"[{label}_FORWARD_AUDIT_PASS] "
         f"loss={report['loss']:.6f} "
         f"text_pooling_tokens={report['text_pooling_tokens']} "
         f"dynamic_rep_shape={rep_shape} memory_shape={memory_shape} "
@@ -571,6 +574,7 @@ def audit_stage1_pooling_update(
     model: Any,
     before: Dict[str, Dict[str, torch.Tensor]],
     require_update: bool,
+    dataset_label: str = "SLAKE",
 ) -> Dict[str, float]:
     visual = model.model.visual
     deltas = {}
@@ -590,7 +594,7 @@ def audit_stage1_pooling_update(
         if require_update and deltas[name] == 0.0:
             raise RuntimeError(f"Stage 1 did not update {name}")
     print(
-        "[SLAKE_STAGE1_POOLING_UPDATE] "
+        f"[{dataset_label.strip().upper()}_STAGE1_POOLING_UPDATE] "
         + " ".join(f"{name}_delta={value:.8f}" for name, value in deltas.items())
     )
     return deltas

@@ -15,7 +15,8 @@
 - specialist 训练必须保留现有 Stage 1 Gate、两套 pooling 及其初始化/随机数路径；不得通过删除 Gate、跳过 Stage 1 后再硬设 `G=1` 来训练。
 - Stage 3 仅允许使用已经多 seed 验证过的 `open_full_ce` 协议：保留完整 Gate 路径但令专业 CE 训练的数据流全开。它与 `No gate (G=1)` 消融不是同一个实验。
 - 核实 SLAKE Base、视觉 LoRA、Prompt Tuning、MMRL 的正式分数、参数量、日志和 checkpoint；缺失项进入补跑队列。
-- 完成 PathVQA 数据审计：官方划分、图像完整性、答案规范、评价指标、重复样本和训练测试泄漏。
+- PathVQA 原始文件完整性已核对：官方 7/3/3 个 Parquet 分片及 SHA-256 全部匹配，规模为 train 19,654、validation 6,259、test 6,719。
+- 完成 PathVQA 内容审计：答案规范、问题类型分布、按图像哈希恢复同图 QA、重复样本和训练测试泄漏。
 - 审计自建数据集：只记录规模、来源、划分、质量限制和不可开源原因。
 - 整理视觉 Prompt、ViT Adapter、条件 PEFT、样本级路由和安全回退相关工作，产出碰撞对照表。
 - 在验证集建立 Base/MMRL 逐样本对照，统计双方正确性转换和 Oracle 上限。
@@ -67,7 +68,7 @@
 ## 时间与验收
 
 - Day 2：实现冻结 checkpoint 的路由覆盖、Utility 采集、连续 alpha Gate、缓存格式、Gate 独立训练和监控。
-- Day 3：完成 PathVQA smoke test、Base/MMRL 主结果预检、Base/MMRL 一致性测试和 seed44 Gate。
+- Day 3：完成 PathVQA 数据依赖与字段预检后直接运行 Base/MMRL seed44，随后完成 Base/MMRL 一致性测试和 seed44 Gate；不单独安排 smoke test。
 - Day 4：双卡并行运行 PathVQA 与 SLAKE 正式 seed44/45。
 - Day 5：补 Visual LoRA、Prompt Tuning 以及跨数据集核心消融。
 - Day 6：完成 Gate、VQAv2 通用保持和自建数据集单 seed。

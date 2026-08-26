@@ -15,7 +15,7 @@ This file is the persistent source of truth for completed experiments. Results a
 
 ## Current Snapshot
 
-- First completed PathVQA result: MMRL seed44 scores **47.30** Overall, with **82.57** Yes/No but only **11.97** Free-form. LoRA and Base controls are still running, so this result does not yet isolate an MMRL-specific regression.
+- First PathVQA comparison: MMRL seed44 scores **47.30** Overall and Visual Attention LoRA-r128 seed44 scores **55.45**. LoRA improves Free-form from **11.97** to **24.58**, but the frozen Base control is still required to establish whether either specialist is useful.
 - Strongest overall result: static Prompt Tuning, seed44, **74.40** with only 51,200 trainable parameters.
 - Strongest MMRL single run: 128-slot Attention Pooling + shared CA + same-initialized layer MLPs + Relation 0.05, seed44, **73.93**.
 - Final Mean Pooling MMRL across seeds44-47: **72.98 +/- 0.49**.
@@ -233,6 +233,22 @@ Interpretation: Prompt Tuning matches MMRL on VQA but gains heavily on KVQA and 
 - Conclusion: training and gradient flow were active, but performance is sharply split between Yes/No and open answers. The result is poor as an absolute score, yet attribution is deferred until the matched Visual LoRA-r128 and frozen Base evaluations finish; if all three have low Free-form accuracy, the bottleneck is likely the frozen LLM/answer-space interface rather than an MMRL-only failure.
 - Output/log path: `/root/autodl-tmp/Qwen3-VL-modify-test/pathvqa/outputs/mmrl/pathvqa_mmrl_layer_mlp_same_init_full_ce_uniform_relation0050_seed44_20260826`.
 
+### 2026-08-26 - pathvqa_lora_visual_all_attention_r128_seed44_20260826
+
+- Commit/config: commit `bc84ee3`; LoRA on `qkv/proj` Attention linears in all24 visual layers, rank128, alpha256, dropout0.05; visual MLP and full LLM frozen.
+- Dataset and split: PathVQA official train19,654; checkpoint selection on validation6,259; one final evaluation on test6,719 with858 image clusters.
+- Seed / data seed: 44 / 42.
+- Controlled change: standard visual-only Attention LoRA baseline against frozen-LLM MMRL; no language-layer LoRA.
+- Validation Overall by epoch: **48.94, 54.91, 55.70**; earliest-best selection chose epoch3. Validation Yes/No by epoch:81.98,86.69,85.82; Free-form:15.99,23.23,25.65.
+- Test Overall: **55.45**; image-clustered 95% bootstrap CI **[53.99, 56.99]**.
+- Test Yes/No / Free-form: **86.29 / 24.58**.
+- Per question type: how5.76, other5.56, what20.50, when0.00, where58.93, why0.00, yes/no86.29; Free-form question-type macro15.12.
+- Trainable parameters:18,874,368 of4,456,690,176 total, ratio0.4235%.
+- Training: 3 epochs, LR1e-4, micro-batch1, gradient accumulation32; runtime9,882.8s, loss0.7361.
+- Evaluation timing: TTFT mean0.0523s, TPOT0.01991s/token,50.23 decode tokens/s, request mean0.1025s.
+- Conclusion: LoRA exceeds MMRL by8.16 Overall,3.72 Yes/No, and12.60 Free-form points, so visual specialization is learnable and MMRL transfers poorly relative to this standard baseline. Absolute performance remains low and epoch3 was still improving, but no rank/MLP/epoch expansion is scheduled before the frozen Base result establishes the real gain over the original model.
+- Output/log path: `/root/autodl-tmp/Qwen3-VL-modify-test/pathvqa/outputs/lora/pathvqa_lora_visual_all_attention_r128_seed44_20260826`; selected checkpoint `checkpoints/epoch_3`.
+
 ## Rejected / Superseded Directions
 
 - DeepStack residual injection: large regression to68.53.
@@ -248,7 +264,7 @@ These results remain useful negative evidence and should not be rerun unless a n
 ## Pending Experiments
 
 1. Fair CA replacement: separately normalize Q, visual memory, and text memory before the equal-parameter Concat-MLP; run seed45 only.
-2. Complete the matched PathVQA Visual LoRA-r128 and frozen Base evaluations before interpreting the MMRL47.30 result.
+2. Complete the frozen PathVQA Base evaluation before interpreting the MMRL47.30 and Visual LoRA55.45 results.
 3. Run the minimal PathVQA `Pooling x Relation` 2x2 matrix only after the method/control comparison establishes a viable score level.
 4. Final comparison table: base VLM, LoRA, static Prompt Tuning, nearest visual prompt/adapter baseline, and MMRL.
 

@@ -26,6 +26,7 @@ This file is the concise experiment memory shared by the user and Codex. The com
 
 | Method | Seed | Overall | Yes/No | Free-form | Summary |
 |---|---:|---:|---:|---:|---|
+| Visual Attention LoRA-r128 | 44 | **55.45** | 86.29 | 24.58 | Best of the two trained PathVQA methods so far; +8.16 Overall and +12.60 Free-form over MMRL, but frozen Base is pending. |
 | 128-slot MMRL + Relation0.05 | 44 | **47.30** | 82.57 | 11.97 | First completed PathVQA result. Gradient flow was active, but open answers were very weak; wait for matched Visual LoRA-r128 and Base before assigning the failure to MMRL. |
 
 ## Core Ablations
@@ -56,5 +57,5 @@ This file is the concise experiment memory shared by the user and Codex. The com
 - SLAKE mixes visual VQA, knowledge questions, and two languages. Prompt Tuning outperforming MMRL suggests that SLAKE is not a pure visual-specialization benchmark.
 - Learned 128-slot pooling has no stable SLAKE advantage over Mean Pooling.
 - Relation, pooling, and routing claims require confirmation on another public dataset before being generalized.
-- PathVQA is the primary public dataset and SLAKE is the secondary robustness dataset. The first PathVQA MMRL run completed at47.30 Overall, but its meaning remains unresolved until Visual LoRA-r128 and Base controls finish.
+- PathVQA is the primary public dataset and SLAKE is the secondary robustness dataset. Visual LoRA-r128 scores55.45 versus MMRL47.30, but both require the pending frozen Base result before specialist gains can be claimed.
 - The in-house dataset will be reported as a single-seed internal application case and will not support the main statistical claims.

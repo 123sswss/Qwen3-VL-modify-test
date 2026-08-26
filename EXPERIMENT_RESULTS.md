@@ -271,7 +271,7 @@ Interpretation: Prompt Tuning matches MMRL on VQA but gains heavily on KVQA and 
 | MMRL seed44 | 1,816 | 80.62 | 1,546 | 84.86 | 4.24 |
 | Visual LoRA-r128 seed44 | 1,816 | 83.65 | 1,546 | 89.39 | 5.74 |
 
-The aggregate Yes/No score hides a severe Base bias toward `no`. MMRL removes most of this imbalance and therefore does not obtain82.57 by collapsing to one class. It nevertheless trails LoRA by3.03 points on `yes` and4.53 points on `no`. Since Stage3 MMRL trains20.998M parameters plus a separate Stage1 Gate path, versus18.874M LoRA parameters, the current MMRL is less accurate and not smaller than the direct visual-attention baseline.
+The aggregate Yes/No score hides a severe Base bias toward `no`. MMRL removes most of this imbalance and therefore does not obtain82.57 by collapsing to one class. It nevertheless trails LoRA by3.03 points on `yes` and4.53 points on `no`. Same-question paired exact McNemar tests reject a tie for both classes: on `yes`, MMRL-only/LoRA-only correct counts are127/182 (`p=0.0021`); on `no`,64/134 (`p=7.29e-7`). Since Stage3 MMRL trains20.998M parameters plus a separate Stage1 Gate path, versus18.874M LoRA parameters, the current MMRL is less accurate and not smaller than the direct visual-attention baseline.
 
 ## Rejected / Superseded Directions
 

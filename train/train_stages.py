@@ -904,10 +904,13 @@ class Qwen3VLMMRLForStages(Qwen3VLForConditionalGeneration):
         images_per_sample=None,
         task_type_ids=None,
         mmrl_gating_mask=None,
+        position_ids=None,
         **kwargs,
     ):
         if mmrl_gating_mask is not None:
             kwargs["mmrl_gating_mask"] = mmrl_gating_mask
+        if position_ids is not None:
+            kwargs["position_ids"] = position_ids
         if self.soft_prompt is not None and not self._soft_prompt_inputs_preexpanded:
             expanded = self._expand_soft_prompt_inputs({
                 **kwargs,

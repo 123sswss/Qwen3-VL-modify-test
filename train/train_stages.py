@@ -661,6 +661,7 @@ class Qwen3VLMMRLForStages(Qwen3VLForConditionalGeneration):
             embeddings.shape[0],
             (self.soft_prompt_length,),
             generator=generator,
+            device="cpu",
         )
         return embeddings[sampled_rows.to(embeddings.device)].clone()
 

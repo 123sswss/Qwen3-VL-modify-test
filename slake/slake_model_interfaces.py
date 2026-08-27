@@ -13,6 +13,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 BACKEND_SPECS = {
     "base": ("test/inferQWen3vl.py", "BaselineModelInterface"),
     "mmrl": ("test/inferEngine.py", "ModelInterface"),
+    "mmrl-prompt": ("test/inferEngine.py", "ModelInterface"),
     "lora": ("loraTest/loraTest.py", "LoraModelInterface"),
     "lora-vision": ("loraTest/loraVisionTest.py", "LoraModelInterface"),
     "lora-vision-last8": (

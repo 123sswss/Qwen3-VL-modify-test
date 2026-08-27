@@ -30,6 +30,7 @@ LEGACY_WEIGHT_NAMES = (
 # This is the union of modules trained in Stage 1 and Stage 3. Stage 1 modules
 # are frozen by the end of Stage 3, so final requires_grad flags are insufficient.
 DELTA_PREFIXES = (
+    "soft_prompt",
     "model.MMRL.",
     "model.visual.hidden_state_pooling.",
     "model.visual.embedding_pooling.",
@@ -224,6 +225,7 @@ def initialize_mmrl_from_base(model: torch.nn.Module, base_model: torch.nn.Modul
 def load_mmrl_delta(
     model: torch.nn.Module,
     checkpoint_dir: str | Path,
+    allow_missing_prefixes: tuple[str, ...] = (),
 ) -> dict[str, Any]:
     """Strictly load every and only expected delta tensor into a rebuilt model."""
 
@@ -241,10 +243,17 @@ def load_mmrl_delta(
             f"missing={sorted(manifest_keys - saved_keys)} "
             f"unexpected={sorted(saved_keys - manifest_keys)}"
         )
-    if saved_keys != expected_keys:
+    missing_keys = expected_keys - saved_keys
+    allowed_missing = {
+        key
+        for key in missing_keys
+        if key.startswith(tuple(allow_missing_prefixes))
+    }
+    if saved_keys - expected_keys or missing_keys != allowed_missing:
         raise RuntimeError(
             "Compact checkpoint does not exactly match the configured FROST-VL modules: "
-            f"missing={sorted(expected_keys - saved_keys)} "
+            f"missing={sorted(missing_keys)} "
+            f"allowed_missing={sorted(allowed_missing)} "
             f"unexpected={sorted(saved_keys - expected_keys)}"
         )
 

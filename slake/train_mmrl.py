@@ -106,6 +106,9 @@ def build_experiment_config(args: argparse.Namespace) -> Dict[str, Any]:
             args, "query_architecture", "layer_mlp_post_cross"
         ),
         "expected_mmrl_parameters": getattr(args, "expected_mmrl_parameters", None),
+        "expected_total_trainable_parameters": getattr(
+            args, "expected_total_trainable_parameters", None
+        ),
         "same_init_layer_projectors": args.same_init_layer_projectors,
         "use_dynamic_cross_attention": not args.disable_dynamic_cross_attention,
         "memory_pooling_mode": args.memory_pooling_mode,
@@ -129,6 +132,14 @@ def build_experiment_config(args: argparse.Namespace) -> Dict[str, Any]:
         "stage3_final_temp": 0.775,
         "stage3_assistant_turn_policy": "all",
         "stage3_data_seed_offset": 0,
+        "soft_prompt_length": int(getattr(args, "soft_prompt_length", 0)),
+        "soft_prompt_init_seed": int(getattr(args, "soft_prompt_init_seed", args.seed)),
+        "stage3_prompt_learning_rate": float(
+            getattr(args, "prompt_lr", 0.3)
+        ),
+        "stage3_prompt_warmup_ratio": float(
+            getattr(args, "prompt_warmup_ratio", 0.03)
+        ),
     }
 
 
@@ -183,6 +194,9 @@ def build_train_config(
             "text_memory_pooling_grad_norm_mean",
             "cross_attention_grad_norm_mean",
             "cross_attention_output_weight_norm",
+            "mmrl_grad_norm",
+            "soft_prompt_norm",
+            "soft_prompt_grad_norm",
             "text_guided_visual_attention_entropy_norm",
             "text_guided_visual_attention_peak_mean",
             "text_guided_visual_slot_specificity_ratio",

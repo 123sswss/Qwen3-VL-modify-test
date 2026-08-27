@@ -194,7 +194,7 @@ run_pathvqa_checkpoint_eval() {
   (
     cd "$ROOT_DIR" || exit 1
     python pathvqa/pathvqa_official_eval.py \
-      --backend mmrl \
+      --backend "${PATHVQA_MMRL_EVAL_BACKEND:-mmrl}" \
       --base-model "$MODEL_PATH" \
       --checkpoint "$checkpoint" \
       --data-root "$PATHVQA_DATA_ROOT" \
@@ -256,6 +256,20 @@ run_pathvqa() {
   fi
   if [ -n "${PATHVQA_EXPECTED_MMRL_PARAMETERS:-}" ]; then
     extra_args+=(--expected-mmrl-parameters "$PATHVQA_EXPECTED_MMRL_PARAMETERS")
+  fi
+  if [ -n "${PATHVQA_SOFT_PROMPT_LENGTH:-}" ]; then
+    extra_args+=(
+      --soft-prompt-length "$PATHVQA_SOFT_PROMPT_LENGTH"
+      --soft-prompt-init-seed "${PATHVQA_SOFT_PROMPT_INIT_SEED:-$run_seed}"
+      --prompt-lr "${PATHVQA_PROMPT_LR:-0.3}"
+      --prompt-warmup-ratio "${PATHVQA_PROMPT_WARMUP_RATIO:-0.03}"
+    )
+  fi
+  if [ -n "${PATHVQA_EXPECTED_TOTAL_TRAINABLE_PARAMETERS:-}" ]; then
+    extra_args+=(
+      --expected-total-trainable-parameters \
+      "$PATHVQA_EXPECTED_TOTAL_TRAINABLE_PARAMETERS"
+    )
   fi
   if [ -n "${PATHVQA_STAGE1_CHECKPOINT_IN:-}" ]; then
     extra_args+=(--stage1-checkpoint-in "$PATHVQA_STAGE1_CHECKPOINT_IN")
@@ -601,6 +615,31 @@ run_pathvqa_last8_lora_minimal_mmrl_relation_suite() {
     run_pathvqa
 }
 
+run_pathvqa_minimal_mmrl_prompt20_seed44() {
+  local shared_stage1="${PATHVQA_MINIMAL_STAGE1_CHECKPOINT:-$PATHVQA_OUTPUT_ROOT/pathvqa_mmrl_minimal_shared_stage1_seed44_20260826}"
+  if [ ! -f "$shared_stage1/mmrl_delta.safetensors" ]; then
+    echo "[ERR] 极简 MMRL Stage1 checkpoint 不存在: $shared_stage1" >&2
+    return 1
+  fi
+  PATHVQA_EXPERIMENT_NAME=pathvqa_mmrl_minimal_shared_s_mean_prompt20_relation0050 \
+  PATHVQA_RUN_SEED=44 \
+  MMRL_QUERY_ARCHITECTURE=shared_direct_post_cross \
+  MMRL_MEMORY_POOLING_MODE=mean \
+  MMRL_FUSION_MODE=cross_attention \
+  MMRL_SAME_INIT_LAYER_PROJECTORS=0 \
+  MMRL_RELATION_LOSS_WEIGHT=0.05 \
+  PATHVQA_EXPECTED_MMRL_PARAMETERS=7927808 \
+  PATHVQA_SOFT_PROMPT_LENGTH=20 \
+  PATHVQA_SOFT_PROMPT_INIT_SEED=44 \
+  PATHVQA_PROMPT_LR=0.3 \
+  PATHVQA_PROMPT_WARMUP_RATIO=0.03 \
+  PATHVQA_EXPECTED_TOTAL_TRAINABLE_PARAMETERS=7979008 \
+  PATHVQA_MMRL_EVAL_BACKEND=mmrl-prompt \
+  PATHVQA_SELECT_BEST_EPOCH=1 \
+  PATHVQA_STAGE1_CHECKPOINT_IN="$shared_stage1" \
+    run_pathvqa
+}
+
 run_final_seeds4() {
   local seed
   for seed in 44 45 46 47; do
@@ -827,6 +866,9 @@ case "$RUN_TARGET" in
   pathvqa_prompt_tuning_seed44)
     run_pathvqa_prompt_tuning_seed44 || failures=$((failures + 1))
     ;;
+  pathvqa_minimal_mmrl_prompt20_seed44)
+    run_pathvqa_minimal_mmrl_prompt20_seed44 || failures=$((failures + 1))
+    ;;
   pathvqa_lora_visual_attn_r128)
     run_pathvqa_lora_visual_attn_r128 || failures=$((failures + 1))
     ;;
@@ -844,7 +886,7 @@ case "$RUN_TARGET" in
     run_slake || failures=$((failures + 1))
     ;;
   *)
-    echo "[ERR] 未知目标: $RUN_TARGET，可选 train、slake、pathvqa、pathvqa_base、pathvqa_prompt_tuning_seed44、pathvqa_lora_visual_attn_r128、pathvqa_lora_visual_attn_r128_then_base、pathvqa_lora_visual_last8_attn_r128、pathvqa_last8_lora_minimal_mmrl_relation_suite、slake_final_seeds4、slake_ablation_no_relation_seeds2、slake_ablation_independent_init_seeds2、slake_ablation_static_query_seed45、slake_ablation_mean_pooling_seed45、slake_mean_final_completion_suite、slake_text_guided_balanced_fusion_slots8_seed45、slake_prompt_tuning_seed44、slake_concat_mlp_fusion_seed45、slake_overnight_prompt_and_concat_mlp、slake_ablation_suite、all。" >&2
+    echo "[ERR] 未知目标: $RUN_TARGET，可选 train、slake、pathvqa、pathvqa_base、pathvqa_prompt_tuning_seed44、pathvqa_minimal_mmrl_prompt20_seed44、pathvqa_lora_visual_attn_r128、pathvqa_lora_visual_attn_r128_then_base、pathvqa_lora_visual_last8_attn_r128、pathvqa_last8_lora_minimal_mmrl_relation_suite、slake_final_seeds4、slake_ablation_no_relation_seeds2、slake_ablation_independent_init_seeds2、slake_ablation_static_query_seed45、slake_ablation_mean_pooling_seed45、slake_mean_final_completion_suite、slake_text_guided_balanced_fusion_slots8_seed45、slake_prompt_tuning_seed44、slake_concat_mlp_fusion_seed45、slake_overnight_prompt_and_concat_mlp、slake_ablation_suite、all。" >&2
     exit 2
     ;;
 esac

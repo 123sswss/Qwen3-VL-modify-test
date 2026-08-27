@@ -2,6 +2,7 @@
 import os
 import csv
 import math
+from contextlib import contextmanager, nullcontext
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
@@ -615,6 +616,13 @@ class Qwen3VLMMRLForStages(Qwen3VLForConditionalGeneration):
         self.lm_head = nn.Linear(hidden_size, len(tokenizer), bias=False)
         self.post_init()
         self.model.MMRL.synchronize_layer_projector_initialization()
+        self.soft_prompt_length = int(getattr(config, "MMRL_SOFT_PROMPT_LENGTH", 0))
+        self.soft_prompt = None
+        self._soft_prompt_inputs_preexpanded = False
+        if self.soft_prompt_length > 0:
+            initial_prompt = self._sample_soft_prompt_from_embeddings()
+            self.soft_prompt = nn.Parameter(initial_prompt.float())
+            self.soft_prompt.register_hook(self._soft_prompt_grad_hook)
         # 补充 generation_config，避免 save_pretrained 时报错
         from transformers import GenerationConfig
         self.generation_config = GenerationConfig.from_model_config(config)
@@ -636,10 +644,125 @@ class Qwen3VLMMRLForStages(Qwen3VLForConditionalGeneration):
         self._shared_rep_grad_hook_handle = None
         self._shared_rep_grad_hook_param_id = None
         self._validated_mmrl_supervision_contract = False
+        self._mmrl_grad_squared = 0.0
+        self._mmrl_grad_hook_handles = []
+        self._register_mmrl_grad_hooks()
         self._ensure_shared_rep_grad_hook()
 
     def _get_mmrl_module(self):
         return getattr(self.model, "MMRL", None)
+
+    def _sample_soft_prompt_from_embeddings(self):
+        embeddings = self.get_input_embeddings().weight.detach()
+        generator = torch.Generator(device="cpu").manual_seed(
+            int(getattr(self.config, "MMRL_SOFT_PROMPT_INIT_SEED", 44))
+        )
+        sampled_rows = torch.randint(
+            embeddings.shape[0],
+            (self.soft_prompt_length,),
+            generator=generator,
+        )
+        return embeddings[sampled_rows.to(embeddings.device)].clone()
+
+    def reset_soft_prompt_from_base_embeddings(self):
+        if self.soft_prompt is None:
+            return
+        initial_prompt = self._sample_soft_prompt_from_embeddings()
+        self.soft_prompt.data.copy_(
+            initial_prompt.to(
+                device=self.soft_prompt.device,
+                dtype=self.soft_prompt.dtype,
+            )
+        )
+
+    def _soft_prompt_grad_hook(self, grad):
+        grad_norm = grad.detach().float().norm()
+        if isinstance(getattr(self, "_last_metrics", None), dict):
+            self._last_metrics["soft_prompt_grad_norm"] = grad_norm
+        return grad
+
+    def _register_mmrl_grad_hooks(self):
+        if self._mmrl_grad_hook_handles:
+            return
+
+        def accumulate(grad):
+            squared = float(grad.detach().float().pow(2).sum().item())
+            self._mmrl_grad_squared += squared
+            if isinstance(getattr(self, "_last_metrics", None), dict):
+                self._last_metrics["mmrl_grad_norm"] = torch.tensor(
+                    math.sqrt(self._mmrl_grad_squared),
+                    device=grad.device,
+                )
+            return grad
+
+        for parameter in self.model.MMRL.parameters():
+            self._mmrl_grad_hook_handles.append(parameter.register_hook(accumulate))
+
+    def _expand_soft_prompt_inputs(self, kwargs):
+        if self.soft_prompt is None:
+            return kwargs
+        expanded = dict(kwargs)
+        input_ids = expanded.pop("input_ids")
+        attention_mask = expanded.pop("attention_mask")
+        batch_size = input_ids.shape[0]
+        pad_id = int(getattr(self.config, "pad_token_id", 0) or 0)
+        prompt_ids = torch.full(
+            (batch_size, self.soft_prompt_length),
+            pad_id,
+            dtype=input_ids.dtype,
+            device=input_ids.device,
+        )
+        prompt_attention = torch.ones(
+            (batch_size, self.soft_prompt_length),
+            dtype=attention_mask.dtype,
+            device=attention_mask.device,
+        )
+        expanded["input_ids"] = torch.cat((prompt_ids, input_ids), dim=1)
+        expanded["attention_mask"] = torch.cat(
+            (prompt_attention, attention_mask), dim=1
+        )
+        labels = expanded.get("labels")
+        if labels is not None:
+            ignored = torch.full(
+                (batch_size, self.soft_prompt_length),
+                -100,
+                dtype=labels.dtype,
+                device=labels.device,
+            )
+            expanded["labels"] = torch.cat((ignored, labels), dim=1)
+        gating_mask = expanded.get("mmrl_gating_mask")
+        if gating_mask is None:
+            gating_mask = attention_mask
+        excluded_prompt = torch.zeros(
+            (batch_size, self.soft_prompt_length),
+            dtype=gating_mask.dtype,
+            device=gating_mask.device,
+        )
+        expanded["mmrl_gating_mask"] = torch.cat(
+            (excluded_prompt, gating_mask), dim=1
+        )
+        return expanded
+
+    @contextmanager
+    def _inject_soft_prompt_embeddings(self):
+        if self.soft_prompt is None:
+            yield
+            return
+        embeddings = self.get_input_embeddings()
+
+        def replace_prompt(_module, _inputs, output):
+            if output.ndim != 3 or output.shape[1] < self.soft_prompt_length:
+                return output
+            prompt = self.soft_prompt.to(
+                device=output.device, dtype=output.dtype
+            ).unsqueeze(0).expand(output.shape[0], -1, -1)
+            return torch.cat((prompt, output[:, self.soft_prompt_length:]), dim=1)
+
+        handle = embeddings.register_forward_hook(replace_prompt)
+        try:
+            yield
+        finally:
+            handle.remove()
 
     def _collect_rep_grad_metrics(self, device):
         result = {}
@@ -772,7 +895,15 @@ class Qwen3VLMMRLForStages(Qwen3VLForConditionalGeneration):
         return torch.cat(tmp).view(-1, 1)
 
     def forward(self, input_ids=None, alpha_labels=None, images_per_sample=None, task_type_ids=None, **kwargs):
+        if self.soft_prompt is not None and not self._soft_prompt_inputs_preexpanded:
+            expanded = self._expand_soft_prompt_inputs({
+                **kwargs,
+                "input_ids": input_ids,
+            })
+            input_ids = expanded.pop("input_ids")
+            kwargs = expanded
         self._last_shared_rep_grad = {}
+        self._mmrl_grad_squared = 0.0
         self._ensure_shared_rep_grad_hook()
         self.model.visual.current_stage_id = int(self.current_stage_id)
         self.model.visual.current_stage_step = int(self.current_stage_step)
@@ -815,7 +946,17 @@ class Qwen3VLMMRLForStages(Qwen3VLForConditionalGeneration):
 
             kwargs["mmrl_gating_mask"] = pooling_bool.to(dtype=self.model.dtype)
         
-        outputs = super().forward(input_ids=input_ids, images_per_sample=images_per_sample, **kwargs)
+        prompt_context = (
+            nullcontext()
+            if self._soft_prompt_inputs_preexpanded
+            else self._inject_soft_prompt_embeddings()
+        )
+        with prompt_context:
+            outputs = super().forward(
+                input_ids=input_ids,
+                images_per_sample=images_per_sample,
+                **kwargs,
+            )
         logits = outputs.logits
         labels = kwargs.get("labels", None)
         if labels is None:
@@ -879,6 +1020,7 @@ class Qwen3VLMMRLForStages(Qwen3VLForConditionalGeneration):
                 "alpha_mae": alpha_mae.detach(),
                 "temperature": torch.tensor(float(self.temperature_override) if self.temperature_override is not None else float("nan"), device=input_ids.device),
                 "stage_progress": torch.tensor(float(getattr(self, "current_stage_progress", 0.0)), device=input_ids.device),
+                "mmrl_grad_norm": torch.tensor(0.0, device=input_ids.device),
             }
             visual_dbg = getattr(self.model.visual, "debug_context", {}) or {}
             for key, value in visual_dbg.items():
@@ -891,6 +1033,16 @@ class Qwen3VLMMRLForStages(Qwen3VLForConditionalGeneration):
                 self._last_metrics[key] = value
             for key, value in self._collect_rep_grad_metrics(input_ids.device).items():
                 self._last_metrics[key] = value
+            if self.soft_prompt is not None:
+                self._last_metrics["soft_prompt_norm"] = (
+                    self.soft_prompt.detach().float().norm()
+                )
+                prompt_grad = self.soft_prompt.grad
+                self._last_metrics["soft_prompt_grad_norm"] = (
+                    prompt_grad.detach().float().norm()
+                    if prompt_grad is not None
+                    else torch.tensor(0.0, device=input_ids.device)
+                )
 
         if self.debug_mode and torch.is_tensor(outputs.loss):
             loss_val = outputs.loss.detach().float().item()
@@ -917,6 +1069,21 @@ class Qwen3VLMMRLForStages(Qwen3VLForConditionalGeneration):
                 print("!!!! [HIGH-LOSS-DBG] abnormal loss end !!!!\n")
 
         return outputs
+
+    def generate(self, *args, **kwargs):
+        if self.soft_prompt is None:
+            return super().generate(*args, **kwargs)
+        if args:
+            if len(args) != 1 or "input_ids" in kwargs:
+                raise TypeError("Soft Prompt generation accepts one positional input_ids")
+            kwargs["input_ids"] = args[0]
+        expanded = self._expand_soft_prompt_inputs(kwargs)
+        self._soft_prompt_inputs_preexpanded = True
+        try:
+            with self._inject_soft_prompt_embeddings():
+                return super().generate(**expanded)
+        finally:
+            self._soft_prompt_inputs_preexpanded = False
 
 
 def build_model_and_processor(model_path, experiment_cfg=None):
@@ -977,6 +1144,12 @@ def build_model_and_processor(model_path, experiment_cfg=None):
         "mmrl_relation_loss_weight",
         os.getenv("MMRL_RELATION_LOSS_WEIGHT", "0.0"),
     ))
+    config.MMRL_SOFT_PROMPT_LENGTH = int(experiment_cfg.get(
+        "soft_prompt_length", 0
+    ))
+    config.MMRL_SOFT_PROMPT_INIT_SEED = int(experiment_cfg.get(
+        "soft_prompt_init_seed", 44
+    ))
     config.MMRL_RELATION_MAX_TOKENS = int(experiment_cfg.get(
         "mmrl_relation_max_tokens",
         os.getenv("MMRL_RELATION_MAX_TOKENS", "64"),
@@ -997,6 +1170,8 @@ def build_model_and_processor(model_path, experiment_cfg=None):
     print("Base model loaded. ")
     print("Tokenizer loaded. Now building MMRL model...")
     model = Qwen3VLMMRLForStages(config, tokenizer).to("cuda").to(torch.bfloat16)
+    if model.soft_prompt is not None:
+        model.soft_prompt.data = model.soft_prompt.data.float()
     model._ensure_shared_rep_grad_hook()
     visual = model.model.visual
     mmrl = model.model.MMRL
@@ -1133,6 +1308,7 @@ def build_model_and_processor(model_path, experiment_cfg=None):
         )
     model.model.load_state_dict(base.model.state_dict(), strict=False)
     model.lm_head.load_state_dict(base.lm_head.state_dict(), strict=False)
+    model.reset_soft_prompt_from_base_embeddings()
 
     cross_output_norm = float(
         model.model.MMRL.cross_attention.output_projection.weight
@@ -1221,6 +1397,8 @@ def set_trainable_stage(model, stage, train_cfg=None):
         mods = [v.hidden_state_pooling, v.embedding_pooling, v.Task_classifier]
     elif stage == 3:
         mods = [model.model.MMRL]
+        if getattr(model, "soft_prompt", None) is not None:
+            mods.append(model.soft_prompt)
         # v.blocks_with_rep stay frozen while the Rep-Token branch remains active.
     else:
         raise ValueError("stage must be 1 or 3")
@@ -1272,17 +1450,37 @@ def _build_stage3_grouped_optimizer(model, train_cfg):
         for parameter in model.model.MMRL.parameters()
         if parameter.requires_grad
     ]
+    prompt_parameter = getattr(model, "soft_prompt", None)
+    prompt_parameters = (
+        [prompt_parameter]
+        if prompt_parameter is not None and prompt_parameter.requires_grad
+        else []
+    )
     active_parameters = [
         parameter for parameter in model.parameters() if parameter.requires_grad
     ]
     if not mmrl_parameters:
         raise RuntimeError("Stage 3 MMRL optimizer group is empty")
+    grouped_parameters = mmrl_parameters + prompt_parameters
     if {id(parameter) for parameter in active_parameters} != {
-        id(parameter) for parameter in mmrl_parameters
+        id(parameter) for parameter in grouped_parameters
     }:
         raise RuntimeError(
-            "Stage 3 trainable parameters must belong exclusively to model.MMRL"
+            "Stage 3 trainable parameters must belong to MMRL or Soft Prompt"
         )
+    expected_total = experiment_cfg.get("expected_total_trainable_parameters")
+    actual_total = sum(parameter.numel() for parameter in grouped_parameters)
+    if expected_total is not None and actual_total != int(expected_total):
+        raise RuntimeError(
+            "Stage 3 trainable parameter audit failed: "
+            f"expected={int(expected_total)} actual={actual_total}"
+        )
+    print(
+        "[STAGE3_TRAINABLE_PARAMETER_AUDIT] "
+        f"mmrl={sum(parameter.numel() for parameter in mmrl_parameters)} "
+        f"soft_prompt={sum(parameter.numel() for parameter in prompt_parameters)} "
+        f"total={actual_total} expected={expected_total}"
+    )
 
     parameter_groups = [{
         "params": mmrl_parameters,
@@ -1290,6 +1488,14 @@ def _build_stage3_grouped_optimizer(model, train_cfg):
         "weight_decay": weight_decay,
         "group_name": "mmrl",
     }]
+    if prompt_parameters:
+        prompt_lr = float(experiment_cfg.get("stage3_prompt_learning_rate", 0.3))
+        parameter_groups.append({
+            "params": prompt_parameters,
+            "lr": prompt_lr,
+            "weight_decay": 0.0,
+            "group_name": "soft_prompt",
+        })
     print(
         "[STAGE3_OPTIMIZER_GROUPS] "
         + " ".join(
@@ -1302,11 +1508,15 @@ def _build_stage3_grouped_optimizer(model, train_cfg):
         f"AdamW beta1={adam_beta1} beta2={adam_beta2} "
         f"eps={adam_epsilon} weight_decay={weight_decay}"
     )
-    return torch.optim.AdamW(
+    optimizer = torch.optim.AdamW(
         parameter_groups,
         betas=(adam_beta1, adam_beta2),
         eps=adam_epsilon,
     )
+    optimizer.soft_prompt_warmup_ratio = float(
+        experiment_cfg.get("stage3_prompt_warmup_ratio", 0.03)
+    )
+    return optimizer
 
 
 def _warmup_hold_cosine_factor(step, warmup_steps, hold_until_step, total_steps):
@@ -1335,7 +1545,7 @@ def _build_stage3_step_scheduler(optimizer, experiment_cfg):
     warmup_steps = int(experiment_cfg["stage3_warmup_steps"])
     hold_until_step = int(experiment_cfg["stage3_hold_until_step"])
 
-    def lr_lambda(current_step):
+    def mmrl_lr_lambda(current_step):
         return _warmup_hold_cosine_factor(
             current_step,
             warmup_steps=warmup_steps,
@@ -1345,7 +1555,7 @@ def _build_stage3_step_scheduler(optimizer, experiment_cfg):
 
     audit_steps = (0, warmup_steps, hold_until_step, 625, total_steps)
     audit = {
-        step: round(lr_lambda(step), 8)
+        step: round(mmrl_lr_lambda(step), 8)
         for step in dict.fromkeys(audit_steps)
     }
     print(
@@ -1354,7 +1564,42 @@ def _build_stage3_step_scheduler(optimizer, experiment_cfg):
         f"hold_until_step={hold_until_step} decay=cosine final_factor=0 "
         f"factor_audit={audit}"
     )
-    return torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lr_lambda)
+    lr_lambdas = [mmrl_lr_lambda]
+    prompt_groups = [
+        group for group in optimizer.param_groups
+        if group.get("group_name") == "soft_prompt"
+    ]
+    if prompt_groups:
+        prompt_warmup_ratio = float(
+            getattr(optimizer, "soft_prompt_warmup_ratio", 0.03)
+        )
+        prompt_warmup_steps = max(1, int(total_steps * prompt_warmup_ratio))
+
+        def prompt_lr_lambda(current_step):
+            step = int(current_step)
+            if step < prompt_warmup_steps:
+                return float(step) / float(prompt_warmup_steps)
+            return max(
+                0.0,
+                float(total_steps - step)
+                / float(max(1, total_steps - prompt_warmup_steps)),
+            )
+
+        lr_lambdas.append(prompt_lr_lambda)
+        prompt_audit = {
+            step: round(prompt_lr_lambda(step), 8)
+            for step in (0, prompt_warmup_steps, total_steps)
+        }
+        print(
+            "[STAGE3_PROMPT_LINEAR_SCHEDULE] "
+            f"total_steps={total_steps} warmup_steps={prompt_warmup_steps} "
+            f"factor_audit={prompt_audit}"
+        )
+    if len(lr_lambdas) != len(optimizer.param_groups):
+        raise RuntimeError("Stage3 scheduler/group count mismatch")
+    return torch.optim.lr_scheduler.LambdaLR(
+        optimizer, lr_lambda=lr_lambdas
+    )
 
 
 def _build_stage3_epoch_decay_scheduler(
@@ -1377,7 +1622,7 @@ def _build_stage3_epoch_decay_scheduler(
             f"Stage3 epoch LR decay must be in (0, 1], got {epoch_decay}"
         )
 
-    def lr_lambda(current_step):
+    def mmrl_lr_lambda(current_step):
         step = int(current_step)
         if step < warmup_steps:
             return float(step) / float(warmup_steps)
@@ -1387,7 +1632,7 @@ def _build_stage3_epoch_decay_scheduler(
     audit_steps = [0, warmup_steps]
     audit_steps.extend(epoch * updates_per_epoch for epoch in range(1, total_epochs))
     audit = {
-        step: round(lr_lambda(step), 8)
+        step: round(mmrl_lr_lambda(step), 8)
         for step in dict.fromkeys(audit_steps)
     }
     print(
@@ -1396,7 +1641,42 @@ def _build_stage3_epoch_decay_scheduler(
         f"warmup_steps={warmup_steps} epoch_decay={epoch_decay} "
         f"factor_audit={audit}"
     )
-    return torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lr_lambda)
+    lr_lambdas = [mmrl_lr_lambda]
+    if any(
+        group.get("group_name") == "soft_prompt"
+        for group in optimizer.param_groups
+    ):
+        total_steps = updates_per_epoch * total_epochs
+        prompt_warmup_ratio = float(
+            getattr(optimizer, "soft_prompt_warmup_ratio", 0.03)
+        )
+        prompt_warmup_steps = max(1, int(total_steps * prompt_warmup_ratio))
+
+        def prompt_lr_lambda(current_step):
+            step = int(current_step)
+            if step < prompt_warmup_steps:
+                return float(step) / float(prompt_warmup_steps)
+            return max(
+                0.0,
+                float(total_steps - step)
+                / float(max(1, total_steps - prompt_warmup_steps)),
+            )
+
+        lr_lambdas.append(prompt_lr_lambda)
+        prompt_audit = {
+            step: round(prompt_lr_lambda(step), 8)
+            for step in (0, prompt_warmup_steps, total_steps)
+        }
+        print(
+            "[STAGE3_PROMPT_LINEAR_SCHEDULE] "
+            f"total_steps={total_steps} warmup_steps={prompt_warmup_steps} "
+            f"factor_audit={prompt_audit}"
+        )
+    if len(lr_lambdas) != len(optimizer.param_groups):
+        raise RuntimeError("Stage3 scheduler/group count mismatch")
+    return torch.optim.lr_scheduler.LambdaLR(
+        optimizer, lr_lambda=lr_lambdas
+    )
 
 
 # =========================

@@ -3,7 +3,8 @@ from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 LORATEST_DIR = PROJECT_ROOT / "loraTest"
-for module_path in (PROJECT_ROOT, LORATEST_DIR):
+TRAIN_DIR = PROJECT_ROOT / "train"
+for module_path in (PROJECT_ROOT, LORATEST_DIR, TRAIN_DIR):
     if str(module_path) not in sys.path:
         sys.path.insert(0, str(module_path))
 
@@ -18,6 +19,7 @@ from transformers import (
 )
 import QWen3WithMMRL
 import processingWithMMRL
+from train_stages import Qwen3VLMMRLForStages
 from generation_timing import generate_with_timing
 from mmrl_checkpoint import (
     initialize_mmrl_from_base,
@@ -31,21 +33,13 @@ class MissingGateError(RuntimeError):
     fatal_evaluation_error = True
 
 
-class Qwen3VLMMRLForGen(Qwen3VLForConditionalGeneration):
+class Qwen3VLMMRLForGen(Qwen3VLMMRLForStages):
     def __init__(self, config, tokenizer):
-        import torch.nn as nn
-        nn.Module.__init__(self)
-        self.config = config
-        current_vocab_size = len(tokenizer)
-        self.model = QWen3WithMMRL.QWen3WithMMRL(config, tokenizer=tokenizer)
-        hidden_size = config.text_config.hidden_size
-        self.lm_head = nn.Linear(hidden_size, current_vocab_size, bias=False)
-        self.generation_config = GenerationConfig.from_model_config(config)
+        super().__init__(config, tokenizer)
         if tokenizer.pad_token_id is not None:
             self.generation_config.pad_token_id = tokenizer.pad_token_id
         if tokenizer.eos_token_id is not None:
             self.generation_config.eos_token_id = tokenizer.eos_token_id
-        self.post_init()
 
     def get_output_embeddings(self):
         return self.lm_head
@@ -78,6 +72,8 @@ class ModelInterface:
         with torch.device("cuda"):
             self.model = Qwen3VLMMRLForGen(config, self.tokenizer)
             self.model.to(torch.bfloat16)
+            if self.model.soft_prompt is not None:
+                self.model.soft_prompt.data = self.model.soft_prompt.data.float()
 
         print(f"[3/4] 从 Base 重建冻结权重与 Rep Blocks: {base_model_path} ...")
         base_model = Qwen3VLForConditionalGeneration.from_pretrained(
@@ -154,6 +150,9 @@ class ModelInterface:
             self.last_gate_value = (
                 gate_values[0] if len(gate_values) == 1 else gate_values
             )
-            input_len = inputs.input_ids.shape[1]
+            input_len = (
+                inputs.input_ids.shape[1]
+                + int(getattr(self.model, "soft_prompt_length", 0))
+            )
             output_ids = generated_ids[:, input_len:]
             return self.tokenizer.decode(output_ids[0], skip_special_tokens=True)

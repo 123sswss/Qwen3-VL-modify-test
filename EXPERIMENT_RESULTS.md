@@ -289,6 +289,7 @@ Correction (2026-08-26): the intended scope-matched LoRA baseline is Attention L
 - Validation Overall by epoch: **46.2853, 46.8605, 46.6049**; epoch2 selected.
 - Test Overall: **46.8373**; image-clustered 95% bootstrap CI **[45.5662, 48.2917]**.
 - Yes/No / Free-form: **79.1196 / 14.5070**.
+- Yes/No class audit:1,816 `yes` questions at69.1079% and1,546 `no` questions at90.8797%; without Relation the model remains strongly biased toward `no`.
 - Per question type: how8.6331, other0.0000, what10.4706, when0.0000, where43.6195, why0.0000, yes/no79.1196; Free-form question-type macro10.4539.
 - Trainable MMRL parameters: **7,927,808** exactly: shared S40,960; layer embeddings8,192; projectors0; visual Mean Pooling1,051,648; text Mean Pooling2,624,512; shared CA4,202,496.
 - Stage3 runtime/loss:6,616s /0.8948.
@@ -305,6 +306,7 @@ Correction (2026-08-26): the intended scope-matched LoRA baseline is Attention L
 - Validation Overall by epoch: **45.4545, 49.5447, 48.7618**; epoch2 selected.
 - Test Overall: **49.4121**; image-clustered 95% bootstrap CI **[48.1175, 50.7317]**.
 - Yes/No / Free-form: **82.5996 / 16.1752**.
+- Yes/No class audit:1,816 `yes` questions at79.6806% and1,546 `no` questions at86.0285%. Relative to the paired Relation0 run, Relation0.05 changes `yes` by+10.5727 and `no` by-4.8512 points, trading a modest loss on `no` for a much larger recovery on `yes`.
 - Per question type: how9.3525, other0.0000, what11.2003, when0.0000, where51.7401, why0.0000, yes/no82.5996; Free-form question-type macro12.0488.
 - Trainable MMRL parameters: **7,927,808**; parameter audit passed exactly.
 - Stage3 runtime/loss:6,617s /0.8953.
@@ -331,15 +333,40 @@ Correction (2026-08-26): the intended scope-matched LoRA baseline is Attention L
 - Conclusion: fixed spatial RoPE is active and optimization remains healthy, but it consistently harms both answer categories. The shared Rep Tokens are semantic prompts rather than tokens aligned to fixed image patches; forcing distinct spatial phases introduces a false correspondence and breaks their useful shared-origin symmetry. Reject this direction and do not add learnable coordinates without a new token-to-region alignment mechanism.
 - Output/log path: `/root/autodl-tmp/Qwen3-VL-modify-test/pathvqa/outputs/mmrl/pathvqa_mmrl_minimal_shared_s_mean_grid5x8_relation0050_seed44_20260827`; selected checkpoint `checkpoints/stage3_epoch_3`.
 
+### 2026-08-27 - pathvqa_prompt_tuning_len20_seed44_20260827
+
+- Commit/config: commit `722a65f`; classic static Prompt Tuning with20 learned prefix embeddings of width2,560; the complete Qwen3-VL backbone is frozen.
+- Dataset and split: PathVQA train19,654; validation6,259 for epoch selection; test6,719 with858 image clusters.
+- Seed / data seed: 44 / 42.
+- Controlled change: formal frozen-backbone static Prompt Tuning baseline using the same PathVQA templates, evaluator, generation settings, and validation-selected test protocol as MMRL and LoRA.
+- Validation Overall by epoch: **52.71, 52.76, 54.87**; epoch3 selected.
+- Test Overall: **55.8268**; image-clustered 95% bootstrap CI **[54.4524, 57.1496]**.
+- Yes/No / Free-form: **90.3331 / 21.2690**.
+- Per question type: how7.9137, other22.2222, what16.4903, when0.0000, where57.3086, why0.0000, yes/no90.3331; Free-form question-type macro17.3225.
+- Yes/No class audit:1,816 `yes` questions at91.2996% and1,546 `no` questions at89.1979%; the aggregate gain is not a one-class collapse.
+- Trainable parameters: **51,200** exactly (`20 x 2,560`), versus7.928M for minimal MMRL and6.291M for last8 Attention LoRA-r128.
+- Training:3 epochs, LR0.3, micro-batch2, gradient accumulation16; runtime5,969.6s; reported train loss12.0592.
+- Evaluation timing: TTFT mean0.0474s, weighted TPOT0.01959s/token,51.05 decode tokens/s, request mean0.0989s.
+- Deltas versus Base: **+21.0568 Overall, +22.9931 Yes/No, +19.1290 Free-form**.
+- Deltas versus minimal MMRL+Relation0.05: **+6.4147 Overall, +7.7335 Yes/No, +5.0938 Free-form**.
+- Deltas versus last8 Attention LoRA-r128: **+1.9795 Overall, +6.0975 Yes/No, but -2.1448 Free-form**.
+- Conclusion: static Prompt Tuning is the current best PathVQA Overall result and demonstrates that the dominant adaptation bottleneck is the frozen LLM context/interface, not only internal ViT specialization. Contrary to the initial prediction, its largest advantage over LoRA is binary-answer calibration; LoRA remains stronger on Free-form. A dynamic multimodal Prompt should therefore be judged on whether it preserves the static prompt's balanced Yes/No performance while recovering the Free-form gap, not merely on aggregate Overall.
+- Output/log path: `/root/autodl-tmp/Qwen3-VL-modify-test/pathvqa/outputs/prompt_tuning/pathvqa_prompt_tuning_len20_seed44_20260827`; selected checkpoint `checkpoints/epoch_3`.
+
 ### PathVQA Yes/No Class-Balance Audit
 
 | Method | Yes count | Yes accuracy | No count | No accuracy | Class gap |
 |---|---:|---:|---:|---:|---:|
 | Frozen Base | 1,816 | 53.30 | 1,546 | 83.83 | 30.53 |
-| MMRL seed44 | 1,816 | 80.62 | 1,546 | 84.86 | 4.24 |
+| Earlier 128-slot MMRL seed44 | 1,816 | 80.62 | 1,546 | 84.86 | 4.24 |
+| Minimal MMRL Relation0 seed44 | 1,816 | 69.11 | 1,546 | 90.88 | 21.77 |
+| Minimal MMRL Relation0.05 seed44 | 1,816 | 79.68 | 1,546 | 86.03 | 6.35 |
 | Visual LoRA-r128 seed44 | 1,816 | 83.65 | 1,546 | 89.39 | 5.74 |
+| Static Prompt Tuning seed44 | 1,816 | 91.30 | 1,546 | 89.20 | 2.10 |
 
 The aggregate Yes/No score hides a severe Base bias toward `no`. MMRL removes most of this imbalance and therefore does not obtain82.57 by collapsing to one class. It nevertheless trails the all24-layer LoRA run by3.03 points on `yes` and4.53 points on `no`. Same-question paired exact McNemar tests reject a tie for this unmatched comparison: on `yes`, MMRL-only/LoRA-only correct counts are127/182 (`p=0.0021`); on `no`,64/134 (`p=7.29e-7`). These statistics remain valid for the completed models but cannot establish a scope-matched architectural advantage because MMRL acts on visual layers17-24 while this LoRA acts on all24 layers.
+
+Correction (2026-08-27): the original `MMRL seed44` class row above refers to the earlier 128-slot47.30 run. The two minimal-MMRL rows were added from their own stored comparison files and are the correct class breakdowns for the clean Relation experiment. They show that Relation's binary gain is primarily calibration of affirmative answers rather than a uniform visual-accuracy increase.
 
 ## Rejected / Superseded Directions
 

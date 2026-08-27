@@ -315,6 +315,11 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--stage1-lr", type=float, default=1e-4)
     parser.add_argument("--mmrl-lr", type=float, default=6e-5)
+    parser.add_argument("--soft-prompt-length", type=int, default=0)
+    parser.add_argument("--soft-prompt-init-seed", type=int, default=44)
+    parser.add_argument("--prompt-lr", type=float, default=0.3)
+    parser.add_argument("--prompt-warmup-ratio", type=float, default=0.03)
+    parser.add_argument("--expected-total-trainable-parameters", type=int)
     parser.add_argument("--relation-weight", type=float, default=0.050)
     parser.add_argument("--relation-max-tokens", type=int, default=64)
     parser.add_argument(
@@ -371,6 +376,12 @@ def parse_args() -> argparse.Namespace:
         parser.error("--generation-checks must be non-negative")
     if args.expected_mmrl_parameters is not None and args.expected_mmrl_parameters < 1:
         parser.error("--expected-mmrl-parameters must be positive")
+    if args.soft_prompt_length < 0:
+        parser.error("--soft-prompt-length must be non-negative")
+    if args.prompt_lr <= 0.0:
+        parser.error("--prompt-lr must be positive")
+    if not 0.0 <= args.prompt_warmup_ratio < 1.0:
+        parser.error("--prompt-warmup-ratio must be in [0, 1)")
     return args
 
 
@@ -508,7 +519,11 @@ def main() -> int:
             )
     else:
         stage1_checkpoint_manifest = validate_stage1_checkpoint(args)
-        loaded_manifest = load_mmrl_delta(model, args.stage1_checkpoint_in)
+        loaded_manifest = load_mmrl_delta(
+            model,
+            args.stage1_checkpoint_in,
+            allow_missing_prefixes=("soft_prompt",),
+        )
         if loaded_manifest.get("weights_sha256") != stage1_checkpoint_manifest.get(
             "weights_sha256"
         ):

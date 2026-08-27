@@ -64,7 +64,7 @@
 - 上述三项已完成：last8 LoRA53.85，极简 MMRL Relation046.84，Relation0.0549.41。Relation 的干净配对收益为+2.57；若继续确认，只补一个额外 seed，不再扩展成完整2x2矩阵。
 - 位置编码控制实验已完成：固定5x8网格得到47.67，低于共同原点的49.41；该方向停止，不追加可学习坐标实验。只有未来建立明确的 Rep Token-图像区域对齐监督后才重新考虑空间位置。
 - PathVQA 传统静态 Prompt Tuning 已完成：20个共享软提示 token、51,200参数、seed44 得到55.83，超过 minimal MMRL49.41与 last8 LoRA53.85；Yes/No90.33，但 Free-form21.27仍低于 last8 LoRA23.41。下一架构方向转为图文条件化动态 LLM Prompt，目标是保留静态 Prompt 的二分类校准并补足开放题，不再继续扩展 ViT 内部位置或 slot 结构。
-- 当前唯一决胜实验：复用 seed44 极简 MMRL 的同一 Stage1 checkpoint，在 Stage3 联合训练 minimal MMRL（Mean Pooling、共享高维S、共享CA、Relation0.05、LR6e-5）与20-token Static Prompt（LR0.3）。Prompt 前缀从 `mmrl_gating_mask` 排除，MMRL 与 Prompt 使用各自原调度并分别记录梯度；总训练参数7,979,008。按三轮 validation 选择 epoch 后只运行一次 test，用于判断视觉适配与 LLM 上下文适配是互补还是冗余，不再追加中间变体。
+- 决胜实验已完成：minimal MMRL+Relation0.05+Static Prompt20 得到55.75，与 Static Prompt 单独55.83打平；Yes/No88.94、Free-form22.52，仍未超过 last8 LoRA 的 Free-form23.41。两分支梯度均健康，因此结论是当前内部ViT MMRL与静态LLM Prompt功能重叠且存在能力权衡，不再追加seed或组合小变体，下一实现直接转向图文条件化动态LLM Prompt。
 - 自建数据集只报告 Base、MMRL、Gated 三项，使用主实验超参，不根据结果调整。
 - 不再声称 128-slot Pooling 优于 Mean Pooling，除非 PathVQA 给出明确证据。
 - PathVQA 上的 MMRL 增益必须同时出现在 What 或非 Yes/No 问题中；若增益只来自 Yes/No，不得归因于视觉表征改进。

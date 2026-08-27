@@ -353,6 +353,24 @@ Correction (2026-08-26): the intended scope-matched LoRA baseline is Attention L
 - Conclusion: static Prompt Tuning is the current best PathVQA Overall result and demonstrates that the dominant adaptation bottleneck is the frozen LLM context/interface, not only internal ViT specialization. Contrary to the initial prediction, its largest advantage over LoRA is binary-answer calibration; LoRA remains stronger on Free-form. A dynamic multimodal Prompt should therefore be judged on whether it preserves the static prompt's balanced Yes/No performance while recovering the Free-form gap, not merely on aggregate Overall.
 - Output/log path: `/root/autodl-tmp/Qwen3-VL-modify-test/pathvqa/outputs/prompt_tuning/pathvqa_prompt_tuning_len20_seed44_20260827`; selected checkpoint `checkpoints/epoch_3`.
 
+### 2026-08-27 - pathvqa_mmrl_minimal_shared_s_mean_prompt20_relation0050_seed44_20260827
+
+- Commit/config: commits `d057bf3` through `acf809a`; jointly trains the exact7,927,808-parameter minimal shared-S Mean-Pooling MMRL with Relation0.05 and a20-token static Soft Prompt. MMRL LR6e-5 retains fixed warmup plus epoch decay; Prompt LR0.3 uses3% warmup plus linear decay. The Prompt prefix is excluded from `mmrl_gating_mask`, so MMRL text pooling sees only the original question context.
+- Dataset and split: PathVQA train19,654; validation6,259 for epoch selection; test6,719 with858 image clusters.
+- Seed / data seed:44 /42. The MMRL branch reloads the same Stage1 checkpoint used by the minimal controls; the Prompt uses seed44 token-embedding initialization.
+- Controlled change: decisive complementarity test adding the independently strong static Prompt20 LLM-context interface to minimal MMRL+Relation0.05 while freezing the vision backbone and LLM weights.
+- Validation-selected epoch: epoch3, validation Overall **55.3763**.
+- Test Overall: **55.7523**; image-clustered95% bootstrap CI **[54.4270, 57.1364]**.
+- Yes/No / Free-form: **88.9352 / 22.5201**.
+- Per question type: how12.2302, other27.7778, what17.5848, when0.0000, where58.4687, why0.0000, yes/no88.9352; Free-form question-type macro19.3436.
+- Trainable parameters: MMRL7,927,808 + Prompt51,200 = **7,979,008**. The compact checkpoint contains11,269,121 parameters because it additionally serializes frozen Stage1 delta modules.
+- Training:3 epochs,1,845 optimizer steps, runtime6,747s, reported train loss0.7651.
+- Diagnostics:8 windows, no malformed lines; CE mean0.7547; total MMRL grad norm0.1592; Prompt grad norm0.00894; CA grad norm0.0967; scaled Relation0.000200; `delta_to_org_ratio`0.1634; CA delta/base ratio20.121; Prompt norm grows from214.02 to663.34. Both branches are active, so the tie is not caused by a dead branch.
+- Versus Static Prompt20: **-0.0745 Overall, -1.3979 Yes/No, +1.2511 Free-form**. Versus minimal MMRL+Relation0.05: **+6.3402 Overall, +6.3356 Yes/No, +6.3449 Free-form**. Versus last8 Visual LoRA: **+1.9050 Overall, +4.6996 Yes/No, -0.8937 Free-form**.
+- Evaluation timing: TTFT mean0.06061s, weighted TPOT0.02364s/token,42.30 decode tokens/s, request mean0.11123s.
+- Conclusion: the combination is statistically and practically tied with Static Prompt alone and fails the pre-registered success condition because Free-form22.52 remains below last8 LoRA23.41. MMRL shifts capacity from binary calibration toward Free-form answers but provides no net Overall gain. The dominant PathVQA bottleneck is the LLM context interface; do not spend more budget combining the current internal-ViT MMRL with static Prompt Tuning.
+- Output/log path: `/root/autodl-tmp/Qwen3-VL-modify-test/pathvqa/outputs/mmrl/pathvqa_mmrl_minimal_shared_s_mean_prompt20_relation0050_seed44_20260827`; selected checkpoint `checkpoints/stage3_epoch_3`.
+
 ### PathVQA Yes/No Class-Balance Audit
 
 | Method | Yes count | Yes accuracy | No count | No accuracy | Class gap |

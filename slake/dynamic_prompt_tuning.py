@@ -411,4 +411,9 @@ class DynamicPromptTuningModel(nn.Module):
             )
         self.soft_prompt.data.copy_(prompt.to(self.soft_prompt.device))
         self.dynamic_prompt.load_state_dict(state["dynamic_prompt"], strict=True)
-
+        # A restored checkpoint is no longer expected to have a zero residual.
+        self.dynamic_prompt._forward_audited = True
+        print(
+            "[DYNAMIC_PROMPT_CHECKPOINT_AUDIT] "
+            f"loaded={checkpoint_path} zero_init_check=skipped_for_trained_state"
+        )

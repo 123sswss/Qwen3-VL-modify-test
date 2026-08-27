@@ -127,8 +127,12 @@ class DynamicPromptTuningTest(unittest.TestCase):
                 torch.testing.assert_close(
                     restored.dynamic_prompt.state_dict()[key], value
                 )
+            restored(**self._batch())
+            self.assertGreater(
+                float(restored.debug_context["dynamic_prompt_delta_norm_mean"]),
+                0.0,
+            )
 
 
 if __name__ == "__main__":
     unittest.main()
-

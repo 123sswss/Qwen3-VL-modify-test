@@ -214,6 +214,7 @@ run_pathvqa() {
   local memory_pooling_mode="${MMRL_MEMORY_POOLING_MODE:-multi_query}"
   local fusion_mode="${MMRL_FUSION_MODE:-cross_attention}"
   local query_architecture="${MMRL_QUERY_ARCHITECTURE:-layer_mlp_post_cross}"
+  local rep_position_mode="${MMRL_REP_POSITION_MODE:-origin}"
   local extra_args=()
 
   if ! python -c 'import datasets, pyarrow' >/dev/null 2>&1; then
@@ -253,6 +254,11 @@ run_pathvqa() {
     echo "[ERR] MMRL_QUERY_ARCHITECTURE must be layer_mlp_post_cross or shared_direct_post_cross" >&2
     return 2
   fi
+  if [ "$rep_position_mode" != "origin" ] \
+    && [ "$rep_position_mode" != "grid_5x8" ]; then
+    echo "[ERR] MMRL_REP_POSITION_MODE must be origin or grid_5x8" >&2
+    return 2
+  fi
   if [ -n "${PATHVQA_EXPECTED_MMRL_PARAMETERS:-}" ]; then
     extra_args+=(--expected-mmrl-parameters "$PATHVQA_EXPECTED_MMRL_PARAMETERS")
   fi
@@ -266,7 +272,7 @@ run_pathvqa() {
   local output_dir
   output_dir="$(available_output_dir "$PATHVQA_OUTPUT_ROOT" "${experiment_name}_seed${run_seed}_${RUN_DATE}")"
   mkdir -p "$output_dir/eval"
-  echo "[PATHVQA] experiment=$experiment_name seed=$run_seed query_architecture=$query_architecture same_init=$same_init dynamic_cross_attention=$dynamic_cross_attention memory_pooling_mode=$memory_pooling_mode fusion_mode=$fusion_mode train_gate=open_full_ce relation=${MMRL_RELATION_LOSS_WEIGHT:-0.05} output=$output_dir"
+  echo "[PATHVQA] experiment=$experiment_name seed=$run_seed query_architecture=$query_architecture rep_position_mode=$rep_position_mode same_init=$same_init dynamic_cross_attention=$dynamic_cross_attention memory_pooling_mode=$memory_pooling_mode fusion_mode=$fusion_mode train_gate=open_full_ce relation=${MMRL_RELATION_LOSS_WEIGHT:-0.05} output=$output_dir"
   (
     cd "$ROOT_DIR" || exit 1
     python -m pathvqa.train_mmrl \
@@ -291,6 +297,7 @@ run_pathvqa() {
       --projector-hidden-dim "${MMRL_PROJECTOR_HIDDEN_DIM:-1024}" \
       --cross-attention-heads "${MMRL_CROSS_ATTENTION_HEADS:-8}" \
       --query-architecture "$query_architecture" \
+      --rep-position-mode "$rep_position_mode" \
       --memory-pooling-mode "$memory_pooling_mode" \
       --fusion-mode "$fusion_mode" \
       "${extra_args[@]}" \
@@ -497,6 +504,26 @@ run_pathvqa_last8_lora_minimal_mmrl_relation_suite() {
   PATHVQA_EXPERIMENT_NAME=pathvqa_mmrl_minimal_shared_s_mean_relation0050 \
   PATHVQA_RUN_SEED="$suite_seed" \
   MMRL_QUERY_ARCHITECTURE=shared_direct_post_cross \
+  MMRL_MEMORY_POOLING_MODE=mean \
+  MMRL_FUSION_MODE=cross_attention \
+  MMRL_SAME_INIT_LAYER_PROJECTORS=0 \
+  MMRL_RELATION_LOSS_WEIGHT=0.05 \
+  PATHVQA_EXPECTED_MMRL_PARAMETERS=7927808 \
+  PATHVQA_SELECT_BEST_EPOCH=1 \
+  PATHVQA_STAGE1_CHECKPOINT_IN="$shared_stage1" \
+    run_pathvqa
+}
+
+run_pathvqa_mmrl_minimal_grid5x8_relation0050() {
+  local shared_stage1="${PATHVQA_SHARED_STAGE1_CHECKPOINT:-$PATHVQA_OUTPUT_ROOT/pathvqa_mmrl_minimal_shared_stage1_seed44_20260826}"
+  if [ ! -f "$shared_stage1/mmrl_delta.safetensors" ]; then
+    echo "[ERR] Shared Stage1 checkpoint not found: $shared_stage1" >&2
+    return 1
+  fi
+  PATHVQA_EXPERIMENT_NAME=pathvqa_mmrl_minimal_shared_s_mean_grid5x8_relation0050 \
+  PATHVQA_RUN_SEED=44 \
+  MMRL_QUERY_ARCHITECTURE=shared_direct_post_cross \
+  MMRL_REP_POSITION_MODE=grid_5x8 \
   MMRL_MEMORY_POOLING_MODE=mean \
   MMRL_FUSION_MODE=cross_attention \
   MMRL_SAME_INIT_LAYER_PROJECTORS=0 \
@@ -742,12 +769,15 @@ case "$RUN_TARGET" in
   pathvqa_last8_lora_minimal_mmrl_relation_suite)
     run_pathvqa_last8_lora_minimal_mmrl_relation_suite || failures=$((failures + 1))
     ;;
+  pathvqa_mmrl_minimal_grid5x8_relation0050)
+    run_pathvqa_mmrl_minimal_grid5x8_relation0050 || failures=$((failures + 1))
+    ;;
   all)
     run_train_dataset || failures=$((failures + 1))
     run_slake || failures=$((failures + 1))
     ;;
   *)
-    echo "[ERR] 未知目标: $RUN_TARGET，可选 train、slake、pathvqa、pathvqa_base、pathvqa_lora_visual_attn_r128、pathvqa_lora_visual_attn_r128_then_base、pathvqa_lora_visual_last8_attn_r128、pathvqa_last8_lora_minimal_mmrl_relation_suite、slake_final_seeds4、slake_ablation_no_relation_seeds2、slake_ablation_independent_init_seeds2、slake_ablation_static_query_seed45、slake_ablation_mean_pooling_seed45、slake_mean_final_completion_suite、slake_text_guided_balanced_fusion_slots8_seed45、slake_prompt_tuning_seed44、slake_concat_mlp_fusion_seed45、slake_overnight_prompt_and_concat_mlp、slake_ablation_suite、all。" >&2
+    echo "[ERR] 未知目标: $RUN_TARGET，可选 train、slake、pathvqa、pathvqa_base、pathvqa_lora_visual_attn_r128、pathvqa_lora_visual_attn_r128_then_base、pathvqa_lora_visual_last8_attn_r128、pathvqa_last8_lora_minimal_mmrl_relation_suite、pathvqa_mmrl_minimal_grid5x8_relation0050、slake_final_seeds4、slake_ablation_no_relation_seeds2、slake_ablation_independent_init_seeds2、slake_ablation_static_query_seed45、slake_ablation_mean_pooling_seed45、slake_mean_final_completion_suite、slake_text_guided_balanced_fusion_slots8_seed45、slake_prompt_tuning_seed44、slake_concat_mlp_fusion_seed45、slake_overnight_prompt_and_concat_mlp、slake_ablation_suite、all。" >&2
     exit 2
     ;;
 esac

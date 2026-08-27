@@ -107,3 +107,14 @@ The two MMRL runs reuse one exact Stage1 checkpoint, so their Stage1 Gate,
 pooling weights, and initial MMRL state are identical. All three experiments
 evaluate epochs1-3 on PathVQA validation, select the best validation epoch,
 and evaluate test only once.
+
+Run the single fixed-position follow-up, which changes only the40 Rep Token
+RoPE coordinates from a shared origin to fixed centers on a5x8 image grid:
+
+```bash
+RUN_TARGET=pathvqa_mmrl_minimal_grid5x8_relation0050 bash run_experiment.sh
+```
+
+It reuses the completed seed44 minimal-MMRL Stage1 checkpoint, keeps Relation
+at0.05 and the exact7,927,808-parameter budget, selects on validation, and
+tests only the selected epoch.

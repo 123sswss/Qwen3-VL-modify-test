@@ -58,6 +58,11 @@ class QWen3WithMMRL(qwen3_vl.Qwen3VLModel):
                 "MMRL_QUERY_ARCHITECTURE",
                 cfg.MMRL_QUERY_ARCHITECTURE,
             ),
+            "MMRL_REP_POSITION_MODE": _cfg_attr(
+                config,
+                "MMRL_REP_POSITION_MODE",
+                cfg.MMRL_REP_POSITION_MODE,
+            ),
             "INSERT_METHOD": _cfg_attr(config, "INSERT_METHOD", cfg.INSERT_METHOD),
             "GATING_MID_DIM": _cfg_attr(config, "GATING_MID_DIM", cfg.GATING_MID_DIM),
             "stretching_length": _cfg_attr(config, "stretching_length", cfg.stretching_length),

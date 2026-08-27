@@ -1,6 +1,6 @@
 # MMRL Experiment Ledger
 
-Last updated: 2026-08-26
+Last updated: 2026-08-27
 
 This file is the persistent source of truth for completed experiments. Results are recorded from official SLAKE evaluation output or diagnostics supplied during development. Unless noted otherwise, SLAKE evaluation contains 2,094 test questions, uses all languages, and reports percentages.
 
@@ -15,7 +15,7 @@ This file is the persistent source of truth for completed experiments. Results a
 
 ## Current Snapshot
 
-- First PathVQA results: frozen Base **34.77**, last8-layer MMRL seed44 **47.30**, and all24-layer Visual Attention LoRA-r128 seed44 **55.45**. Both specialists materially improve Base, but the8.16-point gap is not scope-matched; last8-layer LoRA-r128 remains pending.
+- Current PathVQA matched comparison: frozen Base **34.77**, minimal last8-layer MMRL + Relation0.05 seed44 **49.41**, and last8-layer Visual Attention LoRA-r128 seed44 **53.85**. The scope-matched LoRA lead is **4.44** points; all24-layer LoRA remains a broader upper bound at **55.45**.
 - Strongest overall result: static Prompt Tuning, seed44, **74.40** with only 51,200 trainable parameters.
 - Strongest MMRL single run: 128-slot Attention Pooling + shared CA + same-initialized layer MLPs + Relation 0.05, seed44, **73.93**.
 - Final Mean Pooling MMRL across seeds44-47: **72.98 +/- 0.49**.
@@ -265,6 +265,55 @@ Correction (2026-08-26): the intended scope-matched LoRA baseline is Attention L
 - Conclusion: PathVQA is genuinely difficult for the original model, especially under normalized exact-match for open answers. MMRL is not a failed or dead adaptation: it delivers a large gain over Base. However, standard visual-only LoRA learns the task substantially better, especially on Free-form answers, so the current MMRL cannot claim superior effectiveness on the primary dataset. Qualitative Base outputs also show plausible pathology phrases that may be semantically related but fail the single-reference exact match; semantic scoring or a blinded error sample should supplement, not replace, the official metric.
 - Output/log path: `/root/autodl-tmp/Qwen3-VL-modify-test/pathvqa/outputs/base/pathvqa_base_20260826`.
 
+### 2026-08-27 - pathvqa_lora_visual_last8_attention_r128_seed44_20260826
+
+- Commit/config: commit `96f0550`; LoRA-r128 on visual Attention `qkv/proj` in layers17-24 only (0-based16-23), alpha256, dropout0.05; visual MLP and LLM frozen.
+- Dataset and split: PathVQA train19,654; validation6,259 for epoch selection; test6,719 with858 image clusters.
+- Seed / data seed: 44 / 42.
+- Controlled change: scope-matched visual-only LoRA baseline using exactly the same last8 visual layers affected by MMRL.
+- Validation Overall by epoch: **49.5606, 52.8998, 53.8904**; epoch3 selected.
+- Test Overall: **53.8473**; image-clustered 95% bootstrap CI **[52.3630, 55.4189]**.
+- Yes/No / Free-form: **84.2356 / 23.4138**.
+- Per question type: how5.7554, other5.5556, what18.7523, when0.0000, where61.0209, why0.0000, yes/no84.2356; Free-form question-type macro15.1807.
+- Trainable parameters: **6,291,456**; target audit selected0-based layers16-23 and exactly16 `qkv/proj` modules.
+- Training: 3 epochs, LR1e-4, micro-batch1, gradient accumulation32; runtime8,772.4s; train loss0.7768.
+- Conclusion: last8 LoRA retains most of the all24-layer LoRA result:53.85 versus55.45, only1.60 points lower while using one-third as many LoRA parameters. It is the valid scope-matched visual-only baseline.
+- Output/log path: `/root/autodl-tmp/Qwen3-VL-modify-test/pathvqa/outputs/lora/pathvqa_lora_visual_last8_attention_r128_seed44_20260826`; selected checkpoint `checkpoints/epoch_3`.
+
+### 2026-08-27 - pathvqa_mmrl_minimal_shared_s_mean_relation0_seed44_20260826
+
+- Commit/config: commit `96f0550`; 40x1024 shared full-dimensional `S` directly enters one shared8-head residual Cross-Attention; Mean Pooling supplies one visual and one text memory token; no layer MLP projectors; layer embeddings retained; insertion into visual layers17-24; `open_full_ce`; Relation0.
+- Dataset and split: PathVQA train19,654; validation6,259 for epoch selection; test6,719 with858 image clusters.
+- Seed / data seed: 44 / 42.
+- Controlled change: minimal MMRL architecture and Relation-off half of an exact shared-Stage1 comparison.
+- Validation Overall by epoch: **46.2853, 46.8605, 46.6049**; epoch2 selected.
+- Test Overall: **46.8373**; image-clustered 95% bootstrap CI **[45.5662, 48.2917]**.
+- Yes/No / Free-form: **79.1196 / 14.5070**.
+- Per question type: how8.6331, other0.0000, what10.4706, when0.0000, where43.6195, why0.0000, yes/no79.1196; Free-form question-type macro10.4539.
+- Trainable MMRL parameters: **7,927,808** exactly: shared S40,960; layer embeddings8,192; projectors0; visual Mean Pooling1,051,648; text Mean Pooling2,624,512; shared CA4,202,496.
+- Stage3 runtime/loss:6,616s /0.8948.
+- Diagnostics:1,845 steps,8 windows, no malformed rows; CE mean0.8919; CA grad norm0.7160; `delta_to_org_ratio`0.6680; CA delta/base ratio5.5979; text/visual pooling grad norms0.8021/0.2468; Relation loss exactly0.
+- Conclusion: the minimal architecture remains a real specialist at+12.07 points over Base, but without Relation it does not exceed the earlier20.998M-parameter MMRL result.
+- Output/log path: `/root/autodl-tmp/Qwen3-VL-modify-test/pathvqa/outputs/mmrl/pathvqa_mmrl_minimal_shared_s_mean_relation0_seed44_20260826`; selected checkpoint `checkpoints/stage3_epoch_2`.
+
+### 2026-08-27 - pathvqa_mmrl_minimal_shared_s_mean_relation0050_seed44_20260826
+
+- Commit/config: identical to the preceding minimal MMRL except uniform Relation weight0.05. It strictly reloads the same Stage1 checkpoint and untouched initial MMRL state with SHA-256 `a2cef33f65e3e837e99a0d188fd4186612f331d491b782f31314a5aa1bc1a093`.
+- Dataset and split: PathVQA train19,654; validation6,259 for epoch selection; test6,719 with858 image clusters.
+- Seed / data seed: 44 / 42.
+- Controlled change: Relation0.05 versus0 under an exact shared-Stage1, matched-initialization comparison.
+- Validation Overall by epoch: **45.4545, 49.5447, 48.7618**; epoch2 selected.
+- Test Overall: **49.4121**; image-clustered 95% bootstrap CI **[48.1175, 50.7317]**.
+- Yes/No / Free-form: **82.5996 / 16.1752**.
+- Per question type: how9.3525, other0.0000, what11.2003, when0.0000, where51.7401, why0.0000, yes/no82.5996; Free-form question-type macro12.0488.
+- Trainable MMRL parameters: **7,927,808**; parameter audit passed exactly.
+- Stage3 runtime/loss:6,617s /0.8953.
+- Diagnostics:1,845 steps,8 windows, no malformed rows; CE mean0.8915; CA grad norm0.6972; `delta_to_org_ratio`0.6873; CA delta/base ratio5.4629; text/visual pooling grad norms0.7683/0.2474; scaled Relation loss0.001819.
+- Paired Relation effect: **+2.5748 Overall**, +3.4801 Yes/No, +1.6682 Free-form. Discordant correctness counts are284 Relation0-only versus457 Relation0.05-only (`McNemar p=2.20e-10`); image-clustered bootstrap 95% CI for the Overall difference is **[+1.7217, +3.4544]**.
+- Matched LoRA comparison: last8 LoRA is+4.4352 Overall, +1.6359 Yes/No, and+7.2386 Free-form; clustered bootstrap 95% CI for its Overall lead is **[+3.3462, +5.5093]**.
+- Conclusion: Relation now has a clear positive PathVQA effect under a clean controlled comparison, not a Gate/Stage1 trajectory confound. The minimal MMRL also improves over the earlier47.30 MMRL while cutting Stage3 MMRL parameters from20.998M to7.928M, although epoch-selection and architecture both changed, so that cross-run gain is descriptive rather than a pure ablation. Last8 LoRA remains stronger, primarily on Free-form answers.
+- Output/log path: `/root/autodl-tmp/Qwen3-VL-modify-test/pathvqa/outputs/mmrl/pathvqa_mmrl_minimal_shared_s_mean_relation0050_seed44_20260826`; selected checkpoint `checkpoints/stage3_epoch_2`.
+
 ### PathVQA Yes/No Class-Balance Audit
 
 | Method | Yes count | Yes accuracy | No count | No accuracy | Class gap |
@@ -289,10 +338,11 @@ These results remain useful negative evidence and should not be rerun unless a n
 
 ## Pending Experiments
 
-1. Fair CA replacement: separately normalize Q, visual memory, and text memory before the equal-parameter Concat-MLP; run seed45 only.
-2. Add a supplementary semantic metric or blinded manual sample for PathVQA Free-form answers while retaining normalized exact-match as the official primary metric.
-3. Decide whether to run the minimal PathVQA `Pooling x Relation` 2x2 matrix now that both MMRL and LoRA show real gains over Base.
-4. Final comparison table: Base VLM, Visual LoRA, Static Prompt Tuning, nearest visual prompt/adapter baseline, and MMRL.
+1. Run one seed44 fixed-position control: the49.41 minimal MMRL + Relation0.05 configuration with40 Rep Token RoPE coordinates placed at fixed5x8 image-grid cell centers instead of one shared origin; reuse the exact completed Stage1 checkpoint and add no parameters.
+2. Fair CA replacement: separately normalize Q, visual memory, and text memory before the equal-parameter Concat-MLP; run seed45 only.
+3. Add a supplementary semantic metric or blinded manual sample for PathVQA Free-form answers while retaining normalized exact-match as the official primary metric.
+4. Confirm the clean PathVQA Relation gain on one additional seed before making a cross-seed claim; the seed44 paired result is already statistically clear.
+5. Final comparison table: Base VLM, Visual LoRA, Static Prompt Tuning, nearest visual prompt/adapter baseline, and MMRL.
 
 ## Update Template
 

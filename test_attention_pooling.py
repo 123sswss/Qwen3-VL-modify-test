@@ -10,6 +10,7 @@ from MMRL import (
     ResidualConcatMLPFusion,
     ResidualCrossAttention,
 )
+from VisionModelWithMMRL import _grid_5x8_position_ids, _resize_cu_and_pos
 from utils import attention_pooling
 
 
@@ -47,6 +48,53 @@ class AttentionPoolingTest(unittest.TestCase):
         expected_empty = pooling.ln(torch.zeros(4, dtype=torch.double))
 
         torch.testing.assert_close(actual[1], expected_empty)
+
+
+class RepPositionTest(unittest.TestCase):
+    def test_grid_5x8_uses_cell_centers_for_each_frame(self):
+        grid_thw = torch.tensor([[1, 10, 16], [2, 5, 8]])
+        position_ids = _grid_5x8_position_ids(grid_thw, 40)
+
+        self.assertEqual(tuple(position_ids.shape), (3, 40, 2))
+        self.assertEqual(position_ids[0, 0].tolist(), [1, 1])
+        self.assertEqual(position_ids[0, -1].tolist(), [9, 15])
+        self.assertEqual(int(torch.unique(position_ids[0], dim=0).shape[0]), 40)
+        self.assertEqual(int(torch.unique(position_ids[1], dim=0).shape[0]), 40)
+        torch.testing.assert_close(position_ids[1], position_ids[2])
+
+    def test_grid_5x8_rejects_non_40_rep_tokens(self):
+        with self.assertRaisesRegex(ValueError, "exactly 40"):
+            _grid_5x8_position_ids(torch.tensor([[1, 10, 16]]), 39)
+
+    def test_resize_uses_per_sequence_rep_rotary_positions(self):
+        r_token = torch.zeros(2, 2, 4)
+        cu_seqlens = torch.tensor([0, 3, 5], dtype=torch.int32)
+        image_rotary = torch.arange(10, dtype=torch.float32).reshape(5, 2) / 10
+        image_embedding = torch.cat((image_rotary, image_rotary), dim=-1)
+        position_embeddings = (image_embedding.cos(), image_embedding.sin())
+        rep_rotary = torch.tensor([
+            [[0.1, 0.2], [0.3, 0.4]],
+            [[0.5, 0.6], [0.7, 0.8]],
+        ])
+
+        (new_cos, new_sin), new_cu, new_rotary = _resize_cu_and_pos(
+            r_token,
+            cu_seqlens,
+            position_embeddings,
+            image_rotary,
+            r_token_rotary_pos_emb=rep_rotary,
+        )
+        expected_rotary = torch.cat((
+            rep_rotary[0],
+            image_rotary[:3],
+            rep_rotary[1],
+            image_rotary[3:],
+        ))
+        expected_embedding = torch.cat((expected_rotary, expected_rotary), dim=-1)
+        torch.testing.assert_close(new_rotary, expected_rotary)
+        torch.testing.assert_close(new_cos, expected_embedding.cos())
+        torch.testing.assert_close(new_sin, expected_embedding.sin())
+        torch.testing.assert_close(new_cu, torch.tensor([0, 5, 9], dtype=torch.int32))
 
 
 class MMRLAblationTest(unittest.TestCase):

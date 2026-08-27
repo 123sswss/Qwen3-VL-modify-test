@@ -61,6 +61,8 @@
 
 - PathVQA 已完成的全部24层 Attention LoRA-r128 仅作为更宽作用域的上界。正式匹配基线必须运行 seed44 的视觉层17-24 Attention qkv/proj LoRA-r128，使作用层范围与 MMRL 一致；在该结果完成前不比较两种架构的优劣。
 - 当前优先队列固定为三项 seed44 串行实验：视觉层17-24 Attention LoRA-r128；极简 `7,927,808` 参数 MMRL（Mean Pooling、共享高维 `S` 直接进入共享 CA）Relation0；同一极简 MMRL Relation0.05。两项 MMRL 必须复用同一 Stage1 checkpoint 与初始 MMRL 状态，三项都按 validation 选择最佳 epoch 后仅测试一次。
+- 上述三项已完成：last8 LoRA53.85，极简 MMRL Relation046.84，Relation0.0549.41。Relation 的干净配对收益为+2.57；若继续确认，只补一个额外 seed，不再扩展成完整2x2矩阵。
+- 位置编码只追加一次 seed44 控制实验：保持49.41配置和共享 Stage1不变，仅将40个 Rep Token 从共同 RoPE 原点改为固定5x8图像网格；不增加可学习坐标或其他参数。
 - 自建数据集只报告 Base、MMRL、Gated 三项，使用主实验超参，不根据结果调整。
 - 不再声称 128-slot Pooling 优于 Mean Pooling，除非 PathVQA 给出明确证据。
 - PathVQA 上的 MMRL 增益必须同时出现在 What 或非 Yes/No 问题中；若增益只来自 Yes/No，不得归因于视觉表征改进。

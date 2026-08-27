@@ -949,6 +949,10 @@ def build_model_and_processor(model_path, experiment_cfg=None):
         "MMRL_QUERY_ARCHITECTURE",
         str(experiment_cfg.get("query_architecture", "layer_mlp_post_cross")),
     )
+    config.MMRL_REP_POSITION_MODE = os.getenv(
+        "MMRL_REP_POSITION_MODE",
+        str(experiment_cfg.get("rep_position_mode", "origin")),
+    )
     config.MMRL_SAME_INIT_LAYER_PROJECTORS = os.getenv(
         "MMRL_SAME_INIT_LAYER_PROJECTORS",
         (
@@ -1061,6 +1065,12 @@ def build_model_and_processor(model_path, experiment_cfg=None):
             f"requested={config.MMRL_QUERY_ARCHITECTURE} "
             f"actual={mmrl.query_architecture}"
         )
+    if config.MMRL_REP_POSITION_MODE != model.model.visual.rep_position_mode:
+        raise RuntimeError(
+            "MMRL_REP_POSITION_MODE config propagation failed: "
+            f"requested={config.MMRL_REP_POSITION_MODE} "
+            f"actual={model.model.visual.rep_position_mode}"
+        )
     memory_tokens_per_image = 0
     if config.MMRL_USE_DYNAMIC_CROSS_ATTENTION:
         if config.MMRL_MEMORY_POOLING_MODE == "multi_query":
@@ -1072,6 +1082,7 @@ def build_model_and_processor(model_path, experiment_cfg=None):
     print(
         "[MMRL_STRUCTURE_AUDIT] "
         f"query_architecture={config.MMRL_QUERY_ARCHITECTURE} "
+        f"rep_position_mode={config.MMRL_REP_POSITION_MODE} "
         f"rp_space_length={config.RP_SPACE_LENGTH} "
         f"memory_query_count={config.MMRL_MEMORY_QUERY_COUNT} "
         f"memory_attention_dim={config.MMRL_MEMORY_ATTENTION_DIM} "
@@ -1197,6 +1208,7 @@ def build_model_and_processor(model_path, experiment_cfg=None):
         f"projector_hidden_dim={config.MMRL_PROJECTOR_HIDDEN_DIM} "
         f"cross_attention_heads={config.MMRL_CROSS_ATTENTION_HEADS} "
         f"query_architecture={config.MMRL_QUERY_ARCHITECTURE} "
+        f"rep_position_mode={config.MMRL_REP_POSITION_MODE} "
         "dynamic_cross_attention="
         f"{config.MMRL_USE_DYNAMIC_CROSS_ATTENTION} "
         f"memory_pooling_mode={config.MMRL_MEMORY_POOLING_MODE} "

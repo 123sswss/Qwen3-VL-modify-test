@@ -105,6 +105,7 @@ def build_experiment_config(args: argparse.Namespace) -> Dict[str, Any]:
         "query_architecture": getattr(
             args, "query_architecture", "layer_mlp_post_cross"
         ),
+        "rep_position_mode": getattr(args, "rep_position_mode", "origin"),
         "expected_mmrl_parameters": getattr(args, "expected_mmrl_parameters", None),
         "same_init_layer_projectors": args.same_init_layer_projectors,
         "use_dynamic_cross_attention": not args.disable_dynamic_cross_attention,
@@ -662,6 +663,11 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--expected-mmrl-parameters", type=int)
     parser.add_argument(
+        "--rep-position-mode",
+        choices=("origin", "grid_5x8"),
+        default="origin",
+    )
+    parser.add_argument(
         "--same-init-layer-projectors",
         action=argparse.BooleanOptionalAction,
         default=True,
@@ -784,6 +790,7 @@ def main() -> int:
         f"projector_hidden_dim={args.projector_hidden_dim} "
         f"cross_attention_heads={args.cross_attention_heads} "
         f"query_architecture={args.query_architecture} "
+        f"rep_position_mode={args.rep_position_mode} "
         f"same_init_layer_projectors={args.same_init_layer_projectors} "
         "dynamic_cross_attention="
         f"{not args.disable_dynamic_cross_attention} "
@@ -871,6 +878,7 @@ def main() -> int:
                 "dataset": "SLAKE",
                 "language": args.language,
                 "query_architecture": args.query_architecture,
+                "rep_position_mode": args.rep_position_mode,
                 "same_init_layer_projectors": (
                     args.same_init_layer_projectors
                 ),

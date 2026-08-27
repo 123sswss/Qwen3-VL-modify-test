@@ -532,7 +532,9 @@ def run_generation_checks(
     was_training = model.training
     outer_temperature = getattr(model, "temperature_override", None)
     inner_temperature = getattr(model.model, "temperature_override", None)
-    model.forward = MethodType(Qwen3VLForConditionalGeneration.forward, model)
+    uses_soft_prompt = getattr(model, "soft_prompt", None) is not None
+    if not uses_soft_prompt:
+        model.forward = MethodType(Qwen3VLForConditionalGeneration.forward, model)
     model.temperature_override = None
     model.model.temperature_override = None
     model.eval()

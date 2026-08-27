@@ -640,6 +640,44 @@ run_pathvqa_minimal_mmrl_prompt20_seed44() {
     run_pathvqa
 }
 
+run_pathvqa_minimal_mmrl_prompt20_resume_eval() {
+  local experiment_name=pathvqa_mmrl_minimal_shared_s_mean_prompt20_relation0050
+  local output_dir="${PATHVQA_RESUME_OUTPUT_DIR:-$PATHVQA_OUTPUT_ROOT/${experiment_name}_seed44_20260827}"
+  local epochs=3
+  local epoch_id
+  PATHVQA_MMRL_EVAL_BACKEND=mmrl-prompt
+  for ((epoch_id = 1; epoch_id <= epochs; epoch_id++)); do
+    local checkpoint="$output_dir/checkpoints/stage3_epoch_${epoch_id}"
+    echo "[PATHVQA_MMRL_VALIDATION] epoch=$epoch_id checkpoint=$checkpoint"
+    run_pathvqa_checkpoint_eval \
+      "$checkpoint" \
+      "$output_dir/eval_validation/epoch_${epoch_id}" \
+      "$output_dir/eval_validation_epoch_${epoch_id}.log" \
+      validation || return 1
+  done
+  local selection
+  selection="$(python "$ROOT_DIR/pathvqa/select_best_epoch.py" --root "$output_dir" --epochs "$epochs")" || return 1
+  local best_epoch
+  local best_validation_score
+  IFS=$'\t' read -r best_epoch best_validation_score <<< "$selection"
+  local best_checkpoint="$output_dir/checkpoints/stage3_epoch_${best_epoch}"
+  echo "[PATHVQA_MMRL_TEST] best_epoch=$best_epoch validation=$best_validation_score"
+  run_pathvqa_checkpoint_eval \
+    "$best_checkpoint" \
+    "$output_dir/eval_test/epoch_${best_epoch}" \
+    "$output_dir/eval_test_epoch_${best_epoch}.log" \
+    test || return 1
+  local test_score
+  test_score="$(python -c 'import json,sys;print(json.load(open(sys.argv[1],encoding="utf-8"))["overall_accuracy"])' "$output_dir/eval_test/epoch_${best_epoch}/pathvqa_summary.json")" || return 1
+  printf 'experiment\tseed\tbest_epoch\tvalidation_accuracy\ttest_accuracy\tcheckpoint\n' \
+    > "$output_dir/selected_result.tsv"
+  printf '%s\t%s\t%s\t%s\t%s\t%s\n' \
+    "$experiment_name" 44 "$best_epoch" "$best_validation_score" \
+    "$test_score" "$best_checkpoint" \
+    >> "$output_dir/selected_result.tsv"
+  cat "$output_dir/selected_result.tsv"
+}
+
 run_final_seeds4() {
   local seed
   for seed in 44 45 46 47; do
@@ -868,6 +906,9 @@ case "$RUN_TARGET" in
     ;;
   pathvqa_minimal_mmrl_prompt20_seed44)
     run_pathvqa_minimal_mmrl_prompt20_seed44 || failures=$((failures + 1))
+    ;;
+  pathvqa_minimal_mmrl_prompt20_resume_eval)
+    run_pathvqa_minimal_mmrl_prompt20_resume_eval || failures=$((failures + 1))
     ;;
   pathvqa_lora_visual_attn_r128)
     run_pathvqa_lora_visual_attn_r128 || failures=$((failures + 1))

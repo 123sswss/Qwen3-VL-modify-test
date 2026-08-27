@@ -686,12 +686,14 @@ class Qwen3VLMMRLForStages(Qwen3VLForConditionalGeneration):
             return
 
         def accumulate(grad):
-            squared = float(grad.detach().float().pow(2).sum().item())
-            self._mmrl_grad_squared += squared
+            squared = grad.detach().float().pow(2).sum()
+            if not torch.is_tensor(self._mmrl_grad_squared):
+                self._mmrl_grad_squared = squared
+            else:
+                self._mmrl_grad_squared = self._mmrl_grad_squared + squared
             if isinstance(getattr(self, "_last_metrics", None), dict):
-                self._last_metrics["mmrl_grad_norm"] = torch.tensor(
-                    math.sqrt(self._mmrl_grad_squared),
-                    device=grad.device,
+                self._last_metrics["mmrl_grad_norm"] = (
+                    self._mmrl_grad_squared.sqrt()
                 )
             return grad
 
@@ -894,7 +896,17 @@ class Qwen3VLMMRLForStages(Qwen3VLForConditionalGeneration):
             return None
         return torch.cat(tmp).view(-1, 1)
 
-    def forward(self, input_ids=None, alpha_labels=None, images_per_sample=None, task_type_ids=None, **kwargs):
+    def forward(
+        self,
+        input_ids=None,
+        alpha_labels=None,
+        images_per_sample=None,
+        task_type_ids=None,
+        mmrl_gating_mask=None,
+        **kwargs,
+    ):
+        if mmrl_gating_mask is not None:
+            kwargs["mmrl_gating_mask"] = mmrl_gating_mask
         if self.soft_prompt is not None and not self._soft_prompt_inputs_preexpanded:
             expanded = self._expand_soft_prompt_inputs({
                 **kwargs,

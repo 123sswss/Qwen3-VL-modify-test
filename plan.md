@@ -1,5 +1,16 @@
 # 一周投稿实验计划
 
+## 2026-08-27 方向修正：Dynamic Multimodal Prompt
+
+- 当前主线从视觉层内部 MMRL 转为冻结完整 VLM 主干的 Dynamic Multimodal Prompt Tuning；旧 MMRL、Relation 与 Utility Gate 计划保留为历史方案，不再阻塞新方法验证。
+- 方法必须单阶段训练：20个 Static Prompt 与图文条件动态 CA 从同一初始状态联合优化，禁止加载训练完成的 Static Prompt checkpoint 作为主方法 warm-start。
+- Static Prompt 同时作为 LLM 前缀基底与 CA Query；图像 Merger 后视觉 Token 和仅问题侧文本 Token 分别 Mean Pooling 为两个 Memory，监督答案 Token 必须从文本 Memory 严格排除。
+- Dynamic CA 首版使用256维、8头和零初始化输出投影，产生20个 Prompt 残差；最终仍只向 LLM 入口插入20个 Token，不增加 Static Prompt 基线之外的序列长度。
+- 视觉编码器、视觉 Merger 和 LLM 全部冻结；Static Prompt 使用LR0.3，动态 CA 首轮使用LR3e-4，两组共享3轮线性调度与validation选模，训练参数预计2,685,440。
+- 首个决策实验固定为 PathVQA seed44。成功线为显著超过 Static Prompt55.83，重点检查 Free-form是否超过21.27并接近或超过last8 Visual LoRA23.41；若不超过Static Prompt，不追加多seed。
+- 必须记录动态残差/静态Prompt范数比、图文注意力比例、注意力熵、两组梯度范数、参数量和延迟；首步必须审计动态残差精确为0。
+- 回退仅保留为后续附加性质：可报告Attention Mask关闭Prompt后的约98% Base输出一致性，但不作为当前方法成立条件，也不在首轮实验中实现KV-cache受损的动态屏蔽。
+
 ## 总体目标
 
 - 主贡献：冻结 LLM，通过 128-slot MMRL 对视觉编码器进行图文条件化垂直专精。

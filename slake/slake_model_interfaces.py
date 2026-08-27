@@ -28,6 +28,10 @@ BACKEND_SPECS = {
         "slake/prompt_tuning_interface.py",
         "PromptTuningModelInterface",
     ),
+    "dynamic-prompt": (
+        "slake/dynamic_prompt_tuning_interface.py",
+        "DynamicPromptTuningModelInterface",
+    ),
 }
 
 

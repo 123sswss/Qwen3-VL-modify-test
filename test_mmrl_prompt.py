@@ -1,10 +1,15 @@
 import unittest
+import sys
+from pathlib import Path
 from types import SimpleNamespace
 
 import torch
 import torch.nn as nn
 
-from train.train_stages import (
+TRAIN_DIR = Path(__file__).resolve().parent / "train"
+sys.path.insert(0, str(TRAIN_DIR))
+
+from train_stages import (
     Qwen3VLMMRLForStages,
     _build_stage3_epoch_decay_scheduler,
     _build_stage3_grouped_optimizer,

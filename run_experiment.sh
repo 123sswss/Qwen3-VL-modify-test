@@ -11,13 +11,14 @@ PATHVQA_CACHE_ROOT="${PATHVQA_CACHE_ROOT:-$PATHVQA_DATA_ROOT/.hf_cache}"
 PATHVQA_OUTPUT_ROOT="${PATHVQA_OUTPUT_ROOT:-$ROOT_DIR/pathvqa/outputs/mmrl}"
 PATHVQA_LORA_OUTPUT_ROOT="${PATHVQA_LORA_OUTPUT_ROOT:-$ROOT_DIR/pathvqa/outputs/lora}"
 PATHVQA_BASE_OUTPUT_ROOT="${PATHVQA_BASE_OUTPUT_ROOT:-$ROOT_DIR/pathvqa/outputs/base}"
+PATHVQA_PROMPT_OUTPUT_ROOT="${PATHVQA_PROMPT_OUTPUT_ROOT:-$ROOT_DIR/pathvqa/outputs/prompt_tuning}"
 ENV_RUN_TARGET="${RUN_TARGET:-}"
 RUN_TARGET="${1:-${ENV_RUN_TARGET:-${MMRL_RUN_TARGET:-all}}}"
 RUN_DATE="${MMRL_RUN_DATE:-$(date +%Y%m%d)}"
 SEED="${MMRL_FIXED_SEED:-44}"
 SHUTDOWN_ON_EXIT="${MMRL_SHUTDOWN_ON_EXIT:-1}"
 
-mkdir -p "$OUTPUT_ROOT" "$SLAKE_OUTPUT_ROOT" "$PATHVQA_OUTPUT_ROOT" "$PATHVQA_LORA_OUTPUT_ROOT" "$PATHVQA_BASE_OUTPUT_ROOT"
+mkdir -p "$OUTPUT_ROOT" "$SLAKE_OUTPUT_ROOT" "$PATHVQA_OUTPUT_ROOT" "$PATHVQA_LORA_OUTPUT_ROOT" "$PATHVQA_BASE_OUTPUT_ROOT" "$PATHVQA_PROMPT_OUTPUT_ROOT"
 echo "[RUN_TARGET] selected=$RUN_TARGET positional=${1:-<unset>} env=${ENV_RUN_TARGET:-<unset>} mmrl_env=${MMRL_RUN_TARGET:-<unset>}"
 
 cancel_shutdown_on_interrupt() {
@@ -214,7 +215,6 @@ run_pathvqa() {
   local memory_pooling_mode="${MMRL_MEMORY_POOLING_MODE:-multi_query}"
   local fusion_mode="${MMRL_FUSION_MODE:-cross_attention}"
   local query_architecture="${MMRL_QUERY_ARCHITECTURE:-layer_mlp_post_cross}"
-  local rep_position_mode="${MMRL_REP_POSITION_MODE:-origin}"
   local extra_args=()
 
   if ! python -c 'import datasets, pyarrow' >/dev/null 2>&1; then
@@ -254,11 +254,6 @@ run_pathvqa() {
     echo "[ERR] MMRL_QUERY_ARCHITECTURE must be layer_mlp_post_cross or shared_direct_post_cross" >&2
     return 2
   fi
-  if [ "$rep_position_mode" != "origin" ] \
-    && [ "$rep_position_mode" != "grid_5x8" ]; then
-    echo "[ERR] MMRL_REP_POSITION_MODE must be origin or grid_5x8" >&2
-    return 2
-  fi
   if [ -n "${PATHVQA_EXPECTED_MMRL_PARAMETERS:-}" ]; then
     extra_args+=(--expected-mmrl-parameters "$PATHVQA_EXPECTED_MMRL_PARAMETERS")
   fi
@@ -272,7 +267,7 @@ run_pathvqa() {
   local output_dir
   output_dir="$(available_output_dir "$PATHVQA_OUTPUT_ROOT" "${experiment_name}_seed${run_seed}_${RUN_DATE}")"
   mkdir -p "$output_dir/eval"
-  echo "[PATHVQA] experiment=$experiment_name seed=$run_seed query_architecture=$query_architecture rep_position_mode=$rep_position_mode same_init=$same_init dynamic_cross_attention=$dynamic_cross_attention memory_pooling_mode=$memory_pooling_mode fusion_mode=$fusion_mode train_gate=open_full_ce relation=${MMRL_RELATION_LOSS_WEIGHT:-0.05} output=$output_dir"
+  echo "[PATHVQA] experiment=$experiment_name seed=$run_seed query_architecture=$query_architecture same_init=$same_init dynamic_cross_attention=$dynamic_cross_attention memory_pooling_mode=$memory_pooling_mode fusion_mode=$fusion_mode train_gate=open_full_ce relation=${MMRL_RELATION_LOSS_WEIGHT:-0.05} output=$output_dir"
   (
     cd "$ROOT_DIR" || exit 1
     python -m pathvqa.train_mmrl \
@@ -297,7 +292,6 @@ run_pathvqa() {
       --projector-hidden-dim "${MMRL_PROJECTOR_HIDDEN_DIM:-1024}" \
       --cross-attention-heads "${MMRL_CROSS_ATTENTION_HEADS:-8}" \
       --query-architecture "$query_architecture" \
-      --rep-position-mode "$rep_position_mode" \
       --memory-pooling-mode "$memory_pooling_mode" \
       --fusion-mode "$fusion_mode" \
       "${extra_args[@]}" \
@@ -398,6 +392,99 @@ run_pathvqa_base() {
       --overwrite \
       2>&1 | tee "$output_dir/eval.log"
   )
+}
+
+run_pathvqa_prompt_eval() {
+  local checkpoint="$1"
+  local split="$2"
+  local eval_output_dir="$3"
+  local eval_log="$4"
+  if [ ! -f "$checkpoint/prompt_config.json" ] \
+    || [ ! -f "$checkpoint/soft_prompt.pt" ]; then
+    echo "[ERR] Prompt checkpoint 不完整: $checkpoint" >&2
+    return 1
+  fi
+  mkdir -p "$eval_output_dir"
+  (
+    cd "$ROOT_DIR" || exit 1
+    python pathvqa/pathvqa_official_eval.py \
+      --backend prompt-tuning \
+      --base-model "$MODEL_PATH" \
+      --checkpoint "$checkpoint" \
+      --data-root "$PATHVQA_DATA_ROOT" \
+      --cache-dir "$PATHVQA_CACHE_ROOT" \
+      --split "$split" \
+      --output-dir "$eval_output_dir" \
+      --overwrite \
+      2>&1 | tee "$eval_log"
+  )
+}
+
+run_pathvqa_prompt_tuning_seed44() {
+  local experiment_name="pathvqa_prompt_tuning_len20"
+  local run_seed=44
+  local epochs="${PATHVQA_PROMPT_EPOCHS:-3}"
+  if ! python -c 'import datasets, pyarrow' >/dev/null 2>&1; then
+    echo "[ERR] PathVQA Prompt Tuning 需要 datasets 和 pyarrow。先运行: python -m pip install -r pathvqa/requirements.txt" >&2
+    return 2
+  fi
+
+  local output_dir
+  output_dir="$(available_output_dir "$PATHVQA_PROMPT_OUTPUT_ROOT" "${experiment_name}_seed${run_seed}_${RUN_DATE}")"
+  mkdir -p "$output_dir"
+  echo "[PATHVQA_PROMPT_TUNING] experiment=$experiment_name seed=$run_seed epochs=$epochs output=$output_dir"
+  (
+    cd "$ROOT_DIR" || exit 1
+    python -m pathvqa.train_prompt_tuning \
+      --model-path "$MODEL_PATH" \
+      --data-root "$PATHVQA_DATA_ROOT" \
+      --cache-dir "$PATHVQA_CACHE_ROOT" \
+      --output-dir "$output_dir" \
+      --experiment-name "$experiment_name" \
+      --prompt-length "${PATHVQA_PROMPT_LENGTH:-20}" \
+      --epochs "$epochs" \
+      --seed "$run_seed" \
+      --data-seed 42 \
+      --learning-rate "${PATHVQA_PROMPT_LR:-0.3}" \
+      --batch-size "${PATHVQA_PROMPT_BATCH_SIZE:-2}" \
+      --gradient-accumulation "${PATHVQA_PROMPT_GRAD_ACCUM:-16}" \
+      --dataloader-workers "${PATHVQA_PROMPT_WORKERS:-2}" \
+      2>&1 | tee "$output_dir/train.log"
+  ) || return 1
+
+  local epoch_id
+  for ((epoch_id = 1; epoch_id <= epochs; epoch_id++)); do
+    local checkpoint="$output_dir/checkpoints/epoch_${epoch_id}"
+    echo "[PATHVQA_PROMPT_VALIDATION] epoch=$epoch_id checkpoint=$checkpoint"
+    run_pathvqa_prompt_eval \
+      "$checkpoint" \
+      validation \
+      "$output_dir/eval_validation/epoch_${epoch_id}" \
+      "$output_dir/eval_validation_epoch_${epoch_id}.log" || return 1
+  done
+
+  local selection
+  selection="$(python "$ROOT_DIR/pathvqa/select_best_epoch.py" --root "$output_dir" --epochs "$epochs")" || return 1
+  local best_epoch
+  local best_validation_score
+  IFS=$'\t' read -r best_epoch best_validation_score <<< "$selection"
+  local best_checkpoint="$output_dir/checkpoints/epoch_${best_epoch}"
+  echo "[PATHVQA_PROMPT_TEST] best_epoch=$best_epoch validation=$best_validation_score"
+  run_pathvqa_prompt_eval \
+    "$best_checkpoint" \
+    test \
+    "$output_dir/eval_test/epoch_${best_epoch}" \
+    "$output_dir/eval_test_epoch_${best_epoch}.log" || return 1
+
+  local test_score
+  test_score="$(python -c 'import json,sys;print(json.load(open(sys.argv[1],encoding="utf-8"))["overall_accuracy"])' "$output_dir/eval_test/epoch_${best_epoch}/pathvqa_summary.json")" || return 1
+  printf 'experiment\tseed\tbest_epoch\tvalidation_accuracy\ttest_accuracy\tcheckpoint\n' \
+    > "$output_dir/selected_result.tsv"
+  printf '%s\t%s\t%s\t%s\t%s\t%s\n' \
+    "$experiment_name" "$run_seed" "$best_epoch" "$best_validation_score" \
+    "$test_score" "$best_checkpoint" \
+    >> "$output_dir/selected_result.tsv"
+  cat "$output_dir/selected_result.tsv"
 }
 
 run_pathvqa_lora_visual_attn_r128() {
@@ -504,26 +591,6 @@ run_pathvqa_last8_lora_minimal_mmrl_relation_suite() {
   PATHVQA_EXPERIMENT_NAME=pathvqa_mmrl_minimal_shared_s_mean_relation0050 \
   PATHVQA_RUN_SEED="$suite_seed" \
   MMRL_QUERY_ARCHITECTURE=shared_direct_post_cross \
-  MMRL_MEMORY_POOLING_MODE=mean \
-  MMRL_FUSION_MODE=cross_attention \
-  MMRL_SAME_INIT_LAYER_PROJECTORS=0 \
-  MMRL_RELATION_LOSS_WEIGHT=0.05 \
-  PATHVQA_EXPECTED_MMRL_PARAMETERS=7927808 \
-  PATHVQA_SELECT_BEST_EPOCH=1 \
-  PATHVQA_STAGE1_CHECKPOINT_IN="$shared_stage1" \
-    run_pathvqa
-}
-
-run_pathvqa_mmrl_minimal_grid5x8_relation0050() {
-  local shared_stage1="${PATHVQA_SHARED_STAGE1_CHECKPOINT:-$PATHVQA_OUTPUT_ROOT/pathvqa_mmrl_minimal_shared_stage1_seed44_20260826}"
-  if [ ! -f "$shared_stage1/mmrl_delta.safetensors" ]; then
-    echo "[ERR] Shared Stage1 checkpoint not found: $shared_stage1" >&2
-    return 1
-  fi
-  PATHVQA_EXPERIMENT_NAME=pathvqa_mmrl_minimal_shared_s_mean_grid5x8_relation0050 \
-  PATHVQA_RUN_SEED=44 \
-  MMRL_QUERY_ARCHITECTURE=shared_direct_post_cross \
-  MMRL_REP_POSITION_MODE=grid_5x8 \
   MMRL_MEMORY_POOLING_MODE=mean \
   MMRL_FUSION_MODE=cross_attention \
   MMRL_SAME_INIT_LAYER_PROJECTORS=0 \
@@ -757,6 +824,9 @@ case "$RUN_TARGET" in
   pathvqa_base)
     run_pathvqa_base || failures=$((failures + 1))
     ;;
+  pathvqa_prompt_tuning_seed44)
+    run_pathvqa_prompt_tuning_seed44 || failures=$((failures + 1))
+    ;;
   pathvqa_lora_visual_attn_r128)
     run_pathvqa_lora_visual_attn_r128 || failures=$((failures + 1))
     ;;
@@ -769,15 +839,12 @@ case "$RUN_TARGET" in
   pathvqa_last8_lora_minimal_mmrl_relation_suite)
     run_pathvqa_last8_lora_minimal_mmrl_relation_suite || failures=$((failures + 1))
     ;;
-  pathvqa_mmrl_minimal_grid5x8_relation0050)
-    run_pathvqa_mmrl_minimal_grid5x8_relation0050 || failures=$((failures + 1))
-    ;;
   all)
     run_train_dataset || failures=$((failures + 1))
     run_slake || failures=$((failures + 1))
     ;;
   *)
-    echo "[ERR] 未知目标: $RUN_TARGET，可选 train、slake、pathvqa、pathvqa_base、pathvqa_lora_visual_attn_r128、pathvqa_lora_visual_attn_r128_then_base、pathvqa_lora_visual_last8_attn_r128、pathvqa_last8_lora_minimal_mmrl_relation_suite、pathvqa_mmrl_minimal_grid5x8_relation0050、slake_final_seeds4、slake_ablation_no_relation_seeds2、slake_ablation_independent_init_seeds2、slake_ablation_static_query_seed45、slake_ablation_mean_pooling_seed45、slake_mean_final_completion_suite、slake_text_guided_balanced_fusion_slots8_seed45、slake_prompt_tuning_seed44、slake_concat_mlp_fusion_seed45、slake_overnight_prompt_and_concat_mlp、slake_ablation_suite、all。" >&2
+    echo "[ERR] 未知目标: $RUN_TARGET，可选 train、slake、pathvqa、pathvqa_base、pathvqa_prompt_tuning_seed44、pathvqa_lora_visual_attn_r128、pathvqa_lora_visual_attn_r128_then_base、pathvqa_lora_visual_last8_attn_r128、pathvqa_last8_lora_minimal_mmrl_relation_suite、slake_final_seeds4、slake_ablation_no_relation_seeds2、slake_ablation_independent_init_seeds2、slake_ablation_static_query_seed45、slake_ablation_mean_pooling_seed45、slake_mean_final_completion_suite、slake_text_guided_balanced_fusion_slots8_seed45、slake_prompt_tuning_seed44、slake_concat_mlp_fusion_seed45、slake_overnight_prompt_and_concat_mlp、slake_ablation_suite、all。" >&2
     exit 2
     ;;
 esac

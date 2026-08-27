@@ -10,40 +10,6 @@ from transformers.models.qwen3_vl import modeling_qwen3_vl as qwen3_vl
 import MMRLGating
 import utils
 
-
-REP_POSITION_MODES = {"origin", "grid_5x8"}
-
-
-def _grid_5x8_position_ids(grid_thw, num_r_tokens):
-    if num_r_tokens != 40:
-        raise ValueError(
-            f"grid_5x8 requires exactly 40 Rep Tokens, got {num_r_tokens}"
-        )
-    position_ids = []
-    device = grid_thw.device
-    for frames, height, width in grid_thw.tolist():
-        height = int(height)
-        width = int(width)
-        rows = torch.div(
-            (torch.arange(5, device=device) * 2 + 1) * height,
-            10,
-            rounding_mode="floor",
-        ).clamp_max(height - 1)
-        cols = torch.div(
-            (torch.arange(8, device=device) * 2 + 1) * width,
-            16,
-            rounding_mode="floor",
-        ).clamp_max(width - 1)
-        grid_rows, grid_cols = torch.meshgrid(rows, cols, indexing="ij")
-        image_positions = torch.stack(
-            (grid_rows.reshape(-1), grid_cols.reshape(-1)),
-            dim=-1,
-        )
-        position_ids.extend([image_positions] * int(frames))
-    if not position_ids:
-        return torch.empty((0, num_r_tokens, 2), dtype=torch.long, device=device)
-    return torch.stack(position_ids, dim=0).long()
-
 class MMRLVitBlock(qwen3_vl.Qwen3VLVisionBlock):
     def __init__(self, config):
         super(MMRLVitBlock, self).__init__(config)
@@ -54,7 +20,6 @@ class MMRLVitBlock(qwen3_vl.Qwen3VLVisionBlock):
                 r_token: Optional[torch.Tensor] = None,
                 rotary_pos_emb: Optional[torch.Tensor] = None,
                 position_embeddings: Optional[tuple[torch.Tensor, torch.Tensor]] = None,
-                r_token_rotary_pos_emb: Optional[torch.Tensor] = None,
                 first_insert: Optional[bool] = False,
                 **kwargs):
         if r_token is None or r_token.ndim != 3:
@@ -77,11 +42,7 @@ class MMRLVitBlock(qwen3_vl.Qwen3VLVisionBlock):
             ]
             hidden_states = torch.cat(new_hidden_states_list, dim=0)
             position_embeddings, cu_seqlens, rotary_pos_emb = _resize_cu_and_pos(
-                r_token,
-                cu_seqlens,
-                position_embeddings,
-                rotary_pos_emb,
-                r_token_rotary_pos_emb=r_token_rotary_pos_emb,
+                r_token, cu_seqlens, position_embeddings, rotary_pos_emb
             )
         else:
             hidden_states_split = torch.split(hidden_states, full_seq_lengths, dim=0)
@@ -111,13 +72,7 @@ class MMRLVitBlock(qwen3_vl.Qwen3VLVisionBlock):
         return hidden_states
 
 
-def _resize_cu_and_pos(
-    r_token,
-    cu_seqlens,
-    position_embeddings,
-    rotary_pos_emb,
-    r_token_rotary_pos_emb=None,
-):
+def _resize_cu_and_pos(r_token, cu_seqlens, position_embeddings, rotary_pos_emb):
     if r_token.ndim != 3:
         raise ValueError(
             f"position resize expects per-image Rep [N,R,D], got {tuple(r_token.shape)}"
@@ -135,25 +90,9 @@ def _resize_cu_and_pos(
     device = original_cos.device
     pos_emb_dim = original_cos.shape[-1]
     rotary_dim = rotary_pos_emb.shape[-1]
-    if r_token_rotary_pos_emb is None:
-        r_token_rotary_pos_emb = torch.zeros(
-            total_pic_num,
-            num_r_tokens,
-            rotary_dim,
-            device=device,
-            dtype=rotary_pos_emb.dtype,
-        )
-    expected_rotary_shape = (total_pic_num, num_r_tokens, rotary_dim)
-    if tuple(r_token_rotary_pos_emb.shape) != expected_rotary_shape:
-        raise ValueError(
-            "Rep rotary position shape mismatch: "
-            f"expected={expected_rotary_shape} "
-            f"actual={tuple(r_token_rotary_pos_emb.shape)}"
-        )
-    r_token_rotary_pos_emb = r_token_rotary_pos_emb.to(
-        device=device,
-        dtype=rotary_pos_emb.dtype,
-    )
+    r_token_cos = torch.ones(num_r_tokens, pos_emb_dim, device=device, dtype=dtype)
+    r_token_sin = torch.zeros(num_r_tokens, pos_emb_dim, device=device, dtype=dtype)
+    r_token_rotary = torch.zeros(num_r_tokens, rotary_dim, device=device, dtype=rotary_pos_emb.dtype)
     cos_split = torch.split(original_cos, seq_lengths, dim=0)
     sin_split = torch.split(original_sin, seq_lengths, dim=0)
     rotary_split = torch.split(rotary_pos_emb, seq_lengths, dim=0)
@@ -161,22 +100,13 @@ def _resize_cu_and_pos(
     new_sin_list = []
     new_rotary_list = []
     for i in range(total_pic_num):
-        current_rep_rotary = r_token_rotary_pos_emb[i]
-        current_rep_emb = torch.cat(
-            (current_rep_rotary, current_rep_rotary),
-            dim=-1,
-        )
-        r_token_cos = current_rep_emb.cos().to(dtype=dtype)
-        r_token_sin = current_rep_emb.sin().to(dtype=dtype)
         current_img_cos = cos_split[i]  # [Seq_Len_i, Dim]
         current_img_sin = sin_split[i]  # [Seq_Len_i, Dim]
         current_img_rot = rotary_split[i]  # [Seq_Len_i, Dim]
 
         new_cos_list.append(torch.cat([r_token_cos, current_img_cos], dim=0))
         new_sin_list.append(torch.cat([r_token_sin, current_img_sin], dim=0))
-        new_rotary_list.append(
-            torch.cat([current_rep_rotary, current_img_rot], dim=0)
-        )
+        new_rotary_list.append(torch.cat([r_token_rotary, current_img_rot], dim=0))
     new_cos = torch.cat(new_cos_list, dim=0)
     new_sin = torch.cat(new_sin_list, dim=0)
     new_rotary = torch.cat(new_rotary_list, dim=0)
@@ -201,14 +131,6 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
     def __init__(self, config, *inputs, **kwargs):
         super().__init__(config, *inputs, **kwargs)
         self.cfg = SimpleNamespace(**config.mmrl_config)
-        self.rep_position_mode = str(
-            getattr(self.cfg, "MMRL_REP_POSITION_MODE", "origin")
-        )
-        if self.rep_position_mode not in REP_POSITION_MODES:
-            raise ValueError(
-                f"Unsupported MMRL_REP_POSITION_MODE={self.rep_position_mode!r}; "
-                f"choices={sorted(REP_POSITION_MODES)}"
-            )
         self.blocks = nn.ModuleList([qwen3_vl.Qwen3VLVisionBlock(config)
                                      for _ in range(config.depth)])
         self.insert_layers = list(self.cfg.INSERT_LAYER)
@@ -220,7 +142,6 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
                                               for _ in self.insert_layers])
         self._printed_forward_layer_entry_audit = False
         self._printed_forward_layer_hit_audit = False
-        self._printed_rep_position_audit = False
         self._print_layer_audit()
         self.hidden_state_pooling = utils.attention_pooling(self.cfg.vision_token_dim,
                                                             self.cfg.POOLING_DIM)
@@ -247,39 +168,6 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
         self.null_image_token = nn.Parameter(torch.zeros(1, self.cfg.vision_token_dim))
         nn.init.normal_(self.null_image_token, std=0.02)
         self.debug_context = {}
-
-    def _build_rep_rotary_positions(self, grid_thw, num_r_tokens, rotary_pos_emb):
-        total_sequences = int(grid_thw[:, 0].sum().item())
-        if self.rep_position_mode == "origin":
-            return rotary_pos_emb.new_zeros(
-                total_sequences,
-                num_r_tokens,
-                rotary_pos_emb.shape[-1],
-            )
-
-        position_ids = _grid_5x8_position_ids(grid_thw, num_r_tokens)
-        max_hw = int(grid_thw[:, 1:].max().item())
-        freq_table = self.rotary_pos_emb(max_hw)
-        rep_rotary = freq_table[position_ids].flatten(2).to(
-            device=rotary_pos_emb.device,
-            dtype=rotary_pos_emb.dtype,
-        )
-        if not self._printed_rep_position_audit:
-            unique_counts = [
-                int(torch.unique(sequence_ids, dim=0).shape[0])
-                for sequence_ids in position_ids
-            ]
-            print(
-                "[MMRL_REP_POSITION_AUDIT] "
-                f"mode={self.rep_position_mode} grid=5x8 "
-                f"sequences={position_ids.shape[0]} slots={position_ids.shape[1]} "
-                f"unique_per_sequence_min={min(unique_counts)} "
-                f"unique_per_sequence_max={max(unique_counts)} "
-                f"first_sequence_first={position_ids[0, 0].tolist()} "
-                f"first_sequence_last={position_ids[0, -1].tolist()}"
-            )
-            self._printed_rep_position_audit = True
-        return rep_rotary
 
     @staticmethod
     def _validate_layer_indexes(name, indexes, depth):
@@ -622,7 +510,6 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
         total_pic_num = cu_seqlens.size(0) - 1
         run_mmrl_branch = rep_generator is not None
         dynamic_rep_tokens = None
-        rep_rotary_positions = None
         forward_hit_layers = []
         if not self._printed_forward_layer_entry_audit:
             print("[MMRL_FORWARD_ENTRY_AUDIT]")
@@ -717,11 +604,6 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
                                 "dynamic Rep tensor shape mismatch: "
                                 f"expected={expected_shape} actual={invalid_shapes}"
                             )
-                        rep_rotary_positions = self._build_rep_rotary_positions(
-                            grid_thw,
-                            current_num_r_token,
-                            rotary_pos_emb,
-                        )
 
                 ############ N图切分+门控 ############
                 idx = self.insert_layers.index(layer_num)
@@ -746,7 +628,6 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
                             position_embeddings=position_embeddings,
                             r_token=r_tokens_input,
                             rotary_pos_emb=rotary_pos_emb,
-                            r_token_rotary_pos_emb=rep_rotary_positions,
                             first_insert=True,
                             **kwargs
                         )
@@ -754,8 +635,7 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
                             _resize_cu_and_pos(r_tokens_input,
                                                cu_seqlens,
                                                position_embeddings,
-                                               rotary_pos_emb,
-                                               r_token_rotary_pos_emb=rep_rotary_positions)
+                                               rotary_pos_emb)
                     else:
                         assert cu_seqlens_with_rep is not None
                         assert position_embeddings_with_rep is not None
@@ -765,7 +645,6 @@ class VisionWithMMRL(qwen3_vl.Qwen3VLVisionModel):
                             position_embeddings=position_embeddings_with_rep,
                             r_token=r_tokens_input,
                             rotary_pos_emb=rotary_pos_emb_with_rep,
-                            r_token_rotary_pos_emb=rep_rotary_positions,
                             first_insert=False,
                             **kwargs
                         )

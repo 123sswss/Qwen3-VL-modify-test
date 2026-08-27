@@ -298,11 +298,6 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--expected-mmrl-parameters", type=int)
     parser.add_argument(
-        "--rep-position-mode",
-        choices=("origin", "grid_5x8"),
-        default="origin",
-    )
-    parser.add_argument(
         "--same-init-layer-projectors",
         action=argparse.BooleanOptionalAction,
         default=True,
@@ -432,7 +427,6 @@ def main() -> int:
         f"projector_hidden_dim={args.projector_hidden_dim} "
         f"cross_attention_heads={args.cross_attention_heads} "
         f"query_architecture={args.query_architecture} "
-        f"rep_position_mode={args.rep_position_mode} "
         f"same_init_layer_projectors={args.same_init_layer_projectors} "
         f"dynamic_cross_attention={not args.disable_dynamic_cross_attention} "
         f"memory_pooling_mode={args.memory_pooling_mode} "
@@ -565,7 +559,6 @@ def main() -> int:
                 "dataset": "PathVQA",
                 "split": args.split,
                 "query_architecture": args.query_architecture,
-                "rep_position_mode": args.rep_position_mode,
                 "same_init_layer_projectors": args.same_init_layer_projectors,
                 "use_dynamic_cross_attention": (
                     not args.disable_dynamic_cross_attention

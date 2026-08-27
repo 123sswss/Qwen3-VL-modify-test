@@ -314,6 +314,23 @@ Correction (2026-08-26): the intended scope-matched LoRA baseline is Attention L
 - Conclusion: Relation now has a clear positive PathVQA effect under a clean controlled comparison, not a Gate/Stage1 trajectory confound. The minimal MMRL also improves over the earlier47.30 MMRL while cutting Stage3 MMRL parameters from20.998M to7.928M, although epoch-selection and architecture both changed, so that cross-run gain is descriptive rather than a pure ablation. Last8 LoRA remains stronger, primarily on Free-form answers.
 - Output/log path: `/root/autodl-tmp/Qwen3-VL-modify-test/pathvqa/outputs/mmrl/pathvqa_mmrl_minimal_shared_s_mean_relation0050_seed44_20260826`; selected checkpoint `checkpoints/stage3_epoch_2`.
 
+### 2026-08-27 - pathvqa_mmrl_minimal_shared_s_mean_grid5x8_relation0050_seed44_20260827
+
+- Commit/config: commit `7b7bc44`; identical to the minimal shared-S Mean-Pooling MMRL + Relation0.05 run except that the 40 Rep Tokens use fixed cell-center RoPE coordinates on a 5x8 image grid instead of sharing the origin.
+- Dataset and split: PathVQA train19,654; validation6,259 for epoch selection; test6,719 with858 image clusters.
+- Seed / data seed: 44 / 42.
+- Controlled change: Rep Token RoPE positions only; fixed coordinates, no learnable position parameters, and the same Stage1 checkpoint SHA-256 `a2cef33f65e3e837e99a0d188fd4186612f331d491b782f31314a5aa1bc1a093`.
+- Validation Overall by epoch: **46.52, 45.90, 47.26**; epoch3 selected.
+- Test Overall: **47.67**.
+- Yes/No / Free-form: **81.02 / 14.27**.
+- Trainable MMRL parameters: **7,927,808** exactly; unchanged from the origin-position control.
+- Stage3 runtime/loss:6,608s /0.9042.
+- Position audit: `grid_5x8`,40 slots and40 unique positions per sequence; the sampled first sequence spans `[2,1]` to `[18,28]`.
+- Diagnostics:1,845 steps,8 windows, no malformed rows; CE mean0.9012; CA grad norm0.7757; `delta_to_org_ratio`0.6597; CA delta/base ratio5.8809; text/visual pooling grad norms0.8550/0.2431; scaled Relation loss0.001710.
+- Matched effect versus origin-position Relation0.05: **-1.74 Overall, -1.58 Yes/No, and -1.91 Free-form**.
+- Conclusion: fixed spatial RoPE is active and optimization remains healthy, but it consistently harms both answer categories. The shared Rep Tokens are semantic prompts rather than tokens aligned to fixed image patches; forcing distinct spatial phases introduces a false correspondence and breaks their useful shared-origin symmetry. Reject this direction and do not add learnable coordinates without a new token-to-region alignment mechanism.
+- Output/log path: `/root/autodl-tmp/Qwen3-VL-modify-test/pathvqa/outputs/mmrl/pathvqa_mmrl_minimal_shared_s_mean_grid5x8_relation0050_seed44_20260827`; selected checkpoint `checkpoints/stage3_epoch_3`.
+
 ### PathVQA Yes/No Class-Balance Audit
 
 | Method | Yes count | Yes accuracy | No count | No accuracy | Class gap |
@@ -338,11 +355,10 @@ These results remain useful negative evidence and should not be rerun unless a n
 
 ## Pending Experiments
 
-1. Run one seed44 fixed-position control: the49.41 minimal MMRL + Relation0.05 configuration with40 Rep Token RoPE coordinates placed at fixed5x8 image-grid cell centers instead of one shared origin; reuse the exact completed Stage1 checkpoint and add no parameters.
-2. Fair CA replacement: separately normalize Q, visual memory, and text memory before the equal-parameter Concat-MLP; run seed45 only.
-3. Add a supplementary semantic metric or blinded manual sample for PathVQA Free-form answers while retaining normalized exact-match as the official primary metric.
-4. Confirm the clean PathVQA Relation gain on one additional seed before making a cross-seed claim; the seed44 paired result is already statistically clear.
-5. Final comparison table: Base VLM, Visual LoRA, Static Prompt Tuning, nearest visual prompt/adapter baseline, and MMRL.
+1. Fair CA replacement: separately normalize Q, visual memory, and text memory before the equal-parameter Concat-MLP; run seed45 only.
+2. Add a supplementary semantic metric or blinded manual sample for PathVQA Free-form answers while retaining normalized exact-match as the official primary metric.
+3. Confirm the clean PathVQA Relation gain on one additional seed before making a cross-seed claim; the seed44 paired result is already statistically clear.
+4. Final comparison table: Base VLM, Visual LoRA, Static Prompt Tuning, nearest visual prompt/adapter baseline, and MMRL.
 
 ## Update Template
 

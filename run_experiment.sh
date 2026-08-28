@@ -507,6 +507,7 @@ run_pathvqa_dynamic_prompt_eval() {
   local split="$2"
   local eval_output_dir="$3"
   local eval_log="$4"
+  shift 4
   if [ ! -f "$checkpoint/dynamic_prompt_config.json" ] \
     || [ ! -f "$checkpoint/dynamic_prompt.pt" ]; then
     echo "[ERR] Dynamic Prompt checkpoint 不完整: $checkpoint" >&2
@@ -524,8 +525,53 @@ run_pathvqa_dynamic_prompt_eval() {
       --split "$split" \
       --output-dir "$eval_output_dir" \
       --overwrite \
+      "$@" \
       2>&1 | tee "$eval_log"
   )
+}
+
+run_pathvqa_dynamic_prompt_interventions() {
+  local source_run="${PATHVQA_DYNAMIC_PROMPT_SOURCE_RUN:-}"
+  if [ -z "$source_run" ]; then
+    source_run="$(ls -dt "$PATHVQA_DYNAMIC_PROMPT_OUTPUT_ROOT"/pathvqa_dynamic_prompt_mean_ca256_len20_seed44_* 2>/dev/null | head -n 1)"
+  fi
+  if [ -z "$source_run" ] || [ ! -f "$source_run/selected_result.tsv" ]; then
+    echo "[ERR] 找不到已完成的 Dynamic Prompt source run: $source_run" >&2
+    return 1
+  fi
+
+  local checkpoint
+  checkpoint="$(awk -F '\t' 'NR == 2 {print $6}' "$source_run/selected_result.tsv")"
+  if [ -z "$checkpoint" ]; then
+    echo "[ERR] selected_result.tsv 未记录 checkpoint: $source_run" >&2
+    return 1
+  fi
+
+  (
+    cd "$ROOT_DIR" || exit 1
+    python -m unittest test_dynamic_prompt_tuning.py
+  ) || return 1
+
+  local intervention
+  local lag="${PATHVQA_DYNAMIC_PROMPT_MEMORY_LAG:-32}"
+  for intervention in zero mean-residual lagged-memory; do
+    local eval_output_dir="$source_run/eval_interventions/$intervention"
+    local eval_log="$source_run/eval_intervention_${intervention}.log"
+    echo "[PATHVQA_DYNAMIC_PROMPT_INTERVENTION] mode=$intervention lag=$lag checkpoint=$checkpoint"
+    run_pathvqa_dynamic_prompt_eval \
+      "$checkpoint" \
+      test \
+      "$eval_output_dir" \
+      "$eval_log" \
+      --dynamic-prompt-intervention "$intervention" \
+      --dynamic-prompt-memory-lag "$lag" || return 1
+  done
+
+  printf 'intervention\toverall\tyes_no\tfree_form\tsamples_changed\n'
+  for intervention in zero mean-residual lagged-memory; do
+    python -c 'import json,sys; d=json.load(open(sys.argv[1],encoding="utf-8")); i=d["dynamic_prompt_intervention"]; print("\t".join(map(str,(i["mode"],d["overall_accuracy"],d["yes_no_accuracy"],d["free_form_accuracy"],i["samples_changed"]))))' \
+      "$source_run/eval_interventions/$intervention/pathvqa_summary.json"
+  done
 }
 
 run_pathvqa_dynamic_prompt_seed44() {
@@ -1005,6 +1051,9 @@ case "$RUN_TARGET" in
   pathvqa_dynamic_prompt_seed44)
     run_pathvqa_dynamic_prompt_seed44 || failures=$((failures + 1))
     ;;
+  pathvqa_dynamic_prompt_interventions)
+    run_pathvqa_dynamic_prompt_interventions || failures=$((failures + 1))
+    ;;
   pathvqa_minimal_mmrl_prompt20_seed44)
     run_pathvqa_minimal_mmrl_prompt20_seed44 || failures=$((failures + 1))
     ;;
@@ -1028,7 +1077,7 @@ case "$RUN_TARGET" in
     run_slake || failures=$((failures + 1))
     ;;
   *)
-    echo "[ERR] 未知目标: $RUN_TARGET，可选 train、slake、pathvqa、pathvqa_base、pathvqa_prompt_tuning_seed44、pathvqa_dynamic_prompt_seed44、pathvqa_minimal_mmrl_prompt20_seed44、pathvqa_lora_visual_attn_r128、pathvqa_lora_visual_attn_r128_then_base、pathvqa_lora_visual_last8_attn_r128、pathvqa_last8_lora_minimal_mmrl_relation_suite、slake_final_seeds4、slake_ablation_no_relation_seeds2、slake_ablation_independent_init_seeds2、slake_ablation_static_query_seed45、slake_ablation_mean_pooling_seed45、slake_mean_final_completion_suite、slake_text_guided_balanced_fusion_slots8_seed45、slake_prompt_tuning_seed44、slake_concat_mlp_fusion_seed45、slake_overnight_prompt_and_concat_mlp、slake_ablation_suite、all。" >&2
+    echo "[ERR] 未知目标: $RUN_TARGET，可选 train、slake、pathvqa、pathvqa_base、pathvqa_prompt_tuning_seed44、pathvqa_dynamic_prompt_seed44、pathvqa_dynamic_prompt_interventions、pathvqa_minimal_mmrl_prompt20_seed44、pathvqa_lora_visual_attn_r128、pathvqa_lora_visual_attn_r128_then_base、pathvqa_lora_visual_last8_attn_r128、pathvqa_last8_lora_minimal_mmrl_relation_suite、slake_final_seeds4、slake_ablation_no_relation_seeds2、slake_ablation_independent_init_seeds2、slake_ablation_static_query_seed45、slake_ablation_mean_pooling_seed45、slake_mean_final_completion_suite、slake_text_guided_balanced_fusion_slots8_seed45、slake_prompt_tuning_seed44、slake_concat_mlp_fusion_seed45、slake_overnight_prompt_and_concat_mlp、slake_ablation_suite、all。" >&2
     exit 2
     ;;
 esac

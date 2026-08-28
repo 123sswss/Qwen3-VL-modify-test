@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import json
 import math
+from collections import deque
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Dict, Iterator, Sequence
+from typing import Any, Deque, Dict, Iterator, Sequence
 
 import torch
 from torch import nn
@@ -14,6 +15,12 @@ from torch import nn
 
 DYNAMIC_PROMPT_CONFIG_NAME = "dynamic_prompt_config.json"
 DYNAMIC_PROMPT_WEIGHTS_NAME = "dynamic_prompt.pt"
+DYNAMIC_PROMPT_INTERVENTIONS = (
+    "normal",
+    "zero",
+    "mean-residual",
+    "lagged-memory",
+)
 
 
 def _masked_mean(
@@ -182,6 +189,15 @@ class DynamicPromptTuningModel(nn.Module):
         self.generation_config = getattr(self.base_model, "generation_config", None)
         self.debug_context: Dict[str, torch.Tensor] = {}
         self._memory_audited = False
+        self._intervention_mode = "normal"
+        self._intervention_memory_lag = 32
+        self._intervention_memory_queue: Deque[torch.Tensor] = deque()
+        self._intervention_delta_sum = None
+        self._intervention_delta_count = 0
+        self._intervention_mean_delta = None
+        self._intervention_samples_seen = 0
+        self._intervention_samples_changed = 0
+        self._intervention_audited = False
 
     @staticmethod
     def _resolve_visual_token_ids(tokenizer: Any) -> Sequence[int]:
@@ -201,6 +217,102 @@ class DynamicPromptTuningModel(nn.Module):
             "soft_prompt": [self.soft_prompt],
             "dynamic_prompt": list(self.dynamic_prompt.parameters()),
         }
+
+    def configure_inference_intervention(
+        self,
+        mode: str = "normal",
+        memory_lag: int = 32,
+    ) -> None:
+        if mode not in DYNAMIC_PROMPT_INTERVENTIONS:
+            raise ValueError(
+                f"Unsupported Dynamic Prompt intervention={mode!r}; "
+                f"choices={DYNAMIC_PROMPT_INTERVENTIONS}"
+            )
+        if memory_lag < 1:
+            raise ValueError("Dynamic Prompt memory_lag must be positive")
+        self._intervention_mode = mode
+        self._intervention_memory_lag = int(memory_lag)
+        self.reset_inference_intervention_state()
+
+    def reset_inference_intervention_state(self) -> None:
+        self._intervention_memory_queue.clear()
+        self._intervention_delta_sum = None
+        self._intervention_delta_count = 0
+        self._intervention_mean_delta = None
+        self._intervention_samples_seen = 0
+        self._intervention_samples_changed = 0
+        self._intervention_audited = False
+
+    def inference_intervention_summary(self) -> Dict[str, Any]:
+        return {
+            "mode": self._intervention_mode,
+            "memory_lag": self._intervention_memory_lag,
+            "samples_seen": self._intervention_samples_seen,
+            "samples_changed": self._intervention_samples_changed,
+            "warmup_samples": (
+                min(
+                    self._intervention_samples_seen,
+                    self._intervention_memory_lag,
+                )
+                if self._intervention_mode == "lagged-memory"
+                else min(
+                    self._intervention_samples_seen,
+                    self._intervention_memory_lag,
+                )
+                if self._intervention_mode == "mean-residual"
+                else 0
+            ),
+        }
+
+    def _apply_memory_intervention(self, memory: torch.Tensor) -> torch.Tensor:
+        if self._intervention_mode != "lagged-memory":
+            return memory
+        selected = []
+        for sample_memory in memory:
+            if len(self._intervention_memory_queue) >= self._intervention_memory_lag:
+                selected.append(self._intervention_memory_queue.popleft())
+                self._intervention_samples_changed += 1
+            else:
+                selected.append(sample_memory)
+            self._intervention_memory_queue.append(sample_memory.detach().clone())
+        return torch.stack(selected, dim=0).to(
+            device=memory.device,
+            dtype=memory.dtype,
+        )
+
+    def _apply_delta_intervention(
+        self,
+        prompt: torch.Tensor,
+        memory: torch.Tensor,
+    ) -> torch.Tensor:
+        batch_size = int(prompt.shape[0])
+        if self._intervention_mode == "zero":
+            self._intervention_samples_changed += batch_size
+            return torch.zeros_like(prompt)
+        if (
+            self._intervention_mode == "mean-residual"
+            and self._intervention_mean_delta is not None
+        ):
+            self._intervention_samples_changed += batch_size
+            return self._intervention_mean_delta.to(
+                device=prompt.device,
+                dtype=prompt.dtype,
+            ).expand(batch_size, -1, -1)
+
+        delta = self.dynamic_prompt(prompt, memory)
+        if self._intervention_mode == "mean-residual":
+            batch_sum = delta.detach().sum(dim=0, keepdim=True)
+            self._intervention_delta_sum = (
+                batch_sum.clone()
+                if self._intervention_delta_sum is None
+                else self._intervention_delta_sum + batch_sum
+            )
+            self._intervention_delta_count += batch_size
+            if self._intervention_delta_count >= self._intervention_memory_lag:
+                self._intervention_mean_delta = (
+                    self._intervention_delta_sum / self._intervention_delta_count
+                )
+        return delta
 
     def _expand_inputs(
         self,
@@ -318,9 +430,16 @@ class DynamicPromptTuningModel(nn.Module):
 
             visual_memory = _masked_mean(inputs_embeds, visual_mask, "visual")
             text_memory = _masked_mean(inputs_embeds, text_mask, "text")
-            memory = torch.stack((visual_memory, text_memory), dim=1)
+            if self._intervention_mode != "normal" and self.training:
+                raise RuntimeError(
+                    "Dynamic Prompt causal interventions are inference-only"
+                )
+            natural_memory = torch.stack((visual_memory, text_memory), dim=1)
+            memory = self._apply_memory_intervention(natural_memory)
             prompt = inputs_embeds[:, : self.prompt_length]
-            delta = self.dynamic_prompt(prompt, memory)
+            delta = self._apply_delta_intervention(prompt, memory)
+            if not self.training:
+                self._intervention_samples_seen += int(prompt.shape[0])
             dynamic = prompt + delta
             kwargs["inputs_embeds"] = torch.cat(
                 (dynamic, inputs_embeds[:, self.prompt_length :]), dim=1
@@ -338,6 +457,13 @@ class DynamicPromptTuningModel(nn.Module):
                     "answer_overlap=0 pass=True"
                 )
                 self._memory_audited = True
+            if not self.training and not self._intervention_audited:
+                print(
+                    "[DYNAMIC_PROMPT_INTERVENTION_AUDIT] "
+                    f"mode={self._intervention_mode} "
+                    f"memory_lag={self._intervention_memory_lag}"
+                )
+                self._intervention_audited = True
             return args, kwargs
 
         handle = language_model.register_forward_pre_hook(

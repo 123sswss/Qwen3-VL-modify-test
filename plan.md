@@ -10,6 +10,10 @@
 - 首个决策实验固定为 PathVQA seed44。成功线为显著超过 Static Prompt55.83，重点检查 Free-form是否超过21.27并接近或超过last8 Visual LoRA23.41；若不超过Static Prompt，不追加多seed。
 - 必须记录动态残差/静态Prompt范数比、图文注意力比例、注意力熵、两组梯度范数、参数量和延迟；首步必须审计动态残差精确为0。
 - 回退仅保留为后续附加性质：可报告Attention Mask关闭Prompt后的约98% Base输出一致性，但不作为当前方法成立条件，也不在首轮实验中实现KV-cache受损的动态屏蔽。
+- PathVQA seed44 首轮已完成：Dynamic Prompt 为56.54/89.83/23.21，超过 Static Prompt55.83/90.33/21.27，主要收益是 Free-form+1.94；但配对图像聚类 Overall 差值95% CI为[-0.10,+1.55]，单seed不足以声称稳定总分提升。
+- 训练诊断显示两Memory注意力在首轮早期迅速硬化，末期熵约0.00010、视觉注意力质量固定为44.375%。该现象不等于动态分支失效，因为Value与残差仍依赖样本，但禁止在因果验证前声称样本级动态路由。
+- 下一优先级不是立即多seed或延长训练，而是复用同一 epoch3 checkpoint 做三个低成本推理干预：强制动态残差为0、固定使用前32个样本的平均residual、使用前32个样本的错配Memory。PathVQA顺序审计确认lag32后不存在同图配对，且仅前32/6719个样本保持正常；若 `delta=0` 与 lagged Memory 都不降低Free-form，则停止当前CA动态化叙事。
+- 只有因果干预证明样本条件有效后，才补 seed45；seed45成功标准为相对同seed Static Prompt保持正向Overall趋势，并优先确认Free-form收益。epoch3 validation仍上升，是否扩至5 epochs排在因果验证和seed45之后，避免把训练预算浪费在静态容量效应上。
 
 ## 总体目标
 

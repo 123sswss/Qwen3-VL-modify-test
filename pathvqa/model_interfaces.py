@@ -7,11 +7,13 @@ def load_pathvqa_model_interface(
     backend: str,
     base_model_path: str,
     checkpoint_path: str | None = None,
+    interface_kwargs=None,
 ):
     return load_slake_model_interface(
         backend,
         base_model_path=base_model_path,
         checkpoint_path=checkpoint_path,
+        interface_kwargs=interface_kwargs,
     )
 
 

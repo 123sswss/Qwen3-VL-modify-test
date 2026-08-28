@@ -372,6 +372,27 @@ Correction (2026-08-26): the intended scope-matched LoRA baseline is Attention L
 - Conclusion: the combination is statistically and practically tied with Static Prompt alone and fails the pre-registered success condition because Free-form22.52 remains below last8 LoRA23.41. This is not branch death or a trivial no-op: MMRL shifts capacity from binary calibration toward a different set of Free-form answers, but the shared CE objective provides no sample-wise authority/routing mechanism, so fixes and regressions cancel. The dominant PathVQA bottleneck is the LLM context interface; do not spend more budget on an always-on combination of the current internal-ViT MMRL with static Prompt Tuning.
 - Output/log path: `/root/autodl-tmp/Qwen3-VL-modify-test/pathvqa/outputs/mmrl/pathvqa_mmrl_minimal_shared_s_mean_prompt20_relation0050_seed44_20260827`; selected checkpoint `checkpoints/stage3_epoch_3`.
 
+### 2026-08-28 - pathvqa_dynamic_prompt_mean_ca256_len20_seed44_20260827
+
+- Commit/config: commit `619787d`; frozen Qwen3-VL backbone with 20 jointly trained 2,560-dimensional Static Prompt tokens. The same tokens act as 20 Cross-Attention queries over two sample-conditioned memory tokens: Mean-Pooled image tokens and Mean-Pooled question-only text tokens. The 256-dimensional 8-head CA returns a zero-initialized residual to the same 20-token LLM prefix. No pretrained Prompt checkpoint, Stage1, Gate, or Relation is used.
+- Dataset and split: PathVQA train19,654; validation6,259 for epoch selection; test6,719 with858 image clusters.
+- Seed / data seed: 44 / 42.
+- Controlled change: replace Static Prompt20 with an equally long jointly trained dynamic multimodal Prompt. The backbone, question template, answer exclusion, generation settings, validation selection, and official normalized exact-match evaluator remain matched to the Static Prompt baseline.
+- Validation Overall by epoch: **52.8040, 54.9609, 55.7278**; epoch3 selected.
+- Test Overall: **56.5412**; image-clustered95% bootstrap CI for the model score **[55.2460, 57.8331]**.
+- Yes/No / Free-form: **89.8275 / 23.2052**.
+- Per question type: how9.3525, other38.8889, what17.5848, when0.0000, where64.0371, why4.5455, yes/no89.8275; Free-form question-type macro22.4015.
+- Yes/No class audit:1,816 `yes` questions at93.7225% and1,546 `no` questions at85.2523%. Relative to Static Prompt, `yes` changes by+2.4229 and `no` by-3.9457 points, so the small aggregate Yes/No loss hides a calibration shift rather than uniform degradation.
+- Trainable parameters: Static Prompt51,200 + Dynamic CA2,634,240 = **2,685,440**. The checkpoint file is10,745,909 bytes.
+- Training:3 epochs, Prompt LR0.3, Dynamic CA LR3e-4, shared3% warmup and linear decay; runtime6,051.7s; reported train loss11.4899.
+- Initialization audits: dynamic residual maximum absolute value is exactly0 at step0; memory has shape `(batch,2,2560)`; question-only text Memory has zero answer-token overlap.
+- Diagnostics:93 rows over steps0-1,840. In epoch1/2/3 windows, normalized two-token attention entropy averages0.08931/0.000506/0.0000995, while visual attention mass averages0.46042/0.45076/0.443754. Over the final30 records, visual mass is0.443754 with std0.0000111 and entropy is0.0001008, indicating an almost fixed hard allocation of the160 query-head pairs between visual and text Memory. The Dynamic residual remains large and sample-varying in norm: epoch3 `delta/base` mean0.4748, range0.3420-0.6459. Dynamic grad norm remains approximately1.0 while Static Prompt grad norm declines to an epoch3 mean0.01849.
+- Paired effect versus Static Prompt20: **+0.7144 Overall**, -0.5057 Yes/No, and **+1.9363 Free-form**. Dynamic-only/Static-only correct counts are375/327 Overall (`McNemar p=0.0760`),127/144 Yes/No (`p=0.3311`), and248/183 Free-form (`p=0.00202`). The image-clustered paired95% bootstrap CI for the Overall difference is **[-0.1021,+1.5520]**. Predictions are textually identical on4,393/6,719 questions (65.38%).
+- Comparison to last8 Visual LoRA-r128: Dynamic Prompt is+2.6939 Overall and-0.2086 Free-form; it nearly closes LoRA's Free-form advantage while retaining much stronger binary accuracy.
+- Evaluation timing: TTFT mean0.049734s, weighted TPOT0.019937s/token,50.157 decode tokens/s, request mean0.095868s.
+- Conclusion: this is the strongest PathVQA seed44 point estimate and the first method to improve Static Prompt specifically on Free-form with a significant paired correctness shift. It does not yet prove a statistically stable Overall improvement because the clustered paired CI crosses zero. The near-zero entropy and exactly stable44.375% visual mass show that CA learned a fixed head/slot modality partition, not visibly sample-dependent attention routing. The residual values can still carry sample-conditioned image/text content, so the correct next test is checkpoint-level causal intervention (`delta=0`, shuffled Memory, fixed/mean residual) before adding seeds or claiming dynamic multimodal routing.
+- Output/log path: `/root/autodl-tmp/Qwen3-VL-modify-test/pathvqa/outputs/dynamic_prompt/pathvqa_dynamic_prompt_mean_ca256_len20_seed44_20260827`; selected checkpoint `checkpoints/epoch_3`; test log `eval_test_epoch_3.log`; diagnostics `dynamic_prompt_diagnostics.jsonl`.
+
 ### PathVQA Yes/No Class-Balance Audit
 
 | Method | Yes count | Yes accuracy | No count | No accuracy | Class gap |
@@ -382,6 +403,7 @@ Correction (2026-08-26): the intended scope-matched LoRA baseline is Attention L
 | Minimal MMRL Relation0.05 seed44 | 1,816 | 79.68 | 1,546 | 86.03 | 6.35 |
 | Visual LoRA-r128 seed44 | 1,816 | 83.65 | 1,546 | 89.39 | 5.74 |
 | Static Prompt Tuning seed44 | 1,816 | 91.30 | 1,546 | 89.20 | 2.10 |
+| Dynamic Multimodal Prompt seed44 | 1,816 | 93.72 | 1,546 | 85.25 | 8.47 |
 
 The aggregate Yes/No score hides a severe Base bias toward `no`. MMRL removes most of this imbalance and therefore does not obtain82.57 by collapsing to one class. It nevertheless trails the all24-layer LoRA run by3.03 points on `yes` and4.53 points on `no`. Same-question paired exact McNemar tests reject a tie for this unmatched comparison: on `yes`, MMRL-only/LoRA-only correct counts are127/182 (`p=0.0021`); on `no`,64/134 (`p=7.29e-7`). These statistics remain valid for the completed models but cannot establish a scope-matched architectural advantage because MMRL acts on visual layers17-24 while this LoRA acts on all24 layers.
 

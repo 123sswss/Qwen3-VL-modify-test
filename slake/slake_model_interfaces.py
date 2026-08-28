@@ -58,6 +58,7 @@ def load_slake_model_interface(
     backend: str,
     base_model_path: str,
     checkpoint_path: str | None = None,
+    interface_kwargs: dict[str, Any] | None = None,
 ) -> Any:
     """Instantiate one existing project model interface for SLAKE evaluation."""
 
@@ -68,8 +69,11 @@ def load_slake_model_interface(
     relative_path, class_name = BACKEND_SPECS[backend]
     module = _load_source_module(relative_path)
     interface_class = getattr(module, class_name)
+    interface_kwargs = dict(interface_kwargs or {})
 
     if backend == "base":
+        if interface_kwargs:
+            raise ValueError("The base backend does not accept interface kwargs")
         return interface_class(base_model_path)
     if not checkpoint_path:
         raise ValueError(f"--checkpoint is required for backend={backend}")
@@ -77,4 +81,4 @@ def load_slake_model_interface(
         return interface_class(checkpoint_path, base_model_path)
     if backend == "lora-vision-last8":
         return interface_class(Path(checkpoint_path).resolve(), base_model_path)
-    return interface_class(checkpoint_path, base_model_path)
+    return interface_class(checkpoint_path, base_model_path, **interface_kwargs)

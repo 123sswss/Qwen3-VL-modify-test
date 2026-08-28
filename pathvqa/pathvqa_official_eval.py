@@ -19,6 +19,7 @@ if str(REPO_ROOT) not in sys.path:
 from pathvqa.data_pipeline import PathVQAParquetStore
 from pathvqa.model_interfaces import BACKEND_SPECS, load_pathvqa_model_interface
 from pathvqa.pathvqa_vqa_metric import evaluate_pathvqa_predictions
+from slake.dynamic_prompt_tuning import DYNAMIC_PROMPT_INTERVENTIONS
 from slake.slake_official_eval import (
     _normalized_timing,
     append_progress_row,
@@ -169,6 +170,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--backend", choices=sorted(BACKEND_SPECS), default="base")
     parser.add_argument("--base-model", required=True)
     parser.add_argument("--checkpoint")
+    parser.add_argument(
+        "--dynamic-prompt-intervention",
+        choices=DYNAMIC_PROMPT_INTERVENTIONS,
+        default="normal",
+    )
+    parser.add_argument("--dynamic-prompt-memory-lag", type=int, default=32)
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--max-new-tokens", type=int, default=32)
     parser.add_argument("--temperature", type=float, default=0.0)
@@ -195,6 +202,23 @@ def main() -> int:
         raise ValueError("--timing-warmup-runs must be non-negative")
     if args.bootstrap_iterations < 1:
         raise ValueError("--bootstrap-iterations must be positive")
+    if args.dynamic_prompt_memory_lag < 1:
+        raise ValueError("--dynamic-prompt-memory-lag must be positive")
+    if (
+        args.backend != "dynamic-prompt"
+        and args.dynamic_prompt_intervention != "normal"
+    ):
+        raise ValueError(
+            "Dynamic Prompt interventions require --backend dynamic-prompt"
+        )
+    if args.resume and args.dynamic_prompt_intervention in {
+        "mean-residual",
+        "lagged-memory",
+    }:
+        raise ValueError(
+            "Stateful Dynamic Prompt interventions do not support --resume; "
+            "rerun with --overwrite"
+        )
     if args.resume and args.overwrite:
         raise ValueError("--resume and --overwrite are mutually exclusive")
 
@@ -210,10 +234,19 @@ def main() -> int:
 
     output_dir = args.output_dir.expanduser().resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
+    interface_kwargs = (
+        {
+            "intervention": args.dynamic_prompt_intervention,
+            "memory_lag": args.dynamic_prompt_memory_lag,
+        }
+        if args.backend == "dynamic-prompt"
+        else None
+    )
     model = load_pathvqa_model_interface(
         args.backend,
         base_model_path=args.base_model,
         checkpoint_path=args.checkpoint,
+        interface_kwargs=interface_kwargs,
     )
     instruction = "" if args.no_instruction else args.instruction
     run_timing_warmup(
@@ -225,6 +258,8 @@ def main() -> int:
         temperature=args.temperature,
         instruction=instruction,
     )
+    if hasattr(model, "reset_inference_state"):
+        model.reset_inference_state()
     prediction_rows = run_inference(
         store,
         records,
@@ -267,6 +302,10 @@ def main() -> int:
             "timing": timing_summary,
         }
     )
+    if hasattr(model, "inference_intervention_summary"):
+        summary["dynamic_prompt_intervention"] = (
+            model.inference_intervention_summary()
+        )
 
     official_predictions = [
         {"question_id": row["question_id"], "answer": row["answer"]}

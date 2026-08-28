@@ -36,7 +36,13 @@ def _move_inputs(inputs: Dict[str, Any], device: torch.device) -> Dict[str, Any]
 
 
 class DynamicPromptTuningModelInterface:
-    def __init__(self, checkpoint_path: str, base_model_path: str) -> None:
+    def __init__(
+        self,
+        checkpoint_path: str,
+        base_model_path: str,
+        intervention: str = "normal",
+        memory_lag: int = 32,
+    ) -> None:
         checkpoint = Path(checkpoint_path).resolve()
         with (checkpoint / DYNAMIC_PROMPT_CONFIG_NAME).open(
             "r", encoding="utf-8"
@@ -61,14 +67,25 @@ class DynamicPromptTuningModelInterface:
         )
         self.model.load_dynamic_prompt(checkpoint)
         self.model.eval()
+        self.model.configure_inference_intervention(
+            intervention,
+            memory_lag=memory_lag,
+        )
         self.device = next(base_model.parameters()).device
         self.last_generation_timing = None
         print(
             "[dynamic-prompt] "
             f"loaded={checkpoint} prompt_length={self.model.prompt_length} "
             f"attention_dim={self.model.dynamic_prompt.attention_dim} "
-            f"heads={self.model.dynamic_prompt.num_heads}"
+            f"heads={self.model.dynamic_prompt.num_heads} "
+            f"intervention={intervention} memory_lag={memory_lag}"
         )
+
+    def reset_inference_state(self) -> None:
+        self.model.reset_inference_intervention_state()
+
+    def inference_intervention_summary(self) -> Dict[str, Any]:
+        return self.model.inference_intervention_summary()
 
     def infer(
         self,
@@ -106,4 +123,3 @@ class DynamicPromptTuningModelInterface:
         return self.processor.batch_decode(
             generated, skip_special_tokens=True
         )[0].strip()
-

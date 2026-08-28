@@ -58,10 +58,10 @@ class _FakeMultimodalModel(nn.Module):
 
 class DynamicPromptTuningTest(unittest.TestCase):
     @staticmethod
-    def _batch(answer_in_context=False):
+    def _batch(answer_in_context=False, text_token=2):
         context = [1, 1, 1, 1, int(answer_in_context)]
         return {
-            "input_ids": torch.tensor([[8, 9, 10, 2, 3]]),
+            "input_ids": torch.tensor([[8, 9, 10, text_token, 3]]),
             "attention_mask": torch.ones(1, 5, dtype=torch.long),
             "labels": torch.tensor([[-100, -100, -100, -100, 3]]),
             "mmrl_gating_mask": torch.tensor([context], dtype=torch.bool),
@@ -132,6 +132,47 @@ class DynamicPromptTuningTest(unittest.TestCase):
                 float(restored.debug_context["dynamic_prompt_delta_norm_mean"]),
                 0.0,
             )
+
+    def test_zero_intervention_removes_trained_dynamic_residual(self):
+        model = self._model().eval()
+        with torch.no_grad():
+            model.dynamic_prompt.output_projection.weight.fill_(0.25)
+            model.configure_inference_intervention("zero")
+            model(**self._batch())
+        prefix = model.base_model.model.language_model.last_embeddings[:, :2]
+        torch.testing.assert_close(prefix.float(), model.soft_prompt.unsqueeze(0))
+        self.assertEqual(
+            model.inference_intervention_summary()["samples_changed"],
+            1,
+        )
+
+    def test_mean_residual_reuses_calibration_delta(self):
+        model = self._model().eval()
+        with torch.no_grad():
+            model.dynamic_prompt.output_projection.weight.fill_(0.25)
+            model.configure_inference_intervention("mean-residual", memory_lag=1)
+            model(**self._batch(text_token=2))
+            first = model.base_model.model.language_model.last_embeddings[:, :2].clone()
+            model(**self._batch(text_token=4))
+            second = model.base_model.model.language_model.last_embeddings[:, :2]
+        torch.testing.assert_close(second, first)
+        summary = model.inference_intervention_summary()
+        self.assertEqual(summary["warmup_samples"], 1)
+        self.assertEqual(summary["samples_changed"], 1)
+
+    def test_lagged_memory_uses_prior_sample_memory(self):
+        model = self._model().eval()
+        with torch.no_grad():
+            model.dynamic_prompt.output_projection.weight.fill_(0.25)
+            model.configure_inference_intervention("lagged-memory", memory_lag=1)
+            model(**self._batch(text_token=2))
+            first = model.base_model.model.language_model.last_embeddings[:, :2].clone()
+            model(**self._batch(text_token=4))
+            second = model.base_model.model.language_model.last_embeddings[:, :2]
+        torch.testing.assert_close(second, first)
+        summary = model.inference_intervention_summary()
+        self.assertEqual(summary["warmup_samples"], 1)
+        self.assertEqual(summary["samples_changed"], 1)
 
 
 if __name__ == "__main__":

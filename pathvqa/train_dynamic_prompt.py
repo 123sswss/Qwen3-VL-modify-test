@@ -238,9 +238,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--sparse-visual-rep-tokens", type=int, default=8)
     parser.add_argument("--sparse-visual-attention-dim", type=int, default=128)
     parser.add_argument("--sparse-visual-heads", type=int, default=4)
-    parser.add_argument("--sparse-visual-relation-weight", type=float, default=0.05)
-    parser.add_argument("--sparse-visual-initial-scale", type=float, default=0.05)
-    parser.add_argument("--sparse-visual-lr", type=float, default=3e-4)
+    parser.add_argument("--sparse-visual-lr", type=float, default=3e-5)
     parser.add_argument("--batch-size", type=int, default=2)
     parser.add_argument("--gradient-accumulation", type=int, default=16)
     parser.add_argument("--dataloader-workers", type=int, default=2)
@@ -270,10 +268,6 @@ def parse_args() -> argparse.Namespace:
         )
     if min(args.prompt_lr, args.dynamic_lr, args.sparse_visual_lr) <= 0.0:
         parser.error("Learning rates must be positive")
-    if args.sparse_visual_relation_weight < 0.0:
-        parser.error("--sparse-visual-relation-weight must be non-negative")
-    if not 0.0 <= args.sparse_visual_initial_scale < 1.0:
-        parser.error("--sparse-visual-initial-scale must be in [0, 1)")
     if args.dataloader_workers < 0:
         parser.error("--dataloader-workers must be non-negative")
     return args
@@ -310,8 +304,6 @@ def main() -> int:
         sparse_visual_rep_tokens=args.sparse_visual_rep_tokens,
         sparse_visual_attention_dim=args.sparse_visual_attention_dim,
         sparse_visual_heads=args.sparse_visual_heads,
-        sparse_visual_relation_weight=args.sparse_visual_relation_weight,
-        sparse_visual_initial_scale=args.sparse_visual_initial_scale,
     )
     dataset = PathVQADataset(
         processor=processor,
@@ -356,8 +348,7 @@ def main() -> int:
         f"sparse_rep_tokens={args.sparse_visual_rep_tokens if args.sparse_visual else 0} "
         f"sparse_attention_dim={args.sparse_visual_attention_dim if args.sparse_visual else 0} "
         f"sparse_heads={args.sparse_visual_heads if args.sparse_visual else 0} "
-        f"sparse_relation={args.sparse_visual_relation_weight if args.sparse_visual else 0.0} "
-        f"sparse_initial_scale={args.sparse_visual_initial_scale if args.sparse_visual else 0.0} "
+        f"sparse_injection={'single_pass_insert_strip' if args.sparse_visual else 'none'} "
         "pretrained_prompt_checkpoint=False stage1=False"
     )
 
@@ -414,8 +405,7 @@ def main() -> int:
                 "rep_token_count": args.sparse_visual_rep_tokens,
                 "attention_dim": args.sparse_visual_attention_dim,
                 "attention_heads": args.sparse_visual_heads,
-                "relation_weight": args.sparse_visual_relation_weight,
-                "initial_residual_scale": args.sparse_visual_initial_scale,
+                "injection_mode": "single_pass_insert_strip",
             }
             if args.sparse_visual
             else None

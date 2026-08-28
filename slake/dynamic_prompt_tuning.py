@@ -157,8 +157,6 @@ class DynamicPromptTuningModel(nn.Module):
         sparse_visual_rep_tokens: int = 8,
         sparse_visual_attention_dim: int = 128,
         sparse_visual_heads: int = 4,
-        sparse_visual_relation_weight: float = 0.05,
-        sparse_visual_initial_scale: float = 0.05,
     ) -> None:
         super().__init__()
         if prompt_length < 1:
@@ -202,8 +200,6 @@ class DynamicPromptTuningModel(nn.Module):
                 rep_token_count=sparse_visual_rep_tokens,
                 attention_dim=sparse_visual_attention_dim,
                 num_heads=sparse_visual_heads,
-                relation_weight=sparse_visual_relation_weight,
-                initial_residual_scale=sparse_visual_initial_scale,
             ).to(device=visual_device)
             self.sparse_visual.install(visual_model)
 
@@ -571,21 +567,10 @@ class DynamicPromptTuningModel(nn.Module):
     def _finalize_forward_output(self, output: Any) -> Any:
         if self.sparse_visual is None:
             return output
-        relation = self.sparse_visual.relation_loss
         self.debug_context = {
             **self.debug_context,
             **self.sparse_visual.debug_context,
-            "sparse_visual_relation_loss_scaled": (
-                relation.detach().float() * self.sparse_visual.relation_weight
-            ),
         }
-        loss = getattr(output, "loss", None)
-        if self.training and loss is not None:
-            output.loss = (
-                loss
-                + relation.to(device=loss.device, dtype=loss.dtype)
-                * self.sparse_visual.relation_weight
-            )
         return output
 
     def forward(self, **kwargs: Any) -> Any:
@@ -616,10 +601,7 @@ class DynamicPromptTuningModel(nn.Module):
                     "rep_token_count": self.sparse_visual.rep_token_count,
                     "attention_dim": self.sparse_visual.rep_attention.attention_dim,
                     "num_heads": self.sparse_visual.rep_attention.num_heads,
-                    "relation_weight": self.sparse_visual.relation_weight,
-                    "initial_residual_scale": (
-                        self.sparse_visual.initial_residual_scale
-                    ),
+                    "injection_mode": "single_pass_insert_strip",
                 }
                 if self.sparse_visual is not None
                 else None

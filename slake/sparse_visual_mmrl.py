@@ -8,7 +8,6 @@ from contextlib import contextmanager
 from typing import Any, Dict, Iterator, Sequence
 
 import torch
-import torch.nn.functional as F
 from torch import nn
 
 
@@ -108,7 +107,7 @@ class SparseVisualRepAttention(nn.Module):
 
 
 class SparseVisualInjectionBlock(nn.Module):
-    """Reuse one frozen block for its base and local Rep-conditioned paths."""
+    """Insert local Rep tokens while executing the wrapped block exactly once."""
 
     def __init__(
         self,
@@ -122,14 +121,12 @@ class SparseVisualInjectionBlock(nn.Module):
         object.__setattr__(self, "_adapter_ref", weakref.ref(adapter))
 
     def forward(self, *args: Any, **kwargs: Any) -> torch.Tensor:
-        original = self.block(*args, **kwargs)
         adapter = self._adapter_ref()
         if adapter is None or not adapter.active:
-            return original
+            return self.block(*args, **kwargs)
         return adapter.inject(
             self.layer_index,
             self.block,
-            original,
             args,
             kwargs,
         )
@@ -146,9 +143,6 @@ class SparseVisualMMRL(nn.Module):
         rep_token_count: int = 8,
         attention_dim: int = 128,
         num_heads: int = 4,
-        relation_weight: float = 0.05,
-        relation_max_tokens: int = 64,
-        initial_residual_scale: float = 0.05,
     ) -> None:
         super().__init__()
         anchors = tuple(int(index) for index in anchor_layers)
@@ -158,27 +152,16 @@ class SparseVisualMMRL(nn.Module):
             raise ValueError("anchor layer indexes must be non-negative")
         if min(visual_dim, text_dim, rep_token_count, attention_dim, num_heads) < 1:
             raise ValueError("Sparse Visual MMRL dimensions must be positive")
-        if relation_weight < 0.0:
-            raise ValueError("relation_weight must be non-negative")
-        if not 0.0 <= initial_residual_scale < 1.0:
-            raise ValueError("initial_residual_scale must be in [0, 1)")
 
         self.visual_dim = int(visual_dim)
         self.text_dim = int(text_dim)
         self.anchor_layers = anchors
         self.rep_token_count = int(rep_token_count)
-        self.relation_weight = float(relation_weight)
-        self.relation_max_tokens = int(relation_max_tokens)
-        self.initial_residual_scale = float(initial_residual_scale)
         self.shared_rep = nn.Parameter(
             torch.empty(self.rep_token_count, self.visual_dim)
         )
         self.layer_embeddings = nn.Parameter(
             torch.empty(len(self.anchor_layers), 1, self.visual_dim)
-        )
-        initial_scale_parameter = math.atanh(self.initial_residual_scale)
-        self.residual_scales = nn.Parameter(
-            torch.full((len(self.anchor_layers),), initial_scale_parameter)
         )
         nn.init.normal_(self.shared_rep, std=0.02)
         nn.init.normal_(self.layer_embeddings, std=0.02)
@@ -195,7 +178,6 @@ class SparseVisualMMRL(nn.Module):
         self._images_per_sample: torch.Tensor | None = None
         self._image_lengths: torch.Tensor | None = None
         self._image_to_sample: torch.Tensor | None = None
-        self._relation_losses: list[torch.Tensor] = []
         self._debug_rows: list[Dict[str, torch.Tensor]] = []
         self._installed = False
         self._forward_audited = False
@@ -219,7 +201,7 @@ class SparseVisualMMRL(nn.Module):
             "[SPARSE_VISUAL_LAYER_AUDIT] "
             f"vision_depth={depth} anchors_0based={list(self.anchor_layers)} "
             f"anchors_natural={[index + 1 for index in self.anchor_layers]} "
-            "local_insert_strip=True shared_frozen_block=True"
+            "local_insert_strip=True block_execution=single_pass"
         )
 
     @contextmanager
@@ -235,7 +217,6 @@ class SparseVisualMMRL(nn.Module):
         self._images_per_sample = images_per_sample.to(dtype=torch.long)
         self._image_lengths = None
         self._image_to_sample = None
-        self._relation_losses = []
         self._debug_rows = []
         self.debug_context = {}
         try:
@@ -268,12 +249,6 @@ class SparseVisualMMRL(nn.Module):
         self._image_to_sample = torch.repeat_interleave(
             sample_ids, self._images_per_sample
         )
-
-    @property
-    def relation_loss(self) -> torch.Tensor:
-        if self._relation_losses:
-            return torch.stack(self._relation_losses).mean()
-        return self.shared_rep.new_tensor(0.0)
 
     def _argument(
         self,
@@ -434,50 +409,10 @@ class SparseVisualMMRL(nn.Module):
                 expanded_kwargs["rotary_pos_emb"] = expanded_rotary
         return expanded_args, expanded_kwargs
 
-    def _relation(
-        self,
-        adapted: torch.Tensor,
-        original: torch.Tensor,
-        lengths: Sequence[int],
-    ) -> torch.Tensor:
-        losses = []
-        for adapted_segment, original_segment in zip(
-            torch.split(adapted, list(lengths), dim=0),
-            torch.split(original, list(lengths), dim=0),
-        ):
-            count = int(adapted_segment.shape[0])
-            if count < 2:
-                continue
-            if count > self.relation_max_tokens:
-                indices = (
-                    torch.linspace(
-                        0,
-                        count - 1,
-                        steps=self.relation_max_tokens,
-                        device=adapted.device,
-                    )
-                    .round()
-                    .long()
-                )
-                adapted_segment = adapted_segment.index_select(0, indices)
-                original_segment = original_segment.index_select(0, indices)
-            adapted_unit = F.normalize(adapted_segment.float(), dim=-1, eps=1e-6)
-            original_unit = F.normalize(
-                original_segment.detach().float(), dim=-1, eps=1e-6
-            )
-            losses.append(
-                F.mse_loss(
-                    adapted_unit @ adapted_unit.transpose(0, 1),
-                    original_unit @ original_unit.transpose(0, 1),
-                )
-            )
-        return torch.stack(losses).mean() if losses else adapted.new_tensor(0.0)
-
     def inject(
         self,
         layer_index: int,
         block: nn.Module,
-        original: torch.Tensor,
         args: Sequence[Any],
         kwargs: Dict[str, Any],
     ) -> torch.Tensor:
@@ -487,8 +422,6 @@ class SparseVisualMMRL(nn.Module):
             raise RuntimeError(
                 "Sparse Visual block did not receive hidden_states/cu_seqlens"
             )
-        if not torch.is_tensor(original):
-            raise TypeError("Sparse Visual expects vision blocks to return a tensor")
         visual_memory, text_memory, lengths = self._segment_memories(
             hidden_states, cu_seqlens
         )
@@ -503,6 +436,8 @@ class SparseVisualMMRL(nn.Module):
             reps, args, kwargs, lengths, cu_seqlens
         )
         adapted_with_rep = block(*expanded_args, **expanded_kwargs)
+        if not torch.is_tensor(adapted_with_rep):
+            raise TypeError("Sparse Visual expects vision blocks to return a tensor")
         adapted = torch.cat(
             [
                 segment[self.rep_token_count :]
@@ -514,46 +449,29 @@ class SparseVisualMMRL(nn.Module):
             ],
             dim=0,
         )
-        scale = torch.tanh(self.residual_scales[layer_position]).to(
-            device=original.device, dtype=original.dtype
-        )
-        delta = adapted - original
-        mixed = original + scale * delta
-        relation = self._relation(mixed, original, lengths)
-        self._relation_losses.append(relation)
 
         with torch.no_grad():
-            original_norm = (
-                original.detach().float().norm(dim=-1).mean().clamp_min(1e-8)
-            )
-            applied_delta_norm = (mixed - original).detach().float().norm(dim=-1).mean()
+            input_norm = hidden_states.detach().float().norm(dim=-1).mean().clamp_min(1e-8)
+            rep_norm = reps.detach().float().norm(dim=-1).mean()
+            output_norm = adapted.detach().float().norm(dim=-1).mean()
             self._debug_rows.append(
                 {
-                    "layer": original.new_tensor(float(layer_index)),
-                    "scale": scale.detach().float(),
-                    "delta_ratio": applied_delta_norm / original_norm,
-                    "relation": relation.detach().float(),
+                    "layer": adapted.new_tensor(float(layer_index)),
+                    "rep_to_input_norm_ratio": rep_norm / input_norm,
+                    "output_to_input_norm_ratio": output_norm / input_norm,
                     **self.rep_attention.debug_context,
                 }
             )
             if not self._forward_audited:
-                observed_scale = float(scale.detach().float().item())
-                scale_error = abs(observed_scale - self.initial_residual_scale)
-                if scale_error > 5e-4:
-                    raise RuntimeError(
-                        "Sparse Visual residual scale initialization mismatch: "
-                        f"expected={self.initial_residual_scale} observed={observed_scale}"
-                    )
                 print(
-                    "[SPARSE_VISUAL_SCALE_INIT_AUDIT] "
+                    "[SPARSE_VISUAL_SINGLE_PASS_AUDIT] "
                     f"layer={layer_index} units={len(lengths)} reps={self.rep_token_count} "
-                    f"expected_scale={self.initial_residual_scale} "
-                    f"observed_scale={observed_scale} pass=True"
+                    "insert_before_block=True strip_after_block=True pass=True"
                 )
                 if layer_index == self.anchor_layers[-1]:
                     self._forward_audited = True
         self._refresh_debug_context()
-        return mixed
+        return adapted
 
     def _refresh_debug_context(self) -> None:
         if not self._debug_rows:
@@ -562,20 +480,22 @@ class SparseVisualMMRL(nn.Module):
         debug: Dict[str, torch.Tensor] = {}
         for row in self._debug_rows:
             layer = int(row["layer"].item())
-            debug[f"sparse_visual_layer{layer}_scale"] = row["scale"]
-            debug[f"sparse_visual_layer{layer}_delta_ratio"] = row["delta_ratio"]
-            debug[f"sparse_visual_layer{layer}_relation_loss"] = row["relation"]
+            debug[f"sparse_visual_layer{layer}_rep_to_input_norm_ratio"] = row[
+                "rep_to_input_norm_ratio"
+            ]
+            debug[f"sparse_visual_layer{layer}_output_to_input_norm_ratio"] = row[
+                "output_to_input_norm_ratio"
+            ]
             debug[f"sparse_visual_layer{layer}_attention_entropy_norm"] = row[
                 "attention_entropy_norm"
             ]
             debug[f"sparse_visual_layer{layer}_visual_attention_mean"] = row[
                 "visual_attention_mean"
             ]
-        debug["sparse_visual_relation_loss"] = self.relation_loss.detach().float()
-        debug["sparse_visual_scale_abs_mean"] = torch.stack(
-            [row["scale"].abs() for row in self._debug_rows]
+        debug["sparse_visual_rep_to_input_norm_ratio_mean"] = torch.stack(
+            [row["rep_to_input_norm_ratio"] for row in self._debug_rows]
         ).mean()
-        debug["sparse_visual_delta_ratio_mean"] = torch.stack(
-            [row["delta_ratio"] for row in self._debug_rows]
+        debug["sparse_visual_output_to_input_norm_ratio_mean"] = torch.stack(
+            [row["output_to_input_norm_ratio"] for row in self._debug_rows]
         ).mean()
         self.debug_context = debug

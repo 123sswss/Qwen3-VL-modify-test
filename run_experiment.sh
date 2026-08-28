@@ -645,11 +645,11 @@ run_pathvqa_dynamic_prompt_seed44() {
   cat "$output_dir/selected_result.tsv"
 }
 
-run_pathvqa_dynamic_prompt_sparse_visual_seed44() {
-  local experiment_name="${PATHVQA_SPARSE_VISUAL_EXPERIMENT_NAME:-pathvqa_dynamic_prompt_sparse_visual_layers5_11_17_slots8_ca128_init0050_relation0050}"
+run_pathvqa_dynamic_prompt_sparse_visual_single_pass_seed44() {
+  local experiment_name="pathvqa_dynamic_prompt_sparse_visual_single_pass_layers5_11_17_slots8_ca128_lr3e5"
   local run_seed=44
   local epochs="${PATHVQA_DYNAMIC_PROMPT_EPOCHS:-3}"
-  local sparse_visual_lr="${PATHVQA_SPARSE_VISUAL_LR:-3e-4}"
+  local sparse_visual_lr="${PATHVQA_SPARSE_VISUAL_LR:-3e-5}"
   if ! python -c 'import datasets, pyarrow' >/dev/null 2>&1; then
     echo "[ERR] PathVQA Dynamic Prompt 需要 datasets 和 pyarrow。先运行: python -m pip install -r pathvqa/requirements.txt" >&2
     return 2
@@ -658,7 +658,7 @@ run_pathvqa_dynamic_prompt_sparse_visual_seed44() {
   local output_dir
   output_dir="$(available_output_dir "$PATHVQA_DYNAMIC_PROMPT_OUTPUT_ROOT" "${experiment_name}_seed${run_seed}_${RUN_DATE}")"
   mkdir -p "$output_dir"
-  echo "[PATHVQA_DYNAMIC_PROMPT_SPARSE_VISUAL] experiment=$experiment_name seed=$run_seed epochs=$epochs anchors=5,11,17 rep_tokens=8 visual_ca=128x4 initial_scale=0.05 relation=0.05 sparse_lr=$sparse_visual_lr expected_trainable=3886595 output=$output_dir"
+  echo "[PATHVQA_DYNAMIC_PROMPT_SPARSE_VISUAL] experiment=$experiment_name seed=$run_seed epochs=$epochs anchors=5,11,17 rep_tokens=8 visual_ca=128x4 injection=single_pass_insert_strip relation=off sparse_lr=$sparse_visual_lr expected_trainable=3886592 output=$output_dir"
   (
     cd "$ROOT_DIR" || exit 1
     python -m unittest test_dynamic_prompt_tuning.py test_sparse_visual_mmrl.py || exit 1
@@ -676,8 +676,6 @@ run_pathvqa_dynamic_prompt_sparse_visual_seed44() {
       --sparse-visual-rep-tokens 8 \
       --sparse-visual-attention-dim 128 \
       --sparse-visual-heads 4 \
-      --sparse-visual-initial-scale 0.05 \
-      --sparse-visual-relation-weight 0.05 \
       --sparse-visual-lr "$sparse_visual_lr" \
       --epochs "$epochs" \
       --seed "$run_seed" \
@@ -687,7 +685,7 @@ run_pathvqa_dynamic_prompt_sparse_visual_seed44() {
       --batch-size "${PATHVQA_DYNAMIC_PROMPT_BATCH_SIZE:-2}" \
       --gradient-accumulation "${PATHVQA_DYNAMIC_PROMPT_GRAD_ACCUM:-16}" \
       --dataloader-workers "${PATHVQA_DYNAMIC_PROMPT_WORKERS:-2}" \
-      --expected-trainable-parameters 3886595 \
+      --expected-trainable-parameters 3886592 \
       2>&1 | tee "$output_dir/train.log"
   ) || return 1
 
@@ -724,12 +722,6 @@ run_pathvqa_dynamic_prompt_sparse_visual_seed44() {
     "$test_score" "$best_checkpoint" \
     >> "$output_dir/selected_result.tsv"
   cat "$output_dir/selected_result.tsv"
-}
-
-run_pathvqa_dynamic_prompt_sparse_visual_lr3e5_seed44() {
-  local PATHVQA_SPARSE_VISUAL_EXPERIMENT_NAME="pathvqa_dynamic_prompt_sparse_visual_layers5_11_17_slots8_ca128_init0050_relation0050_sparse_lr3e5"
-  local PATHVQA_SPARSE_VISUAL_LR="3e-5"
-  run_pathvqa_dynamic_prompt_sparse_visual_seed44
 }
 
 run_pathvqa_lora_visual_attn_r128() {
@@ -1138,11 +1130,8 @@ case "$RUN_TARGET" in
   pathvqa_dynamic_prompt_seed44)
     run_pathvqa_dynamic_prompt_seed44 || failures=$((failures + 1))
     ;;
-  pathvqa_dynamic_prompt_sparse_visual_seed44)
-    run_pathvqa_dynamic_prompt_sparse_visual_seed44 || failures=$((failures + 1))
-    ;;
-  pathvqa_dynamic_prompt_sparse_visual_lr3e5_seed44)
-    run_pathvqa_dynamic_prompt_sparse_visual_lr3e5_seed44 || failures=$((failures + 1))
+  pathvqa_dynamic_prompt_sparse_visual_single_pass_seed44)
+    run_pathvqa_dynamic_prompt_sparse_visual_single_pass_seed44 || failures=$((failures + 1))
     ;;
   pathvqa_dynamic_prompt_interventions)
     run_pathvqa_dynamic_prompt_interventions || failures=$((failures + 1))
@@ -1170,7 +1159,7 @@ case "$RUN_TARGET" in
     run_slake || failures=$((failures + 1))
     ;;
   *)
-    echo "[ERR] 未知目标: $RUN_TARGET，可选 train、slake、pathvqa、pathvqa_base、pathvqa_prompt_tuning_seed44、pathvqa_dynamic_prompt_seed44、pathvqa_dynamic_prompt_sparse_visual_seed44、pathvqa_dynamic_prompt_sparse_visual_lr3e5_seed44、pathvqa_dynamic_prompt_interventions、pathvqa_minimal_mmrl_prompt20_seed44、pathvqa_lora_visual_attn_r128、pathvqa_lora_visual_attn_r128_then_base、pathvqa_lora_visual_last8_attn_r128、pathvqa_last8_lora_minimal_mmrl_relation_suite、slake_final_seeds4、slake_ablation_no_relation_seeds2、slake_ablation_independent_init_seeds2、slake_ablation_static_query_seed45、slake_ablation_mean_pooling_seed45、slake_mean_final_completion_suite、slake_text_guided_balanced_fusion_slots8_seed45、slake_prompt_tuning_seed44、slake_concat_mlp_fusion_seed45、slake_overnight_prompt_and_concat_mlp、slake_ablation_suite、all。" >&2
+    echo "[ERR] 未知目标: $RUN_TARGET，可选 train、slake、pathvqa、pathvqa_base、pathvqa_prompt_tuning_seed44、pathvqa_dynamic_prompt_seed44、pathvqa_dynamic_prompt_sparse_visual_single_pass_seed44、pathvqa_dynamic_prompt_interventions、pathvqa_minimal_mmrl_prompt20_seed44、pathvqa_lora_visual_attn_r128、pathvqa_lora_visual_attn_r128_then_base、pathvqa_lora_visual_last8_attn_r128、pathvqa_last8_lora_minimal_mmrl_relation_suite、slake_final_seeds4、slake_ablation_no_relation_seeds2、slake_ablation_independent_init_seeds2、slake_ablation_static_query_seed45、slake_ablation_mean_pooling_seed45、slake_mean_final_completion_suite、slake_text_guided_balanced_fusion_slots8_seed45、slake_prompt_tuning_seed44、slake_concat_mlp_fusion_seed45、slake_overnight_prompt_and_concat_mlp、slake_ablation_suite、all。" >&2
     exit 2
     ;;
 esac

@@ -459,6 +459,26 @@ Correction (2026-08-26): the intended scope-matched LoRA baseline is Attention L
 
 Correction (2026-08-28): the immediate recommendation to stop all tuning was too strong. Relative to the original Dynamic Prompt at the same epoch, Sparse Visual epoch1 changes Overall/Yes-No/Free-form by **+2.0131/+0.7360/+3.2866**, before collapsing in epoch2 and recovering in epoch3. This is a positive early signal followed by unstable co-adaptation, not evidence that the visual branch is intrinsically useless. One strict diagnostic is therefore permitted: reduce only Sparse Visual LR from3e-4 to3e-5. This can support an update-timescale/CE-competition explanation if it removes the epoch2 collapse, but cannot by itself prove or disprove gradient conflict.
 
+### 2026-08-28 - pathvqa_dynamic_prompt_sparse_visual_layers5_11_17_slots8_ca128_init0050_relation0050_sparse_lr3e5_seed44_20260828
+
+- Commit/config: commit `89deb94`; exact same Dynamic Prompt20+CA256 and Sparse Visual layers5/11/17 architecture as the3e-4 control, with Soft Prompt LR0.3, Dynamic CA LR3e-4, initial residual scale0.05 and Relation0.05 unchanged. The only controlled change is Sparse Visual LR **3e-4 -> 3e-5**.
+- Dataset and split: PathVQA train19,654; validation6,259 for epoch selection; test6,719 with858 image clusters.
+- Seed / data seed:44 /42.
+- Validation Overall / Yes-No / Free-form by epoch: epoch1 **54.5295 / 88.2880 / 20.8679**; epoch2 **55.1366 / 88.1920 / 22.1761**; epoch3 **56.8461 / 88.8640 / 24.9202**. Epoch3 selected. Unlike the3e-4 control's54.8171 -> 51.5897 -> 54.9129 Overall trajectory, the lower-LR run improves monotonically and removes the epoch2 collapse.
+- Test Overall: **57.5086**; image-clustered95% bootstrap CI **[56.1883,58.9046]**.
+- Yes/No / Free-form: **89.6193 / 25.3500**.
+- Yes/No class audit:1,816 `yes` questions at93.7225% and1,546 `no` questions at84.7995%. Relative to the original Dynamic Prompt, `yes` is unchanged and `no` changes by-0.4528 points; the aggregate binary difference is not significant.
+- Per question type: how10.0719, other38.8889, what19.7738, when0.0000, where66.5893, why4.5455, yes/no89.6193; Free-form question-type macro23.3116.
+- Trainable parameters: Soft Prompt51,200 + Dynamic Prompt CA2,634,240 + Sparse Visual1,201,155 = **3,886,595**.
+- Training:3 epochs,1,845 optimizer steps, runtime7,122.0s, reported train loss11.3922.
+- Final diagnostics at step1,840: Soft Prompt norm915.972; Dynamic/Sparse grad norms0.99976/0.01116. Sparse scales remain close to initialization at0.04980/0.05225/0.05151 for layers5/11/17. Applied residual ratios are only0.000464/0.000710/0.001016, with mean0.000730; unlike the3e-4 control, layer11 no longer dominates. Sparse attention entropy remains0.416/0.574/0.565 and visual mass0.306/0.318/0.844. Dynamic attention remains hard with entropy3.98e-5 and visual mass0.44375. Scaled Relation is only1.41e-8 and cannot explain the gain.
+- Paired versus the original Dynamic Prompt20+CA256: **+0.9674 Overall, -0.2082 Yes/No, +2.1448 Free-form**. New-only/old-only correct counts are338/273 Overall (`McNemar p=0.00956`),128/135 Yes/No (`p=0.7115`), and210/138 Free-form (`p=0.000134`). Image-clustered paired95% CIs are **[+0.1985,+1.7252] Overall**, [-1.1138,+0.7405] Yes/No, and **[+0.8408,+3.4390] Free-form**. Predictions are textually identical on4,661/6,719 questions (69.37%).
+- Paired versus the exact3e-4 Sparse Visual control: **+1.4883 Overall, +0.7436 Yes/No, +2.2341 Free-form**. New-only/old-only counts are397/297 Overall and237/162 Free-form; clustered paired95% CIs are **[+0.6213,+2.3085] Overall** and **[+0.8736,+3.6055] Free-form**.
+- Conclusion: the pre-registered LR diagnostic succeeds. Sparse LR3e-4 over-adapts and destabilizes the jointly trained LLM-entry Prompt; reducing only its LR by10x removes the epoch2 collapse and produces statistically positive paired Overall and Free-form gains. This supports an update-timescale mismatch / unstable shared-CE co-adaptation explanation, not the stronger claim that LR alone proves gradient conflict. Because the final Sparse residual averages only0.073%, the result does not yet distinguish a causally useful inference-time visual correction from a training-time regularization/trajectory effect. A same-checkpoint Sparse-off intervention is required before claiming direct visual complementarity.
+- Output/log path: `/root/autodl-tmp/Qwen3-VL-modify-test/pathvqa/outputs/dynamic_prompt/pathvqa_dynamic_prompt_sparse_visual_layers5_11_17_slots8_ca128_init0050_relation0050_sparse_lr3e5_seed44_20260828`; selected checkpoint `checkpoints/epoch_3`; test log `eval_test_epoch_3.log`; diagnostics `dynamic_prompt_diagnostics.jsonl`.
+
+Storage correction (2026-08-28): by explicit user direction, the `checkpoints/` and `final/` weight directories for both completed dual-path Sparse Visual runs (LR3e-4 and LR3e-5) were deleted after their results were fully recorded. Evaluation logs, summaries, predictions, comparisons and diagnostics remain at the recorded output roots. The57.5086 result remains valid historical evidence, but its checkpoint can no longer support the planned Sparse-off intervention or direct reuse.
+
 ### PathVQA Yes/No Class-Balance Audit
 
 | Method | Yes count | Yes accuracy | No count | No accuracy | Class gap |

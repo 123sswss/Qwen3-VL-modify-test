@@ -20,6 +20,10 @@
 - `init0050` 重跑已完成：PathVQA seed44 为56.02/88.88/23.12，低于 Dynamic Prompt 的56.54/89.83/23.21。Sparse 分支已有效激活但由第11层主导，未形成主指标互补；不追加seed45，不再调该视觉协同架构。
 - 纠正（2026-08-28）：上述“停止视觉协同扩展”结论忽略了完整三轮轨迹。Sparse Visual 在epoch1相对原 Dynamic Prompt 同轮提升Overall +2.01、Yes/No +0.74、Free-form +3.29，随后epoch2坍缩并在epoch3恢复，更符合分支联合优化不稳定而非结构完全无效。允许追加一次严格的学习率诊断，除此之外仍不扩结构、不加seed。
 - 待运行 `pathvqa_dynamic_prompt_sparse_visual_layers5_11_17_slots8_ca128_init0050_relation0050_sparse_lr3e5_seed44`：唯一变量是Sparse Visual LR由3e-4降至3e-5；Prompt LR0.3、Dynamic CA LR3e-4、初始化0.05、Relation0.05、结构、seed和数据顺序保持不变。主要诊断是epoch2是否不再从epoch1下降3.23个百分点；若训练轨迹稳定且最终接近或超过56.54，支持“分支更新时间尺度不匹配”的改进方向，否则停止单纯LR调节。
+- 上述LR诊断已完成并达到成功线：Validation为54.53 ->55.14 ->56.85，Test为57.51/89.62/25.35；相对原 Dynamic Prompt 的配对聚类95% CI为[+0.20,+1.73] Overall、[+0.84,+3.44] Free-form。仅降低Sparse LR便消除epoch2坍缩并取得显著净增益，确认后续方向是轻量、慢更新的视觉协同，而不是增强视觉分支幅度。
+- 当前服务器无可用GPU，禁止启动任何训练或推理。旧双路径Sparse Visual的`checkpoints/`与`final/`已按用户要求删除，仅保留日志和评估证据，因此原57.51 checkpoint不再能运行Sparse-off干预。
+- 新实现改为标准单路径Rep Token注入：每个锚点只执行一次原生视觉Block，直接计算`Strip(Block([R;h]))`；彻底移除Residual Scale、Relation及其诊断和参数。Sparse参数1,201,152，总训练参数3,886,592，继续固定LR3e-5。新运行目标为`pathvqa_dynamic_prompt_sparse_visual_single_pass_seed44`，实验名显式包含`single_pass`；该实现尚未运行，不能继承57.51分数。
+- 算力恢复后的第一优先级是运行上述single-pass seed44，先判断去掉双路径后能否保留低LR收益与降低训练/推理耗时；取消继续扫描Sparse LR。只有single-pass成立后才追加额外seed和同checkpoint Sparse-off干预。
 
 ## 总体目标
 

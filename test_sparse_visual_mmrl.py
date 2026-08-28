@@ -43,11 +43,10 @@ class _FakeMerger(nn.Module):
         return self.linear(hidden_states.view(-1, self.linear.in_features))
 
 
-class _FakeDeepStackVisual(_FakeVisual):
+class _FakeMergedVisual(_FakeVisual):
     def __init__(self):
         super().__init__()
-        self.deepstack_visual_indexes = (1,)
-        self.deepstack_merger_list = nn.ModuleList([_FakeMerger()])
+        self.merger = _FakeMerger()
         self.spatial_merge_unit = 4
 
 
@@ -109,7 +108,7 @@ class SparseVisualMMRLTest(unittest.TestCase):
 
     def test_last_anchor_exports_sample_grouped_shared_s_memory(self):
         torch.manual_seed(13)
-        visual = _FakeDeepStackVisual()
+        visual = _FakeMergedVisual()
         adapter = SparseVisualMMRL(
             visual_dim=8,
             text_dim=12,
@@ -121,7 +120,7 @@ class SparseVisualMMRLTest(unittest.TestCase):
         )
         adapter.install(visual)
         self.assertNotIn(
-            "deepstack_merger_list",
+            "merger",
             dict(adapter.named_modules()),
         )
         hidden = torch.randn(7, 8)

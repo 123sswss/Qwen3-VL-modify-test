@@ -668,7 +668,7 @@ run_pathvqa_dynamic_prompt_sparse_visual_variant_seed44() {
   if [ "$train_soft_prompt" = "false" ]; then
     extra_args+=(--freeze-soft-prompt)
   fi
-  echo "[PATHVQA_DYNAMIC_PROMPT_SPARSE_VISUAL] experiment=$experiment_name seed=$run_seed epochs=$epochs anchors=5,11,17 rep_tokens=8 visual_ca=128x4 injection=single_pass_insert_strip relation=off sparse_lr=$sparse_visual_lr shared_s_memory=$shared_s_memory train_soft_prompt=$train_soft_prompt expected_trainable=$expected_trainable output=$output_dir"
+  echo "[PATHVQA_DYNAMIC_PROMPT_SPARSE_VISUAL] experiment=$experiment_name seed=$run_seed epochs=$epochs anchors=5,11,17 rep_tokens=8 visual_ca=128x4 injection=single_pass_insert_strip relation=off sparse_lr=$sparse_visual_lr shared_s_memory=$shared_s_memory shared_s_memory_merger=main_visual_merger train_soft_prompt=$train_soft_prompt expected_trainable=$expected_trainable output=$output_dir"
   (
     cd "$ROOT_DIR" || exit 1
     python -m unittest test_dynamic_prompt_tuning.py test_sparse_visual_mmrl.py || exit 1
@@ -743,13 +743,13 @@ run_pathvqa_dynamic_prompt_sparse_visual_single_pass_seed44() {
 
 run_pathvqa_dynamic_prompt_shared_s_memory_keep_p_seed44() {
   run_pathvqa_dynamic_prompt_sparse_visual_variant_seed44 \
-    "pathvqa_dynamic_prompt_shared_s_memory_keep_p_layers5_11_17_slots8_ca128_lr3e5" \
+    "pathvqa_dynamic_prompt_shared_s_memory_main_merger_keep_p_layers5_11_17_slots8_ca128_lr3e5" \
     true true 3886592
 }
 
 run_pathvqa_dynamic_prompt_shared_s_memory_no_trainable_p_seed44() {
   run_pathvqa_dynamic_prompt_sparse_visual_variant_seed44 \
-    "pathvqa_dynamic_prompt_shared_s_memory_no_trainable_p_layers5_11_17_slots8_ca128_lr3e5" \
+    "pathvqa_dynamic_prompt_shared_s_memory_main_merger_no_trainable_p_layers5_11_17_slots8_ca128_lr3e5" \
     true false 3835392
 }
 

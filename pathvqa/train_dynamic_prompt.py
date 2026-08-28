@@ -373,6 +373,7 @@ def main() -> int:
         f"sparse_heads={args.sparse_visual_heads if args.sparse_visual else 0} "
         f"sparse_injection={'single_pass_insert_strip' if args.sparse_visual else 'none'} "
         f"shared_s_memory={args.shared_s_memory} "
+        f"shared_s_memory_merger={'main_visual_merger' if args.shared_s_memory else 'none'} "
         f"train_soft_prompt={not args.freeze_soft_prompt} "
         "pretrained_prompt_checkpoint=False stage1=False"
     )
@@ -425,6 +426,9 @@ def main() -> int:
         "dynamic_learning_rate": args.dynamic_lr,
         "sparse_visual_learning_rate": args.sparse_visual_lr,
         "shared_s_memory": args.shared_s_memory,
+        "shared_s_memory_merger": (
+            "main_visual_merger" if args.shared_s_memory else None
+        ),
         "train_soft_prompt": not args.freeze_soft_prompt,
         "sparse_visual": (
             {
@@ -433,6 +437,9 @@ def main() -> int:
                 "attention_dim": args.sparse_visual_attention_dim,
                 "attention_heads": args.sparse_visual_heads,
                 "injection_mode": "single_pass_insert_strip",
+                "shared_s_memory_merger": (
+                    "main_visual_merger" if args.shared_s_memory else None
+                ),
             }
             if args.sparse_visual
             else None

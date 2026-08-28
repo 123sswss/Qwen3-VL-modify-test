@@ -201,26 +201,10 @@ class SparseVisualMMRL(nn.Module):
             raise ValueError(
                 f"Sparse Visual anchors {invalid} exceed vision depth {depth}"
             )
-        for index in self.anchor_layers:
-            blocks[index] = SparseVisualInjectionBlock(blocks[index], self, index)
         if self.export_shared_s_memory:
-            deepstack_indexes = tuple(
-                int(index)
-                for index in getattr(visual_model, "deepstack_visual_indexes", ())
-            )
-            last_anchor = self.anchor_layers[-1]
-            if last_anchor not in deepstack_indexes:
-                raise RuntimeError(
-                    "Shared S-Memory requires a pretrained DeepStack merger at "
-                    f"the last anchor; anchor={last_anchor} "
-                    f"deepstack={list(deepstack_indexes)}"
-                )
-            mergers = getattr(visual_model, "deepstack_merger_list", None)
-            if mergers is None:
-                raise RuntimeError(
-                    "Shared S-Memory requires visual_model.deepstack_merger_list"
-                )
-            merger = mergers[deepstack_indexes.index(last_anchor)]
+            merger = getattr(visual_model, "merger", None)
+            if merger is None:
+                raise RuntimeError("Shared S-Memory requires visual_model.merger")
             merge_unit = int(getattr(visual_model, "spatial_merge_unit", 0))
             if merge_unit < 1 or self.rep_token_count % merge_unit != 0:
                 raise ValueError(
@@ -233,6 +217,8 @@ class SparseVisualMMRL(nn.Module):
                 weakref.ref(merger),
             )
             self._shared_memory_merge_unit = merge_unit
+        for index in self.anchor_layers:
+            blocks[index] = SparseVisualInjectionBlock(blocks[index], self, index)
         self._installed = True
         print(
             "[SPARSE_VISUAL_LAYER_AUDIT] "
@@ -412,7 +398,8 @@ class SparseVisualMMRL(nn.Module):
                     f"last_anchor={self.anchor_layers[-1]} "
                     f"segments={rep_outputs.shape[0]} rep_tokens={self.rep_token_count} "
                     f"merged_slots={merged_slots} batch={batch_size} "
-                    "deepstack_merger_frozen=True pass=True"
+                    "main_visual_merger_frozen=True "
+                    "output_space=llm_input pass=True"
                 )
                 self._shared_memory_audited = True
 

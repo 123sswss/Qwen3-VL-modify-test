@@ -640,6 +640,9 @@ class DynamicPromptTuningModel(nn.Module):
                 else "mean_visual_plus_mean_question"
             ),
             "shared_s_memory": self.shared_s_memory,
+            "shared_s_memory_merger": (
+                "main_visual_merger" if self.shared_s_memory else None
+            ),
             "train_soft_prompt": self.train_soft_prompt,
             "sparse_visual": (
                 {
@@ -649,6 +652,9 @@ class DynamicPromptTuningModel(nn.Module):
                     "num_heads": self.sparse_visual.rep_attention.num_heads,
                     "injection_mode": "single_pass_insert_strip",
                     "shared_s_memory": self.shared_s_memory,
+                    "shared_s_memory_merger": (
+                        "main_visual_merger" if self.shared_s_memory else None
+                    ),
                 }
                 if self.sparse_visual is not None
                 else None

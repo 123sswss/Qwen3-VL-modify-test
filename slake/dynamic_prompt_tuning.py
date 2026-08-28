@@ -158,6 +158,7 @@ class DynamicPromptTuningModel(nn.Module):
         sparse_visual_attention_dim: int = 128,
         sparse_visual_heads: int = 4,
         sparse_visual_relation_weight: float = 0.05,
+        sparse_visual_initial_scale: float = 0.05,
     ) -> None:
         super().__init__()
         if prompt_length < 1:
@@ -202,6 +203,7 @@ class DynamicPromptTuningModel(nn.Module):
                 attention_dim=sparse_visual_attention_dim,
                 num_heads=sparse_visual_heads,
                 relation_weight=sparse_visual_relation_weight,
+                initial_residual_scale=sparse_visual_initial_scale,
             ).to(device=visual_device)
             self.sparse_visual.install(visual_model)
 
@@ -615,6 +617,9 @@ class DynamicPromptTuningModel(nn.Module):
                     "attention_dim": self.sparse_visual.rep_attention.attention_dim,
                     "num_heads": self.sparse_visual.rep_attention.num_heads,
                     "relation_weight": self.sparse_visual.relation_weight,
+                    "initial_residual_scale": (
+                        self.sparse_visual.initial_residual_scale
+                    ),
                 }
                 if self.sparse_visual is not None
                 else None

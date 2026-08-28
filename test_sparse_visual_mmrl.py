@@ -30,7 +30,7 @@ class _FakeVisual(nn.Module):
 
 
 class SparseVisualMMRLTest(unittest.TestCase):
-    def _adapter(self):
+    def _adapter(self, initial_residual_scale=0.0):
         return SparseVisualMMRL(
             visual_dim=8,
             text_dim=12,
@@ -40,6 +40,7 @@ class SparseVisualMMRLTest(unittest.TestCase):
             num_heads=2,
             relation_weight=0.05,
             relation_max_tokens=4,
+            initial_residual_scale=initial_residual_scale,
         )
 
     def test_zero_scale_is_exact_and_scale_receives_gradient(self):
@@ -91,9 +92,14 @@ class SparseVisualMMRLTest(unittest.TestCase):
             attention_dim=128,
             num_heads=4,
             relation_weight=0.05,
+            initial_residual_scale=0.05,
         )
         parameter_count = sum(parameter.numel() for parameter in adapter.parameters())
         self.assertEqual(parameter_count, 1_201_155)
+        torch.testing.assert_close(
+            torch.tanh(adapter.residual_scales),
+            torch.full((3,), 0.05),
+        )
 
 
 if __name__ == "__main__":

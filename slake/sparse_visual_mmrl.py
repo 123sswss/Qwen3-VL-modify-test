@@ -148,6 +148,7 @@ class SparseVisualMMRL(nn.Module):
         num_heads: int = 4,
         relation_weight: float = 0.05,
         relation_max_tokens: int = 64,
+        initial_residual_scale: float = 0.05,
     ) -> None:
         super().__init__()
         anchors = tuple(int(index) for index in anchor_layers)
@@ -159,6 +160,8 @@ class SparseVisualMMRL(nn.Module):
             raise ValueError("Sparse Visual MMRL dimensions must be positive")
         if relation_weight < 0.0:
             raise ValueError("relation_weight must be non-negative")
+        if not 0.0 <= initial_residual_scale < 1.0:
+            raise ValueError("initial_residual_scale must be in [0, 1)")
 
         self.visual_dim = int(visual_dim)
         self.text_dim = int(text_dim)
@@ -166,13 +169,17 @@ class SparseVisualMMRL(nn.Module):
         self.rep_token_count = int(rep_token_count)
         self.relation_weight = float(relation_weight)
         self.relation_max_tokens = int(relation_max_tokens)
+        self.initial_residual_scale = float(initial_residual_scale)
         self.shared_rep = nn.Parameter(
             torch.empty(self.rep_token_count, self.visual_dim)
         )
         self.layer_embeddings = nn.Parameter(
             torch.empty(len(self.anchor_layers), 1, self.visual_dim)
         )
-        self.residual_scales = nn.Parameter(torch.zeros(len(self.anchor_layers)))
+        initial_scale_parameter = math.atanh(self.initial_residual_scale)
+        self.residual_scales = nn.Parameter(
+            torch.full((len(self.anchor_layers),), initial_scale_parameter)
+        )
         nn.init.normal_(self.shared_rep, std=0.02)
         nn.init.normal_(self.layer_embeddings, std=0.02)
         self.rep_attention = SparseVisualRepAttention(
@@ -530,16 +537,18 @@ class SparseVisualMMRL(nn.Module):
                 }
             )
             if not self._forward_audited:
-                max_abs = float((mixed - original).detach().float().abs().max().item())
-                if max_abs != 0.0:
+                observed_scale = float(scale.detach().float().item())
+                scale_error = abs(observed_scale - self.initial_residual_scale)
+                if scale_error > 5e-4:
                     raise RuntimeError(
-                        "Sparse Visual residual scales must initialize to exact zero; "
-                        f"max_abs_delta={max_abs}"
+                        "Sparse Visual residual scale initialization mismatch: "
+                        f"expected={self.initial_residual_scale} observed={observed_scale}"
                     )
                 print(
-                    "[SPARSE_VISUAL_ZERO_INIT_AUDIT] "
+                    "[SPARSE_VISUAL_SCALE_INIT_AUDIT] "
                     f"layer={layer_index} units={len(lengths)} reps={self.rep_token_count} "
-                    "max_abs_delta=0.0 pass=True"
+                    f"expected_scale={self.initial_residual_scale} "
+                    f"observed_scale={observed_scale} pass=True"
                 )
                 if layer_index == self.anchor_layers[-1]:
                     self._forward_audited = True

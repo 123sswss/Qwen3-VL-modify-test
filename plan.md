@@ -16,6 +16,7 @@
 - 下一正式优先级是同seed配对运行 PathVQA Static Prompt seed45 与 Dynamic Prompt seed45；两者保持3 epochs和现有超参，先验证Free-form与Overall趋势能否复现。只有seed45仍支持动态收益，才进入SLAKE迁移或额外seed。epoch3 validation仍上升，但5 epochs重训排在seed45复现之后，避免根据seed44 test继续调参。
 - 不再追加 seed44 的结构小改。视觉Memory与文本Memory的单独错配可作为后续机制消融，但当前联合错配、零残差和均值残差已经足以证明样本条件性，不阻塞多seed验证。
 - 2026-08-28 受控追加一次 seed44 视觉协同小试：保留 Dynamic Prompt20+CA256 主干不变，只在原生视觉层5/11/17（0-based）加入独立插入/立即剥离的局部 Rep 分支。共享8个1024维 Rep，使用CA128/4头读取当前视觉段均值与问题文本均值，以零初始化 `tanh(gamma_l)` 融合，并对三层局部输出施加平均 Relation0.05。新增1,201,155参数、总计3,886,595参数；若不超过当前56.54则停止视觉协同扩展，若有任何正收益再考虑seed45。
+- 首轮零初始化运行在step460仍只有 `sparse_visual_delta_ratio_mean=7.69e-6`，Relation缩放项为 `2.72e-11`；分支有梯度但实际视觉改变量落在BF16近零区。重跑时仅把实际初始融合比例从0改为0.05（内部参数为`atanh(0.05)`），Sparse LR仍保持3e-4，其余配置不变；实验名加入`init0050`以避免与首轮混淆。
 
 ## 总体目标
 

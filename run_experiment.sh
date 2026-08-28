@@ -646,7 +646,7 @@ run_pathvqa_dynamic_prompt_seed44() {
 }
 
 run_pathvqa_dynamic_prompt_sparse_visual_seed44() {
-  local experiment_name="pathvqa_dynamic_prompt_sparse_visual_layers5_11_17_slots8_ca128_relation0050"
+  local experiment_name="pathvqa_dynamic_prompt_sparse_visual_layers5_11_17_slots8_ca128_init0050_relation0050"
   local run_seed=44
   local epochs="${PATHVQA_DYNAMIC_PROMPT_EPOCHS:-3}"
   if ! python -c 'import datasets, pyarrow' >/dev/null 2>&1; then
@@ -657,7 +657,7 @@ run_pathvqa_dynamic_prompt_sparse_visual_seed44() {
   local output_dir
   output_dir="$(available_output_dir "$PATHVQA_DYNAMIC_PROMPT_OUTPUT_ROOT" "${experiment_name}_seed${run_seed}_${RUN_DATE}")"
   mkdir -p "$output_dir"
-  echo "[PATHVQA_DYNAMIC_PROMPT_SPARSE_VISUAL] experiment=$experiment_name seed=$run_seed epochs=$epochs anchors=5,11,17 rep_tokens=8 visual_ca=128x4 relation=0.05 expected_trainable=3886595 output=$output_dir"
+  echo "[PATHVQA_DYNAMIC_PROMPT_SPARSE_VISUAL] experiment=$experiment_name seed=$run_seed epochs=$epochs anchors=5,11,17 rep_tokens=8 visual_ca=128x4 initial_scale=0.05 relation=0.05 expected_trainable=3886595 output=$output_dir"
   (
     cd "$ROOT_DIR" || exit 1
     python -m unittest test_dynamic_prompt_tuning.py test_sparse_visual_mmrl.py || exit 1
@@ -675,6 +675,7 @@ run_pathvqa_dynamic_prompt_sparse_visual_seed44() {
       --sparse-visual-rep-tokens 8 \
       --sparse-visual-attention-dim 128 \
       --sparse-visual-heads 4 \
+      --sparse-visual-initial-scale 0.05 \
       --sparse-visual-relation-weight 0.05 \
       --sparse-visual-lr "${PATHVQA_SPARSE_VISUAL_LR:-3e-4}" \
       --epochs "$epochs" \

@@ -88,6 +88,11 @@ class DynamicPromptTuningModelInterface:
                 if sparse_visual is not None
                 else 0.05
             ),
+            sparse_visual_initial_scale=(
+                float(sparse_visual.get("initial_residual_scale", 0.0))
+                if sparse_visual is not None
+                else 0.05
+            ),
         )
         self.model.load_dynamic_prompt(checkpoint)
         self.model.eval()

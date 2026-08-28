@@ -25,6 +25,16 @@
 - 新实现改为标准单路径Rep Token注入：每个锚点只执行一次原生视觉Block，直接计算`Strip(Block([R;h]))`；彻底移除Residual Scale、Relation及其诊断和参数。Sparse参数1,201,152，总训练参数3,886,592，继续固定LR3e-5。新运行目标为`pathvqa_dynamic_prompt_sparse_visual_single_pass_seed44`，实验名显式包含`single_pass`；该实现尚未运行，不能继承57.51分数。
 - 算力恢复后的第一优先级是运行上述single-pass seed44，先判断去掉双路径后能否保留低LR收益与降低训练/推理耗时；取消继续扫描Sparse LR。只有single-pass成立后才追加额外seed和同checkpoint Sparse-off干预。
 
+### 今晚单Seed共享S递进实验（已实现、待运行）
+
+- 三项全部固定PathVQA seed44/data_seed42、3 epochs、相同数据顺序、20个LLM前缀位置、Dynamic CA256/8头、Sparse Visual层5/11/17、8个1024维共享S、Visual CA128/4头、Sparse LR3e-5、Text CA LR3e-4和validation选模。每项只测试所选最佳epoch一次，不扫描学习率。
+- 实验1 `pathvqa_dynamic_prompt_sparse_visual_single_pass_seed44`：单路径新基线。保留独立可学习P（LR0.3）和现有Text CA，不加入S到文本侧的直接桥梁。目标是判断`Strip(Block([R;h]))`能否接近历史双路径57.51，并建立后两项的同实现对照；它不是旧57.51的严格复现。
+- 实验2 `pathvqa_dynamic_prompt_shared_s_memory_keep_p_seed44`：保留实验1的独立可学习P；捕获第17层最后视觉锚点的8个条件化Rep，经该层匹配的冻结`deepstack_merger_list[2]`按原生2x2规则映射成2个LLM空间向量，再按样本均值汇聚为额外S-Memory并加入Text CA Memory。P仍作为20个Query和残差基底。冻结Merger不增加训练参数，S通过视觉路径与文本路径共同接收CE梯度，但始终使用自己的3e-5学习率。
+- 实验3 `pathvqa_dynamic_prompt_shared_s_memory_no_trainable_p_seed44`：与实验2完全相同，但移除独立可学习P。保留同一初始化得到的20个冻结P0作为Text CA Query/长度骨架，最终前缀为`P0 + TextCA(P0, [visual, text, S-Memory])`；这样唯一核心变量是51,200参数的独立P是否可训练，不额外混入前缀长度或新Token扩展器差异。
+- 主要比较依次为实验2-实验1（共享S跨视觉/文本桥梁是否有用）和实验3-实验2（独立可学习P是否必要）。报告Overall、Yes/No、Free-form、问题类型、三轮Validation、聚类配对CI、逐样本fix/break、参数量、训练时间、TTFT、Sparse分支总梯度、共享S参数梯度及S-Memory接口梯度；后两者用于确认文本桥梁参与反传，不冒充严格的逐路径梯度分解。
+- 决策规则：实验2若不低于实验1且Free-form有正向净修复，则保留共享S桥梁；实验3若与实验2差距不超过0.5 Overall，可采用更纯粹的共享S叙事，否则保留独立P并将硬共享版本作为必要消融。三项完成前不追加seed、不修改S数量、不自建新MLP。
+- 三项实现完成后使用单一串行目标`pathvqa_dynamic_prompt_shared_s_suite_seed44`依次运行，任一项训练、validation选模或test失败即停止后续实验，避免在基线失效时继续消耗整夜算力。
+
 ## 总体目标
 
 - 主贡献：冻结 LLM，通过 128-slot MMRL 对视觉编码器进行图文条件化垂直专精。

@@ -80,18 +80,22 @@ class DynamicPromptTrainer(Trainer):
             )
         optimizer_groups = [
             {
-                "params": prompt_parameters,
-                "lr": self.prompt_lr,
-                "weight_decay": 0.0,
-                "group_name": "soft_prompt",
-            },
-            {
                 "params": dynamic_parameters,
                 "lr": self.dynamic_lr,
                 "weight_decay": 0.0,
                 "group_name": "dynamic_prompt",
             },
         ]
+        if prompt_parameters:
+            optimizer_groups.insert(
+                0,
+                {
+                    "params": prompt_parameters,
+                    "lr": self.prompt_lr,
+                    "weight_decay": 0.0,
+                    "group_name": "soft_prompt",
+                },
+            )
         if sparse_visual_parameters:
             optimizer_groups.append(
                 {
@@ -175,6 +179,19 @@ class DynamicPromptCallback(TrainerCallback):
             "dynamic_prompt_grad_norm": float(dynamic_grad_norm.item()),
             "sparse_visual_grad_norm": float(sparse_grad_norm.item()),
         }
+        if (
+            sparse_visual is not None
+            and sparse_visual.export_shared_s_memory
+        ):
+            shared_rep_grad = sparse_visual.shared_rep.grad
+            row["shared_s_parameter_grad_norm"] = (
+                float(shared_rep_grad.detach().float().norm().item())
+                if shared_rep_grad is not None
+                else 0.0
+            )
+            row["shared_s_memory_grad_norm"] = float(
+                sparse_visual.shared_s_memory_grad_norm().item()
+            )
         for key, value in model.debug_context.items():
             row[key] = float(value.detach().float().item())
         self.output_dir.mkdir(parents=True, exist_ok=True)
@@ -239,6 +256,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--sparse-visual-attention-dim", type=int, default=128)
     parser.add_argument("--sparse-visual-heads", type=int, default=4)
     parser.add_argument("--sparse-visual-lr", type=float, default=3e-5)
+    parser.add_argument("--shared-s-memory", action="store_true")
+    parser.add_argument("--freeze-soft-prompt", action="store_true")
     parser.add_argument("--batch-size", type=int, default=2)
     parser.add_argument("--gradient-accumulation", type=int, default=16)
     parser.add_argument("--dataloader-workers", type=int, default=2)
@@ -270,6 +289,8 @@ def parse_args() -> argparse.Namespace:
         parser.error("Learning rates must be positive")
     if args.dataloader_workers < 0:
         parser.error("--dataloader-workers must be non-negative")
+    if args.shared_s_memory and not args.sparse_visual:
+        parser.error("--shared-s-memory requires --sparse-visual")
     return args
 
 
@@ -304,6 +325,8 @@ def main() -> int:
         sparse_visual_rep_tokens=args.sparse_visual_rep_tokens,
         sparse_visual_attention_dim=args.sparse_visual_attention_dim,
         sparse_visual_heads=args.sparse_visual_heads,
+        shared_s_memory=args.shared_s_memory,
+        train_soft_prompt=not args.freeze_soft_prompt,
     )
     dataset = PathVQADataset(
         processor=processor,
@@ -349,6 +372,8 @@ def main() -> int:
         f"sparse_attention_dim={args.sparse_visual_attention_dim if args.sparse_visual else 0} "
         f"sparse_heads={args.sparse_visual_heads if args.sparse_visual else 0} "
         f"sparse_injection={'single_pass_insert_strip' if args.sparse_visual else 'none'} "
+        f"shared_s_memory={args.shared_s_memory} "
+        f"train_soft_prompt={not args.freeze_soft_prompt} "
         "pretrained_prompt_checkpoint=False stage1=False"
     )
 
@@ -399,6 +424,8 @@ def main() -> int:
         "prompt_learning_rate": args.prompt_lr,
         "dynamic_learning_rate": args.dynamic_lr,
         "sparse_visual_learning_rate": args.sparse_visual_lr,
+        "shared_s_memory": args.shared_s_memory,
+        "train_soft_prompt": not args.freeze_soft_prompt,
         "sparse_visual": (
             {
                 "anchor_layers": list(args.sparse_visual_anchor_layers),

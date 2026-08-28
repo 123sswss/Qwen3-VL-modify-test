@@ -6,7 +6,10 @@ from types import SimpleNamespace
 import torch
 import torch.nn as nn
 
-from slake.dynamic_prompt_tuning import DynamicPromptTuningModel
+from slake.dynamic_prompt_tuning import (
+    DynamicPromptCrossAttention,
+    DynamicPromptTuningModel,
+)
 
 
 class _FakeTokenizer:
@@ -176,6 +179,39 @@ class DynamicPromptTuningTest(unittest.TestCase):
         summary = model.inference_intervention_summary()
         self.assertEqual(summary["warmup_samples"], 1)
         self.assertEqual(summary["samples_changed"], 1)
+
+    def test_cross_attention_accepts_shared_s_memory_token(self):
+        attention = DynamicPromptCrossAttention(
+            hidden_size=8,
+            attention_dim=4,
+            num_heads=2,
+        )
+        delta = attention(torch.randn(2, 3, 8), torch.randn(2, 3, 8))
+        self.assertEqual(tuple(delta.shape), (2, 3, 8))
+        self.assertIn(
+            "dynamic_prompt_shared_s_attention_mean",
+            attention.debug_context,
+        )
+
+    def test_frozen_prompt_remains_query_scaffold_without_optimizer_group(self):
+        model = DynamicPromptTuningModel(
+            _FakeMultimodalModel(),
+            tokenizer=_FakeTokenizer(),
+            prompt_length=2,
+            init_seed=5,
+            attention_dim=4,
+            num_heads=2,
+            train_soft_prompt=False,
+        )
+        self.assertFalse(model.soft_prompt.requires_grad)
+        self.assertEqual(model.trainable_parameter_groups()["soft_prompt"], [])
+        output = model(**self._batch())
+        output.loss.backward()
+        self.assertIsNone(model.soft_prompt.grad)
+        self.assertGreater(
+            float(model.dynamic_prompt.output_projection.weight.grad.norm()),
+            0.0,
+        )
 
 
 if __name__ == "__main__":

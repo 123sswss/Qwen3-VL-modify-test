@@ -83,6 +83,8 @@ class DynamicPromptTuningModelInterface:
             sparse_visual_heads=(
                 int(sparse_visual["num_heads"]) if sparse_visual is not None else 4
             ),
+            shared_s_memory=bool(config.get("shared_s_memory", False)),
+            train_soft_prompt=bool(config.get("train_soft_prompt", True)),
         )
         self.model.load_dynamic_prompt(checkpoint)
         self.model.eval()
@@ -98,6 +100,8 @@ class DynamicPromptTuningModelInterface:
             f"attention_dim={self.model.dynamic_prompt.attention_dim} "
             f"heads={self.model.dynamic_prompt.num_heads} "
             f"sparse_visual={sparse_visual is not None} "
+            f"shared_s_memory={self.model.shared_s_memory} "
+            f"train_soft_prompt={self.model.train_soft_prompt} "
             f"intervention={intervention} memory_lag={memory_lag}"
         )
 

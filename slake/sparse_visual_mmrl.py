@@ -143,6 +143,7 @@ class SparseVisualMMRL(nn.Module):
         rep_token_count: int = 8,
         attention_dim: int = 128,
         num_heads: int = 4,
+        export_shared_s_memory: bool = False,
     ) -> None:
         super().__init__()
         anchors = tuple(int(index) for index in anchor_layers)
@@ -157,6 +158,7 @@ class SparseVisualMMRL(nn.Module):
         self.text_dim = int(text_dim)
         self.anchor_layers = anchors
         self.rep_token_count = int(rep_token_count)
+        self.export_shared_s_memory = bool(export_shared_s_memory)
         self.shared_rep = nn.Parameter(
             torch.empty(self.rep_token_count, self.visual_dim)
         )
@@ -178,9 +180,14 @@ class SparseVisualMMRL(nn.Module):
         self._images_per_sample: torch.Tensor | None = None
         self._image_lengths: torch.Tensor | None = None
         self._image_to_sample: torch.Tensor | None = None
+        self._shared_s_memory: torch.Tensor | None = None
+        self._last_shared_s_memory: torch.Tensor | None = None
         self._debug_rows: list[Dict[str, torch.Tensor]] = []
         self._installed = False
         self._forward_audited = False
+        self._shared_memory_audited = False
+        object.__setattr__(self, "_shared_memory_merger_ref", None)
+        self._shared_memory_merge_unit = 0
 
     def install(self, visual_model: nn.Module) -> None:
         if self._installed:
@@ -196,12 +203,43 @@ class SparseVisualMMRL(nn.Module):
             )
         for index in self.anchor_layers:
             blocks[index] = SparseVisualInjectionBlock(blocks[index], self, index)
+        if self.export_shared_s_memory:
+            deepstack_indexes = tuple(
+                int(index)
+                for index in getattr(visual_model, "deepstack_visual_indexes", ())
+            )
+            last_anchor = self.anchor_layers[-1]
+            if last_anchor not in deepstack_indexes:
+                raise RuntimeError(
+                    "Shared S-Memory requires a pretrained DeepStack merger at "
+                    f"the last anchor; anchor={last_anchor} "
+                    f"deepstack={list(deepstack_indexes)}"
+                )
+            mergers = getattr(visual_model, "deepstack_merger_list", None)
+            if mergers is None:
+                raise RuntimeError(
+                    "Shared S-Memory requires visual_model.deepstack_merger_list"
+                )
+            merger = mergers[deepstack_indexes.index(last_anchor)]
+            merge_unit = int(getattr(visual_model, "spatial_merge_unit", 0))
+            if merge_unit < 1 or self.rep_token_count % merge_unit != 0:
+                raise ValueError(
+                    "Rep tokens must be divisible by the visual merge unit: "
+                    f"rep_tokens={self.rep_token_count} merge_unit={merge_unit}"
+                )
+            object.__setattr__(
+                self,
+                "_shared_memory_merger_ref",
+                weakref.ref(merger),
+            )
+            self._shared_memory_merge_unit = merge_unit
         self._installed = True
         print(
             "[SPARSE_VISUAL_LAYER_AUDIT] "
             f"vision_depth={depth} anchors_0based={list(self.anchor_layers)} "
             f"anchors_natural={[index + 1 for index in self.anchor_layers]} "
-            "local_insert_strip=True block_execution=single_pass"
+            "local_insert_strip=True block_execution=single_pass "
+            f"shared_s_memory={self.export_shared_s_memory}"
         )
 
     @contextmanager
@@ -217,6 +255,8 @@ class SparseVisualMMRL(nn.Module):
         self._images_per_sample = images_per_sample.to(dtype=torch.long)
         self._image_lengths = None
         self._image_to_sample = None
+        self._shared_s_memory = None
+        self._last_shared_s_memory = None
         self._debug_rows = []
         self.debug_context = {}
         try:
@@ -227,6 +267,7 @@ class SparseVisualMMRL(nn.Module):
             self._images_per_sample = None
             self._image_lengths = None
             self._image_to_sample = None
+            self._shared_s_memory = None
 
     def prepare_visual(self, grid_thw: torch.Tensor) -> None:
         if not self.active:
@@ -265,7 +306,7 @@ class SparseVisualMMRL(nn.Module):
         self,
         hidden_states: torch.Tensor,
         cu_seqlens: torch.Tensor,
-    ) -> tuple[torch.Tensor, torch.Tensor, list[int]]:
+    ) -> tuple[torch.Tensor, torch.Tensor, list[int], torch.Tensor]:
         if self._text_memory is None or self._image_lengths is None:
             raise RuntimeError(
                 "Sparse Visual context was not prepared before a block ran"
@@ -319,7 +360,61 @@ class SparseVisualMMRL(nn.Module):
         text_memory = text_memory_all.index_select(
             0, sample_ids.to(text_memory_all.device)
         )
-        return visual_memory, text_memory, lengths
+        return visual_memory, text_memory, lengths, sample_ids
+
+    def shared_s_memory(self) -> torch.Tensor:
+        if not self.export_shared_s_memory:
+            raise RuntimeError("Shared S-Memory export is disabled")
+        if self._shared_s_memory is None:
+            raise RuntimeError(
+                "Shared S-Memory was requested before the last visual anchor ran"
+            )
+        return self._shared_s_memory
+
+    def shared_s_memory_grad_norm(self) -> torch.Tensor:
+        memory = self._last_shared_s_memory
+        if memory is None or memory.grad is None:
+            return self.shared_rep.new_tensor(0.0)
+        return memory.grad.detach().float().norm()
+
+    def _capture_shared_s_memory(
+        self,
+        rep_outputs: torch.Tensor,
+        sample_ids: torch.Tensor,
+    ) -> None:
+        merger_ref = self._shared_memory_merger_ref
+        merger = merger_ref() if merger_ref is not None else None
+        if merger is None or self._images_per_sample is None:
+            raise RuntimeError("Shared S-Memory merger context is unavailable")
+        merged = merger(rep_outputs.reshape(-1, self.visual_dim))
+        merged_slots = self.rep_token_count // self._shared_memory_merge_unit
+        merged = merged.view(rep_outputs.shape[0], merged_slots, self.text_dim)
+        segment_memory = merged.mean(dim=1)
+        sample_ids = sample_ids.to(device=segment_memory.device, dtype=torch.long)
+        batch_size = int(self._images_per_sample.numel())
+        sample_sums = segment_memory.new_zeros(batch_size, self.text_dim).index_add(
+            0, sample_ids, segment_memory
+        )
+        counts = torch.bincount(sample_ids, minlength=batch_size).to(
+            device=segment_memory.device,
+            dtype=segment_memory.dtype,
+        )
+        if bool((counts == 0).any()):
+            raise RuntimeError("Shared S-Memory is missing one or more samples")
+        self._shared_s_memory = sample_sums / counts.unsqueeze(-1)
+        if self._shared_s_memory.requires_grad:
+            self._shared_s_memory.retain_grad()
+        self._last_shared_s_memory = self._shared_s_memory
+        with torch.no_grad():
+            if not self._shared_memory_audited:
+                print(
+                    "[SPARSE_VISUAL_SHARED_S_MEMORY_AUDIT] "
+                    f"last_anchor={self.anchor_layers[-1]} "
+                    f"segments={rep_outputs.shape[0]} rep_tokens={self.rep_token_count} "
+                    f"merged_slots={merged_slots} batch={batch_size} "
+                    "deepstack_merger_frozen=True pass=True"
+                )
+                self._shared_memory_audited = True
 
     @staticmethod
     def _prefix_tensor_by_segment(
@@ -422,7 +517,7 @@ class SparseVisualMMRL(nn.Module):
             raise RuntimeError(
                 "Sparse Visual block did not receive hidden_states/cu_seqlens"
             )
-        visual_memory, text_memory, lengths = self._segment_memories(
+        visual_memory, text_memory, lengths, sample_ids = self._segment_memories(
             hidden_states, cu_seqlens
         )
         layer_position = self.anchor_layers.index(layer_index)
@@ -438,14 +533,21 @@ class SparseVisualMMRL(nn.Module):
         adapted_with_rep = block(*expanded_args, **expanded_kwargs)
         if not torch.is_tensor(adapted_with_rep):
             raise TypeError("Sparse Visual expects vision blocks to return a tensor")
+        adapted_segments = torch.split(
+            adapted_with_rep,
+            [length + self.rep_token_count for length in lengths],
+            dim=0,
+        )
+        if self.export_shared_s_memory and layer_index == self.anchor_layers[-1]:
+            rep_outputs = torch.stack(
+                [segment[: self.rep_token_count] for segment in adapted_segments],
+                dim=0,
+            )
+            self._capture_shared_s_memory(rep_outputs, sample_ids)
         adapted = torch.cat(
             [
                 segment[self.rep_token_count :]
-                for segment in torch.split(
-                    adapted_with_rep,
-                    [length + self.rep_token_count for length in lengths],
-                    dim=0,
-                )
+                for segment in adapted_segments
             ],
             dim=0,
         )
@@ -498,4 +600,13 @@ class SparseVisualMMRL(nn.Module):
         debug["sparse_visual_output_to_input_norm_ratio_mean"] = torch.stack(
             [row["output_to_input_norm_ratio"] for row in self._debug_rows]
         ).mean()
+        if self._shared_s_memory is not None:
+            debug["shared_s_memory_norm_mean"] = (
+                self._shared_s_memory.detach().float().norm(dim=-1).mean()
+            )
+            debug["shared_s_memory_slots_per_segment"] = (
+                self._shared_s_memory.new_tensor(
+                    float(self.rep_token_count // self._shared_memory_merge_unit)
+                )
+            )
         self.debug_context = debug

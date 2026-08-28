@@ -137,6 +137,7 @@ class DynamicPromptTuningTest(unittest.TestCase):
         model = self._model().eval()
         with torch.no_grad():
             model.dynamic_prompt.output_projection.weight.fill_(0.25)
+            model.dynamic_prompt._forward_audited = True
             model.configure_inference_intervention("zero")
             model(**self._batch())
         prefix = model.base_model.model.language_model.last_embeddings[:, :2]
@@ -150,6 +151,7 @@ class DynamicPromptTuningTest(unittest.TestCase):
         model = self._model().eval()
         with torch.no_grad():
             model.dynamic_prompt.output_projection.weight.fill_(0.25)
+            model.dynamic_prompt._forward_audited = True
             model.configure_inference_intervention("mean-residual", memory_lag=1)
             model(**self._batch(text_token=2))
             first = model.base_model.model.language_model.last_embeddings[:, :2].clone()
@@ -164,6 +166,7 @@ class DynamicPromptTuningTest(unittest.TestCase):
         model = self._model().eval()
         with torch.no_grad():
             model.dynamic_prompt.output_projection.weight.fill_(0.25)
+            model.dynamic_prompt._forward_audited = True
             model.configure_inference_intervention("lagged-memory", memory_lag=1)
             model(**self._batch(text_token=2))
             first = model.base_model.model.language_model.last_embeddings[:, :2].clone()

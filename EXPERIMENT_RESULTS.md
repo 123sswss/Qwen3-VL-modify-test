@@ -439,6 +439,26 @@ Correction (2026-08-26): the intended scope-matched LoRA baseline is Attention L
 - Conclusion: current-sample visual/question Memory is causally necessary. Although attention weights harden into an almost fixed modality allocation, the selected Value content remains strongly sample-dependent; Dynamic Prompt conditioning operates through values and residual direction, not through visibly dynamic attention weights.
 - Output/log path: `/root/autodl-tmp/Qwen3-VL-modify-test/pathvqa/outputs/dynamic_prompt/pathvqa_dynamic_prompt_mean_ca256_len20_seed44_20260827/eval_interventions/lagged-memory`; log `eval_intervention_lagged-memory.log`.
 
+### 2026-08-28 - pathvqa_dynamic_prompt_sparse_visual_layers5_11_17_slots8_ca128_init0050_relation0050_seed44_20260828
+
+- Commit/config: commit `5cb805f`; the Dynamic Prompt20+CA256 method is retained unchanged and jointly trained with a 1,201,155-parameter Sparse Visual MMRL branch. Eight shared 1,024-dimensional Rep tokens use CA128/4 heads over image-level Mean-Pooled visual states and question-only text states, then enter native visual layers5/11/17 (0-based) through independent insert/strip paths. The actual `tanh(gamma_l)` residual scale starts at0.05 and local Relation0.05 is averaged over the three anchors.
+- Dataset and split: PathVQA train19,654; validation6,259 for epoch selection; test6,719 with858 image clusters.
+- Seed / data seed:44 /42.
+- Controlled change: add the Sparse Visual branch to the exact seed44 Dynamic Prompt protocol. Relative to the aborted zero-scale attempt, only the initial visual residual scale changes from0 to0.05; Prompt LR0.3, Dynamic CA LR3e-4, Sparse Visual LR3e-4, architecture, Relation and all data/evaluation settings remain fixed.
+- Validation Overall / Yes-No / Free-form by epoch: epoch1 **54.8171 / 88.5760 / 21.1551**; epoch2 **51.5897 / 87.4240 / 15.8583**; epoch3 **54.9129 / 88.2560 / 21.6656**. Epoch3 selected by Overall.
+- Test Overall: **56.0202**; image-clustered95% bootstrap CI **[54.7117,57.3767]**.
+- Yes/No / Free-form: **88.8757 / 23.1159**.
+- Per question type: how13.6691, other55.5556, what17.0741, when16.6667, where64.2691, why4.5455, yes/no88.8757; Free-form question-type macro28.6300.
+- Trainable parameters: Soft Prompt51,200 + Dynamic Prompt CA2,634,240 + Sparse Visual1,201,155 = **3,886,595**.
+- Training:3 epochs,1,845 optimizer steps, runtime7,122.0s, reported train loss11.2830.
+- Late diagnostics at step1,840: Sparse Visual grad norm0.1529 versus Dynamic Prompt0.9881; scales are0.04492/0.07520/0.05029 at layers5/11/17. Applied residual ratios are0.000660/0.034100/0.000321, so the branch is active but overwhelmingly dominated by layer11. Attention entropy is nearly zero at all anchors and visual masses settle near0.25/0.28125/0.50. Mean Sparse residual ratio is0.011694. Scaled Relation is only1.13e-7 and therefore does not materially control optimization.
+- Versus Dynamic Prompt20+CA256: **-0.5210 Overall, -0.9518 Yes/No, -0.0893 Free-form**, while Free-form question-type macro changes by+6.2285. The macro gain is concentrated in small how/other/when categories and does not establish a primary-metric improvement.
+- Evaluation timing: TTFT mean0.05545s; weighted TPOT0.019804s/token;50.496 decode tokens/s; request mean0.10601s.
+- Conclusion: the0.05 initialization successfully fixes branch death, but the active Sparse Visual addition does not improve the main method. It perturbs binary calibration, leaves aggregate Free-form essentially unchanged and lowers both validation and test Overall. Do not run seed45 or tune this sparse architecture further under the current one-week budget; retain it as evidence that stronger internal visual adaptation is not complementary to the Dynamic Prompt interface under shared CE.
+- Output/log path: `/root/autodl-tmp/Qwen3-VL-modify-test/pathvqa/outputs/dynamic_prompt/pathvqa_dynamic_prompt_sparse_visual_layers5_11_17_slots8_ca128_init0050_relation0050_seed44_20260828`; selected checkpoint `checkpoints/epoch_3`.
+
+Correction (2026-08-28): the immediate recommendation to stop all tuning was too strong. Relative to the original Dynamic Prompt at the same epoch, Sparse Visual epoch1 changes Overall/Yes-No/Free-form by **+2.0131/+0.7360/+3.2866**, before collapsing in epoch2 and recovering in epoch3. This is a positive early signal followed by unstable co-adaptation, not evidence that the visual branch is intrinsically useless. One strict diagnostic is therefore permitted: reduce only Sparse Visual LR from3e-4 to3e-5. This can support an update-timescale/CE-competition explanation if it removes the epoch2 collapse, but cannot by itself prove or disprove gradient conflict.
+
 ### PathVQA Yes/No Class-Balance Audit
 
 | Method | Yes count | Yes accuracy | No count | No accuracy | Class gap |

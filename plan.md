@@ -17,6 +17,9 @@
 - 不再追加 seed44 的结构小改。视觉Memory与文本Memory的单独错配可作为后续机制消融，但当前联合错配、零残差和均值残差已经足以证明样本条件性，不阻塞多seed验证。
 - 2026-08-28 受控追加一次 seed44 视觉协同小试：保留 Dynamic Prompt20+CA256 主干不变，只在原生视觉层5/11/17（0-based）加入独立插入/立即剥离的局部 Rep 分支。共享8个1024维 Rep，使用CA128/4头读取当前视觉段均值与问题文本均值，以零初始化 `tanh(gamma_l)` 融合，并对三层局部输出施加平均 Relation0.05。新增1,201,155参数、总计3,886,595参数；若不超过当前56.54则停止视觉协同扩展，若有任何正收益再考虑seed45。
 - 首轮零初始化运行在step460仍只有 `sparse_visual_delta_ratio_mean=7.69e-6`，Relation缩放项为 `2.72e-11`；分支有梯度但实际视觉改变量落在BF16近零区。重跑时仅把实际初始融合比例从0改为0.05（内部参数为`atanh(0.05)`），Sparse LR仍保持3e-4，其余配置不变；实验名加入`init0050`以避免与首轮混淆。
+- `init0050` 重跑已完成：PathVQA seed44 为56.02/88.88/23.12，低于 Dynamic Prompt 的56.54/89.83/23.21。Sparse 分支已有效激活但由第11层主导，未形成主指标互补；不追加seed45，不再调该视觉协同架构。
+- 纠正（2026-08-28）：上述“停止视觉协同扩展”结论忽略了完整三轮轨迹。Sparse Visual 在epoch1相对原 Dynamic Prompt 同轮提升Overall +2.01、Yes/No +0.74、Free-form +3.29，随后epoch2坍缩并在epoch3恢复，更符合分支联合优化不稳定而非结构完全无效。允许追加一次严格的学习率诊断，除此之外仍不扩结构、不加seed。
+- 待运行 `pathvqa_dynamic_prompt_sparse_visual_layers5_11_17_slots8_ca128_init0050_relation0050_sparse_lr3e5_seed44`：唯一变量是Sparse Visual LR由3e-4降至3e-5；Prompt LR0.3、Dynamic CA LR3e-4、初始化0.05、Relation0.05、结构、seed和数据顺序保持不变。主要诊断是epoch2是否不再从epoch1下降3.23个百分点；若训练轨迹稳定且最终接近或超过56.54，支持“分支更新时间尺度不匹配”的改进方向，否则停止单纯LR调节。
 
 ## 总体目标
 

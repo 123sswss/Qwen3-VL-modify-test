@@ -12,6 +12,7 @@ from typing import Any, Deque, Dict, Iterator, Sequence
 import torch
 from torch import nn
 
+from slake.sparse_visual_mmrl import SparseVisualMMRL
 
 DYNAMIC_PROMPT_CONFIG_NAME = "dynamic_prompt_config.json"
 DYNAMIC_PROMPT_WEIGHTS_NAME = "dynamic_prompt.pt"
@@ -32,7 +33,9 @@ def _masked_mean(
     counts = mask.sum(dim=1)
     if bool((counts == 0).any()):
         indices = (counts == 0).nonzero(as_tuple=True)[0].tolist()
-        raise RuntimeError(f"Dynamic Prompt {name} memory is empty for samples={indices}")
+        raise RuntimeError(
+            f"Dynamic Prompt {name} memory is empty for samples={indices}"
+        )
     weights = mask.to(dtype=values.dtype).unsqueeze(-1)
     return (values * weights).sum(dim=1) / counts.to(values.dtype).unsqueeze(-1)
 
@@ -77,9 +80,7 @@ class DynamicPromptCrossAttention(nn.Module):
 
     def _split_heads(self, tensor: torch.Tensor) -> torch.Tensor:
         batch, length, _ = tensor.shape
-        return tensor.view(
-            batch, length, self.num_heads, self.head_dim
-        ).transpose(1, 2)
+        return tensor.view(batch, length, self.num_heads, self.head_dim).transpose(1, 2)
 
     def forward(
         self,
@@ -98,22 +99,16 @@ class DynamicPromptCrossAttention(nn.Module):
         parameter_dtype = self.query_projection.weight.dtype
         prompt_f = prompt.to(dtype=parameter_dtype)
         memory_f = memory.to(dtype=parameter_dtype)
-        query = self._split_heads(
-            self.query_projection(self.query_norm(prompt_f))
-        )
-        key = self._split_heads(
-            self.key_projection(self.memory_norm(memory_f))
-        )
-        value = self._split_heads(
-            self.value_projection(self.memory_norm(memory_f))
-        )
-        scores = torch.matmul(query, key.transpose(-1, -2)) / math.sqrt(
-            self.head_dim
-        )
+        query = self._split_heads(self.query_projection(self.query_norm(prompt_f)))
+        key = self._split_heads(self.key_projection(self.memory_norm(memory_f)))
+        value = self._split_heads(self.value_projection(self.memory_norm(memory_f)))
+        scores = torch.matmul(query, key.transpose(-1, -2)) / math.sqrt(self.head_dim)
         attention = torch.softmax(scores.float(), dim=-1).to(dtype=value.dtype)
         context = torch.matmul(attention, value)
-        context = context.transpose(1, 2).contiguous().view(
-            prompt.shape[0], prompt.shape[1], self.attention_dim
+        context = (
+            context.transpose(1, 2)
+            .contiguous()
+            .view(prompt.shape[0], prompt.shape[1], self.attention_dim)
         )
         delta = self.output_projection(context).to(dtype=prompt.dtype)
 
@@ -158,6 +153,11 @@ class DynamicPromptTuningModel(nn.Module):
         init_seed: int = 44,
         attention_dim: int = 256,
         num_heads: int = 8,
+        sparse_visual_anchor_layers: Sequence[int] | None = None,
+        sparse_visual_rep_tokens: int = 8,
+        sparse_visual_attention_dim: int = 128,
+        sparse_visual_heads: int = 4,
+        sparse_visual_relation_weight: float = 0.05,
     ) -> None:
         super().__init__()
         if prompt_length < 1:
@@ -183,6 +183,27 @@ class DynamicPromptTuningModel(nn.Module):
             attention_dim=attention_dim,
             num_heads=num_heads,
         ).to(device=embeddings.device)
+        self.sparse_visual = None
+        if sparse_visual_anchor_layers:
+            model_core = getattr(self.base_model, "model", None)
+            visual_model = getattr(model_core, "visual", None)
+            visual_config = getattr(visual_model, "config", None)
+            visual_dim = getattr(visual_config, "hidden_size", None)
+            if visual_model is None or visual_dim is None:
+                raise RuntimeError(
+                    "Sparse Visual MMRL requires base_model.model.visual.config.hidden_size"
+                )
+            visual_device = next(visual_model.parameters()).device
+            self.sparse_visual = SparseVisualMMRL(
+                visual_dim=int(visual_dim),
+                text_dim=int(embeddings.shape[-1]),
+                anchor_layers=sparse_visual_anchor_layers,
+                rep_token_count=sparse_visual_rep_tokens,
+                attention_dim=sparse_visual_attention_dim,
+                num_heads=sparse_visual_heads,
+                relation_weight=sparse_visual_relation_weight,
+            ).to(device=visual_device)
+            self.sparse_visual.install(visual_model)
 
         self.visual_template_token_ids = self._resolve_visual_token_ids(tokenizer)
         self.config = self.base_model.config
@@ -213,10 +234,13 @@ class DynamicPromptTuningModel(nn.Module):
         return self.base_model.get_input_embeddings()
 
     def trainable_parameter_groups(self) -> Dict[str, list[nn.Parameter]]:
-        return {
+        groups = {
             "soft_prompt": [self.soft_prompt],
             "dynamic_prompt": list(self.dynamic_prompt.parameters()),
         }
+        if self.sparse_visual is not None:
+            groups["sparse_visual"] = list(self.sparse_visual.parameters())
+        return groups
 
     def configure_inference_intervention(
         self,
@@ -255,12 +279,14 @@ class DynamicPromptTuningModel(nn.Module):
                     self._intervention_memory_lag,
                 )
                 if self._intervention_mode == "lagged-memory"
-                else min(
-                    self._intervention_samples_seen,
-                    self._intervention_memory_lag,
+                else (
+                    min(
+                        self._intervention_samples_seen,
+                        self._intervention_memory_lag,
+                    )
+                    if self._intervention_mode == "mean-residual"
+                    else 0
                 )
-                if self._intervention_mode == "mean-residual"
-                else 0
             ),
         }
 
@@ -379,11 +405,15 @@ class DynamicPromptTuningModel(nn.Module):
         def replace_prompt(_module: nn.Module, _inputs: Any, output: torch.Tensor):
             if output.ndim != 3 or output.shape[1] < self.prompt_length:
                 return output
-            prompt = self.soft_prompt.to(
-                device=output.device,
-                dtype=output.dtype,
-            ).unsqueeze(0).expand(output.shape[0], -1, -1)
-            return torch.cat((prompt, output[:, self.prompt_length:]), dim=1)
+            prompt = (
+                self.soft_prompt.to(
+                    device=output.device,
+                    dtype=output.dtype,
+                )
+                .unsqueeze(0)
+                .expand(output.shape[0], -1, -1)
+            )
+            return torch.cat((prompt, output[:, self.prompt_length :]), dim=1)
 
         handle = embeddings.register_forward_hook(replace_prompt)
         try:
@@ -404,7 +434,9 @@ class DynamicPromptTuningModel(nn.Module):
                 "Dynamic Prompt requires base_model.model.language_model"
             )
 
-        def replace_language_inputs(_module: nn.Module, args: Any, kwargs: Dict[str, Any]):
+        def replace_language_inputs(
+            _module: nn.Module, args: Any, kwargs: Dict[str, Any]
+        ):
             inputs_embeds = kwargs.get("inputs_embeds")
             if inputs_embeds is None or inputs_embeds.ndim != 3:
                 return args, kwargs
@@ -419,10 +451,13 @@ class DynamicPromptTuningModel(nn.Module):
                 device=inputs_embeds.device,
                 dtype=torch.bool,
             )
-            text_mask = expanded_context.to(
-                device=inputs_embeds.device,
-                dtype=torch.bool,
-            ) & ~visual_mask
+            text_mask = (
+                expanded_context.to(
+                    device=inputs_embeds.device,
+                    dtype=torch.bool,
+                )
+                & ~visual_mask
+            )
             ids = expanded_ids.to(inputs_embeds.device)
             for token_id in self.visual_template_token_ids:
                 text_mask = text_mask & ids.ne(token_id)
@@ -446,7 +481,9 @@ class DynamicPromptTuningModel(nn.Module):
             )
             self.debug_context = {
                 **self.dynamic_prompt.debug_context,
-                "dynamic_prompt_visual_tokens_mean": visual_mask.sum(dim=1).float().mean(),
+                "dynamic_prompt_visual_tokens_mean": visual_mask.sum(dim=1)
+                .float()
+                .mean(),
                 "dynamic_prompt_text_tokens_mean": text_mask.sum(dim=1).float().mean(),
             }
             if not self._memory_audited:
@@ -476,19 +513,84 @@ class DynamicPromptTuningModel(nn.Module):
             handle.remove()
 
     @contextmanager
+    def _inject_sparse_visual(
+        self,
+        expanded_ids: torch.Tensor,
+        expanded_context: torch.Tensor,
+    ) -> Iterator[None]:
+        if self.sparse_visual is None:
+            yield
+            return
+        ids = expanded_ids.to(self.soft_prompt.device)
+        text_mask = expanded_context.to(device=ids.device, dtype=torch.bool)
+        for token_id in self.visual_template_token_ids:
+            text_mask = text_mask & ids.ne(token_id)
+        text_mask[:, : self.prompt_length] = False
+        token_embeddings = self.get_input_embeddings()(ids)
+        text_memory = _masked_mean(token_embeddings, text_mask, "sparse visual text")
+        vision_end_id = self.visual_template_token_ids[2]
+        images_per_sample = ids.eq(vision_end_id).sum(dim=1)
+        if bool((images_per_sample == 0).any()):
+            indices = (images_per_sample == 0).nonzero(as_tuple=True)[0].tolist()
+            raise RuntimeError(
+                f"Sparse Visual MMRL requires an image for every sample: {indices}"
+            )
+
+        visual_model = self.base_model.model.visual
+
+        def prepare_visual(_module: nn.Module, args: Any, kwargs: Dict[str, Any]):
+            grid_thw = kwargs.get("grid_thw")
+            if grid_thw is None and len(args) > 1:
+                grid_thw = args[1]
+            self.sparse_visual.prepare_visual(grid_thw)
+            return args, kwargs
+
+        with self.sparse_visual.activate(text_memory, images_per_sample):
+            handle = visual_model.register_forward_pre_hook(
+                prepare_visual,
+                with_kwargs=True,
+            )
+            try:
+                yield
+            finally:
+                handle.remove()
+
+    @contextmanager
     def _injection_context(
         self,
         expanded_ids: torch.Tensor,
         expanded_context: torch.Tensor,
     ) -> Iterator[None]:
         with self._inject_prompt_embeddings():
-            with self._inject_dynamic_prompt(expanded_ids, expanded_context):
-                yield
+            with self._inject_sparse_visual(expanded_ids, expanded_context):
+                with self._inject_dynamic_prompt(expanded_ids, expanded_context):
+                    yield
+
+    def _finalize_forward_output(self, output: Any) -> Any:
+        if self.sparse_visual is None:
+            return output
+        relation = self.sparse_visual.relation_loss
+        self.debug_context = {
+            **self.debug_context,
+            **self.sparse_visual.debug_context,
+            "sparse_visual_relation_loss_scaled": (
+                relation.detach().float() * self.sparse_visual.relation_weight
+            ),
+        }
+        loss = getattr(output, "loss", None)
+        if self.training and loss is not None:
+            output.loss = (
+                loss
+                + relation.to(device=loss.device, dtype=loss.dtype)
+                * self.sparse_visual.relation_weight
+            )
+        return output
 
     def forward(self, **kwargs: Any) -> Any:
         expanded, expanded_ids, expanded_context = self._expand_inputs(kwargs)
         with self._injection_context(expanded_ids, expanded_context):
-            return self.base_model(**expanded)
+            output = self.base_model(**expanded)
+        return self._finalize_forward_output(output)
 
     def generate(self, **kwargs: Any) -> Any:
         expanded, expanded_ids, expanded_context = self._expand_inputs(kwargs)
@@ -506,6 +608,17 @@ class DynamicPromptTuningModel(nn.Module):
             "num_heads": self.dynamic_prompt.num_heads,
             "init_seed": self.init_seed,
             "memory": "mean_visual_plus_mean_question",
+            "sparse_visual": (
+                {
+                    "anchor_layers": list(self.sparse_visual.anchor_layers),
+                    "rep_token_count": self.sparse_visual.rep_token_count,
+                    "attention_dim": self.sparse_visual.rep_attention.attention_dim,
+                    "num_heads": self.sparse_visual.rep_attention.num_heads,
+                    "relation_weight": self.sparse_visual.relation_weight,
+                }
+                if self.sparse_visual is not None
+                else None
+            ),
         }
         with (output_path / DYNAMIC_PROMPT_CONFIG_NAME).open(
             "w", encoding="utf-8"
@@ -518,6 +631,14 @@ class DynamicPromptTuningModel(nn.Module):
                     key: value.detach().cpu()
                     for key, value in self.dynamic_prompt.state_dict().items()
                 },
+                "sparse_visual": (
+                    {
+                        key: value.detach().cpu()
+                        for key, value in self.sparse_visual.state_dict().items()
+                    }
+                    if self.sparse_visual is not None
+                    else None
+                ),
             },
             output_path / DYNAMIC_PROMPT_WEIGHTS_NAME,
         )
@@ -537,6 +658,15 @@ class DynamicPromptTuningModel(nn.Module):
             )
         self.soft_prompt.data.copy_(prompt.to(self.soft_prompt.device))
         self.dynamic_prompt.load_state_dict(state["dynamic_prompt"], strict=True)
+        sparse_state = state.get("sparse_visual")
+        if (sparse_state is None) != (self.sparse_visual is None):
+            raise ValueError(
+                "Sparse Visual checkpoint/model architecture mismatch: "
+                f"checkpoint={sparse_state is not None} model={self.sparse_visual is not None}"
+            )
+        if self.sparse_visual is not None:
+            self.sparse_visual.load_state_dict(sparse_state, strict=True)
+            self.sparse_visual._forward_audited = True
         # A restored checkpoint is no longer expected to have a zero residual.
         self.dynamic_prompt._forward_audited = True
         print(

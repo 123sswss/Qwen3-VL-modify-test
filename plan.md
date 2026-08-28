@@ -12,8 +12,10 @@
 - 回退仅保留为后续附加性质：可报告Attention Mask关闭Prompt后的约98% Base输出一致性，但不作为当前方法成立条件，也不在首轮实验中实现KV-cache受损的动态屏蔽。
 - PathVQA seed44 首轮已完成：Dynamic Prompt 为56.54/89.83/23.21，超过 Static Prompt55.83/90.33/21.27，主要收益是 Free-form+1.94；但配对图像聚类 Overall 差值95% CI为[-0.10,+1.55]，单seed不足以声称稳定总分提升。
 - 训练诊断显示两Memory注意力在首轮早期迅速硬化，末期熵约0.00010、视觉注意力质量固定为44.375%。该现象不等于动态分支失效，因为Value与残差仍依赖样本，但禁止在因果验证前声称样本级动态路由。
-- 下一优先级不是立即多seed或延长训练，而是复用同一 epoch3 checkpoint 做三个低成本推理干预：强制动态残差为0、固定使用前32个样本的平均residual、使用前32个样本的错配Memory。PathVQA顺序审计确认lag32后不存在同图配对，且仅前32/6719个样本保持正常；若 `delta=0` 与 lagged Memory 都不降低Free-form，则停止当前CA动态化叙事。
-- 只有因果干预证明样本条件有效后，才补 seed45；seed45成功标准为相对同seed Static Prompt保持正向Overall趋势，并优先确认Free-form收益。epoch3 validation仍上升，是否扩至5 epochs排在因果验证和seed45之后，避免把训练预算浪费在静态容量效应上。
+- 三项 checkpoint 因果干预已完成：`delta=0` 为49.29，前32样本平均residual为43.19，lag32错配Memory为48.58，均显著低于正常56.54。正常相对错配Memory的聚类配对95% CI为[+6.99,+8.89]，证明当前样本条件有效；近零注意力熵应解释为固定模态分工，而不是动态分支失效。
+- 下一正式优先级是同seed配对运行 PathVQA Static Prompt seed45 与 Dynamic Prompt seed45；两者保持3 epochs和现有超参，先验证Free-form与Overall趋势能否复现。只有seed45仍支持动态收益，才进入SLAKE迁移或额外seed。epoch3 validation仍上升，但5 epochs重训排在seed45复现之后，避免根据seed44 test继续调参。
+- 不再追加 seed44 的结构小改。视觉Memory与文本Memory的单独错配可作为后续机制消融，但当前联合错配、零残差和均值残差已经足以证明样本条件性，不阻塞多seed验证。
+- 2026-08-28 受控追加一次 seed44 视觉协同小试：保留 Dynamic Prompt20+CA256 主干不变，只在原生视觉层5/11/17（0-based）加入独立插入/立即剥离的局部 Rep 分支。共享8个1024维 Rep，使用CA128/4头读取当前视觉段均值与问题文本均值，以零初始化 `tanh(gamma_l)` 融合，并对三层局部输出施加平均 Relation0.05。新增1,201,155参数、总计3,886,595参数；若不超过当前56.54则停止视觉协同扩展，若有任何正收益再考虑seed45。
 
 ## 总体目标
 

@@ -57,6 +57,7 @@ class DynamicPromptTuningModelInterface:
             device_map="auto",
             trust_remote_code=True,
         )
+        sparse_visual = config.get("sparse_visual")
         self.model = DynamicPromptTuningModel(
             base_model,
             tokenizer=self.processor.tokenizer,
@@ -64,6 +65,29 @@ class DynamicPromptTuningModelInterface:
             init_seed=int(config.get("init_seed", 44)),
             attention_dim=int(config["attention_dim"]),
             num_heads=int(config["num_heads"]),
+            sparse_visual_anchor_layers=(
+                tuple(int(index) for index in sparse_visual["anchor_layers"])
+                if sparse_visual is not None
+                else None
+            ),
+            sparse_visual_rep_tokens=(
+                int(sparse_visual["rep_token_count"])
+                if sparse_visual is not None
+                else 8
+            ),
+            sparse_visual_attention_dim=(
+                int(sparse_visual["attention_dim"])
+                if sparse_visual is not None
+                else 128
+            ),
+            sparse_visual_heads=(
+                int(sparse_visual["num_heads"]) if sparse_visual is not None else 4
+            ),
+            sparse_visual_relation_weight=(
+                float(sparse_visual["relation_weight"])
+                if sparse_visual is not None
+                else 0.05
+            ),
         )
         self.model.load_dynamic_prompt(checkpoint)
         self.model.eval()
@@ -78,6 +102,7 @@ class DynamicPromptTuningModelInterface:
             f"loaded={checkpoint} prompt_length={self.model.prompt_length} "
             f"attention_dim={self.model.dynamic_prompt.attention_dim} "
             f"heads={self.model.dynamic_prompt.num_heads} "
+            f"sparse_visual={sparse_visual is not None} "
             f"intervention={intervention} memory_lag={memory_lag}"
         )
 
@@ -94,13 +119,15 @@ class DynamicPromptTuningModelInterface:
         max_new_tokens: int = 32,
         temperature: float = 0.0,
     ) -> str:
-        messages = [{
-            "role": "user",
-            "content": [
-                {"type": "image", "image": image},
-                {"type": "text", "text": prompt},
-            ],
-        }]
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "image", "image": image},
+                    {"type": "text", "text": prompt},
+                ],
+            }
+        ]
         text = self.processor.apply_chat_template(
             messages, tokenize=False, add_generation_prompt=True
         )
@@ -120,6 +147,6 @@ class DynamicPromptTuningModelInterface:
             )
         input_length = original_length + self.model.prompt_length
         generated = output_ids[:, input_length:]
-        return self.processor.batch_decode(
-            generated, skip_special_tokens=True
-        )[0].strip()
+        return self.processor.batch_decode(generated, skip_special_tokens=True)[
+            0
+        ].strip()

@@ -645,6 +645,85 @@ run_pathvqa_dynamic_prompt_seed44() {
   cat "$output_dir/selected_result.tsv"
 }
 
+run_pathvqa_dynamic_prompt_sparse_visual_seed44() {
+  local experiment_name="pathvqa_dynamic_prompt_sparse_visual_layers5_11_17_slots8_ca128_relation0050"
+  local run_seed=44
+  local epochs="${PATHVQA_DYNAMIC_PROMPT_EPOCHS:-3}"
+  if ! python -c 'import datasets, pyarrow' >/dev/null 2>&1; then
+    echo "[ERR] PathVQA Dynamic Prompt 需要 datasets 和 pyarrow。先运行: python -m pip install -r pathvqa/requirements.txt" >&2
+    return 2
+  fi
+
+  local output_dir
+  output_dir="$(available_output_dir "$PATHVQA_DYNAMIC_PROMPT_OUTPUT_ROOT" "${experiment_name}_seed${run_seed}_${RUN_DATE}")"
+  mkdir -p "$output_dir"
+  echo "[PATHVQA_DYNAMIC_PROMPT_SPARSE_VISUAL] experiment=$experiment_name seed=$run_seed epochs=$epochs anchors=5,11,17 rep_tokens=8 visual_ca=128x4 relation=0.05 expected_trainable=3886595 output=$output_dir"
+  (
+    cd "$ROOT_DIR" || exit 1
+    python -m unittest test_dynamic_prompt_tuning.py test_sparse_visual_mmrl.py || exit 1
+    python -m pathvqa.train_dynamic_prompt \
+      --model-path "$MODEL_PATH" \
+      --data-root "$PATHVQA_DATA_ROOT" \
+      --cache-dir "$PATHVQA_CACHE_ROOT" \
+      --output-dir "$output_dir" \
+      --experiment-name "$experiment_name" \
+      --prompt-length 20 \
+      --attention-dim 256 \
+      --attention-heads 8 \
+      --sparse-visual \
+      --sparse-visual-anchor-layers 5 11 17 \
+      --sparse-visual-rep-tokens 8 \
+      --sparse-visual-attention-dim 128 \
+      --sparse-visual-heads 4 \
+      --sparse-visual-relation-weight 0.05 \
+      --sparse-visual-lr "${PATHVQA_SPARSE_VISUAL_LR:-3e-4}" \
+      --epochs "$epochs" \
+      --seed "$run_seed" \
+      --data-seed 42 \
+      --prompt-lr "${PATHVQA_DYNAMIC_PROMPT_STATIC_LR:-0.3}" \
+      --dynamic-lr "${PATHVQA_DYNAMIC_PROMPT_LR:-3e-4}" \
+      --batch-size "${PATHVQA_DYNAMIC_PROMPT_BATCH_SIZE:-2}" \
+      --gradient-accumulation "${PATHVQA_DYNAMIC_PROMPT_GRAD_ACCUM:-16}" \
+      --dataloader-workers "${PATHVQA_DYNAMIC_PROMPT_WORKERS:-2}" \
+      --expected-trainable-parameters 3886595 \
+      2>&1 | tee "$output_dir/train.log"
+  ) || return 1
+
+  local epoch_id
+  for ((epoch_id = 1; epoch_id <= epochs; epoch_id++)); do
+    local checkpoint="$output_dir/checkpoints/epoch_${epoch_id}"
+    echo "[PATHVQA_DYNAMIC_PROMPT_SPARSE_VISUAL_VALIDATION] epoch=$epoch_id checkpoint=$checkpoint"
+    run_pathvqa_dynamic_prompt_eval \
+      "$checkpoint" \
+      validation \
+      "$output_dir/eval_validation/epoch_${epoch_id}" \
+      "$output_dir/eval_validation_epoch_${epoch_id}.log" || return 1
+  done
+
+  local selection
+  selection="$(python "$ROOT_DIR/pathvqa/select_best_epoch.py" --root "$output_dir" --epochs "$epochs")" || return 1
+  local best_epoch
+  local best_validation_score
+  IFS=$'\t' read -r best_epoch best_validation_score <<< "$selection"
+  local best_checkpoint="$output_dir/checkpoints/epoch_${best_epoch}"
+  echo "[PATHVQA_DYNAMIC_PROMPT_SPARSE_VISUAL_TEST] best_epoch=$best_epoch validation=$best_validation_score"
+  run_pathvqa_dynamic_prompt_eval \
+    "$best_checkpoint" \
+    test \
+    "$output_dir/eval_test/epoch_${best_epoch}" \
+    "$output_dir/eval_test_epoch_${best_epoch}.log" || return 1
+
+  local test_score
+  test_score="$(python -c 'import json,sys;print(json.load(open(sys.argv[1],encoding="utf-8"))["overall_accuracy"])' "$output_dir/eval_test/epoch_${best_epoch}/pathvqa_summary.json")" || return 1
+  printf 'experiment\tseed\tbest_epoch\tvalidation_accuracy\ttest_accuracy\tcheckpoint\n' \
+    > "$output_dir/selected_result.tsv"
+  printf '%s\t%s\t%s\t%s\t%s\t%s\n' \
+    "$experiment_name" "$run_seed" "$best_epoch" "$best_validation_score" \
+    "$test_score" "$best_checkpoint" \
+    >> "$output_dir/selected_result.tsv"
+  cat "$output_dir/selected_result.tsv"
+}
+
 run_pathvqa_lora_visual_attn_r128() {
   local experiment_name="${PATHVQA_LORA_EXPERIMENT_NAME:-pathvqa_lora_visual_all_attention_r128}"
   local last_n_layers="${PATHVQA_LORA_LAST_N_VISION_LAYERS:-24}"
@@ -1051,6 +1130,9 @@ case "$RUN_TARGET" in
   pathvqa_dynamic_prompt_seed44)
     run_pathvqa_dynamic_prompt_seed44 || failures=$((failures + 1))
     ;;
+  pathvqa_dynamic_prompt_sparse_visual_seed44)
+    run_pathvqa_dynamic_prompt_sparse_visual_seed44 || failures=$((failures + 1))
+    ;;
   pathvqa_dynamic_prompt_interventions)
     run_pathvqa_dynamic_prompt_interventions || failures=$((failures + 1))
     ;;
@@ -1077,7 +1159,7 @@ case "$RUN_TARGET" in
     run_slake || failures=$((failures + 1))
     ;;
   *)
-    echo "[ERR] 未知目标: $RUN_TARGET，可选 train、slake、pathvqa、pathvqa_base、pathvqa_prompt_tuning_seed44、pathvqa_dynamic_prompt_seed44、pathvqa_dynamic_prompt_interventions、pathvqa_minimal_mmrl_prompt20_seed44、pathvqa_lora_visual_attn_r128、pathvqa_lora_visual_attn_r128_then_base、pathvqa_lora_visual_last8_attn_r128、pathvqa_last8_lora_minimal_mmrl_relation_suite、slake_final_seeds4、slake_ablation_no_relation_seeds2、slake_ablation_independent_init_seeds2、slake_ablation_static_query_seed45、slake_ablation_mean_pooling_seed45、slake_mean_final_completion_suite、slake_text_guided_balanced_fusion_slots8_seed45、slake_prompt_tuning_seed44、slake_concat_mlp_fusion_seed45、slake_overnight_prompt_and_concat_mlp、slake_ablation_suite、all。" >&2
+    echo "[ERR] 未知目标: $RUN_TARGET，可选 train、slake、pathvqa、pathvqa_base、pathvqa_prompt_tuning_seed44、pathvqa_dynamic_prompt_seed44、pathvqa_dynamic_prompt_sparse_visual_seed44、pathvqa_dynamic_prompt_interventions、pathvqa_minimal_mmrl_prompt20_seed44、pathvqa_lora_visual_attn_r128、pathvqa_lora_visual_attn_r128_then_base、pathvqa_lora_visual_last8_attn_r128、pathvqa_last8_lora_minimal_mmrl_relation_suite、slake_final_seeds4、slake_ablation_no_relation_seeds2、slake_ablation_independent_init_seeds2、slake_ablation_static_query_seed45、slake_ablation_mean_pooling_seed45、slake_mean_final_completion_suite、slake_text_guided_balanced_fusion_slots8_seed45、slake_prompt_tuning_seed44、slake_concat_mlp_fusion_seed45、slake_overnight_prompt_and_concat_mlp、slake_ablation_suite、all。" >&2
     exit 2
     ;;
 esac

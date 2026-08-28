@@ -22,7 +22,6 @@ from transformers import (
 from pathvqa.data_pipeline import PathVQADataCollator, PathVQADataset
 from slake.dynamic_prompt_tuning import DynamicPromptTuningModel
 
-
 MODEL_BATCH_KEYS = (
     "input_ids",
     "attention_mask",
@@ -47,9 +46,17 @@ class DynamicPromptCollator:
 
 
 class DynamicPromptTrainer(Trainer):
-    def __init__(self, *args, prompt_lr: float, dynamic_lr: float, **kwargs):
+    def __init__(
+        self,
+        *args,
+        prompt_lr: float,
+        dynamic_lr: float,
+        sparse_visual_lr: float,
+        **kwargs,
+    ):
         self.prompt_lr = float(prompt_lr)
         self.dynamic_lr = float(dynamic_lr)
+        self.sparse_visual_lr = float(sparse_visual_lr)
         super().__init__(*args, **kwargs)
 
     def create_optimizer(self):
@@ -58,29 +65,44 @@ class DynamicPromptTrainer(Trainer):
         groups = self.model.trainable_parameter_groups()
         prompt_parameters = groups["soft_prompt"]
         dynamic_parameters = groups["dynamic_prompt"]
-        active = [parameter for parameter in self.model.parameters() if parameter.requires_grad]
-        grouped = prompt_parameters + dynamic_parameters
+        sparse_visual_parameters = groups.get("sparse_visual", [])
+        active = [
+            parameter
+            for parameter in self.model.parameters()
+            if parameter.requires_grad
+        ]
+        grouped = prompt_parameters + dynamic_parameters + sparse_visual_parameters
         if {id(parameter) for parameter in active} != {
             id(parameter) for parameter in grouped
         }:
             raise RuntimeError(
                 "Dynamic Prompt trainable parameters must belong to exactly one optimizer group"
             )
+        optimizer_groups = [
+            {
+                "params": prompt_parameters,
+                "lr": self.prompt_lr,
+                "weight_decay": 0.0,
+                "group_name": "soft_prompt",
+            },
+            {
+                "params": dynamic_parameters,
+                "lr": self.dynamic_lr,
+                "weight_decay": 0.0,
+                "group_name": "dynamic_prompt",
+            },
+        ]
+        if sparse_visual_parameters:
+            optimizer_groups.append(
+                {
+                    "params": sparse_visual_parameters,
+                    "lr": self.sparse_visual_lr,
+                    "weight_decay": 0.0,
+                    "group_name": "sparse_visual",
+                }
+            )
         self.optimizer = torch.optim.AdamW(
-            [
-                {
-                    "params": prompt_parameters,
-                    "lr": self.prompt_lr,
-                    "weight_decay": 0.0,
-                    "group_name": "soft_prompt",
-                },
-                {
-                    "params": dynamic_parameters,
-                    "lr": self.dynamic_lr,
-                    "weight_decay": 0.0,
-                    "group_name": "dynamic_prompt",
-                },
-            ],
+            optimizer_groups,
             betas=(0.9, 0.999),
             eps=1e-8,
         )
@@ -88,6 +110,8 @@ class DynamicPromptTrainer(Trainer):
             "[DYNAMIC_PROMPT_OPTIMIZER] "
             f"soft_prompt_lr={self.prompt_lr} tensors={len(prompt_parameters)} "
             f"dynamic_prompt_lr={self.dynamic_lr} tensors={len(dynamic_parameters)} "
+            f"sparse_visual_lr={self.sparse_visual_lr} "
+            f"tensors={len(sparse_visual_parameters)} "
             "scheduler=linear warmup_ratio=0.03"
         )
         return self.optimizer
@@ -124,6 +148,21 @@ class DynamicPromptCallback(TrainerCallback):
             if dynamic_grads
             else torch.tensor(0.0)
         )
+        sparse_visual = getattr(model, "sparse_visual", None)
+        sparse_grads = (
+            [
+                parameter.grad.detach().float().pow(2).sum()
+                for parameter in sparse_visual.parameters()
+                if parameter.grad is not None
+            ]
+            if sparse_visual is not None
+            else []
+        )
+        sparse_grad_norm = (
+            torch.stack(sparse_grads).sum().sqrt()
+            if sparse_grads
+            else torch.tensor(0.0)
+        )
         row = {
             "step": step,
             "epoch": float(state.epoch or 0.0),
@@ -134,6 +173,7 @@ class DynamicPromptCallback(TrainerCallback):
                 else 0.0
             ),
             "dynamic_prompt_grad_norm": float(dynamic_grad_norm.item()),
+            "sparse_visual_grad_norm": float(sparse_grad_norm.item()),
         }
         for key, value in model.debug_context.items():
             row[key] = float(value.detach().float().item())
@@ -188,25 +228,49 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--data-seed", type=int, default=42)
     parser.add_argument("--prompt-lr", type=float, default=0.3)
     parser.add_argument("--dynamic-lr", type=float, default=3e-4)
+    parser.add_argument("--sparse-visual", action="store_true")
+    parser.add_argument(
+        "--sparse-visual-anchor-layers",
+        type=int,
+        nargs="+",
+        default=(5, 11, 17),
+    )
+    parser.add_argument("--sparse-visual-rep-tokens", type=int, default=8)
+    parser.add_argument("--sparse-visual-attention-dim", type=int, default=128)
+    parser.add_argument("--sparse-visual-heads", type=int, default=4)
+    parser.add_argument("--sparse-visual-relation-weight", type=float, default=0.05)
+    parser.add_argument("--sparse-visual-lr", type=float, default=3e-4)
     parser.add_argument("--batch-size", type=int, default=2)
     parser.add_argument("--gradient-accumulation", type=int, default=16)
     parser.add_argument("--dataloader-workers", type=int, default=2)
     parser.add_argument("--max-length", type=int, default=2048)
     parser.add_argument("--expected-trainable-parameters", type=int)
     args = parser.parse_args()
-    if min(
-        args.prompt_length,
-        args.attention_dim,
-        args.attention_heads,
-        args.epochs,
-        args.batch_size,
-        args.gradient_accumulation,
-    ) < 1:
+    if (
+        min(
+            args.prompt_length,
+            args.attention_dim,
+            args.attention_heads,
+            args.epochs,
+            args.batch_size,
+            args.gradient_accumulation,
+            args.sparse_visual_rep_tokens,
+            args.sparse_visual_attention_dim,
+            args.sparse_visual_heads,
+        )
+        < 1
+    ):
         parser.error("Prompt dimensions, epochs, and batch settings must be positive")
     if args.attention_dim % args.attention_heads != 0:
         parser.error("--attention-dim must be divisible by --attention-heads")
-    if args.prompt_lr <= 0.0 or args.dynamic_lr <= 0.0:
+    if args.sparse_visual_attention_dim % args.sparse_visual_heads != 0:
+        parser.error(
+            "--sparse-visual-attention-dim must be divisible by --sparse-visual-heads"
+        )
+    if min(args.prompt_lr, args.dynamic_lr, args.sparse_visual_lr) <= 0.0:
         parser.error("Learning rates must be positive")
+    if args.sparse_visual_relation_weight < 0.0:
+        parser.error("--sparse-visual-relation-weight must be non-negative")
     if args.dataloader_workers < 0:
         parser.error("--dataloader-workers must be non-negative")
     return args
@@ -237,6 +301,13 @@ def main() -> int:
         init_seed=args.seed,
         attention_dim=args.attention_dim,
         num_heads=args.attention_heads,
+        sparse_visual_anchor_layers=(
+            tuple(args.sparse_visual_anchor_layers) if args.sparse_visual else None
+        ),
+        sparse_visual_rep_tokens=args.sparse_visual_rep_tokens,
+        sparse_visual_attention_dim=args.sparse_visual_attention_dim,
+        sparse_visual_heads=args.sparse_visual_heads,
+        sparse_visual_relation_weight=args.sparse_visual_relation_weight,
     )
     dataset = PathVQADataset(
         processor=processor,
@@ -276,7 +347,13 @@ def main() -> int:
         f"parameters={counts} total={trainable} "
         f"epochs={args.epochs} prompt_lr={args.prompt_lr} "
         f"dynamic_lr={args.dynamic_lr} seed={args.seed} data_seed={args.data_seed} "
-        "pretrained_prompt_checkpoint=False stage1=False relation=False"
+        f"sparse_visual={args.sparse_visual} "
+        f"sparse_anchors={list(args.sparse_visual_anchor_layers) if args.sparse_visual else []} "
+        f"sparse_rep_tokens={args.sparse_visual_rep_tokens if args.sparse_visual else 0} "
+        f"sparse_attention_dim={args.sparse_visual_attention_dim if args.sparse_visual else 0} "
+        f"sparse_heads={args.sparse_visual_heads if args.sparse_visual else 0} "
+        f"sparse_relation={args.sparse_visual_relation_weight if args.sparse_visual else 0.0} "
+        "pretrained_prompt_checkpoint=False stage1=False"
     )
 
     callback = DynamicPromptCallback(processor, args.output_dir)
@@ -284,6 +361,7 @@ def main() -> int:
         model=model,
         prompt_lr=args.prompt_lr,
         dynamic_lr=args.dynamic_lr,
+        sparse_visual_lr=args.sparse_visual_lr,
         args=TrainingArguments(
             output_dir=str(args.output_dir / "trainer"),
             num_train_epochs=args.epochs,
@@ -324,13 +402,23 @@ def main() -> int:
         "total_trainable_parameters": trainable,
         "prompt_learning_rate": args.prompt_lr,
         "dynamic_learning_rate": args.dynamic_lr,
+        "sparse_visual_learning_rate": args.sparse_visual_lr,
+        "sparse_visual": (
+            {
+                "anchor_layers": list(args.sparse_visual_anchor_layers),
+                "rep_token_count": args.sparse_visual_rep_tokens,
+                "attention_dim": args.sparse_visual_attention_dim,
+                "attention_heads": args.sparse_visual_heads,
+                "relation_weight": args.sparse_visual_relation_weight,
+            }
+            if args.sparse_visual
+            else None
+        ),
         "seed": args.seed,
         "data_seed": args.data_seed,
         "train_metrics": result.metrics,
     }
-    with (args.output_dir / "train_report.json").open(
-        "w", encoding="utf-8"
-    ) as handle:
+    with (args.output_dir / "train_report.json").open("w", encoding="utf-8") as handle:
         json.dump(report, handle, ensure_ascii=False, indent=2, default=str)
     print(f"[PATHVQA_DYNAMIC_PROMPT_PASS] checkpoint={final_dir}")
     return 0
@@ -338,4 +426,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

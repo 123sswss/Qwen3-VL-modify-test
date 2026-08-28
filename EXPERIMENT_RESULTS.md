@@ -393,6 +393,52 @@ Correction (2026-08-26): the intended scope-matched LoRA baseline is Attention L
 - Conclusion: this is the strongest PathVQA seed44 point estimate and the first method to improve Static Prompt specifically on Free-form with a significant paired correctness shift. It does not yet prove a statistically stable Overall improvement because the clustered paired CI crosses zero. The near-zero entropy and exactly stable44.375% visual mass show that CA learned a fixed head/slot modality partition, not visibly sample-dependent attention routing. The residual values can still carry sample-conditioned image/text content, so the correct next test is checkpoint-level causal intervention (`delta=0`, shuffled Memory, fixed/mean residual) before adding seeds or claiming dynamic multimodal routing.
 - Output/log path: `/root/autodl-tmp/Qwen3-VL-modify-test/pathvqa/outputs/dynamic_prompt/pathvqa_dynamic_prompt_mean_ca256_len20_seed44_20260827`; selected checkpoint `checkpoints/epoch_3`; test log `eval_test_epoch_3.log`; diagnostics `dynamic_prompt_diagnostics.jsonl`.
 
+### 2026-08-28 - pathvqa_dynamic_prompt_mean_ca256_len20_seed44_20260827__intervention_zero
+
+- Commit/config: commit `26ef735`; inference-only causal intervention on the selected epoch3 Dynamic Prompt checkpoint. The jointly trained20-token Soft Prompt remains unchanged, but the complete sample-conditioned CA residual is forced to exact zero for every test sample.
+- Dataset and split: PathVQA test6,719 with858 image clusters; source training seed/data seed44/42.
+- Controlled change: Dynamic Prompt residual only; backbone, checkpoint, prefix length, test order, templates, generation, and official evaluator exactly match the normal56.5412 run.
+- Overall: **49.2930**; image-clustered95% CI **[48.1936,50.3944]**.
+- Yes/No / Free-form: **87.1802 / 11.3494**.
+- Yes/No class audit: `yes`90.5837% and `no`83.1824%.
+- Per question type: how7.1942, other11.1111, what7.8803, when0.0000, where35.4988, why0.0000, yes/no87.1802; Free-form macro10.2807.
+- Intervention audit:6,719/6,719 samples changed; zero warmup samples.
+- Paired normal-minus-zero effect: **+7.2481 Overall**, +2.6472 Yes/No, and **+11.8558 Free-form**. Normal-only/zero-only correct counts are604/117 Overall (`McNemar p=6.36e-80`),157/68 Yes/No (`p=2.79e-9`), and447/49 Free-form (`p=1.86e-81`). The image-clustered paired95% CI for the Overall difference is **[+6.3431,+8.1816]**.
+- Inference timing:742.5s for6,719 samples; TTFT mean0.048596s, weighted TPOT0.019972s/token, request mean0.101003s.
+- Conclusion: the Dynamic residual is indispensable inside the jointly optimized checkpoint, especially for Free-form. This is not an independently trained Static Prompt baseline: the Soft Prompt co-adapted with CA, so the result proves branch necessity and co-adaptation rather than claiming that any Dynamic model must beat a separately optimized Static Prompt by7.25 points.
+- Output/log path: `/root/autodl-tmp/Qwen3-VL-modify-test/pathvqa/outputs/dynamic_prompt/pathvqa_dynamic_prompt_mean_ca256_len20_seed44_20260827/eval_interventions/zero`; log `eval_intervention_zero.log`.
+
+### 2026-08-28 - pathvqa_dynamic_prompt_mean_ca256_len20_seed44_20260827__intervention_mean_residual_lag32
+
+- Commit/config: commit `26ef735`; inference-only intervention using normal sample residuals for the first32 calibration samples, then replacing every subsequent sample residual with their fixed average.
+- Dataset and split: PathVQA test6,719 with858 image clusters; source training seed/data seed44/42.
+- Controlled change: residual sample dependence only; all weights and evaluation settings match the normal run. The first32 samples are explicitly retained as calibration and excluded in the supplementary clean-effect calculation.
+- Overall: **43.1910**; image-clustered95% CI **[42.1834,44.2155]**.
+- Yes/No / Free-form: **79.8037 / 6.5237**.
+- Yes/No class audit: `yes`78.5793% and `no`81.2419%.
+- Per question type: how7.9137, other33.3333, what2.9186, when0.0000, where28.0742, why4.5455, yes/no79.8037; Free-form macro12.7976.
+- Intervention audit:6,719 samples seen,6,687 changed,32 calibration samples.
+- Paired normal-minus-mean effect: **+13.3502 Overall**, +10.0238 Yes/No, and **+16.6816 Free-form**. Normal-only/mean-only correct counts are1,014/117 Overall (`McNemar p=7.01e-179`),423/86 Yes/No (`p=1.81e-54`), and591/31 Free-form (`p=2.79e-135`). The image-clustered paired95% CI for Overall is **[+12.2733,+14.3957]**; after excluding the first32 samples, the effect remains+13.4141 with CI[+12.3604,+14.4930].
+- Inference timing:802.9s; TTFT mean0.048430s, weighted TPOT0.019850s/token, request mean0.110921s.
+- Conclusion: a constant domain-level residual is not merely insufficient; it is substantially worse than removing the residual entirely. Dynamic residual vectors are not interchangeable static offsets, and averaging them destroys information needed by both binary and Free-form predictions.
+- Output/log path: `/root/autodl-tmp/Qwen3-VL-modify-test/pathvqa/outputs/dynamic_prompt/pathvqa_dynamic_prompt_mean_ca256_len20_seed44_20260827/eval_interventions/mean-residual`; log `eval_intervention_mean-residual.log`.
+
+### 2026-08-28 - pathvqa_dynamic_prompt_mean_ca256_len20_seed44_20260827__intervention_lagged_memory32
+
+- Commit/config: commit `26ef735`; inference-only intervention preserving the trained CA but replacing each sample's visual and question Memory with Memory from32 samples earlier. Dataset-order audit confirms zero same-image donor pairs after the first32 samples.
+- Dataset and split: PathVQA test6,719 with858 image clusters; source training seed/data seed44/42.
+- Controlled change: current-sample Memory alignment only; the first32 samples remain normal while6,687 use mismatched Memory. Main VLM image/question inputs remain untouched, so the intervention changes only the Dynamic Prompt branch.
+- Overall: **48.5787**; image-clustered95% CI **[47.4625,49.6968]**.
+- Yes/No / Free-form: **84.1761 / 12.9282**.
+- Yes/No class audit: `yes`84.0859% and `no`84.2820%.
+- Per question type: how7.1942, other16.6667, what8.6830, when0.0000, where42.4594, why0.0000, yes/no84.1761; Free-form macro12.5005.
+- Intervention audit:6,719 samples seen,6,687 changed,32 warmup samples; no same-image pair among changed samples.
+- Paired normal-minus-lagged effect: **+7.9625 Overall**, +5.6514 Yes/No, and **+10.2770 Free-form**. Normal-only/lagged-only correct counts are705/170 Overall (`McNemar p=4.56e-78`),284/94 Yes/No (`p=2.73e-23`), and421/76 Free-form (`p=6.25e-59`). The image-clustered paired95% CI for Overall is **[+6.9923,+8.8855]**. Excluding the first32 samples gives+8.0006 Overall with CI[+7.0470,+8.9920].
+- Relative to zero residual: lagged Memory is-0.7144 Overall with clustered CI[-1.5219,+0.0754], trading-3.0042 Yes/No (`p=1.63e-7`) for+1.5788 Free-form (`p=0.00375`). Mismatched domain Memory therefore retains limited generic open-answer signal but loses the much larger benefit of correct sample alignment.
+- Inference timing:748.4s; TTFT mean0.049211s, weighted TPOT0.019497s/token, request mean0.102236s.
+- Conclusion: current-sample visual/question Memory is causally necessary. Although attention weights harden into an almost fixed modality allocation, the selected Value content remains strongly sample-dependent; Dynamic Prompt conditioning operates through values and residual direction, not through visibly dynamic attention weights.
+- Output/log path: `/root/autodl-tmp/Qwen3-VL-modify-test/pathvqa/outputs/dynamic_prompt/pathvqa_dynamic_prompt_mean_ca256_len20_seed44_20260827/eval_interventions/lagged-memory`; log `eval_intervention_lagged-memory.log`.
+
 ### PathVQA Yes/No Class-Balance Audit
 
 | Method | Yes count | Yes accuracy | No count | No accuracy | Class gap |

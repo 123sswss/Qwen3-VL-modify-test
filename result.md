@@ -37,6 +37,15 @@ This file is the concise experiment memory shared by the user and Codex. The com
 | 128-slot MMRL + Relation0.05 | 44 | **47.30** | 82.57 | 11.97 | +12.53 Overall over Base, proving the method adapts, but Free-form learning is much weaker than LoRA. |
 | Frozen Base | - | **34.77** | 67.34 | 2.14 | PathVQA open exact-match is extremely difficult for the original model; no training or checkpoint. |
 
+## Dynamic Prompt Causal Interventions
+
+| Same checkpoint inference | Overall | Yes/No | Free-form | Effect versus normal |
+|---|---:|---:|---:|---|
+| Normal matched Memory | **56.54** | **89.83** | **23.21** | Reference |
+| Zero Dynamic residual | 49.29 | 87.18 | 11.35 | -7.25 Overall; residual branch is necessary |
+| Mean residual after32-sample calibration | 43.19 | 79.80 | 6.52 | -13.35 Overall; a fixed static offset is actively harmful |
+| Lag32 mismatched Memory | 48.58 | 84.18 | 12.93 | -7.96 Overall; matched sample Memory is causally necessary |
+
 ## Core Ablations
 
 | Controlled change | Result | Conclusion |
@@ -73,7 +82,8 @@ This file is the concise experiment memory shared by the user and Codex. The com
 - Static Prompt Tuning reaches55.83 with only51,200 parameters, beating minimal MMRL by6.42 and last8 LoRA by1.98 Overall. Its Yes/No score90.33 is balanced across `yes`91.30 and `no`89.20, while Free-form21.27 still trails last8 LoRA23.41. This shifts the main bottleneck and next architecture toward the LLM context interface.
 - The decisive MMRL+Static-Prompt combination reaches55.75, effectively identical to Static Prompt55.83. Both branches have healthy nonzero gradients, but the combination trades1.40 Yes/No points for1.25 Free-form points and still trails last8 LoRA on Free-form by0.89. This rejects practical complementarity for the current internal-ViT MMRL and supports moving directly to a dynamic multimodal LLM Prompt interface.
 - Dynamic Multimodal Prompt reaches56.54/89.83/23.21 and is the strongest PathVQA seed44 point estimate. Against Static Prompt it gains0.71 Overall and1.94 Free-form while losing0.51 Yes/No; the Free-form paired shift is significant (`p=0.0020`), but the image-clustered95% CI for the Overall difference is[-0.10,+1.55], so a stable aggregate gain is not yet established.
-- Dynamic Prompt attention over the two pooled Memory tokens hardens almost completely: late normalized entropy is0.00010 and visual mass is fixed at44.375%, consistent with a fixed assignment of71/160 prompt-head pairs to vision and89/160 to text. Values remain sample-conditioned and the residual/base norm ratio averages0.475 in epoch3, so the branch is active; zero-residual, shuffled-Memory, and fixed-residual inference interventions are required to distinguish genuine conditional information from extra static capacity.
+- Pre-intervention concern: Dynamic Prompt attention over the two pooled Memory tokens hardens almost completely, with late normalized entropy0.00010 and visual mass fixed at44.375%, consistent with71/160 prompt-head pairs assigned to vision and89/160 to text.
+- Causal interventions resolve that concern. Normal matched Memory beats zero residual by+7.25 Overall and lag32 mismatched Memory by+7.96, with clustered paired95% CIs[+6.34,+8.18] and[+6.99,+8.89]. A fixed mean residual falls to43.19. The method is genuinely sample-conditioned even though attention weights are nearly fixed: dynamic information is carried by current-sample Value vectors and residual direction rather than variable attention routing.
 - The Overall tie hides substantial sample churn: versus Static Prompt, the combination fixes352 questions and breaks357, with a61.07 Prompt-or-combination oracle. MMRL therefore contributes distinct information, but an always-on shared-CE composition lacks sample-wise arbitration and lets binary calibration losses cancel Free-form gains.
 - Separate binary classes confirm that MMRL is balanced rather than exploiting label bias: Yes/No accuracies are80.62/84.86, versus all24-layer LoRA83.65/89.39 and Base53.30/83.83. The all24-layer LoRA wins both classes, but this remains a broader-scope diagnostic rather than the formal matched comparison.
 - PathVQA Free-form normalized exact-match is unusually harsh: Base reaches only2.14, and qualitative outputs can contain plausible pathology phrases that miss the single reference. Add semantic/error analysis as a supplement, not a replacement for the official metric.

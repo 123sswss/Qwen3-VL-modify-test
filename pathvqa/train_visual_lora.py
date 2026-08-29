@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Train the fixed PathVQA visual-attention LoRA rank-128 baseline."""
+"""Train audited PathVQA Attention LoRA baselines."""
 
 from __future__ import annotations
 
@@ -47,8 +47,8 @@ except ImportError:
 
 
 VISION_LAYER_COUNT = 24
-RANK = 128
-LORA_ALPHA = 256
+LANGUAGE_LAYER_COUNT = 36
+DEFAULT_RANK = 128
 LORA_DROPOUT = 0.05
 LAST8_EXPECTED_TRAINABLE_PARAMETERS = 6_291_456
 MODEL_BATCH_KEYS = (
@@ -98,7 +98,7 @@ class EpochAdapterCheckpointCallback(TrainerCallback):
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Train PathVQA LoRA on all visual-attention qkv/proj modules."
+        description="Train PathVQA LoRA on audited visual or full-model Attention."
     )
     parser.add_argument(
         "--data-root",
@@ -116,6 +116,12 @@ def parse_args() -> argparse.Namespace:
         "--experiment-name",
         default="pathvqa_lora_visual_all_attention_r128",
     )
+    parser.add_argument(
+        "--target-scope",
+        choices=("visual", "full_model"),
+        default="visual",
+    )
+    parser.add_argument("--rank", type=int, default=DEFAULT_RANK)
     parser.add_argument("--last-n-vision-layers", type=int, default=24)
     parser.add_argument("--epochs", type=int, default=3)
     parser.add_argument("--seed", type=int, default=44)
@@ -125,6 +131,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--gradient-accumulation", type=int, default=32)
     parser.add_argument("--dataloader-workers", type=int, default=2)
     parser.add_argument("--max-length", type=int, default=2048)
+    parser.add_argument("--expected-trainable-parameters", type=int)
     args = parser.parse_args()
     if args.epochs < 1:
         parser.error("--epochs must be positive")
@@ -136,10 +143,22 @@ def parse_args() -> argparse.Namespace:
         parser.error("--dataloader-workers must be non-negative")
     if args.max_length < 32:
         parser.error("--max-length must be at least 32")
+    if args.rank < 1:
+        parser.error("--rank must be positive")
     if not 1 <= args.last_n_vision_layers <= VISION_LAYER_COUNT:
         parser.error(
             f"--last-n-vision-layers must be in [1, {VISION_LAYER_COUNT}]"
         )
+    if (
+        args.target_scope == "full_model"
+        and args.last_n_vision_layers != VISION_LAYER_COUNT
+    ):
+        parser.error("Full-model Attention LoRA must include all visual layers")
+    if (
+        args.expected_trainable_parameters is not None
+        and args.expected_trainable_parameters < 1
+    ):
+        parser.error("--expected-trainable-parameters must be positive")
     return args
 
 
@@ -270,6 +289,61 @@ def find_visual_attention_targets(
     return targets, selected_layers
 
 
+def extract_language_layer_index(module_name: str) -> int | None:
+    match = re.search(
+        r"(?:^|\.)language_model\.layers\.(\d+)(?:\.|$)",
+        module_name.lower(),
+    )
+    return int(match.group(1)) if match else None
+
+
+def find_language_attention_targets(
+    model: nn.Module,
+) -> tuple[List[str], List[int]]:
+    targets = []
+    per_layer: Counter[int] = Counter()
+    for name, module in model.named_modules():
+        if not isinstance(module, nn.Linear):
+            continue
+        layer_index = extract_language_layer_index(name)
+        if layer_index is None:
+            continue
+        lowered = name.lower()
+        if "self_attn" not in lowered:
+            continue
+        if not lowered.endswith(("q_proj", "k_proj", "v_proj", "o_proj")):
+            continue
+        targets.append(name)
+        per_layer[layer_index] += 1
+
+    selected_layers = sorted(per_layer)
+    expected_layers = list(range(LANGUAGE_LAYER_COUNT))
+    if selected_layers != expected_layers:
+        raise RuntimeError(
+            "Unexpected Qwen3-VL language layer layout: "
+            f"expected={expected_layers} actual={selected_layers}"
+        )
+    expected_target_count = LANGUAGE_LAYER_COUNT * 4
+    if len(targets) != expected_target_count:
+        raise RuntimeError(
+            "Language attention target audit failed: "
+            f"expected_targets={expected_target_count} actual={len(targets)} "
+            f"per_layer={dict(per_layer)}"
+        )
+    if any(per_layer[index] != 4 for index in expected_layers):
+        raise RuntimeError(
+            "Each language layer must expose exactly q/k/v/o Attention targets; "
+            f"per_layer={dict(per_layer)}"
+        )
+    print(
+        "[PATHVQA_LORA_LANGUAGE_TARGET_AUDIT] "
+        f"selected_layers_0based={selected_layers} target_count={len(targets)}"
+    )
+    for name in targets:
+        print(f"  - {name}")
+    return targets, selected_layers
+
+
 def count_parameters(model: nn.Module) -> Dict[str, int | float]:
     total = sum(parameter.numel() for parameter in model.parameters())
     trainable = sum(
@@ -282,6 +356,21 @@ def count_parameters(model: nn.Module) -> Dict[str, int | float]:
         "trainable": trainable,
         "trainable_ratio": trainable / total if total else 0.0,
     }
+
+
+def expected_lora_parameter_count(
+    model: nn.Module,
+    target_modules: List[str],
+    rank: int,
+) -> int:
+    modules = dict(model.named_modules())
+    total = 0
+    for name in target_modules:
+        module = modules.get(name)
+        if not isinstance(module, nn.Linear):
+            raise RuntimeError(f"LoRA target is not a Linear module: {name}")
+        total += rank * (module.in_features + module.out_features)
+    return total
 
 
 def main() -> int:
@@ -302,12 +391,42 @@ def main() -> int:
 
     seed_everything(args.seed, args.data_seed)
     model, processor = load_model_and_processor(model_path)
-    target_modules, selected_layers = find_visual_attention_targets(
+    visual_targets, selected_vision_layers = find_visual_attention_targets(
         model,
         last_n_layers=args.last_n_vision_layers,
     )
+    language_targets: List[str] = []
+    selected_language_layers: List[int] = []
+    if args.target_scope == "full_model":
+        language_targets, selected_language_layers = (
+            find_language_attention_targets(model)
+        )
+    target_modules = visual_targets + language_targets
     if len(target_modules) != len(set(target_modules)):
-        raise RuntimeError("Duplicate visual LoRA target modules detected")
+        raise RuntimeError("Duplicate LoRA target modules detected")
+    expected_target_count = len(selected_vision_layers) * 2
+    if args.target_scope == "full_model":
+        expected_target_count += LANGUAGE_LAYER_COUNT * 4
+    if len(target_modules) != expected_target_count:
+        raise RuntimeError(
+            "Combined LoRA target audit failed: "
+            f"scope={args.target_scope} expected={expected_target_count} "
+            f"actual={len(target_modules)}"
+        )
+    print(
+        "[PATHVQA_LORA_COMBINED_TARGET_AUDIT] "
+        f"scope={args.target_scope} visual={len(visual_targets)} "
+        f"language={len(language_targets)} total={len(target_modules)}"
+    )
+    predicted_trainable = expected_lora_parameter_count(
+        model,
+        target_modules,
+        args.rank,
+    )
+    print(
+        "[PATHVQA_LORA_PREDICTED_PARAMETER_AUDIT] "
+        f"rank={args.rank} predicted_trainable={predicted_trainable}"
+    )
 
     dataset = PathVQADataset(
         processor=processor,
@@ -323,10 +442,11 @@ def main() -> int:
     for parameter in model.parameters():
         parameter.requires_grad = False
     model.config.use_cache = False
+    lora_alpha = args.rank * 2
     peft_config = LoraConfig(
         task_type=TaskType.CAUSAL_LM,
-        r=RANK,
-        lora_alpha=LORA_ALPHA,
+        r=args.rank,
+        lora_alpha=lora_alpha,
         lora_dropout=LORA_DROPOUT,
         bias="none",
         target_modules=target_modules,
@@ -334,12 +454,26 @@ def main() -> int:
     )
     model = get_peft_model(model, peft_config)
     parameter_counts = count_parameters(model)
+    if int(parameter_counts["trainable"]) != predicted_trainable:
+        raise RuntimeError(
+            "LoRA predicted/actual parameter mismatch: "
+            f"predicted={predicted_trainable} "
+            f"actual={int(parameter_counts['trainable'])}"
+        )
     target_scope = (
-        "visual_all_attention"
-        if args.last_n_vision_layers == VISION_LAYER_COUNT
-        else f"visual_last{args.last_n_vision_layers}_attention"
+        "full_model_attention"
+        if args.target_scope == "full_model"
+        else (
+            "visual_all_attention"
+            if args.last_n_vision_layers == VISION_LAYER_COUNT
+            else f"visual_last{args.last_n_vision_layers}_attention"
+        )
     )
-    if args.last_n_vision_layers == 8:
+    if (
+        args.target_scope == "visual"
+        and args.rank == DEFAULT_RANK
+        and args.last_n_vision_layers == 8
+    ):
         actual_trainable = int(parameter_counts["trainable"])
         if actual_trainable != LAST8_EXPECTED_TRAINABLE_PARAMETERS:
             raise RuntimeError(
@@ -352,12 +486,25 @@ def main() -> int:
             f"expected={LAST8_EXPECTED_TRAINABLE_PARAMETERS} "
             f"actual={actual_trainable} pass=True"
         )
+    if args.expected_trainable_parameters is not None:
+        actual_trainable = int(parameter_counts["trainable"])
+        if actual_trainable != args.expected_trainable_parameters:
+            raise RuntimeError(
+                "LoRA parameter audit failed: "
+                f"expected={args.expected_trainable_parameters} "
+                f"actual={actual_trainable}"
+            )
+        print(
+            "[PATHVQA_LORA_EXPECTED_PARAMETER_AUDIT] "
+            f"expected={args.expected_trainable_parameters} "
+            f"actual={actual_trainable} pass=True"
+        )
     print(
         "[PATHVQA_LORA_CONFIG] "
         f"method=lora target_scope={target_scope} "
         f"epochs={args.epochs} micro_batch={args.batch_size} "
         f"gradient_accumulation={args.gradient_accumulation} "
-        f"rank={RANK} alpha={LORA_ALPHA} dropout={LORA_DROPOUT} "
+        f"rank={args.rank} alpha={lora_alpha} dropout={LORA_DROPOUT} "
         f"learning_rate={args.learning_rate} "
         f"trainable={parameter_counts['trainable']} total={parameter_counts['total']} "
         f"ratio={parameter_counts['trainable_ratio']:.6%}"
@@ -404,8 +551,8 @@ def main() -> int:
         "experiment": args.experiment_name,
         "method": "lora",
         "target_scope": target_scope,
-        "rank": RANK,
-        "alpha": LORA_ALPHA,
+        "rank": args.rank,
+        "alpha": lora_alpha,
         "dropout": LORA_DROPOUT,
         "epochs": args.epochs,
         "seed": args.seed,
@@ -413,9 +560,11 @@ def main() -> int:
         "learning_rate": args.learning_rate,
         "per_device_train_batch_size": args.batch_size,
         "gradient_accumulation_steps": args.gradient_accumulation,
-        "selected_vision_layers_0based": selected_layers,
+        "selected_vision_layers_0based": selected_vision_layers,
+        "selected_language_layers_0based": selected_language_layers,
         "target_modules": target_modules,
         "parameter_counts": parameter_counts,
+        "predicted_trainable_parameters": predicted_trainable,
         "dataset_samples": len(dataset),
         "train_metrics": train_result.metrics,
         "model_path": str(model_path),

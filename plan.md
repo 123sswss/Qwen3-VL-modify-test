@@ -48,6 +48,7 @@
 - 评估协议更新（2026-08-29）：后续PathVQA Dynamic Prompt开发实验固定训练3 epochs，只对`epoch_3`执行一次全量Validation；不再比较epoch1/2、不再自动选择最佳epoch，也不运行Test。`selected_result.tsv`必须标记`fixed_epoch3_validation`，Test仅在架构最终锁定后恢复。Dynamic Prompt因果干预同样默认只运行Validation。
 - Shared-S方向按新证据重新开放一次、但不恢复已否定的raw视觉S硬共享：新增`pathvqa_dynamic_prompt_asymmetric_shared_s_seed44`，令20x2560的文本Prompt本身成为共享S并保持Prompt LR0.3；文本侧直接更新S，视觉侧只能读取`detach(LayerNorm(S))`，经可学习20→8 Token Mixer与2560→128→1024低维Adapter生成视觉Rep基底。视觉Adapter、Visual CA和层嵌入保持Sparse LR3e-5，现有图文Dynamic CA保持3e-4；不使用`visual.merger`，不保留另一套独立P或视觉S。
 - 上述非对称Shared-S只运行PathVQA seed44，固定3 epochs并仅评估epoch3 Validation，不运行Test。对照为同seed的single-pass基线Validation57.5172；若明显低于基线则彻底停止Shared-S，若持平或产生正收益才讨论seed45。必须记录S梯度、视觉Adapter梯度、Token Mixer熵、Adapter输出范数、Dynamic delta/base及三层Visual CA诊断，以确认“文本写、视觉只读”的优化机制实际成立。
+- 同步增加强标准对照`pathvqa_lora_full_model_attn_r8_seed44`：PathVQA seed44/data_seed42，LoRA rank8、alpha16、dropout0.05、LR1e-4，覆盖24层视觉Attention的qkv/proj与36层LLM Self-Attention的q/k/v/o，共192个Linear目标、精确7,077,888个训练参数。训练3 epochs、有效batch32，只评估epoch3 Validation且不跑Test，与非对称Shared-S使用同一固定评估协议；它约为Shared-S 4,337,312参数的1.63倍，因此作为全模型强基线而不是参数严格等量对照。
 
 ## 总体目标
 

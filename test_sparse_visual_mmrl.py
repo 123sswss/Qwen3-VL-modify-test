@@ -4,7 +4,7 @@ from types import SimpleNamespace
 import torch
 import torch.nn as nn
 
-from slake.sparse_visual_mmrl import SparseVisualMMRL
+from slake.sparse_visual_mmrl import LatentResidualAttention, SparseVisualMMRL
 
 
 class _SegmentMixingBlock(nn.Module):
@@ -160,6 +160,103 @@ class SparseVisualMMRLTest(unittest.TestCase):
         self.assertIn(
             "shared_s_visual_adapter_token_entropy_norm",
             adapter._text_anchor_debug,
+        )
+
+    def test_full_workspace_uses_tokens_and_preserves_private_visual_path_at_init(self):
+        torch.manual_seed(17)
+        visual = _FakeVisual()
+        adapter = SparseVisualMMRL(
+            visual_dim=8,
+            text_dim=12,
+            anchor_layers=(1,),
+            rep_token_count=2,
+            attention_dim=4,
+            num_heads=2,
+            shared_workspace=True,
+            workspace_tokens=3,
+            workspace_dim=8,
+            workspace_heads=2,
+            workspace_ffn_dim=16,
+            workspace_visual_attention_dim=4,
+            workspace_visual_heads=2,
+        )
+        adapter.install(visual)
+        hidden = torch.randn(7, 8)
+        text_tokens = torch.randn(2, 4, 12)
+        text_mask = torch.tensor(
+            [[True, True, False, False], [True, True, True, False]]
+        )
+        cu_seqlens = torch.tensor([0, 2, 4, 7], dtype=torch.int32)
+        with adapter.activate(
+            torch.randn(2, 12),
+            torch.tensor([1, 1]),
+            text_tokens=text_tokens,
+            text_token_mask=text_mask,
+        ):
+            adapter.prepare_visual(torch.tensor([[1, 1, 4], [1, 1, 3]]))
+            output = visual.blocks[1](hidden, cu_seqlens=cu_seqlens)
+            workspace = adapter.shared_workspace_text_memory()
+            self.assertEqual(tuple(workspace.shape), (2, 3, 8))
+            self.assertEqual(
+                float(
+                    adapter.debug_context[
+                        "workspace_layer1_visual_delta_to_base_ratio"
+                    ]
+                ),
+                0.0,
+            )
+            loss = output.square().mean() + workspace.square().mean()
+        loss.backward()
+        self.assertGreater(float(adapter.shared_rep.grad.norm()), 0.0)
+        self.assertGreater(float(adapter.workspace_seed.grad.norm()), 0.0)
+        private_ids = {id(parameter) for parameter in adapter.private_parameters()}
+        workspace_ids = {
+            id(parameter) for parameter in adapter.shared_workspace_parameters()
+        }
+        self.assertTrue(private_ids.isdisjoint(workspace_ids))
+        self.assertEqual(
+            private_ids | workspace_ids,
+            {id(parameter) for parameter in adapter.parameters()},
+        )
+
+    def test_full_workspace_production_parameter_count(self):
+        adapter = SparseVisualMMRL(
+            visual_dim=1024,
+            text_dim=2560,
+            anchor_layers=(5, 11, 17),
+            rep_token_count=8,
+            attention_dim=128,
+            num_heads=4,
+            shared_workspace=True,
+            workspace_tokens=32,
+            workspace_dim=1024,
+            workspace_heads=16,
+            workspace_ffn_dim=4096,
+            workspace_visual_attention_dim=1024,
+            workspace_visual_heads=16,
+        )
+        private_count = sum(
+            parameter.numel() for parameter in adapter.private_parameters()
+        )
+        workspace_count = sum(
+            parameter.numel()
+            for parameter in adapter.shared_workspace_parameters()
+        )
+        self.assertEqual(private_count, 1_201_152)
+        self.assertEqual(workspace_count, 65_659_904)
+        text_head = LatentResidualAttention(
+            query_dim=2560,
+            memory_dim=1024,
+            attention_dim=1024,
+            num_heads=16,
+        )
+        text_head_count = sum(
+            parameter.numel() for parameter in text_head.parameters()
+        )
+        self.assertEqual(text_head_count, 7_349_760)
+        self.assertEqual(
+            51_200 + 2_634_240 + private_count + workspace_count + text_head_count,
+            76_896_256,
         )
 
 

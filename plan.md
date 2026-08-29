@@ -48,7 +48,11 @@
 - 评估协议更新（2026-08-29）：后续PathVQA Dynamic Prompt开发实验固定训练3 epochs，只对`epoch_3`执行一次全量Validation；不再比较epoch1/2、不再自动选择最佳epoch，也不运行Test。`selected_result.tsv`必须标记`fixed_epoch3_validation`，Test仅在架构最终锁定后恢复。Dynamic Prompt因果干预同样默认只运行Validation。
 - Shared-S方向按新证据重新开放一次、但不恢复已否定的raw视觉S硬共享：新增`pathvqa_dynamic_prompt_asymmetric_shared_s_seed44`，令20x2560的文本Prompt本身成为共享S并保持Prompt LR0.3；文本侧直接更新S，视觉侧只能读取`detach(LayerNorm(S))`，经可学习20→8 Token Mixer与2560→128→1024低维Adapter生成视觉Rep基底。视觉Adapter、Visual CA和层嵌入保持Sparse LR3e-5，现有图文Dynamic CA保持3e-4；不使用`visual.merger`，不保留另一套独立P或视觉S。
 - 上述非对称Shared-S只运行PathVQA seed44，固定3 epochs并仅评估epoch3 Validation，不运行Test。对照为同seed的single-pass基线Validation57.5172；若明显低于基线则彻底停止Shared-S，若持平或产生正收益才讨论seed45。必须记录S梯度、视觉Adapter梯度、Token Mixer熵、Adapter输出范数、Dynamic delta/base及三层Visual CA诊断，以确认“文本写、视觉只读”的优化机制实际成立。
+- 非对称Shared-S seed44已完成：固定epoch3 Validation为56.8142/88.2240/25.4946，相对精确基线57.5172/89.7280/25.3989为-0.7030/-1.5040/+0.0957；Overall聚类配对95% CI[-1.4045,+0.0161]，Yes/No退化显著而Free-form完全打平。梯度隔离和Adapter均正常，但Visual CA三层视觉质量由约68%/50%/61%降至29%/27%/29%，Rep/input反而显著增大，说明纯替换把视觉分支文本化并放大。该结构不追加seed45；若仍抢救共享锚点，只允许“保留独立视觉S + 有界stop-gradient文本S残差”这一项新假设。
 - 同步增加强标准对照`pathvqa_lora_full_model_attn_r8_seed44`：PathVQA seed44/data_seed42，LoRA rank8、alpha16、dropout0.05、LR1e-4，覆盖24层视觉Attention的qkv/proj与36层LLM Self-Attention的q/k/v/o，共192个Linear目标、精确7,077,888个训练参数。训练3 epochs、有效batch32，只评估epoch3 Validation且不跑Test，与非对称Shared-S使用同一固定评估协议；它约为Shared-S 4,337,312参数的1.63倍，因此作为全模型强基线而不是参数严格等量对照。
+- 方向调整（2026-08-29）：停止用删除私有参数、低维瓶颈或硬共享换取小参数量。下一阶段先建立高容量性能上限，再做蒸馏、共享权重或低秩化。新结构必须完整保留57.5172 Validation基线的独立P20、原Text CA256、独立视觉S8、原Visual CA128和层5/11/17单路径注入。
+- 新增唯一主实验`pathvqa_dynamic_prompt_full_workspace_seed44`：增加32x1024样本级共享多模态工作区Z；Z在视觉层5/11/17依次经过各自独立的全Token Cross-Attention、Self-Attention和FFN4096更新，Memory为该层完整视觉Token与完整问题Token，而非Mean Pooling。原文本与视觉私有支路继续独立工作；Z只通过独立Text CA1024/16头和三组Visual CA1024/16头提供附加残差，不拼入原CA Memory、不替换P或S。四个共享残差头输出投影严格零初始化，使训练第0步等价于当前基线。
+- 上述工作区实验固定PathVQA seed44/data_seed42、Prompt LR0.3、原Dynamic CA LR3e-4、原Sparse Visual LR3e-5、Workspace LR1e-4、3 epochs；只评估epoch3 Validation、不跑Test。重点记录Workspace总梯度、三层Z的视觉/文本注意力质量和熵、Z范数、三层视觉共享残差比例、文本共享残差比例及原私有分支诊断。只有Validation超过57.5172且主要收益不只来自Yes/No，才追加seed45并进入降本消融；失败时先根据独立残差头诊断定位，不扫描槽数或维度。
 
 ## 总体目标
 

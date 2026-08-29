@@ -646,6 +646,7 @@ run_pathvqa_dynamic_prompt_sparse_visual_variant_seed44() {
   local experiment_name="$1"
   local shared_s_text_mode="$2"
   local expected_trainable="$3"
+  local shared_workspace="${4:-false}"
   local run_seed=44
   local epochs="${PATHVQA_DYNAMIC_PROMPT_EPOCHS:-3}"
   if [ "$epochs" -ne 3 ]; then
@@ -656,6 +657,7 @@ run_pathvqa_dynamic_prompt_sparse_visual_variant_seed44() {
   local shared_s_source=raw_unconditioned_visual_s
   local shared_s_text_merger=main_visual_merger
   local shared_s_gradient_policy=joint_or_disabled
+  local workspace_args=()
   if [ "$shared_s_text_mode" = "none" ]; then
     shared_s_source=independent_text_p_and_visual_s
     shared_s_text_merger=none
@@ -663,6 +665,20 @@ run_pathvqa_dynamic_prompt_sparse_visual_variant_seed44() {
     shared_s_source=text_owned_prompt_s
     shared_s_text_merger=none
     shared_s_gradient_policy=text_write_visual_readonly
+  fi
+  if [ "$shared_workspace" = "true" ]; then
+    workspace_args=(
+      --shared-workspace
+      --workspace-tokens 32
+      --workspace-dim 1024
+      --workspace-heads 16
+      --workspace-ffn-dim 4096
+      --workspace-text-attention-dim 1024
+      --workspace-text-heads 16
+      --workspace-visual-attention-dim 1024
+      --workspace-visual-heads 16
+      --workspace-lr "${PATHVQA_SHARED_WORKSPACE_LR:-1e-4}"
+    )
   fi
   if ! python -c 'import datasets, pyarrow' >/dev/null 2>&1; then
     echo "[ERR] PathVQA Dynamic Prompt 需要 datasets 和 pyarrow。先运行: python -m pip install -r pathvqa/requirements.txt" >&2
@@ -672,7 +688,7 @@ run_pathvqa_dynamic_prompt_sparse_visual_variant_seed44() {
   local output_dir
   output_dir="$(available_output_dir "$PATHVQA_DYNAMIC_PROMPT_OUTPUT_ROOT" "${experiment_name}_seed${run_seed}_${RUN_DATE}")"
   mkdir -p "$output_dir"
-  echo "[PATHVQA_DYNAMIC_PROMPT_SPARSE_VISUAL] experiment=$experiment_name seed=$run_seed epochs=$epochs anchors=5,11,17 rep_tokens=8 visual_ca=128x4 injection=single_pass_insert_strip relation=off sparse_lr=$sparse_visual_lr shared_s_text_mode=$shared_s_text_mode shared_s_source=$shared_s_source shared_s_text_merger=$shared_s_text_merger shared_s_gradient_policy=$shared_s_gradient_policy expected_trainable=$expected_trainable output=$output_dir"
+  echo "[PATHVQA_DYNAMIC_PROMPT_SPARSE_VISUAL] experiment=$experiment_name seed=$run_seed epochs=$epochs anchors=5,11,17 rep_tokens=8 visual_ca=128x4 injection=single_pass_insert_strip relation=off sparse_lr=$sparse_visual_lr shared_s_text_mode=$shared_s_text_mode shared_s_source=$shared_s_source shared_s_text_merger=$shared_s_text_merger shared_s_gradient_policy=$shared_s_gradient_policy shared_workspace=$shared_workspace workspace=32x1024 workspace_blocks=3 workspace_ca=1024x16 workspace_lr=${PATHVQA_SHARED_WORKSPACE_LR:-1e-4} expected_trainable=$expected_trainable output=$output_dir"
   (
     cd "$ROOT_DIR" || exit 1
     python -m unittest test_dynamic_prompt_tuning.py test_sparse_visual_mmrl.py || exit 1
@@ -695,6 +711,7 @@ run_pathvqa_dynamic_prompt_sparse_visual_variant_seed44() {
       --shared-s-attention-dim 128 \
       --shared-s-heads 4 \
       --shared-s-visual-bottleneck-dim 128 \
+      "${workspace_args[@]}" \
       --epochs "$epochs" \
       --seed "$run_seed" \
       --data-seed 42 \
@@ -733,6 +750,12 @@ run_pathvqa_dynamic_prompt_asymmetric_shared_s_seed44() {
   run_pathvqa_dynamic_prompt_sparse_visual_variant_seed44 \
     "pathvqa_dynamic_prompt_asymmetric_shared_s_text_owned_visual_readonly_layers5_11_17_slots8_adapter128" \
     text_owned_visual_readonly 4337312
+}
+
+run_pathvqa_dynamic_prompt_full_workspace_seed44() {
+  run_pathvqa_dynamic_prompt_sparse_visual_variant_seed44 \
+    "pathvqa_dynamic_prompt_full_workspace_z32_d1024_blocks3_private_p20_private_s8" \
+    none 76896256 true
 }
 
 run_pathvqa_dynamic_prompt_raw_shared_s_suite_seed44() {
@@ -1219,6 +1242,9 @@ case "$RUN_TARGET" in
   pathvqa_dynamic_prompt_asymmetric_shared_s_seed44)
     run_pathvqa_dynamic_prompt_asymmetric_shared_s_seed44 || failures=$((failures + 1))
     ;;
+  pathvqa_dynamic_prompt_full_workspace_seed44)
+    run_pathvqa_dynamic_prompt_full_workspace_seed44 || failures=$((failures + 1))
+    ;;
   pathvqa_dynamic_prompt_interventions)
     run_pathvqa_dynamic_prompt_interventions || failures=$((failures + 1))
     ;;
@@ -1248,7 +1274,7 @@ case "$RUN_TARGET" in
     run_slake || failures=$((failures + 1))
     ;;
   *)
-    echo "[ERR] 未知目标: $RUN_TARGET，可选 train、slake、pathvqa、pathvqa_base、pathvqa_prompt_tuning_seed44、pathvqa_dynamic_prompt_seed44、pathvqa_dynamic_prompt_sparse_visual_single_pass_seed44、pathvqa_dynamic_prompt_raw_shared_s_separate_residual_seed44、pathvqa_dynamic_prompt_raw_shared_s_direct_prompt_seed44、pathvqa_dynamic_prompt_raw_shared_s_suite_seed44、pathvqa_dynamic_prompt_asymmetric_shared_s_seed44、pathvqa_dynamic_prompt_interventions、pathvqa_minimal_mmrl_prompt20_seed44、pathvqa_lora_visual_attn_r128、pathvqa_lora_visual_attn_r128_then_base、pathvqa_lora_visual_last8_attn_r128、pathvqa_lora_full_model_attn_r8_seed44、pathvqa_last8_lora_minimal_mmrl_relation_suite、slake_final_seeds4、slake_ablation_no_relation_seeds2、slake_ablation_independent_init_seeds2、slake_ablation_static_query_seed45、slake_ablation_mean_pooling_seed45、slake_mean_final_completion_suite、slake_text_guided_balanced_fusion_slots8_seed45、slake_prompt_tuning_seed44、slake_concat_mlp_fusion_seed45、slake_overnight_prompt_and_concat_mlp、slake_ablation_suite、all。" >&2
+    echo "[ERR] 未知目标: $RUN_TARGET，可选 train、slake、pathvqa、pathvqa_base、pathvqa_prompt_tuning_seed44、pathvqa_dynamic_prompt_seed44、pathvqa_dynamic_prompt_sparse_visual_single_pass_seed44、pathvqa_dynamic_prompt_raw_shared_s_separate_residual_seed44、pathvqa_dynamic_prompt_raw_shared_s_direct_prompt_seed44、pathvqa_dynamic_prompt_raw_shared_s_suite_seed44、pathvqa_dynamic_prompt_asymmetric_shared_s_seed44、pathvqa_dynamic_prompt_full_workspace_seed44、pathvqa_dynamic_prompt_interventions、pathvqa_minimal_mmrl_prompt20_seed44、pathvqa_lora_visual_attn_r128、pathvqa_lora_visual_attn_r128_then_base、pathvqa_lora_visual_last8_attn_r128、pathvqa_lora_full_model_attn_r8_seed44、pathvqa_last8_lora_minimal_mmrl_relation_suite、slake_final_seeds4、slake_ablation_no_relation_seeds2、slake_ablation_independent_init_seeds2、slake_ablation_static_query_seed45、slake_ablation_mean_pooling_seed45、slake_mean_final_completion_suite、slake_text_guided_balanced_fusion_slots8_seed45、slake_prompt_tuning_seed44、slake_concat_mlp_fusion_seed45、slake_overnight_prompt_and_concat_mlp、slake_ablation_suite、all。" >&2
     exit 2
     ;;
 esac

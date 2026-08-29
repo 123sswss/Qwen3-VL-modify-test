@@ -64,6 +64,7 @@ class DynamicPromptTuningModelInterface:
         )
         sparse_visual = config.get("sparse_visual")
         shared_s_prompt_attention = config.get("shared_s_prompt_attention")
+        shared_workspace = config.get("shared_workspace")
         self.model = DynamicPromptTuningModel(
             base_model,
             tokenizer=self.processor.tokenizer,
@@ -107,6 +108,47 @@ class DynamicPromptTuningModelInterface:
                 if sparse_visual is not None
                 else 128
             ),
+            shared_workspace=shared_workspace is not None,
+            workspace_tokens=(
+                int(shared_workspace["tokens"])
+                if shared_workspace is not None
+                else 32
+            ),
+            workspace_dim=(
+                int(shared_workspace["dim"])
+                if shared_workspace is not None
+                else 1024
+            ),
+            workspace_heads=(
+                int(shared_workspace["heads"])
+                if shared_workspace is not None
+                else 16
+            ),
+            workspace_ffn_dim=(
+                int(shared_workspace["ffn_dim"])
+                if shared_workspace is not None
+                else 4096
+            ),
+            workspace_text_attention_dim=(
+                int(shared_workspace["text_attention_dim"])
+                if shared_workspace is not None
+                else 1024
+            ),
+            workspace_text_heads=(
+                int(shared_workspace["text_attention_heads"])
+                if shared_workspace is not None
+                else 16
+            ),
+            workspace_visual_attention_dim=(
+                int(shared_workspace["visual_attention_dim"])
+                if shared_workspace is not None
+                else 1024
+            ),
+            workspace_visual_heads=(
+                int(shared_workspace["visual_attention_heads"])
+                if shared_workspace is not None
+                else 16
+            ),
         )
         self.model.load_dynamic_prompt(checkpoint)
         self.model.eval()
@@ -123,6 +165,7 @@ class DynamicPromptTuningModelInterface:
             f"heads={self.model.dynamic_prompt.num_heads} "
             f"sparse_visual={sparse_visual is not None} "
             f"shared_s_text_mode={self.model.shared_s_text_mode} "
+            f"shared_workspace={self.model.shared_workspace_enabled} "
             f"train_soft_prompt={self.model.soft_prompt is not None} "
             f"intervention={intervention} memory_lag={memory_lag}"
         )

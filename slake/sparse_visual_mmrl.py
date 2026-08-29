@@ -107,6 +107,208 @@ class SparseVisualRepAttention(nn.Module):
         return queries + delta
 
 
+class LatentResidualAttention(nn.Module):
+    """Read a latent workspace without replacing a branch's private base."""
+
+    def __init__(
+        self,
+        query_dim: int,
+        memory_dim: int,
+        attention_dim: int,
+        num_heads: int,
+        zero_init_output: bool = True,
+    ) -> None:
+        super().__init__()
+        if min(query_dim, memory_dim, attention_dim, num_heads) < 1:
+            raise ValueError("Latent attention dimensions must be positive")
+        if attention_dim % num_heads != 0:
+            raise ValueError("attention_dim must be divisible by num_heads")
+        self.query_dim = int(query_dim)
+        self.memory_dim = int(memory_dim)
+        self.attention_dim = int(attention_dim)
+        self.num_heads = int(num_heads)
+        self.head_dim = self.attention_dim // self.num_heads
+        self.query_norm = nn.LayerNorm(self.query_dim)
+        self.memory_norm = nn.LayerNorm(self.memory_dim)
+        self.query_projection = nn.Linear(
+            self.query_dim, self.attention_dim, bias=False
+        )
+        self.key_projection = nn.Linear(
+            self.memory_dim, self.attention_dim, bias=False
+        )
+        self.value_projection = nn.Linear(
+            self.memory_dim, self.attention_dim, bias=False
+        )
+        self.output_projection = nn.Linear(
+            self.attention_dim, self.query_dim, bias=True
+        )
+        if zero_init_output:
+            nn.init.zeros_(self.output_projection.weight)
+            nn.init.zeros_(self.output_projection.bias)
+        self.debug_context: Dict[str, torch.Tensor] = {}
+        self._forward_audited = False
+
+    def _split_heads(self, tensor: torch.Tensor) -> torch.Tensor:
+        batch, length, _ = tensor.shape
+        return tensor.view(batch, length, self.num_heads, self.head_dim).transpose(1, 2)
+
+    def forward(
+        self,
+        queries: torch.Tensor,
+        memory: torch.Tensor,
+    ) -> torch.Tensor:
+        if queries.ndim != 3 or queries.shape[-1] != self.query_dim:
+            raise ValueError(
+                f"queries must have [B,Q,{self.query_dim}], got {tuple(queries.shape)}"
+            )
+        if memory.ndim != 3 or memory.shape[-1] != self.memory_dim:
+            raise ValueError(
+                f"memory must have [B,M,{self.memory_dim}], got {tuple(memory.shape)}"
+            )
+        if queries.shape[0] != memory.shape[0]:
+            raise ValueError("Latent attention batch dimensions must match")
+
+        dtype = self.query_projection.weight.dtype
+        query = self._split_heads(
+            self.query_projection(self.query_norm(queries.to(dtype=dtype)))
+        )
+        memory_f = self.memory_norm(memory.to(dtype=dtype))
+        key = self._split_heads(self.key_projection(memory_f))
+        value = self._split_heads(self.value_projection(memory_f))
+        scores = torch.matmul(query, key.transpose(-1, -2)) / math.sqrt(self.head_dim)
+        attention = torch.softmax(scores.float(), dim=-1).to(dtype=value.dtype)
+        context = torch.matmul(attention, value)
+        context = (
+            context.transpose(1, 2)
+            .contiguous()
+            .view(queries.shape[0], queries.shape[1], self.attention_dim)
+        )
+        delta = self.output_projection(context).to(dtype=queries.dtype)
+
+        with torch.no_grad():
+            attention_f = attention.detach().float().clamp_min(1e-8)
+            entropy = -(attention_f * attention_f.log()).sum(dim=-1)
+            if memory.shape[1] > 1:
+                entropy = entropy / math.log(float(memory.shape[1]))
+            query_norm = queries.detach().float().norm(dim=-1).mean()
+            delta_norm = delta.detach().float().norm(dim=-1).mean()
+            self.debug_context = {
+                "attention_entropy_norm": entropy.mean(),
+                "delta_norm_mean": delta_norm,
+                "base_norm_mean": query_norm,
+                "delta_to_base_ratio": delta_norm / query_norm.clamp_min(1e-8),
+            }
+            if not self._forward_audited:
+                max_abs = float(delta.detach().float().abs().max().item())
+                if max_abs != 0.0:
+                    raise RuntimeError(
+                        "Latent residual output must start at exact zero; "
+                        f"max_abs_delta={max_abs}"
+                    )
+                self._forward_audited = True
+        return delta
+
+
+class FullTokenWorkspaceBlock(nn.Module):
+    """Update shared slots from full visual and question-token memories."""
+
+    def __init__(
+        self,
+        workspace_dim: int,
+        num_heads: int,
+        ffn_dim: int,
+    ) -> None:
+        super().__init__()
+        if min(workspace_dim, num_heads, ffn_dim) < 1:
+            raise ValueError("Workspace block dimensions must be positive")
+        if workspace_dim % num_heads != 0:
+            raise ValueError("workspace_dim must be divisible by num_heads")
+        self.workspace_dim = int(workspace_dim)
+        self.num_heads = int(num_heads)
+        self.ffn_dim = int(ffn_dim)
+        self.query_norm = nn.LayerNorm(self.workspace_dim)
+        self.memory_norm = nn.LayerNorm(self.workspace_dim)
+        self.cross_attention = nn.MultiheadAttention(
+            self.workspace_dim,
+            self.num_heads,
+            batch_first=True,
+        )
+        self.self_norm = nn.LayerNorm(self.workspace_dim)
+        self.self_attention = nn.MultiheadAttention(
+            self.workspace_dim,
+            self.num_heads,
+            batch_first=True,
+        )
+        self.ffn_norm = nn.LayerNorm(self.workspace_dim)
+        self.ffn = nn.Sequential(
+            nn.Linear(self.workspace_dim, self.ffn_dim),
+            nn.GELU(approximate="tanh"),
+            nn.Linear(self.ffn_dim, self.workspace_dim),
+        )
+        self.debug_context: Dict[str, torch.Tensor] = {}
+
+    def forward(
+        self,
+        workspace: torch.Tensor,
+        memory: torch.Tensor,
+        memory_mask: torch.Tensor,
+        visual_width: int,
+    ) -> torch.Tensor:
+        if workspace.ndim != 3 or workspace.shape[-1] != self.workspace_dim:
+            raise ValueError("Workspace slots have an invalid shape")
+        if memory.ndim != 3 or memory.shape[-1] != self.workspace_dim:
+            raise ValueError("Workspace memory has an invalid shape")
+        if memory_mask.shape != memory.shape[:2]:
+            raise ValueError("Workspace memory mask has an invalid shape")
+        if visual_width < 1 or visual_width >= memory.shape[1]:
+            raise ValueError("Workspace memory must contain visual and text tokens")
+
+        query = self.query_norm(workspace)
+        normalized_memory = self.memory_norm(memory)
+        cross, weights = self.cross_attention(
+            query,
+            normalized_memory,
+            normalized_memory,
+            key_padding_mask=~memory_mask,
+            need_weights=True,
+            average_attn_weights=False,
+        )
+        workspace = workspace + cross
+        self_input = self.self_norm(workspace)
+        self_delta, _ = self.self_attention(
+            self_input,
+            self_input,
+            self_input,
+            need_weights=False,
+        )
+        workspace = workspace + self_delta
+        workspace = workspace + self.ffn(self.ffn_norm(workspace))
+
+        with torch.no_grad():
+            probabilities = weights.detach().float().clamp_min(1e-8)
+            valid = memory_mask[:, None, None, :]
+            probabilities = probabilities * valid
+            valid_counts = memory_mask.sum(dim=-1).clamp_min(2).float()
+            entropy = -(
+                probabilities * probabilities.clamp_min(1e-8).log()
+            ).sum(dim=-1)
+            entropy = entropy / valid_counts.log()[:, None, None]
+            self.debug_context = {
+                "attention_entropy_norm": entropy.mean(),
+                "visual_attention_mean": probabilities[..., :visual_width]
+                .sum(dim=-1)
+                .mean(),
+                "text_attention_mean": probabilities[..., visual_width:]
+                .sum(dim=-1)
+                .mean(),
+                "workspace_norm_mean": workspace.detach()
+                .float()
+                .norm(dim=-1)
+                .mean(),
+            }
+        return workspace
+
+
 class SparseVisualInjectionBlock(nn.Module):
     """Insert local Rep tokens while executing the wrapped block exactly once."""
 
@@ -147,6 +349,13 @@ class SparseVisualMMRL(nn.Module):
         map_shared_s_to_text: bool = False,
         text_anchor_tokens: int | None = None,
         text_anchor_bottleneck_dim: int = 128,
+        shared_workspace: bool = False,
+        workspace_tokens: int = 32,
+        workspace_dim: int = 1024,
+        workspace_heads: int = 16,
+        workspace_ffn_dim: int = 4096,
+        workspace_visual_attention_dim: int = 1024,
+        workspace_visual_heads: int = 16,
     ) -> None:
         super().__init__()
         anchors = tuple(int(index) for index in anchor_layers)
@@ -160,6 +369,26 @@ class SparseVisualMMRL(nn.Module):
             raise ValueError("text_anchor_tokens must be positive when enabled")
         if text_anchor_bottleneck_dim < 1:
             raise ValueError("text_anchor_bottleneck_dim must be positive")
+        if min(
+            workspace_tokens,
+            workspace_dim,
+            workspace_heads,
+            workspace_ffn_dim,
+            workspace_visual_attention_dim,
+            workspace_visual_heads,
+        ) < 1:
+            raise ValueError("Shared workspace dimensions must be positive")
+        if shared_workspace and workspace_dim != visual_dim:
+            raise ValueError(
+                "The first full-capacity workspace keeps visual width unchanged: "
+                f"workspace_dim={workspace_dim} visual_dim={visual_dim}"
+            )
+        if workspace_dim % workspace_heads != 0:
+            raise ValueError("workspace_dim must be divisible by workspace_heads")
+        if workspace_visual_attention_dim % workspace_visual_heads != 0:
+            raise ValueError(
+                "workspace_visual_attention_dim must be divisible by heads"
+            )
         if map_shared_s_to_text and text_anchor_tokens is not None:
             raise ValueError(
                 "Raw visual-S text mapping and text-owned S are mutually exclusive"
@@ -172,6 +401,11 @@ class SparseVisualMMRL(nn.Module):
         self.map_shared_s_to_text = bool(map_shared_s_to_text)
         self.text_anchor_tokens = int(text_anchor_tokens or 0)
         self.text_anchor_bottleneck_dim = int(text_anchor_bottleneck_dim)
+        self.shared_workspace_enabled = bool(shared_workspace)
+        self.workspace_tokens = int(workspace_tokens)
+        self.workspace_dim = int(workspace_dim)
+        self.workspace_heads = int(workspace_heads)
+        self.workspace_ffn_dim = int(workspace_ffn_dim)
         if self.text_anchor_tokens:
             self.register_parameter("shared_rep", None)
             self.text_anchor_token_mixer = nn.Parameter(
@@ -217,14 +451,69 @@ class SparseVisualMMRL(nn.Module):
             attention_dim=attention_dim,
             num_heads=num_heads,
         )
+        if self.shared_workspace_enabled:
+            if self.text_anchor_tokens or self.map_shared_s_to_text:
+                raise ValueError(
+                    "The full workspace requires independent private P and visual S"
+                )
+            self.workspace_seed = nn.Parameter(
+                torch.empty(self.workspace_tokens, self.workspace_dim)
+            )
+            self.workspace_layer_embeddings = nn.Parameter(
+                torch.empty(len(self.anchor_layers), 1, self.workspace_dim)
+            )
+            self.workspace_text_norm = nn.LayerNorm(self.text_dim)
+            self.workspace_text_projection = nn.Linear(
+                self.text_dim, self.workspace_dim, bias=True
+            )
+            self.workspace_visual_type = nn.Parameter(
+                torch.empty(1, 1, self.workspace_dim)
+            )
+            self.workspace_text_type = nn.Parameter(
+                torch.empty(1, 1, self.workspace_dim)
+            )
+            self.workspace_blocks = nn.ModuleList(
+                FullTokenWorkspaceBlock(
+                    self.workspace_dim,
+                    self.workspace_heads,
+                    self.workspace_ffn_dim,
+                )
+                for _ in self.anchor_layers
+            )
+            self.workspace_visual_attentions = nn.ModuleList(
+                LatentResidualAttention(
+                    query_dim=self.visual_dim,
+                    memory_dim=self.workspace_dim,
+                    attention_dim=workspace_visual_attention_dim,
+                    num_heads=workspace_visual_heads,
+                    zero_init_output=True,
+                )
+                for _ in self.anchor_layers
+            )
+            nn.init.normal_(self.workspace_seed, std=0.02)
+            nn.init.normal_(self.workspace_layer_embeddings, std=0.02)
+            nn.init.normal_(self.workspace_visual_type, std=0.02)
+            nn.init.normal_(self.workspace_text_type, std=0.02)
+        else:
+            self.register_parameter("workspace_seed", None)
+            self.register_parameter("workspace_layer_embeddings", None)
+            self.workspace_text_norm = None
+            self.workspace_text_projection = None
+            self.register_parameter("workspace_visual_type", None)
+            self.register_parameter("workspace_text_type", None)
+            self.workspace_blocks = nn.ModuleList()
+            self.workspace_visual_attentions = nn.ModuleList()
 
         self.active = False
         self.debug_context: Dict[str, torch.Tensor] = {}
         self._text_memory: torch.Tensor | None = None
+        self._text_tokens: torch.Tensor | None = None
+        self._text_token_mask: torch.Tensor | None = None
         self._images_per_sample: torch.Tensor | None = None
         self._image_lengths: torch.Tensor | None = None
         self._image_to_sample: torch.Tensor | None = None
         self._read_only_shared_rep: torch.Tensor | None = None
+        self._workspace_by_image: torch.Tensor | None = None
         self._text_anchor_debug: Dict[str, torch.Tensor] = {}
         self._last_shared_s_text_prompt: torch.Tensor | None = None
         self._debug_rows: list[Dict[str, torch.Tensor]] = []
@@ -232,6 +521,25 @@ class SparseVisualMMRL(nn.Module):
         self._forward_audited = False
         object.__setattr__(self, "_shared_memory_merger_ref", None)
         self._shared_memory_merge_unit = 0
+
+    def shared_workspace_parameters(self) -> list[nn.Parameter]:
+        if not self.shared_workspace_enabled:
+            return []
+        return [
+            parameter
+            for name, parameter in self.named_parameters()
+            if name.startswith("workspace_")
+        ]
+
+    def private_parameters(self) -> list[nn.Parameter]:
+        workspace_ids = {
+            id(parameter) for parameter in self.shared_workspace_parameters()
+        }
+        return [
+            parameter
+            for parameter in self.parameters()
+            if id(parameter) not in workspace_ids
+        ]
 
     def install(self, visual_model: nn.Module) -> None:
         if self._installed:
@@ -271,7 +579,10 @@ class SparseVisualMMRL(nn.Module):
             "local_insert_strip=True block_execution=single_pass "
             f"map_shared_s_to_text={self.map_shared_s_to_text} "
             f"text_owned_s_visual_readonly={bool(self.text_anchor_tokens)} "
-            f"text_anchor_bottleneck={self.text_anchor_bottleneck_dim if self.text_anchor_tokens else 0}"
+            f"text_anchor_bottleneck={self.text_anchor_bottleneck_dim if self.text_anchor_tokens else 0} "
+            f"shared_workspace={self.shared_workspace_enabled} "
+            f"workspace_tokens={self.workspace_tokens if self.shared_workspace_enabled else 0} "
+            f"workspace_dim={self.workspace_dim if self.shared_workspace_enabled else 0}"
         )
 
     def adapt_read_only_text_anchor(self, text_anchor: torch.Tensor) -> torch.Tensor:
@@ -329,14 +640,44 @@ class SparseVisualMMRL(nn.Module):
         text_memory: torch.Tensor,
         images_per_sample: torch.Tensor,
         text_anchor: torch.Tensor | None = None,
+        text_tokens: torch.Tensor | None = None,
+        text_token_mask: torch.Tensor | None = None,
     ) -> Iterator[None]:
         if self.active:
             raise RuntimeError("Sparse Visual MMRL context is already active")
         self.active = True
         self._text_memory = text_memory
         self._images_per_sample = images_per_sample.to(dtype=torch.long)
+        if self.shared_workspace_enabled:
+            if text_tokens is None or text_token_mask is None:
+                raise RuntimeError("Shared workspace requires full question tokens")
+            if text_tokens.ndim != 3 or text_token_mask.shape != text_tokens.shape[:2]:
+                raise ValueError("Shared workspace question tokens have invalid shapes")
+            lengths = text_token_mask.to(dtype=torch.bool).sum(dim=1)
+            if bool((lengths == 0).any()):
+                raise RuntimeError("Shared workspace question memory is empty")
+            max_length = int(lengths.max().item())
+            compact = text_tokens.new_zeros(
+                text_tokens.shape[0], max_length, text_tokens.shape[-1]
+            )
+            compact_mask = torch.zeros(
+                text_tokens.shape[0],
+                max_length,
+                dtype=torch.bool,
+                device=text_tokens.device,
+            )
+            for sample_index in range(text_tokens.shape[0]):
+                selected = text_tokens[sample_index][text_token_mask[sample_index].bool()]
+                compact[sample_index, : selected.shape[0]] = selected
+                compact_mask[sample_index, : selected.shape[0]] = True
+            self._text_tokens = compact
+            self._text_token_mask = compact_mask
+        else:
+            self._text_tokens = None
+            self._text_token_mask = None
         self._image_lengths = None
         self._image_to_sample = None
+        self._workspace_by_image = None
         if self.text_anchor_tokens:
             if text_anchor is None:
                 raise RuntimeError("Text-owned Shared-S requires a text anchor")
@@ -353,10 +694,13 @@ class SparseVisualMMRL(nn.Module):
         finally:
             self.active = False
             self._text_memory = None
+            self._text_tokens = None
+            self._text_token_mask = None
             self._images_per_sample = None
             self._image_lengths = None
             self._image_to_sample = None
             self._read_only_shared_rep = None
+            self._workspace_by_image = None
 
     def prepare_visual(self, grid_thw: torch.Tensor) -> None:
         if not self.active:
@@ -395,7 +739,13 @@ class SparseVisualMMRL(nn.Module):
         self,
         hidden_states: torch.Tensor,
         cu_seqlens: torch.Tensor,
-    ) -> tuple[torch.Tensor, torch.Tensor, list[int], torch.Tensor]:
+    ) -> tuple[
+        torch.Tensor,
+        torch.Tensor,
+        list[int],
+        torch.Tensor,
+        torch.Tensor,
+    ]:
         if self._text_memory is None or self._image_lengths is None:
             raise RuntimeError(
                 "Sparse Visual context was not prepared before a block ran"
@@ -449,7 +799,119 @@ class SparseVisualMMRL(nn.Module):
         text_memory = text_memory_all.index_select(
             0, sample_ids.to(text_memory_all.device)
         )
-        return visual_memory, text_memory, lengths, sample_ids
+        return visual_memory, text_memory, lengths, sample_ids, image_ids
+
+    def _update_shared_workspace(
+        self,
+        layer_position: int,
+        hidden_states: torch.Tensor,
+    ) -> torch.Tensor:
+        if not self.shared_workspace_enabled:
+            raise RuntimeError("Shared workspace is disabled")
+        if (
+            self._image_lengths is None
+            or self._image_to_sample is None
+            or self._text_tokens is None
+            or self._text_token_mask is None
+            or self.workspace_seed is None
+            or self.workspace_layer_embeddings is None
+            or self.workspace_text_norm is None
+            or self.workspace_text_projection is None
+            or self.workspace_visual_type is None
+            or self.workspace_text_type is None
+        ):
+            raise RuntimeError("Shared workspace context is incomplete")
+
+        image_segments = torch.split(
+            hidden_states,
+            self._image_lengths.detach().cpu().tolist(),
+            dim=0,
+        )
+        visual_width = max(segment.shape[0] for segment in image_segments)
+        workspace_dtype = next(
+            self.workspace_blocks[layer_position].parameters()
+        ).dtype
+        visual_tokens = torch.zeros(
+            len(image_segments),
+            visual_width,
+            self.visual_dim,
+            dtype=workspace_dtype,
+            device=hidden_states.device,
+        )
+        visual_mask = torch.zeros(
+            len(image_segments),
+            visual_width,
+            dtype=torch.bool,
+            device=hidden_states.device,
+        )
+        for image_index, segment in enumerate(image_segments):
+            visual_tokens[image_index, : segment.shape[0]] = segment.to(
+                dtype=workspace_dtype
+            )
+            visual_mask[image_index, : segment.shape[0]] = True
+
+        image_to_sample = self._image_to_sample.to(hidden_states.device)
+        text_tokens = self._text_tokens.to(hidden_states.device).index_select(
+            0, image_to_sample
+        )
+        text_mask = self._text_token_mask.to(hidden_states.device).index_select(
+            0, image_to_sample
+        )
+        projected_text = self.workspace_text_projection(
+            self.workspace_text_norm(text_tokens.to(dtype=workspace_dtype))
+        )
+        visual_tokens = visual_tokens + self.workspace_visual_type.to(
+            device=hidden_states.device,
+            dtype=workspace_dtype,
+        )
+        projected_text = projected_text + self.workspace_text_type.to(
+            device=hidden_states.device,
+            dtype=workspace_dtype,
+        )
+        memory = torch.cat((visual_tokens, projected_text), dim=1)
+        memory_mask = torch.cat((visual_mask, text_mask), dim=1)
+
+        if self._workspace_by_image is None:
+            workspace = self.workspace_seed.to(
+                device=hidden_states.device,
+                dtype=workspace_dtype,
+            ).unsqueeze(0).expand(len(image_segments), -1, -1)
+        else:
+            workspace = self._workspace_by_image.to(
+                device=hidden_states.device,
+                dtype=workspace_dtype,
+            )
+        workspace = workspace + self.workspace_layer_embeddings[layer_position].to(
+            device=hidden_states.device,
+            dtype=workspace_dtype,
+        )
+        workspace = self.workspace_blocks[layer_position](
+            workspace,
+            memory,
+            memory_mask,
+            visual_width,
+        )
+        self._workspace_by_image = workspace
+        return workspace
+
+    def shared_workspace_text_memory(self) -> torch.Tensor:
+        """Return final image workspaces averaged into one bank per sample."""
+        if not self.shared_workspace_enabled or self._workspace_by_image is None:
+            raise RuntimeError("Final shared workspace is unavailable")
+        if self._image_to_sample is None or self._images_per_sample is None:
+            raise RuntimeError("Shared workspace sample mapping is unavailable")
+        workspace = self._workspace_by_image
+        sample_ids = self._image_to_sample.to(workspace.device)
+        batch_size = int(self._images_per_sample.numel())
+        combined = workspace.new_zeros(
+            batch_size, self.workspace_tokens, self.workspace_dim
+        )
+        combined = combined.index_add(0, sample_ids, workspace)
+        counts = self._images_per_sample.to(
+            device=workspace.device,
+            dtype=workspace.dtype,
+        ).view(batch_size, 1, 1)
+        return combined / counts.clamp_min(1.0)
 
     @property
     def shared_s_text_prompt_length(self) -> int:
@@ -584,9 +1046,13 @@ class SparseVisualMMRL(nn.Module):
             raise RuntimeError(
                 "Sparse Visual block did not receive hidden_states/cu_seqlens"
             )
-        visual_memory, text_memory, lengths, _sample_ids = self._segment_memories(
-            hidden_states, cu_seqlens
-        )
+        (
+            visual_memory,
+            text_memory,
+            lengths,
+            _sample_ids,
+            image_ids,
+        ) = self._segment_memories(hidden_states, cu_seqlens)
         layer_position = self.anchor_layers.index(layer_index)
         shared_rep = (
             self._read_only_shared_rep
@@ -601,6 +1067,45 @@ class SparseVisualMMRL(nn.Module):
             device=hidden_states.device,
             dtype=hidden_states.dtype,
         )
+        workspace_debug = {}
+        if self.shared_workspace_enabled:
+            workspace_by_image = self._update_shared_workspace(
+                layer_position,
+                hidden_states,
+            )
+            workspace = workspace_by_image.index_select(
+                0, image_ids.to(workspace_by_image.device)
+            )
+            shared_delta = self.workspace_visual_attentions[layer_position](
+                reps,
+                workspace,
+            ).to(device=hidden_states.device, dtype=hidden_states.dtype)
+            reps = reps + shared_delta
+            block_debug = self.workspace_blocks[layer_position].debug_context
+            attention_debug = self.workspace_visual_attentions[
+                layer_position
+            ].debug_context
+            workspace_debug = {
+                "workspace_attention_entropy_norm": block_debug[
+                    "attention_entropy_norm"
+                ],
+                "workspace_visual_attention_mean": block_debug[
+                    "visual_attention_mean"
+                ],
+                "workspace_text_attention_mean": block_debug[
+                    "text_attention_mean"
+                ],
+                "workspace_norm_mean": block_debug["workspace_norm_mean"],
+                "workspace_visual_residual_entropy_norm": attention_debug[
+                    "attention_entropy_norm"
+                ],
+                "workspace_visual_delta_norm_mean": attention_debug[
+                    "delta_norm_mean"
+                ],
+                "workspace_visual_delta_to_base_ratio": attention_debug[
+                    "delta_to_base_ratio"
+                ],
+            }
         expanded_args, expanded_kwargs = self._expanded_block_inputs(
             reps, args, kwargs, lengths, cu_seqlens
         )
@@ -630,6 +1135,7 @@ class SparseVisualMMRL(nn.Module):
                     "rep_to_input_norm_ratio": rep_norm / input_norm,
                     "output_to_input_norm_ratio": output_norm / input_norm,
                     **self.rep_attention.debug_context,
+                    **workspace_debug,
                 }
             )
             if not self._forward_audited:
@@ -662,12 +1168,41 @@ class SparseVisualMMRL(nn.Module):
             debug[f"sparse_visual_layer{layer}_visual_attention_mean"] = row[
                 "visual_attention_mean"
             ]
+            if self.shared_workspace_enabled:
+                debug[f"workspace_layer{layer}_attention_entropy_norm"] = row[
+                    "workspace_attention_entropy_norm"
+                ]
+                debug[f"workspace_layer{layer}_visual_attention_mean"] = row[
+                    "workspace_visual_attention_mean"
+                ]
+                debug[f"workspace_layer{layer}_text_attention_mean"] = row[
+                    "workspace_text_attention_mean"
+                ]
+                debug[f"workspace_layer{layer}_norm_mean"] = row[
+                    "workspace_norm_mean"
+                ]
+                debug[f"workspace_layer{layer}_visual_residual_entropy_norm"] = row[
+                    "workspace_visual_residual_entropy_norm"
+                ]
+                debug[f"workspace_layer{layer}_visual_delta_norm_mean"] = row[
+                    "workspace_visual_delta_norm_mean"
+                ]
+                debug[f"workspace_layer{layer}_visual_delta_to_base_ratio"] = row[
+                    "workspace_visual_delta_to_base_ratio"
+                ]
         debug["sparse_visual_rep_to_input_norm_ratio_mean"] = torch.stack(
             [row["rep_to_input_norm_ratio"] for row in self._debug_rows]
         ).mean()
         debug["sparse_visual_output_to_input_norm_ratio_mean"] = torch.stack(
             [row["output_to_input_norm_ratio"] for row in self._debug_rows]
         ).mean()
+        if self.shared_workspace_enabled:
+            debug["workspace_visual_delta_to_base_ratio_mean"] = torch.stack(
+                [
+                    row["workspace_visual_delta_to_base_ratio"]
+                    for row in self._debug_rows
+                ]
+            ).mean()
         debug.update(self._text_anchor_debug)
         if self._last_shared_s_text_prompt is not None:
             debug["shared_s_text_prompt_norm_mean"] = (

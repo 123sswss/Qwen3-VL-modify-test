@@ -12,7 +12,7 @@ from typing import Any, Deque, Dict, Iterator, Sequence
 import torch
 from torch import nn
 
-from slake.sparse_visual_mmrl import SparseVisualMMRL
+from slake.sparse_visual_mmrl import LatentResidualAttention, SparseVisualMMRL
 
 DYNAMIC_PROMPT_CONFIG_NAME = "dynamic_prompt_config.json"
 DYNAMIC_PROMPT_WEIGHTS_NAME = "dynamic_prompt.pt"
@@ -180,6 +180,15 @@ class DynamicPromptTuningModel(nn.Module):
         shared_s_attention_dim: int = 128,
         shared_s_heads: int = 4,
         shared_s_visual_bottleneck_dim: int = 128,
+        shared_workspace: bool = False,
+        workspace_tokens: int = 32,
+        workspace_dim: int = 1024,
+        workspace_heads: int = 16,
+        workspace_ffn_dim: int = 4096,
+        workspace_text_attention_dim: int = 1024,
+        workspace_text_heads: int = 16,
+        workspace_visual_attention_dim: int = 1024,
+        workspace_visual_heads: int = 16,
     ) -> None:
         super().__init__()
         if prompt_length < 1:
@@ -193,10 +202,19 @@ class DynamicPromptTuningModel(nn.Module):
             raise ValueError("Shared-S attention dimensions must be positive")
         if shared_s_attention_dim % shared_s_heads != 0:
             raise ValueError("shared_s_attention_dim must be divisible by shared_s_heads")
+        if shared_workspace and shared_s_text_mode != "none":
+            raise ValueError(
+                "The full workspace requires independent private P and visual S"
+            )
+        if workspace_text_attention_dim % workspace_text_heads != 0:
+            raise ValueError(
+                "workspace_text_attention_dim must be divisible by heads"
+            )
         self.base_model = base_model
         self.requested_prompt_length = int(prompt_length)
         self.init_seed = int(init_seed)
         self.shared_s_text_mode = shared_s_text_mode
+        self.shared_workspace_enabled = bool(shared_workspace)
         for parameter in self.base_model.parameters():
             parameter.requires_grad = False
 
@@ -227,6 +245,13 @@ class DynamicPromptTuningModel(nn.Module):
                     else None
                 ),
                 text_anchor_bottleneck_dim=shared_s_visual_bottleneck_dim,
+                shared_workspace=self.shared_workspace_enabled,
+                workspace_tokens=workspace_tokens,
+                workspace_dim=workspace_dim,
+                workspace_heads=workspace_heads,
+                workspace_ffn_dim=workspace_ffn_dim,
+                workspace_visual_attention_dim=workspace_visual_attention_dim,
+                workspace_visual_heads=workspace_visual_heads,
             ).to(device=visual_device)
             self.sparse_visual.install(visual_model)
         elif self.shared_s_text_mode != "none":
@@ -258,6 +283,17 @@ class DynamicPromptTuningModel(nn.Module):
                 hidden_size=int(embeddings.shape[-1]),
                 attention_dim=shared_s_attention_dim,
                 num_heads=shared_s_heads,
+            ).to(device=embeddings.device)
+        self.workspace_text_attention = None
+        if self.shared_workspace_enabled:
+            if self.sparse_visual is None:
+                raise ValueError("Shared workspace requires Sparse Visual MMRL")
+            self.workspace_text_attention = LatentResidualAttention(
+                query_dim=int(embeddings.shape[-1]),
+                memory_dim=workspace_dim,
+                attention_dim=workspace_text_attention_dim,
+                num_heads=workspace_text_heads,
+                zero_init_output=True,
             ).to(device=embeddings.device)
 
         self.visual_template_token_ids = self._resolve_visual_token_ids(tokenizer)
@@ -297,7 +333,14 @@ class DynamicPromptTuningModel(nn.Module):
             "dynamic_prompt": dynamic_parameters,
         }
         if self.sparse_visual is not None:
-            groups["sparse_visual"] = list(self.sparse_visual.parameters())
+            groups["sparse_visual"] = self.sparse_visual.private_parameters()
+        if self.shared_workspace_enabled:
+            if self.sparse_visual is None or self.workspace_text_attention is None:
+                raise RuntimeError("Shared workspace modules are incomplete")
+            groups["shared_workspace"] = (
+                self.sparse_visual.shared_workspace_parameters()
+                + list(self.workspace_text_attention.parameters())
+            )
         return groups
 
     def configure_inference_intervention(
@@ -584,15 +627,48 @@ class DynamicPromptTuningModel(nn.Module):
                         float(shared_prompt.shape[1])
                     ),
                 }
+            workspace_delta = torch.zeros_like(prompt)
+            workspace_debug = {}
+            if self.workspace_text_attention is not None:
+                if self.sparse_visual is None:
+                    raise RuntimeError("Shared workspace visual trunk is unavailable")
+                workspace_memory = self.sparse_visual.shared_workspace_text_memory()
+                workspace_delta = self.workspace_text_attention(
+                    prompt,
+                    workspace_memory,
+                )
+                text_workspace_debug = self.workspace_text_attention.debug_context
+                workspace_debug = {
+                    "workspace_text_attention_entropy_norm": text_workspace_debug[
+                        "attention_entropy_norm"
+                    ],
+                    "workspace_text_delta_norm_mean": text_workspace_debug[
+                        "delta_norm_mean"
+                    ],
+                    "workspace_text_base_norm_mean": text_workspace_debug[
+                        "base_norm_mean"
+                    ],
+                    "workspace_text_delta_to_base_ratio": text_workspace_debug[
+                        "delta_to_base_ratio"
+                    ],
+                    "workspace_text_memory_norm_mean": workspace_memory.detach()
+                    .float()
+                    .norm(dim=-1)
+                    .mean(),
+                    "workspace_text_memory_tokens": prompt.new_tensor(
+                        float(workspace_memory.shape[1])
+                    ),
+                }
             if not self.training:
                 self._intervention_samples_seen += int(prompt.shape[0])
-            dynamic = prompt + delta + shared_delta
+            dynamic = prompt + delta + shared_delta + workspace_delta
             kwargs["inputs_embeds"] = torch.cat(
                 (dynamic, inputs_embeds[:, self.prompt_length :]), dim=1
             )
             self.debug_context = {
                 **self.dynamic_prompt.debug_context,
                 **shared_debug,
+                **workspace_debug,
                 "dynamic_prompt_visual_tokens_mean": visual_mask.sum(dim=1)
                 .float()
                 .mean(),
@@ -605,6 +681,7 @@ class DynamicPromptTuningModel(nn.Module):
                     f"text_tokens={text_mask.sum(dim=1).tolist()} "
                     f"memory_tokens={natural_memory.shape[1]} "
                     f"shared_s_text_mode={self.shared_s_text_mode} "
+                    f"shared_workspace={self.shared_workspace_enabled} "
                     f"prompt_tokens={self.prompt_length} "
                     "answer_overlap=0 pass=True"
                 )
@@ -669,6 +746,12 @@ class DynamicPromptTuningModel(nn.Module):
             text_memory,
             images_per_sample,
             text_anchor=text_anchor,
+            text_tokens=(
+                token_embeddings if self.shared_workspace_enabled else None
+            ),
+            text_token_mask=(
+                text_mask if self.shared_workspace_enabled else None
+            ),
         ):
             handle = visual_model.register_forward_pre_hook(
                 prepare_visual,
@@ -746,6 +829,28 @@ class DynamicPromptTuningModel(nn.Module):
                 if self.shared_s_prompt_attention is not None
                 else None
             ),
+            "shared_workspace": (
+                {
+                    "tokens": self.sparse_visual.workspace_tokens,
+                    "dim": self.sparse_visual.workspace_dim,
+                    "heads": self.sparse_visual.workspace_heads,
+                    "ffn_dim": self.sparse_visual.workspace_ffn_dim,
+                    "text_attention_dim": self.workspace_text_attention.attention_dim,
+                    "text_attention_heads": self.workspace_text_attention.num_heads,
+                    "visual_attention_dim": self.sparse_visual.workspace_visual_attentions[
+                        0
+                    ].attention_dim,
+                    "visual_attention_heads": self.sparse_visual.workspace_visual_attentions[
+                        0
+                    ].num_heads,
+                    "memory": "full_visual_plus_full_question_tokens",
+                    "private_text_prompt": True,
+                    "private_visual_rep": True,
+                    "zero_init_residual_heads": True,
+                }
+                if self.shared_workspace_enabled
+                else None
+            ),
             "train_soft_prompt": self.soft_prompt is not None,
             "sparse_visual": (
                 {
@@ -795,6 +900,14 @@ class DynamicPromptTuningModel(nn.Module):
                     if self.shared_s_prompt_attention is not None
                     else None
                 ),
+                "workspace_text_attention": (
+                    {
+                        key: value.detach().cpu()
+                        for key, value in self.workspace_text_attention.state_dict().items()
+                    }
+                    if self.workspace_text_attention is not None
+                    else None
+                ),
                 "sparse_visual": (
                     {
                         key: value.detach().cpu()
@@ -840,6 +953,19 @@ class DynamicPromptTuningModel(nn.Module):
                 shared_attention_state, strict=True
             )
             self.shared_s_prompt_attention._forward_audited = True
+        workspace_text_state = state.get("workspace_text_attention")
+        if (workspace_text_state is None) != (self.workspace_text_attention is None):
+            raise ValueError(
+                "Workspace text attention checkpoint/model architecture mismatch: "
+                f"checkpoint={workspace_text_state is not None} "
+                f"model={self.workspace_text_attention is not None}"
+            )
+        if self.workspace_text_attention is not None:
+            self.workspace_text_attention.load_state_dict(
+                workspace_text_state,
+                strict=True,
+            )
+            self.workspace_text_attention._forward_audited = True
         sparse_state = state.get("sparse_visual")
         if (sparse_state is None) != (self.sparse_visual is None):
             raise ValueError(
@@ -849,6 +975,8 @@ class DynamicPromptTuningModel(nn.Module):
         if self.sparse_visual is not None:
             self.sparse_visual.load_state_dict(sparse_state, strict=True)
             self.sparse_visual._forward_audited = True
+            for attention in self.sparse_visual.workspace_visual_attentions:
+                attention._forward_audited = True
         # A restored checkpoint is no longer expected to have a zero residual.
         self.dynamic_prompt._forward_audited = True
         print(

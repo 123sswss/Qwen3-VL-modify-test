@@ -336,6 +336,60 @@ class DynamicPromptTuningTest(unittest.TestCase):
                     value,
                 )
 
+    def test_full_workspace_checkpoint_and_optimizer_groups_round_trip(self):
+        kwargs = dict(
+            tokenizer=_FakeTokenizer(),
+            prompt_length=2,
+            init_seed=5,
+            attention_dim=4,
+            num_heads=2,
+            sparse_visual_anchor_layers=(1,),
+            sparse_visual_rep_tokens=2,
+            sparse_visual_attention_dim=4,
+            sparse_visual_heads=2,
+            shared_workspace=True,
+            workspace_tokens=3,
+            workspace_dim=8,
+            workspace_heads=2,
+            workspace_ffn_dim=16,
+            workspace_text_attention_dim=4,
+            workspace_text_heads=2,
+            workspace_visual_attention_dim=4,
+            workspace_visual_heads=2,
+        )
+        model = DynamicPromptTuningModel(_FakeMultimodalModel(), **kwargs)
+        groups = model.trainable_parameter_groups()
+        self.assertIn("shared_workspace", groups)
+        grouped_ids = {
+            id(parameter)
+            for parameters in groups.values()
+            for parameter in parameters
+        }
+        self.assertEqual(
+            grouped_ids,
+            {
+                id(parameter)
+                for parameter in model.parameters()
+                if parameter.requires_grad
+            },
+        )
+        with torch.no_grad():
+            model.sparse_visual.workspace_seed.add_(0.25)
+            model.workspace_text_attention.output_projection.weight.add_(0.5)
+        with tempfile.TemporaryDirectory() as directory:
+            model.save_dynamic_prompt(Path(directory))
+            restored = DynamicPromptTuningModel(_FakeMultimodalModel(), **kwargs)
+            restored.load_dynamic_prompt(Path(directory))
+            torch.testing.assert_close(
+                restored.sparse_visual.workspace_seed,
+                model.sparse_visual.workspace_seed,
+            )
+            for key, value in model.workspace_text_attention.state_dict().items():
+                torch.testing.assert_close(
+                    restored.workspace_text_attention.state_dict()[key],
+                    value,
+                )
+
 
 if __name__ == "__main__":
     unittest.main()

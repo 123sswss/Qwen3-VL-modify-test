@@ -52,11 +52,13 @@ class DynamicPromptTrainer(Trainer):
         prompt_lr: float,
         dynamic_lr: float,
         sparse_visual_lr: float,
+        workspace_lr: float,
         **kwargs,
     ):
         self.prompt_lr = float(prompt_lr)
         self.dynamic_lr = float(dynamic_lr)
         self.sparse_visual_lr = float(sparse_visual_lr)
+        self.workspace_lr = float(workspace_lr)
         super().__init__(*args, **kwargs)
 
     def create_optimizer(self):
@@ -66,12 +68,18 @@ class DynamicPromptTrainer(Trainer):
         prompt_parameters = groups["soft_prompt"]
         dynamic_parameters = groups["dynamic_prompt"]
         sparse_visual_parameters = groups.get("sparse_visual", [])
+        workspace_parameters = groups.get("shared_workspace", [])
         active = [
             parameter
             for parameter in self.model.parameters()
             if parameter.requires_grad
         ]
-        grouped = prompt_parameters + dynamic_parameters + sparse_visual_parameters
+        grouped = (
+            prompt_parameters
+            + dynamic_parameters
+            + sparse_visual_parameters
+            + workspace_parameters
+        )
         if {id(parameter) for parameter in active} != {
             id(parameter) for parameter in grouped
         }:
@@ -105,6 +113,15 @@ class DynamicPromptTrainer(Trainer):
                     "group_name": "sparse_visual",
                 }
             )
+        if workspace_parameters:
+            optimizer_groups.append(
+                {
+                    "params": workspace_parameters,
+                    "lr": self.workspace_lr,
+                    "weight_decay": 0.0,
+                    "group_name": "shared_workspace",
+                }
+            )
         self.optimizer = torch.optim.AdamW(
             optimizer_groups,
             betas=(0.9, 0.999),
@@ -116,6 +133,8 @@ class DynamicPromptTrainer(Trainer):
             f"dynamic_prompt_lr={self.dynamic_lr} tensors={len(dynamic_parameters)} "
             f"sparse_visual_lr={self.sparse_visual_lr} "
             f"tensors={len(sparse_visual_parameters)} "
+            f"workspace_lr={self.workspace_lr} "
+            f"tensors={len(workspace_parameters)} "
             "scheduler=linear warmup_ratio=0.03"
         )
         return self.optimizer
@@ -141,6 +160,7 @@ class DynamicPromptCallback(TrainerCallback):
         if step % self.logging_steps != 0:
             return control
         model = kwargs["model"]
+        parameter_groups = model.trainable_parameter_groups()
         prompt_grad = (
             model.soft_prompt.grad if model.soft_prompt is not None else None
         )
@@ -155,15 +175,16 @@ class DynamicPromptCallback(TrainerCallback):
             else torch.tensor(0.0)
         )
         sparse_visual = getattr(model, "sparse_visual", None)
-        sparse_grads = (
-            [
-                parameter.grad.detach().float().pow(2).sum()
-                for parameter in sparse_visual.parameters()
-                if parameter.grad is not None
-            ]
-            if sparse_visual is not None
-            else []
-        )
+        sparse_grads = [
+            parameter.grad.detach().float().pow(2).sum()
+            for parameter in parameter_groups.get("sparse_visual", [])
+            if parameter.grad is not None
+        ]
+        workspace_grads = [
+            parameter.grad.detach().float().pow(2).sum()
+            for parameter in parameter_groups.get("shared_workspace", [])
+            if parameter.grad is not None
+        ]
         sparse_grad_norm = (
             torch.stack(sparse_grads).sum().sqrt()
             if sparse_grads
@@ -184,6 +205,11 @@ class DynamicPromptCallback(TrainerCallback):
             ),
             "dynamic_prompt_grad_norm": float(dynamic_grad_norm.item()),
             "sparse_visual_grad_norm": float(sparse_grad_norm.item()),
+            "shared_workspace_grad_norm": (
+                float(torch.stack(workspace_grads).sum().sqrt().item())
+                if workspace_grads
+                else 0.0
+            ),
         }
         if (
             sparse_visual is not None
@@ -306,6 +332,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--shared-s-attention-dim", type=int, default=128)
     parser.add_argument("--shared-s-heads", type=int, default=4)
     parser.add_argument("--shared-s-visual-bottleneck-dim", type=int, default=128)
+    parser.add_argument("--shared-workspace", action="store_true")
+    parser.add_argument("--workspace-tokens", type=int, default=32)
+    parser.add_argument("--workspace-dim", type=int, default=1024)
+    parser.add_argument("--workspace-heads", type=int, default=16)
+    parser.add_argument("--workspace-ffn-dim", type=int, default=4096)
+    parser.add_argument("--workspace-text-attention-dim", type=int, default=1024)
+    parser.add_argument("--workspace-text-heads", type=int, default=16)
+    parser.add_argument("--workspace-visual-attention-dim", type=int, default=1024)
+    parser.add_argument("--workspace-visual-heads", type=int, default=16)
+    parser.add_argument("--workspace-lr", type=float, default=1e-4)
     parser.add_argument("--batch-size", type=int, default=2)
     parser.add_argument("--gradient-accumulation", type=int, default=16)
     parser.add_argument("--dataloader-workers", type=int, default=2)
@@ -326,6 +362,14 @@ def parse_args() -> argparse.Namespace:
             args.shared_s_attention_dim,
             args.shared_s_heads,
             args.shared_s_visual_bottleneck_dim,
+            args.workspace_tokens,
+            args.workspace_dim,
+            args.workspace_heads,
+            args.workspace_ffn_dim,
+            args.workspace_text_attention_dim,
+            args.workspace_text_heads,
+            args.workspace_visual_attention_dim,
+            args.workspace_visual_heads,
         )
         < 1
     ):
@@ -338,12 +382,31 @@ def parse_args() -> argparse.Namespace:
         )
     if args.shared_s_attention_dim % args.shared_s_heads != 0:
         parser.error("--shared-s-attention-dim must be divisible by --shared-s-heads")
-    if min(args.prompt_lr, args.dynamic_lr, args.sparse_visual_lr) <= 0.0:
+    if args.workspace_dim % args.workspace_heads != 0:
+        parser.error("--workspace-dim must be divisible by --workspace-heads")
+    if args.workspace_text_attention_dim % args.workspace_text_heads != 0:
+        parser.error(
+            "--workspace-text-attention-dim must be divisible by its heads"
+        )
+    if args.workspace_visual_attention_dim % args.workspace_visual_heads != 0:
+        parser.error(
+            "--workspace-visual-attention-dim must be divisible by its heads"
+        )
+    if min(
+        args.prompt_lr,
+        args.dynamic_lr,
+        args.sparse_visual_lr,
+        args.workspace_lr,
+    ) <= 0.0:
         parser.error("Learning rates must be positive")
     if args.dataloader_workers < 0:
         parser.error("--dataloader-workers must be non-negative")
     if args.shared_s_text_mode != "none" and not args.sparse_visual:
         parser.error("Shared-S text modes require --sparse-visual")
+    if args.shared_workspace and not args.sparse_visual:
+        parser.error("--shared-workspace requires --sparse-visual")
+    if args.shared_workspace and args.shared_s_text_mode != "none":
+        parser.error("--shared-workspace requires independent private P and visual S")
     return args
 
 
@@ -382,6 +445,15 @@ def main() -> int:
         shared_s_attention_dim=args.shared_s_attention_dim,
         shared_s_heads=args.shared_s_heads,
         shared_s_visual_bottleneck_dim=args.shared_s_visual_bottleneck_dim,
+        shared_workspace=args.shared_workspace,
+        workspace_tokens=args.workspace_tokens,
+        workspace_dim=args.workspace_dim,
+        workspace_heads=args.workspace_heads,
+        workspace_ffn_dim=args.workspace_ffn_dim,
+        workspace_text_attention_dim=args.workspace_text_attention_dim,
+        workspace_text_heads=args.workspace_text_heads,
+        workspace_visual_attention_dim=args.workspace_visual_attention_dim,
+        workspace_visual_heads=args.workspace_visual_heads,
     )
     dataset = PathVQADataset(
         processor=processor,
@@ -434,6 +506,15 @@ def main() -> int:
         f"shared_s_attention={args.shared_s_attention_dim}x{args.shared_s_heads} "
         f"shared_s_visual_bottleneck={args.shared_s_visual_bottleneck_dim} "
         f"shared_s_gradient_policy={'text_write_visual_readonly' if args.shared_s_text_mode == 'text_owned_visual_readonly' else 'joint_or_disabled'} "
+        f"shared_workspace={args.shared_workspace} "
+        f"workspace_tokens={args.workspace_tokens if args.shared_workspace else 0} "
+        f"workspace_dim={args.workspace_dim if args.shared_workspace else 0} "
+        f"workspace_blocks={len(args.sparse_visual_anchor_layers) if args.shared_workspace else 0} "
+        f"workspace_heads={args.workspace_heads if args.shared_workspace else 0} "
+        f"workspace_ffn_dim={args.workspace_ffn_dim if args.shared_workspace else 0} "
+        f"workspace_text_ca={args.workspace_text_attention_dim if args.shared_workspace else 0}x{args.workspace_text_heads if args.shared_workspace else 0} "
+        f"workspace_visual_ca={args.workspace_visual_attention_dim if args.shared_workspace else 0}x{args.workspace_visual_heads if args.shared_workspace else 0} "
+        f"workspace_lr={args.workspace_lr} "
         f"train_soft_prompt={model.soft_prompt is not None} "
         "pretrained_prompt_checkpoint=False stage1=False"
     )
@@ -444,6 +525,7 @@ def main() -> int:
         prompt_lr=args.prompt_lr,
         dynamic_lr=args.dynamic_lr,
         sparse_visual_lr=args.sparse_visual_lr,
+        workspace_lr=args.workspace_lr,
         args=TrainingArguments(
             output_dir=str(args.output_dir / "trainer"),
             num_train_epochs=args.epochs,
@@ -498,6 +580,23 @@ def main() -> int:
         "shared_s_gradient_policy": (
             "text_write_visual_readonly"
             if args.shared_s_text_mode == "text_owned_visual_readonly"
+            else None
+        ),
+        "shared_workspace": (
+            {
+                "tokens": args.workspace_tokens,
+                "dim": args.workspace_dim,
+                "heads": args.workspace_heads,
+                "ffn_dim": args.workspace_ffn_dim,
+                "text_attention_dim": args.workspace_text_attention_dim,
+                "text_attention_heads": args.workspace_text_heads,
+                "visual_attention_dim": args.workspace_visual_attention_dim,
+                "visual_attention_heads": args.workspace_visual_heads,
+                "learning_rate": args.workspace_lr,
+                "memory": "full_visual_plus_full_question_tokens",
+                "residual_heads_zero_initialized": True,
+            }
+            if args.shared_workspace
             else None
         ),
         "train_soft_prompt": model.soft_prompt is not None,

@@ -530,6 +530,29 @@ run_pathvqa_dynamic_prompt_eval() {
   )
 }
 
+run_pathvqa_dynamic_prompt_epoch3_validation() {
+  local output_dir="$1"
+  local experiment_name="$2"
+  local run_seed="$3"
+  local checkpoint="$output_dir/checkpoints/epoch_3"
+  echo "[PATHVQA_DYNAMIC_PROMPT_FIXED_VALIDATION] protocol=fixed_epoch3 split=validation checkpoint=$checkpoint"
+  run_pathvqa_dynamic_prompt_eval \
+    "$checkpoint" \
+    validation \
+    "$output_dir/eval_validation/epoch_3" \
+    "$output_dir/eval_validation_epoch_3.log" || return 1
+
+  local validation_score
+  validation_score="$(python -c 'import json,sys;print(json.load(open(sys.argv[1],encoding="utf-8"))["overall_accuracy"])' "$output_dir/eval_validation/epoch_3/pathvqa_summary.json")" || return 1
+  printf 'experiment\tseed\tprotocol\tvalidation_epoch\tvalidation_accuracy\tcheckpoint\n' \
+    > "$output_dir/selected_result.tsv"
+  printf '%s\t%s\t%s\t%s\t%s\t%s\n' \
+    "$experiment_name" "$run_seed" fixed_epoch3_validation 3 \
+    "$validation_score" "$checkpoint" \
+    >> "$output_dir/selected_result.tsv"
+  cat "$output_dir/selected_result.tsv"
+}
+
 run_pathvqa_dynamic_prompt_interventions() {
   local source_run="${PATHVQA_DYNAMIC_PROMPT_SOURCE_RUN:-}"
   if [ -z "$source_run" ]; then
@@ -555,12 +578,12 @@ run_pathvqa_dynamic_prompt_interventions() {
   local intervention
   local lag="${PATHVQA_DYNAMIC_PROMPT_MEMORY_LAG:-32}"
   for intervention in zero mean-residual lagged-memory; do
-    local eval_output_dir="$source_run/eval_interventions/$intervention"
-    local eval_log="$source_run/eval_intervention_${intervention}.log"
-    echo "[PATHVQA_DYNAMIC_PROMPT_INTERVENTION] mode=$intervention lag=$lag checkpoint=$checkpoint"
+    local eval_output_dir="$source_run/eval_interventions_validation/$intervention"
+    local eval_log="$source_run/eval_intervention_validation_${intervention}.log"
+    echo "[PATHVQA_DYNAMIC_PROMPT_INTERVENTION] split=validation mode=$intervention lag=$lag checkpoint=$checkpoint"
     run_pathvqa_dynamic_prompt_eval \
       "$checkpoint" \
-      test \
+      validation \
       "$eval_output_dir" \
       "$eval_log" \
       --dynamic-prompt-intervention "$intervention" \
@@ -570,7 +593,7 @@ run_pathvqa_dynamic_prompt_interventions() {
   printf 'intervention\toverall\tyes_no\tfree_form\tsamples_changed\n'
   for intervention in zero mean-residual lagged-memory; do
     python -c 'import json,sys; d=json.load(open(sys.argv[1],encoding="utf-8")); i=d["dynamic_prompt_intervention"]; print("\t".join(map(str,(i["mode"],d["overall_accuracy"],d["yes_no_accuracy"],d["free_form_accuracy"],i["samples_changed"]))))' \
-      "$source_run/eval_interventions/$intervention/pathvqa_summary.json"
+      "$source_run/eval_interventions_validation/$intervention/pathvqa_summary.json"
   done
 }
 
@@ -578,6 +601,10 @@ run_pathvqa_dynamic_prompt_seed44() {
   local experiment_name="pathvqa_dynamic_prompt_mean_ca256_len20"
   local run_seed=44
   local epochs="${PATHVQA_DYNAMIC_PROMPT_EPOCHS:-3}"
+  if [ "$epochs" -ne 3 ]; then
+    echo "[ERR] Dynamic Prompt 固定评估协议要求 epochs=3，当前为: $epochs" >&2
+    return 2
+  fi
   if ! python -c 'import datasets, pyarrow' >/dev/null 2>&1; then
     echo "[ERR] PathVQA Dynamic Prompt 需要 datasets 和 pyarrow。先运行: python -m pip install -r pathvqa/requirements.txt" >&2
     return 2
@@ -610,39 +637,8 @@ run_pathvqa_dynamic_prompt_seed44() {
       2>&1 | tee "$output_dir/train.log"
   ) || return 1
 
-  local epoch_id
-  for ((epoch_id = 1; epoch_id <= epochs; epoch_id++)); do
-    local checkpoint="$output_dir/checkpoints/epoch_${epoch_id}"
-    echo "[PATHVQA_DYNAMIC_PROMPT_VALIDATION] epoch=$epoch_id checkpoint=$checkpoint"
-    run_pathvqa_dynamic_prompt_eval \
-      "$checkpoint" \
-      validation \
-      "$output_dir/eval_validation/epoch_${epoch_id}" \
-      "$output_dir/eval_validation_epoch_${epoch_id}.log" || return 1
-  done
-
-  local selection
-  selection="$(python "$ROOT_DIR/pathvqa/select_best_epoch.py" --root "$output_dir" --epochs "$epochs")" || return 1
-  local best_epoch
-  local best_validation_score
-  IFS=$'\t' read -r best_epoch best_validation_score <<< "$selection"
-  local best_checkpoint="$output_dir/checkpoints/epoch_${best_epoch}"
-  echo "[PATHVQA_DYNAMIC_PROMPT_TEST] best_epoch=$best_epoch validation=$best_validation_score"
-  run_pathvqa_dynamic_prompt_eval \
-    "$best_checkpoint" \
-    test \
-    "$output_dir/eval_test/epoch_${best_epoch}" \
-    "$output_dir/eval_test_epoch_${best_epoch}.log" || return 1
-
-  local test_score
-  test_score="$(python -c 'import json,sys;print(json.load(open(sys.argv[1],encoding="utf-8"))["overall_accuracy"])' "$output_dir/eval_test/epoch_${best_epoch}/pathvqa_summary.json")" || return 1
-  printf 'experiment\tseed\tbest_epoch\tvalidation_accuracy\ttest_accuracy\tcheckpoint\n' \
-    > "$output_dir/selected_result.tsv"
-  printf '%s\t%s\t%s\t%s\t%s\t%s\n' \
-    "$experiment_name" "$run_seed" "$best_epoch" "$best_validation_score" \
-    "$test_score" "$best_checkpoint" \
-    >> "$output_dir/selected_result.tsv"
-  cat "$output_dir/selected_result.tsv"
+  run_pathvqa_dynamic_prompt_epoch3_validation \
+    "$output_dir" "$experiment_name" "$run_seed"
 }
 
 run_pathvqa_dynamic_prompt_sparse_visual_variant_seed44() {
@@ -651,6 +647,10 @@ run_pathvqa_dynamic_prompt_sparse_visual_variant_seed44() {
   local expected_trainable="$3"
   local run_seed=44
   local epochs="${PATHVQA_DYNAMIC_PROMPT_EPOCHS:-3}"
+  if [ "$epochs" -ne 3 ]; then
+    echo "[ERR] Dynamic Prompt 固定评估协议要求 epochs=3，当前为: $epochs" >&2
+    return 2
+  fi
   local sparse_visual_lr="${PATHVQA_SPARSE_VISUAL_LR:-3e-5}"
   if ! python -c 'import datasets, pyarrow' >/dev/null 2>&1; then
     echo "[ERR] PathVQA Dynamic Prompt 需要 datasets 和 pyarrow。先运行: python -m pip install -r pathvqa/requirements.txt" >&2
@@ -694,39 +694,8 @@ run_pathvqa_dynamic_prompt_sparse_visual_variant_seed44() {
       2>&1 | tee "$output_dir/train.log"
   ) || return 1
 
-  local epoch_id
-  for ((epoch_id = 1; epoch_id <= epochs; epoch_id++)); do
-    local checkpoint="$output_dir/checkpoints/epoch_${epoch_id}"
-    echo "[PATHVQA_DYNAMIC_PROMPT_SPARSE_VISUAL_VALIDATION] epoch=$epoch_id checkpoint=$checkpoint"
-    run_pathvqa_dynamic_prompt_eval \
-      "$checkpoint" \
-      validation \
-      "$output_dir/eval_validation/epoch_${epoch_id}" \
-      "$output_dir/eval_validation_epoch_${epoch_id}.log" || return 1
-  done
-
-  local selection
-  selection="$(python "$ROOT_DIR/pathvqa/select_best_epoch.py" --root "$output_dir" --epochs "$epochs")" || return 1
-  local best_epoch
-  local best_validation_score
-  IFS=$'\t' read -r best_epoch best_validation_score <<< "$selection"
-  local best_checkpoint="$output_dir/checkpoints/epoch_${best_epoch}"
-  echo "[PATHVQA_DYNAMIC_PROMPT_SPARSE_VISUAL_TEST] best_epoch=$best_epoch validation=$best_validation_score"
-  run_pathvqa_dynamic_prompt_eval \
-    "$best_checkpoint" \
-    test \
-    "$output_dir/eval_test/epoch_${best_epoch}" \
-    "$output_dir/eval_test_epoch_${best_epoch}.log" || return 1
-
-  local test_score
-  test_score="$(python -c 'import json,sys;print(json.load(open(sys.argv[1],encoding="utf-8"))["overall_accuracy"])' "$output_dir/eval_test/epoch_${best_epoch}/pathvqa_summary.json")" || return 1
-  printf 'experiment\tseed\tbest_epoch\tvalidation_accuracy\ttest_accuracy\tcheckpoint\n' \
-    > "$output_dir/selected_result.tsv"
-  printf '%s\t%s\t%s\t%s\t%s\t%s\n' \
-    "$experiment_name" "$run_seed" "$best_epoch" "$best_validation_score" \
-    "$test_score" "$best_checkpoint" \
-    >> "$output_dir/selected_result.tsv"
-  cat "$output_dir/selected_result.tsv"
+  run_pathvqa_dynamic_prompt_epoch3_validation \
+    "$output_dir" "$experiment_name" "$run_seed"
 }
 
 run_pathvqa_dynamic_prompt_sparse_visual_single_pass_seed44() {

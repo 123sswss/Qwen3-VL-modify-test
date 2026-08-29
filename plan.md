@@ -42,6 +42,10 @@
 - 纠正版实验A（本方版本）：保留57.79基线的独立P20、原图文Dynamic CA256和视觉层5/11/17注入不变；仅将raw S经冻结普通`visual.merger`变成2个领域Token，再由独立零输出初始化CA128读取为20个额外残差。最终前缀为`P + Delta_sample + Delta_raw_S`，新增约1.324M参数，S仍只属于Sparse LR3e-5组。
 - 纠正版实验B（用户版本）：完全删除独立P及冻结P0；raw S经同一冻结`visual.merger`原生得到2个LLM入口Token，直接作为前缀基底和现有图文Dynamic CA256的Query。视觉侧仍从同一个raw S生成层5/11/17 Rep。禁止增加扩展MLP或偷偷补回20个Query位置。
 - 两次固定PathVQA seed44/data_seed42、3 epochs、相同数据顺序与Sparse LR3e-5，串行目标为`pathvqa_dynamic_prompt_raw_shared_s_suite_seed44`；不重复57.79基线。重点记录raw-S文本接口梯度、独立Shared-S CA梯度、两种delta/base、Validation轨迹、Overall/Yes-No/Free-form及逐样本配对结果。
+- 纠正版实验A已完成：54.95/88.31/21.54，相对57.79基线下降2.84 Overall和4.23 Free-form，聚类配对Overall CI[-3.67,-2.04]。raw-S残差仅约P的3.95%但梯度健康，视觉CA层11/17转为96.5%/91.2%视觉质量；结果强烈支持跨支路优化干扰，但尚未用stop-gradient区分反向梯度冲突与前向残差内容有害。
+- 纠正版实验B已完成：51.64/87.33/15.91，相对基线下降6.15 Overall和9.86 Free-form，聚类配对Overall CI[-7.10,-5.20]。2-token raw-S基底范数约70，Dynamic残差达到其2.83倍；S虽有强CE梯度但仍处于3e-5视觉学习率组，无法替代LR0.3的P20文本锚点。
+- 决策：停止raw-S硬共享结构，不追加seed、不扫描S学习率、不增加S数量或Token扩展器。当前支持架构仍是57.79的独立P20 + 图文Dynamic CA + 单路径Sparse Visual；后续若继续追求论文核心，应研究优化层面的软耦合/梯度协调，而不是让视觉与文本直接共用同一个可训练参数。
+- 评估协议更新（2026-08-29）：后续PathVQA Dynamic Prompt开发实验固定训练3 epochs，只对`epoch_3`执行一次全量Validation；不再比较epoch1/2、不再自动选择最佳epoch，也不运行Test。`selected_result.tsv`必须标记`fixed_epoch3_validation`，Test仅在架构最终锁定后恢复。Dynamic Prompt因果干预同样默认只运行Validation。
 
 ## 总体目标
 

@@ -141,7 +141,9 @@ class DynamicPromptCallback(TrainerCallback):
         if step % self.logging_steps != 0:
             return control
         model = kwargs["model"]
-        prompt_grad = model.soft_prompt.grad
+        prompt_grad = (
+            model.soft_prompt.grad if model.soft_prompt is not None else None
+        )
         dynamic_grads = [
             parameter.grad.detach().float().pow(2).sum()
             for parameter in model.dynamic_prompt.parameters()
@@ -170,7 +172,11 @@ class DynamicPromptCallback(TrainerCallback):
         row = {
             "step": step,
             "epoch": float(state.epoch or 0.0),
-            "soft_prompt_norm": float(model.soft_prompt.detach().float().norm().item()),
+            "soft_prompt_norm": (
+                float(model.soft_prompt.detach().float().norm().item())
+                if model.soft_prompt is not None
+                else 0.0
+            ),
             "soft_prompt_grad_norm": (
                 float(prompt_grad.detach().float().norm().item())
                 if prompt_grad is not None
@@ -181,7 +187,7 @@ class DynamicPromptCallback(TrainerCallback):
         }
         if (
             sparse_visual is not None
-            and sparse_visual.export_shared_s_memory
+            and sparse_visual.map_shared_s_to_text
         ):
             shared_rep_grad = sparse_visual.shared_rep.grad
             row["shared_s_parameter_grad_norm"] = (
@@ -189,9 +195,24 @@ class DynamicPromptCallback(TrainerCallback):
                 if shared_rep_grad is not None
                 else 0.0
             )
-            row["shared_s_memory_grad_norm"] = float(
-                sparse_visual.shared_s_memory_grad_norm().item()
+            row["shared_s_text_prompt_grad_norm"] = float(
+                sparse_visual.shared_s_text_prompt_grad_norm().item()
             )
+        shared_attention = getattr(model, "shared_s_prompt_attention", None)
+        shared_attention_grads = (
+            [
+                parameter.grad.detach().float().pow(2).sum()
+                for parameter in shared_attention.parameters()
+                if parameter.grad is not None
+            ]
+            if shared_attention is not None
+            else []
+        )
+        row["shared_s_prompt_attention_grad_norm"] = (
+            float(torch.stack(shared_attention_grads).sum().sqrt().item())
+            if shared_attention_grads
+            else 0.0
+        )
         for key, value in model.debug_context.items():
             row[key] = float(value.detach().float().item())
         self.output_dir.mkdir(parents=True, exist_ok=True)
@@ -256,8 +277,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--sparse-visual-attention-dim", type=int, default=128)
     parser.add_argument("--sparse-visual-heads", type=int, default=4)
     parser.add_argument("--sparse-visual-lr", type=float, default=3e-5)
-    parser.add_argument("--shared-s-memory", action="store_true")
-    parser.add_argument("--freeze-soft-prompt", action="store_true")
+    parser.add_argument(
+        "--shared-s-text-mode",
+        choices=("none", "separate_residual", "direct_prompt"),
+        default="none",
+    )
+    parser.add_argument("--shared-s-attention-dim", type=int, default=128)
+    parser.add_argument("--shared-s-heads", type=int, default=4)
     parser.add_argument("--batch-size", type=int, default=2)
     parser.add_argument("--gradient-accumulation", type=int, default=16)
     parser.add_argument("--dataloader-workers", type=int, default=2)
@@ -275,6 +301,8 @@ def parse_args() -> argparse.Namespace:
             args.sparse_visual_rep_tokens,
             args.sparse_visual_attention_dim,
             args.sparse_visual_heads,
+            args.shared_s_attention_dim,
+            args.shared_s_heads,
         )
         < 1
     ):
@@ -285,12 +313,14 @@ def parse_args() -> argparse.Namespace:
         parser.error(
             "--sparse-visual-attention-dim must be divisible by --sparse-visual-heads"
         )
+    if args.shared_s_attention_dim % args.shared_s_heads != 0:
+        parser.error("--shared-s-attention-dim must be divisible by --shared-s-heads")
     if min(args.prompt_lr, args.dynamic_lr, args.sparse_visual_lr) <= 0.0:
         parser.error("Learning rates must be positive")
     if args.dataloader_workers < 0:
         parser.error("--dataloader-workers must be non-negative")
-    if args.shared_s_memory and not args.sparse_visual:
-        parser.error("--shared-s-memory requires --sparse-visual")
+    if args.shared_s_text_mode != "none" and not args.sparse_visual:
+        parser.error("Shared-S text modes require --sparse-visual")
     return args
 
 
@@ -325,8 +355,9 @@ def main() -> int:
         sparse_visual_rep_tokens=args.sparse_visual_rep_tokens,
         sparse_visual_attention_dim=args.sparse_visual_attention_dim,
         sparse_visual_heads=args.sparse_visual_heads,
-        shared_s_memory=args.shared_s_memory,
-        train_soft_prompt=not args.freeze_soft_prompt,
+        shared_s_text_mode=args.shared_s_text_mode,
+        shared_s_attention_dim=args.shared_s_attention_dim,
+        shared_s_heads=args.shared_s_heads,
     )
     dataset = PathVQADataset(
         processor=processor,
@@ -361,7 +392,9 @@ def main() -> int:
         )
     print(
         "[PATHVQA_DYNAMIC_PROMPT_CONFIG] "
-        f"prompt_length={args.prompt_length} hidden_size={model.soft_prompt.shape[-1]} "
+        f"requested_prompt_length={args.prompt_length} "
+        f"effective_prompt_length={model.prompt_length} "
+        f"hidden_size={model.dynamic_prompt.hidden_size} "
         f"attention_dim={args.attention_dim} heads={args.attention_heads} "
         f"parameters={counts} total={trainable} "
         f"epochs={args.epochs} prompt_lr={args.prompt_lr} "
@@ -372,9 +405,10 @@ def main() -> int:
         f"sparse_attention_dim={args.sparse_visual_attention_dim if args.sparse_visual else 0} "
         f"sparse_heads={args.sparse_visual_heads if args.sparse_visual else 0} "
         f"sparse_injection={'single_pass_insert_strip' if args.sparse_visual else 'none'} "
-        f"shared_s_memory={args.shared_s_memory} "
-        f"shared_s_memory_merger={'main_visual_merger' if args.shared_s_memory else 'none'} "
-        f"train_soft_prompt={not args.freeze_soft_prompt} "
+        f"shared_s_text_mode={args.shared_s_text_mode} "
+        f"shared_s_text_merger={'main_visual_merger' if args.shared_s_text_mode != 'none' else 'none'} "
+        f"shared_s_attention={args.shared_s_attention_dim}x{args.shared_s_heads} "
+        f"train_soft_prompt={model.soft_prompt is not None} "
         "pretrained_prompt_checkpoint=False stage1=False"
     )
 
@@ -417,7 +451,8 @@ def main() -> int:
         "method": "dynamic_multimodal_prompt_tuning",
         "experiment": args.experiment_name,
         "dataset": "PathVQA",
-        "prompt_length": args.prompt_length,
+        "requested_prompt_length": args.prompt_length,
+        "effective_prompt_length": model.prompt_length,
         "attention_dim": args.attention_dim,
         "attention_heads": args.attention_heads,
         "trainable_parameters": counts,
@@ -425,11 +460,13 @@ def main() -> int:
         "prompt_learning_rate": args.prompt_lr,
         "dynamic_learning_rate": args.dynamic_lr,
         "sparse_visual_learning_rate": args.sparse_visual_lr,
-        "shared_s_memory": args.shared_s_memory,
-        "shared_s_memory_merger": (
-            "main_visual_merger" if args.shared_s_memory else None
+        "shared_s_text_mode": args.shared_s_text_mode,
+        "shared_s_text_merger": (
+            "main_visual_merger" if args.shared_s_text_mode != "none" else None
         ),
-        "train_soft_prompt": not args.freeze_soft_prompt,
+        "shared_s_attention_dim": args.shared_s_attention_dim,
+        "shared_s_attention_heads": args.shared_s_heads,
+        "train_soft_prompt": model.soft_prompt is not None,
         "sparse_visual": (
             {
                 "anchor_layers": list(args.sparse_visual_anchor_layers),
@@ -437,8 +474,10 @@ def main() -> int:
                 "attention_dim": args.sparse_visual_attention_dim,
                 "attention_heads": args.sparse_visual_heads,
                 "injection_mode": "single_pass_insert_strip",
-                "shared_s_memory_merger": (
-                    "main_visual_merger" if args.shared_s_memory else None
+                "shared_s_text_merger": (
+                    "main_visual_merger"
+                    if args.shared_s_text_mode != "none"
+                    else None
                 ),
             }
             if args.sparse_visual

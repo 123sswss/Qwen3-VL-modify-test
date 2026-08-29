@@ -22,6 +22,11 @@ DYNAMIC_PROMPT_INTERVENTIONS = (
     "mean-residual",
     "lagged-memory",
 )
+SHARED_S_TEXT_MODES = (
+    "none",
+    "separate_residual",
+    "direct_prompt",
+)
 
 
 def _masked_mean(
@@ -170,38 +175,30 @@ class DynamicPromptTuningModel(nn.Module):
         sparse_visual_rep_tokens: int = 8,
         sparse_visual_attention_dim: int = 128,
         sparse_visual_heads: int = 4,
-        shared_s_memory: bool = False,
-        train_soft_prompt: bool = True,
+        shared_s_text_mode: str = "none",
+        shared_s_attention_dim: int = 128,
+        shared_s_heads: int = 4,
     ) -> None:
         super().__init__()
         if prompt_length < 1:
             raise ValueError("prompt_length must be positive")
+        if shared_s_text_mode not in SHARED_S_TEXT_MODES:
+            raise ValueError(
+                f"Unsupported shared_s_text_mode={shared_s_text_mode!r}; "
+                f"choices={SHARED_S_TEXT_MODES}"
+            )
+        if shared_s_attention_dim < 1 or shared_s_heads < 1:
+            raise ValueError("Shared-S attention dimensions must be positive")
+        if shared_s_attention_dim % shared_s_heads != 0:
+            raise ValueError("shared_s_attention_dim must be divisible by shared_s_heads")
         self.base_model = base_model
-        self.prompt_length = int(prompt_length)
+        self.requested_prompt_length = int(prompt_length)
         self.init_seed = int(init_seed)
-        self.shared_s_memory = bool(shared_s_memory)
-        self.train_soft_prompt = bool(train_soft_prompt)
+        self.shared_s_text_mode = shared_s_text_mode
         for parameter in self.base_model.parameters():
             parameter.requires_grad = False
 
         embeddings = self.base_model.get_input_embeddings().weight.detach()
-        generator = torch.Generator(device="cpu").manual_seed(self.init_seed)
-        sampled_rows = torch.randint(
-            embeddings.shape[0],
-            (self.prompt_length,),
-            generator=generator,
-            device="cpu",
-        )
-        initial_prompt = embeddings[sampled_rows.to(embeddings.device)].clone()
-        self.soft_prompt = nn.Parameter(
-            initial_prompt.float(),
-            requires_grad=self.train_soft_prompt,
-        )
-        self.dynamic_prompt = DynamicPromptCrossAttention(
-            hidden_size=int(embeddings.shape[-1]),
-            attention_dim=attention_dim,
-            num_heads=num_heads,
-        ).to(device=embeddings.device)
         self.sparse_visual = None
         if sparse_visual_anchor_layers:
             model_core = getattr(self.base_model, "model", None)
@@ -220,11 +217,39 @@ class DynamicPromptTuningModel(nn.Module):
                 rep_token_count=sparse_visual_rep_tokens,
                 attention_dim=sparse_visual_attention_dim,
                 num_heads=sparse_visual_heads,
-                export_shared_s_memory=self.shared_s_memory,
+                map_shared_s_to_text=self.shared_s_text_mode != "none",
             ).to(device=visual_device)
             self.sparse_visual.install(visual_model)
-        elif self.shared_s_memory:
-            raise ValueError("Shared S-Memory requires Sparse Visual MMRL")
+        elif self.shared_s_text_mode != "none":
+            raise ValueError("Shared-S text modes require Sparse Visual MMRL")
+
+        if self.shared_s_text_mode == "direct_prompt":
+            self.prompt_length = self.sparse_visual.shared_s_text_prompt_length
+            self.register_parameter("soft_prompt", None)
+        else:
+            self.prompt_length = self.requested_prompt_length
+            generator = torch.Generator(device="cpu").manual_seed(self.init_seed)
+            sampled_rows = torch.randint(
+                embeddings.shape[0],
+                (self.prompt_length,),
+                generator=generator,
+                device="cpu",
+            )
+            initial_prompt = embeddings[sampled_rows.to(embeddings.device)].clone()
+            self.soft_prompt = nn.Parameter(initial_prompt.float())
+
+        self.dynamic_prompt = DynamicPromptCrossAttention(
+            hidden_size=int(embeddings.shape[-1]),
+            attention_dim=attention_dim,
+            num_heads=num_heads,
+        ).to(device=embeddings.device)
+        self.shared_s_prompt_attention = None
+        if self.shared_s_text_mode == "separate_residual":
+            self.shared_s_prompt_attention = DynamicPromptCrossAttention(
+                hidden_size=int(embeddings.shape[-1]),
+                attention_dim=shared_s_attention_dim,
+                num_heads=shared_s_heads,
+            ).to(device=embeddings.device)
 
         self.visual_template_token_ids = self._resolve_visual_token_ids(tokenizer)
         self.config = self.base_model.config
@@ -255,9 +280,12 @@ class DynamicPromptTuningModel(nn.Module):
         return self.base_model.get_input_embeddings()
 
     def trainable_parameter_groups(self) -> Dict[str, list[nn.Parameter]]:
+        dynamic_parameters = list(self.dynamic_prompt.parameters())
+        if self.shared_s_prompt_attention is not None:
+            dynamic_parameters.extend(self.shared_s_prompt_attention.parameters())
         groups = {
-            "soft_prompt": [self.soft_prompt] if self.train_soft_prompt else [],
-            "dynamic_prompt": list(self.dynamic_prompt.parameters()),
+            "soft_prompt": [self.soft_prompt] if self.soft_prompt is not None else [],
+            "dynamic_prompt": dynamic_parameters,
         }
         if self.sparse_visual is not None:
             groups["sparse_visual"] = list(self.sparse_visual.parameters())
@@ -426,14 +454,19 @@ class DynamicPromptTuningModel(nn.Module):
         def replace_prompt(_module: nn.Module, _inputs: Any, output: torch.Tensor):
             if output.ndim != 3 or output.shape[1] < self.prompt_length:
                 return output
-            prompt = (
-                self.soft_prompt.to(
-                    device=output.device,
-                    dtype=output.dtype,
+            if self.soft_prompt is None:
+                prompt = self._expanded_shared_s_prompt(
+                    output.shape[0], output.device, output.dtype
                 )
-                .unsqueeze(0)
-                .expand(output.shape[0], -1, -1)
-            )
+            else:
+                prompt = (
+                    self.soft_prompt.to(
+                        device=output.device,
+                        dtype=output.dtype,
+                    )
+                    .unsqueeze(0)
+                    .expand(output.shape[0], -1, -1)
+                )
             return torch.cat((prompt, output[:, self.prompt_length :]), dim=1)
 
         handle = embeddings.register_forward_hook(replace_prompt)
@@ -441,6 +474,20 @@ class DynamicPromptTuningModel(nn.Module):
             yield
         finally:
             handle.remove()
+
+    def _expanded_shared_s_prompt(
+        self,
+        batch_size: int,
+        device: torch.device,
+        dtype: torch.dtype,
+    ) -> torch.Tensor:
+        if self.sparse_visual is None or self.shared_s_text_mode == "none":
+            raise RuntimeError("Raw Shared-S prompt was requested while disabled")
+        prompt = self.sparse_visual.shared_s_text_prompt().to(
+            device=device,
+            dtype=dtype,
+        )
+        return prompt.unsqueeze(0).expand(batch_size, -1, -1)
 
     @contextmanager
     def _inject_dynamic_prompt(
@@ -491,32 +538,52 @@ class DynamicPromptTuningModel(nn.Module):
                     "Dynamic Prompt causal interventions are inference-only"
                 )
             natural_memory = torch.stack((visual_memory, text_memory), dim=1)
-            if self.shared_s_memory:
-                shared_memory = self.sparse_visual.shared_s_memory().to(
-                    device=inputs_embeds.device,
-                    dtype=inputs_embeds.dtype,
-                )
-                if shared_memory.shape != visual_memory.shape:
-                    raise RuntimeError(
-                        "Shared S-Memory shape mismatch: "
-                        f"shared={tuple(shared_memory.shape)} "
-                        f"visual={tuple(visual_memory.shape)}"
-                    )
-                natural_memory = torch.cat(
-                    (natural_memory, shared_memory.unsqueeze(1)),
-                    dim=1,
-                )
             memory = self._apply_memory_intervention(natural_memory)
             prompt = inputs_embeds[:, : self.prompt_length]
             delta = self._apply_delta_intervention(prompt, memory)
+            shared_delta = torch.zeros_like(prompt)
+            shared_debug = {}
+            if self.shared_s_prompt_attention is not None:
+                shared_prompt = self._expanded_shared_s_prompt(
+                    prompt.shape[0], prompt.device, prompt.dtype
+                )
+                shared_delta = self.shared_s_prompt_attention(prompt, shared_prompt)
+                shared_debug = {
+                    "shared_s_prompt_attention_entropy_norm": self.shared_s_prompt_attention.debug_context[
+                        "dynamic_prompt_attention_entropy_norm"
+                    ],
+                    "shared_s_prompt_token0_attention_mean": self.shared_s_prompt_attention.debug_context[
+                        "dynamic_prompt_visual_attention_mean"
+                    ],
+                    "shared_s_prompt_token1_attention_mean": self.shared_s_prompt_attention.debug_context[
+                        "dynamic_prompt_text_attention_mean"
+                    ],
+                    "shared_s_prompt_delta_norm_mean": self.shared_s_prompt_attention.debug_context[
+                        "dynamic_prompt_delta_norm_mean"
+                    ],
+                    "shared_s_prompt_base_norm_mean": self.shared_s_prompt_attention.debug_context[
+                        "dynamic_prompt_base_norm_mean"
+                    ],
+                    "shared_s_prompt_delta_to_base_ratio": self.shared_s_prompt_attention.debug_context[
+                        "dynamic_prompt_delta_to_base_ratio"
+                    ],
+                    "shared_s_text_prompt_norm_mean": shared_prompt.detach()
+                    .float()
+                    .norm(dim=-1)
+                    .mean(),
+                    "shared_s_text_prompt_tokens": prompt.new_tensor(
+                        float(shared_prompt.shape[1])
+                    ),
+                }
             if not self.training:
                 self._intervention_samples_seen += int(prompt.shape[0])
-            dynamic = prompt + delta
+            dynamic = prompt + delta + shared_delta
             kwargs["inputs_embeds"] = torch.cat(
                 (dynamic, inputs_embeds[:, self.prompt_length :]), dim=1
             )
             self.debug_context = {
                 **self.dynamic_prompt.debug_context,
+                **shared_debug,
                 "dynamic_prompt_visual_tokens_mean": visual_mask.sum(dim=1)
                 .float()
                 .mean(),
@@ -528,7 +595,8 @@ class DynamicPromptTuningModel(nn.Module):
                     f"visual_tokens={visual_mask.sum(dim=1).tolist()} "
                     f"text_tokens={text_mask.sum(dim=1).tolist()} "
                     f"memory_tokens={natural_memory.shape[1]} "
-                    f"shared_s_memory={self.shared_s_memory} "
+                    f"shared_s_text_mode={self.shared_s_text_mode} "
+                    f"prompt_tokens={self.prompt_length} "
                     "answer_overlap=0 pass=True"
                 )
                 self._memory_audited = True
@@ -559,7 +627,7 @@ class DynamicPromptTuningModel(nn.Module):
         if self.sparse_visual is None:
             yield
             return
-        ids = expanded_ids.to(self.soft_prompt.device)
+        ids = expanded_ids.to(self.get_input_embeddings().weight.device)
         text_mask = expanded_context.to(device=ids.device, dtype=torch.bool)
         for token_id in self.visual_template_token_ids:
             text_mask = text_mask & ids.ne(token_id)
@@ -630,20 +698,28 @@ class DynamicPromptTuningModel(nn.Module):
         config = {
             "method": "dynamic_multimodal_prompt_tuning",
             "prompt_length": self.prompt_length,
-            "hidden_size": int(self.soft_prompt.shape[-1]),
+            "requested_prompt_length": self.requested_prompt_length,
+            "hidden_size": self.dynamic_prompt.hidden_size,
             "attention_dim": self.dynamic_prompt.attention_dim,
             "num_heads": self.dynamic_prompt.num_heads,
             "init_seed": self.init_seed,
-            "memory": (
-                "mean_visual_plus_mean_question_plus_shared_s"
-                if self.shared_s_memory
-                else "mean_visual_plus_mean_question"
+            "memory": "mean_visual_plus_mean_question",
+            "shared_s_text_mode": self.shared_s_text_mode,
+            "shared_s_text_merger": (
+                "main_visual_merger"
+                if self.shared_s_text_mode != "none"
+                else None
             ),
-            "shared_s_memory": self.shared_s_memory,
-            "shared_s_memory_merger": (
-                "main_visual_merger" if self.shared_s_memory else None
+            "shared_s_prompt_attention": (
+                {
+                    "attention_dim": self.shared_s_prompt_attention.attention_dim,
+                    "num_heads": self.shared_s_prompt_attention.num_heads,
+                    "zero_init_output": True,
+                }
+                if self.shared_s_prompt_attention is not None
+                else None
             ),
-            "train_soft_prompt": self.train_soft_prompt,
+            "train_soft_prompt": self.soft_prompt is not None,
             "sparse_visual": (
                 {
                     "anchor_layers": list(self.sparse_visual.anchor_layers),
@@ -651,9 +727,11 @@ class DynamicPromptTuningModel(nn.Module):
                     "attention_dim": self.sparse_visual.rep_attention.attention_dim,
                     "num_heads": self.sparse_visual.rep_attention.num_heads,
                     "injection_mode": "single_pass_insert_strip",
-                    "shared_s_memory": self.shared_s_memory,
-                    "shared_s_memory_merger": (
-                        "main_visual_merger" if self.shared_s_memory else None
+                    "map_raw_shared_s_to_text": self.shared_s_text_mode != "none",
+                    "shared_s_text_merger": (
+                        "main_visual_merger"
+                        if self.shared_s_text_mode != "none"
+                        else None
                     ),
                 }
                 if self.sparse_visual is not None
@@ -666,11 +744,23 @@ class DynamicPromptTuningModel(nn.Module):
             json.dump(config, handle, ensure_ascii=False, indent=2)
         torch.save(
             {
-                "soft_prompt": self.soft_prompt.detach().cpu(),
+                "soft_prompt": (
+                    self.soft_prompt.detach().cpu()
+                    if self.soft_prompt is not None
+                    else None
+                ),
                 "dynamic_prompt": {
                     key: value.detach().cpu()
                     for key, value in self.dynamic_prompt.state_dict().items()
                 },
+                "shared_s_prompt_attention": (
+                    {
+                        key: value.detach().cpu()
+                        for key, value in self.shared_s_prompt_attention.state_dict().items()
+                    }
+                    if self.shared_s_prompt_attention is not None
+                    else None
+                ),
                 "sparse_visual": (
                     {
                         key: value.detach().cpu()
@@ -691,13 +781,31 @@ class DynamicPromptTuningModel(nn.Module):
             weights_only=True,
         )
         prompt = state["soft_prompt"]
-        if tuple(prompt.shape) != tuple(self.soft_prompt.shape):
+        if (prompt is None) != (self.soft_prompt is None):
             raise ValueError(
-                f"Soft prompt shape mismatch: {tuple(prompt.shape)} vs "
-                f"{tuple(self.soft_prompt.shape)}"
+                "Soft prompt checkpoint/model architecture mismatch: "
+                f"checkpoint={prompt is not None} model={self.soft_prompt is not None}"
             )
-        self.soft_prompt.data.copy_(prompt.to(self.soft_prompt.device))
+        if self.soft_prompt is not None:
+            if tuple(prompt.shape) != tuple(self.soft_prompt.shape):
+                raise ValueError(
+                    f"Soft prompt shape mismatch: {tuple(prompt.shape)} vs "
+                    f"{tuple(self.soft_prompt.shape)}"
+                )
+            self.soft_prompt.data.copy_(prompt.to(self.soft_prompt.device))
         self.dynamic_prompt.load_state_dict(state["dynamic_prompt"], strict=True)
+        shared_attention_state = state.get("shared_s_prompt_attention")
+        if (shared_attention_state is None) != (self.shared_s_prompt_attention is None):
+            raise ValueError(
+                "Shared-S prompt attention checkpoint/model architecture mismatch: "
+                f"checkpoint={shared_attention_state is not None} "
+                f"model={self.shared_s_prompt_attention is not None}"
+            )
+        if self.shared_s_prompt_attention is not None:
+            self.shared_s_prompt_attention.load_state_dict(
+                shared_attention_state, strict=True
+            )
+            self.shared_s_prompt_attention._forward_audited = True
         sparse_state = state.get("sparse_visual")
         if (sparse_state is None) != (self.sparse_visual is None):
             raise ValueError(

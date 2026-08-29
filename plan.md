@@ -21,11 +21,11 @@
 - 纠正（2026-08-28）：上述“停止视觉协同扩展”结论忽略了完整三轮轨迹。Sparse Visual 在epoch1相对原 Dynamic Prompt 同轮提升Overall +2.01、Yes/No +0.74、Free-form +3.29，随后epoch2坍缩并在epoch3恢复，更符合分支联合优化不稳定而非结构完全无效。允许追加一次严格的学习率诊断，除此之外仍不扩结构、不加seed。
 - 待运行 `pathvqa_dynamic_prompt_sparse_visual_layers5_11_17_slots8_ca128_init0050_relation0050_sparse_lr3e5_seed44`：唯一变量是Sparse Visual LR由3e-4降至3e-5；Prompt LR0.3、Dynamic CA LR3e-4、初始化0.05、Relation0.05、结构、seed和数据顺序保持不变。主要诊断是epoch2是否不再从epoch1下降3.23个百分点；若训练轨迹稳定且最终接近或超过56.54，支持“分支更新时间尺度不匹配”的改进方向，否则停止单纯LR调节。
 - 上述LR诊断已完成并达到成功线：Validation为54.53 ->55.14 ->56.85，Test为57.51/89.62/25.35；相对原 Dynamic Prompt 的配对聚类95% CI为[+0.20,+1.73] Overall、[+0.84,+3.44] Free-form。仅降低Sparse LR便消除epoch2坍缩并取得显著净增益，确认后续方向是轻量、慢更新的视觉协同，而不是增强视觉分支幅度。
-- 当前服务器无可用GPU，禁止启动任何训练或推理。旧双路径Sparse Visual的`checkpoints/`与`final/`已按用户要求删除，仅保留日志和评估证据，因此原57.51 checkpoint不再能运行Sparse-off干预。
+- 旧双路径Sparse Visual的`checkpoints/`与`final/`已按用户要求删除，仅保留日志和评估证据，因此原57.51 checkpoint不再能运行Sparse-off干预。
 - 新实现改为标准单路径Rep Token注入：每个锚点只执行一次原生视觉Block，直接计算`Strip(Block([R;h]))`；彻底移除Residual Scale、Relation及其诊断和参数。Sparse参数1,201,152，总训练参数3,886,592，继续固定LR3e-5。新运行目标为`pathvqa_dynamic_prompt_sparse_visual_single_pass_seed44`，实验名显式包含`single_pass`；该实现尚未运行，不能继承57.51分数。
 - 算力恢复后的第一优先级是运行上述single-pass seed44，先判断去掉双路径后能否保留低LR收益与降低训练/推理耗时；取消继续扫描Sparse LR。只有single-pass成立后才追加额外seed和同checkpoint Sparse-off干预。
 
-### 今晚单Seed共享S递进实验（已实现、待运行）
+### 今晚单Seed共享S递进实验（已完成）
 
 - 三项全部固定PathVQA seed44/data_seed42、3 epochs、相同数据顺序、20个LLM前缀位置、Dynamic CA256/8头、Sparse Visual层5/11/17、8个1024维共享S、Visual CA128/4头、Sparse LR3e-5、Text CA LR3e-4和validation选模。每项只测试所选最佳epoch一次，不扫描学习率。
 - 实验1 `pathvqa_dynamic_prompt_sparse_visual_single_pass_seed44`：单路径新基线。保留独立可学习P（LR0.3）和现有Text CA，不加入S到文本侧的直接桥梁。目标是判断`Strip(Block([R;h]))`能否接近历史双路径57.51，并建立后两项的同实现对照；它不是旧57.51的严格复现。
@@ -34,6 +34,14 @@
 - 主要比较依次为实验2-实验1（共享S跨视觉/文本桥梁是否有用）和实验3-实验2（独立可学习P是否必要）。报告Overall、Yes/No、Free-form、问题类型、三轮Validation、聚类配对CI、逐样本fix/break、参数量、训练时间、TTFT、Sparse分支总梯度、共享S参数梯度及S-Memory接口梯度；后两者用于确认文本桥梁参与反传，不冒充严格的逐路径梯度分解。
 - 决策规则：实验2若不低于实验1且Free-form有正向净修复，则保留共享S桥梁；实验3若与实验2差距不超过0.5 Overall，可采用更纯粹的共享S叙事，否则保留独立P并将硬共享版本作为必要消融。三项完成前不追加seed、不修改S数量、不自建新MLP。
 - 三项实现完成后使用单一串行目标`pathvqa_dynamic_prompt_shared_s_suite_seed44`依次运行，任一项训练、validation选模或test失败即停止后续实验，避免在基线失效时继续消耗整夜算力。
+- 实验1完成：single-pass baseline Validation55.06 ->56.21 ->57.52，Test **57.79/89.77/25.77**，超过已删除checkpoint的历史双路径57.51点估计。标准单路径成立并成为新参考。
+- 实验2完成：keep-P共享S-Memory为 **56.14/89.02/23.21**，相对实验1下降1.65 Overall和2.56 Free-form，聚类配对Overall CI为[-2.43,-0.92]。桥梁梯度健康且获得23.75%注意力，因此按预设规则删除该方向，不追加seed或结构修补。
+- 实验3完成：冻结P0为 **54.71/87.45/21.92**，相对实验2再降1.43 Overall，聚类配对CI为[-2.25,-0.65]；Dynamic residual/base末期均值76.8x。独立可学习P被确认为必要组件，纯共享S叙事停止。
+- 后续候选仅保留single-pass baseline的额外seed与同checkpoint Sparse-off机制干预；是否立即运行seed45由下一轮讨论决定，不自动启动。共享S-Memory实验2/3不再追加预算。
+- 更正（2026-08-29）：上述实验2/3把第17层视觉Block输出的条件化Rep经Merger回流到Text CA，偏离了原始“未经Visual CA的共享参数S直接分叉到视觉侧与文本侧”设计。56.14/54.71只否定末层Rep回流捷径，不能否定raw-S共享。旧结果保留但撤销“共享S终止”的外推结论。
+- 纠正版实验A（本方版本）：保留57.79基线的独立P20、原图文Dynamic CA256和视觉层5/11/17注入不变；仅将raw S经冻结普通`visual.merger`变成2个领域Token，再由独立零输出初始化CA128读取为20个额外残差。最终前缀为`P + Delta_sample + Delta_raw_S`，新增约1.324M参数，S仍只属于Sparse LR3e-5组。
+- 纠正版实验B（用户版本）：完全删除独立P及冻结P0；raw S经同一冻结`visual.merger`原生得到2个LLM入口Token，直接作为前缀基底和现有图文Dynamic CA256的Query。视觉侧仍从同一个raw S生成层5/11/17 Rep。禁止增加扩展MLP或偷偷补回20个Query位置。
+- 两次固定PathVQA seed44/data_seed42、3 epochs、相同数据顺序与Sparse LR3e-5，串行目标为`pathvqa_dynamic_prompt_raw_shared_s_suite_seed44`；不重复57.79基线。重点记录raw-S文本接口梯度、独立Shared-S CA梯度、两种delta/base、Validation轨迹、Overall/Yes-No/Free-form及逐样本配对结果。
 
 ## 总体目标
 

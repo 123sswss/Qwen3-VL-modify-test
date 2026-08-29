@@ -106,9 +106,11 @@ class SparseVisualMMRLTest(unittest.TestCase):
         parameter_count = sum(parameter.numel() for parameter in adapter.parameters())
         self.assertEqual(parameter_count, 1_201_152)
 
-    def test_last_anchor_exports_sample_grouped_shared_s_memory(self):
+    def test_raw_shared_s_maps_to_text_without_visual_conditioning(self):
         torch.manual_seed(13)
         visual = _FakeMergedVisual()
+        for parameter in visual.parameters():
+            parameter.requires_grad = False
         adapter = SparseVisualMMRL(
             visual_dim=8,
             text_dim=12,
@@ -116,25 +118,23 @@ class SparseVisualMMRLTest(unittest.TestCase):
             rep_token_count=4,
             attention_dim=4,
             num_heads=2,
-            export_shared_s_memory=True,
+            map_shared_s_to_text=True,
         )
         adapter.install(visual)
         self.assertNotIn(
             "merger",
             dict(adapter.named_modules()),
         )
-        hidden = torch.randn(7, 8)
-        cu_seqlens = torch.tensor([0, 2, 4, 7], dtype=torch.int32)
-        with adapter.activate(torch.randn(2, 12), torch.tensor([1, 1])):
-            adapter.prepare_visual(torch.tensor([[1, 1, 4], [1, 1, 3]]))
-            output = visual.blocks[1](hidden, cu_seqlens=cu_seqlens)
-            shared_memory = adapter.shared_s_memory()
-            self.assertEqual(tuple(shared_memory.shape), (2, 12))
-            loss = output.square().mean() + shared_memory.square().mean()
+        shared_prompt = adapter.shared_s_text_prompt()
+        expected = visual.merger(adapter.shared_rep)
+        self.assertEqual(adapter.shared_s_text_prompt_length, 1)
+        self.assertEqual(tuple(shared_prompt.shape), (1, 12))
+        torch.testing.assert_close(shared_prompt, expected)
+        loss = shared_prompt.square().mean()
         loss.backward()
         self.assertGreater(float(adapter.shared_rep.grad.abs().sum()), 0.0)
-        self.assertGreater(float(adapter.shared_s_memory_grad_norm()), 0.0)
-        self.assertIn("shared_s_memory_norm_mean", adapter.debug_context)
+        self.assertGreater(float(adapter.shared_s_text_prompt_grad_norm()), 0.0)
+        self.assertTrue(all(parameter.grad is None for parameter in visual.parameters()))
 
 
 if __name__ == "__main__":

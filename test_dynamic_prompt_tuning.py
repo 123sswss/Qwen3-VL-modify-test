@@ -33,10 +33,34 @@ class _FakeLanguageModel(nn.Module):
         return SimpleNamespace(loss=inputs_embeds.float().sum())
 
 
+class _FakeVisualBlock(nn.Module):
+    def forward(self, hidden_states, **kwargs):
+        return hidden_states
+
+
+class _FakeVisualMerger(nn.Module):
+    def __init__(self, visual_size=8, text_size=8, merge_unit=2):
+        super().__init__()
+        self.linear = nn.Linear(visual_size * merge_unit, text_size, bias=False)
+
+    def forward(self, hidden_states):
+        return self.linear(hidden_states.view(-1, self.linear.in_features))
+
+
+class _FakeVisual(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.config = SimpleNamespace(hidden_size=8)
+        self.blocks = nn.ModuleList(_FakeVisualBlock() for _ in range(2))
+        self.merger = _FakeVisualMerger()
+        self.spatial_merge_unit = 2
+
+
 class _FakeCore(nn.Module):
     def __init__(self):
         super().__init__()
         self.language_model = _FakeLanguageModel()
+        self.visual = _FakeVisual()
 
 
 class _FakeMultimodalModel(nn.Module):
@@ -180,20 +204,45 @@ class DynamicPromptTuningTest(unittest.TestCase):
         self.assertEqual(summary["warmup_samples"], 1)
         self.assertEqual(summary["samples_changed"], 1)
 
-    def test_cross_attention_accepts_shared_s_memory_token(self):
+    def test_cross_attention_accepts_two_memory_tokens(self):
         attention = DynamicPromptCrossAttention(
             hidden_size=8,
             attention_dim=4,
             num_heads=2,
         )
-        delta = attention(torch.randn(2, 3, 8), torch.randn(2, 3, 8))
+        delta = attention(torch.randn(2, 3, 8), torch.randn(2, 2, 8))
         self.assertEqual(tuple(delta.shape), (2, 3, 8))
-        self.assertIn(
-            "dynamic_prompt_shared_s_attention_mean",
-            attention.debug_context,
+        self.assertNotIn("dynamic_prompt_shared_s_attention_mean", attention.debug_context)
+
+    def test_direct_shared_s_prompt_has_no_independent_prompt_or_p0(self):
+        model = DynamicPromptTuningModel(
+            _FakeMultimodalModel(),
+            tokenizer=_FakeTokenizer(),
+            prompt_length=20,
+            init_seed=5,
+            attention_dim=4,
+            num_heads=2,
+            sparse_visual_anchor_layers=(1,),
+            sparse_visual_rep_tokens=4,
+            sparse_visual_attention_dim=4,
+            sparse_visual_heads=2,
+            shared_s_text_mode="direct_prompt",
+        )
+        self.assertIsNone(model.soft_prompt)
+        self.assertEqual(model.prompt_length, 2)
+        self.assertEqual(model.trainable_parameter_groups()["soft_prompt"], [])
+        output = model(**self._batch())
+        prefix = model.base_model.model.language_model.last_embeddings[:, :2]
+        expected = model.sparse_visual.shared_s_text_prompt().unsqueeze(0)
+        torch.testing.assert_close(prefix.float(), expected.float())
+        output.loss.backward()
+        self.assertGreater(float(model.sparse_visual.shared_rep.grad.norm()), 0.0)
+        self.assertGreater(
+            float(model.dynamic_prompt.output_projection.weight.grad.norm()),
+            0.0,
         )
 
-    def test_frozen_prompt_remains_query_scaffold_without_optimizer_group(self):
+    def test_separate_shared_s_residual_preserves_independent_prompt_at_step_zero(self):
         model = DynamicPromptTuningModel(
             _FakeMultimodalModel(),
             tokenizer=_FakeTokenizer(),
@@ -201,15 +250,23 @@ class DynamicPromptTuningTest(unittest.TestCase):
             init_seed=5,
             attention_dim=4,
             num_heads=2,
-            train_soft_prompt=False,
+            sparse_visual_anchor_layers=(1,),
+            sparse_visual_rep_tokens=4,
+            sparse_visual_attention_dim=4,
+            sparse_visual_heads=2,
+            shared_s_text_mode="separate_residual",
+            shared_s_attention_dim=4,
+            shared_s_heads=2,
         )
-        self.assertFalse(model.soft_prompt.requires_grad)
-        self.assertEqual(model.trainable_parameter_groups()["soft_prompt"], [])
         output = model(**self._batch())
+        prefix = model.base_model.model.language_model.last_embeddings[:, :2]
+        torch.testing.assert_close(prefix.float(), model.soft_prompt.unsqueeze(0))
         output.loss.backward()
-        self.assertIsNone(model.soft_prompt.grad)
+        self.assertIsNotNone(model.shared_s_prompt_attention)
         self.assertGreater(
-            float(model.dynamic_prompt.output_projection.weight.grad.norm()),
+            float(
+                model.shared_s_prompt_attention.output_projection.weight.grad.norm()
+            ),
             0.0,
         )
 

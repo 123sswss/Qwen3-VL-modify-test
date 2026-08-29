@@ -48,6 +48,11 @@ class DynamicPromptTuningModelInterface:
             "r", encoding="utf-8"
         ) as handle:
             config = json.load(handle)
+        if config.get("shared_s_memory", False):
+            raise RuntimeError(
+                "Legacy post-anchor Rep feedback checkpoints are intentionally "
+                "unsupported by the corrected raw Shared-S implementation"
+            )
         self.processor = AutoProcessor.from_pretrained(
             base_model_path, trust_remote_code=True
         )
@@ -58,10 +63,13 @@ class DynamicPromptTuningModelInterface:
             trust_remote_code=True,
         )
         sparse_visual = config.get("sparse_visual")
+        shared_s_prompt_attention = config.get("shared_s_prompt_attention")
         self.model = DynamicPromptTuningModel(
             base_model,
             tokenizer=self.processor.tokenizer,
-            prompt_length=int(config["prompt_length"]),
+            prompt_length=int(
+                config.get("requested_prompt_length", config["prompt_length"])
+            ),
             init_seed=int(config.get("init_seed", 44)),
             attention_dim=int(config["attention_dim"]),
             num_heads=int(config["num_heads"]),
@@ -83,8 +91,17 @@ class DynamicPromptTuningModelInterface:
             sparse_visual_heads=(
                 int(sparse_visual["num_heads"]) if sparse_visual is not None else 4
             ),
-            shared_s_memory=bool(config.get("shared_s_memory", False)),
-            train_soft_prompt=bool(config.get("train_soft_prompt", True)),
+            shared_s_text_mode=str(config.get("shared_s_text_mode", "none")),
+            shared_s_attention_dim=(
+                int(shared_s_prompt_attention["attention_dim"])
+                if shared_s_prompt_attention is not None
+                else 128
+            ),
+            shared_s_heads=(
+                int(shared_s_prompt_attention["num_heads"])
+                if shared_s_prompt_attention is not None
+                else 4
+            ),
         )
         self.model.load_dynamic_prompt(checkpoint)
         self.model.eval()
@@ -100,8 +117,8 @@ class DynamicPromptTuningModelInterface:
             f"attention_dim={self.model.dynamic_prompt.attention_dim} "
             f"heads={self.model.dynamic_prompt.num_heads} "
             f"sparse_visual={sparse_visual is not None} "
-            f"shared_s_memory={self.model.shared_s_memory} "
-            f"train_soft_prompt={self.model.train_soft_prompt} "
+            f"shared_s_text_mode={self.model.shared_s_text_mode} "
+            f"train_soft_prompt={self.model.soft_prompt is not None} "
             f"intervention={intervention} memory_lag={memory_lag}"
         )
 

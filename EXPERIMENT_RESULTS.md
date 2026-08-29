@@ -479,7 +479,65 @@ Correction (2026-08-28): the immediate recommendation to stop all tuning was too
 
 Storage correction (2026-08-28): by explicit user direction, the `checkpoints/` and `final/` weight directories for both completed dual-path Sparse Visual runs (LR3e-4 and LR3e-5) were deleted after their results were fully recorded. Evaluation logs, summaries, predictions, comparisons and diagnostics remain at the recorded output roots. The57.5086 result remains valid historical evidence, but its checkpoint can no longer support the planned Sparse-off intervention or direct reuse.
 
+### 2026-08-29 - pathvqa_dynamic_prompt_sparse_visual_single_pass_layers5_11_17_slots8_ca128_lr3e5_seed44_20260828
+
+- Commit/config: commit `e3715c0`; corrected single-pass Sparse Visual baseline using `Strip(Block([Rep; h]))` at visual layers5/11/17. It retains the independently trainable20-token Prompt, Dynamic CA256/8 heads over Mean-Pooled visual/question Memory, shared8x1024 visual Rep base, shared Visual CA128/4 heads and Sparse LR3e-5. Residual Scale, Relation and a direct shared-S text bridge are absent.
+- Dataset and split: PathVQA train19,654; validation6,259 for epoch selection; test6,719 with858 image clusters.
+- Seed / data seed:44 /42.
+- Controlled change: establish the corrected single-pass reference after removing the historical dual execution path; all three experiments in this suite use the same data order,3 epochs, Prompt LR0.3, Dynamic CA LR3e-4 and Sparse LR3e-5.
+- Validation Overall / Yes-No / Free-form by epoch: epoch1 **55.0567 / 87.9360 / 22.2719**; epoch2 **56.2071 / 88.0640 / 24.4416**; epoch3 **57.5172 / 89.7280 / 25.3989**. Epoch3 selected.
+- Test Overall: **57.7913**; image-clustered95% bootstrap CI **[56.4283,59.1711]**.
+- Yes/No / Free-form: **89.7680 / 25.7671**.
+- Per question type: how9.3525, other38.8889, what20.0292, when0.0000, where68.4455, why4.5455, yes/no89.7680; Free-form question-type macro23.5436.
+- Trainable parameters: Prompt51,200 + Dynamic CA2,634,240 + Sparse Visual1,201,152 = **3,886,592**.
+- Training:3 epochs,1,845 optimizer steps, runtime6,914.1s, reported train loss11.3922.
+- Diagnostics:93 rows through step1,840. Over the last30 rows, Prompt norm875.14 and grad norm0.01340; Dynamic/Sparse grad norms0.7821/0.5845. Dynamic attention again hardens to normalized entropy5.23e-5 with44.375% visual mass. Dynamic delta/base averages0.4781. Sparse Rep/input and output/input norm ratios average0.7834 and1.1062, confirming a strongly active single-pass branch rather than the historical0.073% residual-scale regime.
+- Suite comparison: this is the winner. It exceeds the shared-S-Memory keep-P variant by **+1.6520 Overall**, +0.7436 Yes/No and **+2.5618 Free-form**. Baseline-only/bridge-only correct counts are381/270 Overall and232/146 Free-form; McNemar p-values are1.55e-5 and1.14e-5. The image-clustered paired95% CI for Overall is **[+0.9157,+2.4331]**.
+- Historical comparison: its point estimate is+0.2827 Overall and+0.4171 Free-form above the deleted-checkpoint dual-path57.5086 run, but that is an architecture change rather than a same-checkpoint intervention and is not used as causal evidence.
+- Evaluation timing: TTFT mean0.079574s, weighted TPOT0.021946s/token,45.566 decode tokens/s, request mean0.137107s.
+- Conclusion: the corrected single-pass Sparse Visual method not only preserves the low-LR gain but establishes the new PathVQA seed44 best point estimate. The expensive historical dual block execution, explicit residual scale and Relation are not required for this result. This checkpoint is the supported reference for any additional seed or causal Sparse-off analysis.
+- Output/log path: `/root/autodl-tmp/Qwen3-VL-modify-test/pathvqa/outputs/dynamic_prompt/pathvqa_dynamic_prompt_sparse_visual_single_pass_layers5_11_17_slots8_ca128_lr3e5_seed44_20260828`; selected checkpoint `checkpoints/epoch_3`; diagnostics `dynamic_prompt_diagnostics.jsonl`.
+
+### 2026-08-29 - pathvqa_dynamic_prompt_shared_s_memory_main_merger_keep_p_layers5_11_17_slots8_ca128_lr3e5_seed44_20260828
+
+- Commit/config: commit `e3715c0`; exact single-pass baseline plus a direct shared-S text bridge. The8 last-anchor Rep outputs are mapped by the frozen input-aligned main `visual.merger`, reduced to one sample-level S-Memory token and appended as the third Text CA Memory. The independently trainable20-token Prompt remains Query and residual base.
+- Dataset and split: PathVQA train19,654; validation6,259 for epoch selection; test6,719 with858 image clusters.
+- Seed / data seed:44 /42.
+- Controlled change versus the winning baseline: enable only the parameter-free S-Memory bridge; all trainable tensors, learning rates, initialization, data order and evaluation settings remain identical.
+- Validation Overall / Yes-No / Free-form by epoch: epoch1 **52.1649 / 86.7200 / 17.7090**; epoch2 **54.3378 / 88.0320 / 20.7403**; epoch3 **56.3189 / 89.3440 / 23.3886**. Epoch3 selected.
+- Test Overall: **56.1393**; image-clustered95% bootstrap CI **[54.8226,57.5498]**.
+- Yes/No / Free-form: **89.0244 / 23.2052**.
+- Per question type: how11.5108, other27.7778, what17.3294, when0.0000, where65.4292, why4.5455, yes/no89.0244; Free-form question-type macro21.0988.
+- Trainable parameters: unchanged at **3,886,592**; the reused main Visual Merger remains frozen and is held by weak reference rather than registered again.
+- Training:3 epochs,1,845 optimizer steps, runtime6,939.8s, reported train loss11.3500.
+- Diagnostics:93 rows through step1,840. The bridge is not dead: last30 mean shared-S parameter grad is0.02356, S-Memory interface grad is0.00905 and total Sparse grad is0.6260. Text CA assigns a stable23.752% attention mass to S-Memory,43.166% to ordinary visual Memory and33.083% to text; normalized entropy is1.91e-4. S-Memory norm averages54.38, while Dynamic delta/base remains a normal0.4417.
+- Paired effect versus single-pass baseline: **-1.6520 Overall**, -0.7436 Yes/No and **-2.5618 Free-form**. Bridge-only/baseline-only correct counts are270/381 Overall and146/232 Free-form. The image-clustered paired95% CI for bridge-minus-baseline Overall is **[-2.4331,-0.9157]**; predictions are identical on4,589/6,719 questions.
+- Evaluation timing: TTFT mean0.079963s, weighted TPOT0.020459s/token,48.878 decode tokens/s, request mean0.136093s.
+- Conclusion: reject the direct shared-S bridge. It receives healthy CE gradients and substantial stable attention yet degrades every primary aggregate metric throughout training. The failure is therefore not branch death; the extra shortcut supplies a competing representation that displaces the already effective native visual/question Memories and worsens joint optimization.
+- Output/log path: `/root/autodl-tmp/Qwen3-VL-modify-test/pathvqa/outputs/dynamic_prompt/pathvqa_dynamic_prompt_shared_s_memory_main_merger_keep_p_layers5_11_17_slots8_ca128_lr3e5_seed44_20260828`; selected checkpoint `checkpoints/epoch_3`; diagnostics `dynamic_prompt_diagnostics.jsonl`.
+
+### 2026-08-29 - pathvqa_dynamic_prompt_shared_s_memory_main_merger_no_trainable_p_layers5_11_17_slots8_ca128_lr3e5_seed44_20260828
+
+- Commit/config: commit `e3715c0`; identical to the keep-P shared-S bridge except the same seed44-initialized20-token P0 is frozen. P0 retains Query positions and prefix length, while Dynamic CA and Sparse Visual remain trainable.
+- Dataset and split: PathVQA train19,654; validation6,259 for epoch selection; test6,719 with858 image clusters.
+- Seed / data seed:44 /42.
+- Controlled change versus the keep-P bridge: remove only the51,200 trainable Prompt parameters; no sequence length, Query initialization, Memory, backbone or scheduling change.
+- Validation Overall / Yes-No / Free-form by epoch: epoch1 **51.4140 / 86.3360 / 16.5922**; epoch2 **53.7945 / 87.0400 / 20.6445**; epoch3 **53.8105 / 87.0080 / 20.7084**. Epoch3 narrowly selected; learning essentially plateaus after epoch2.
+- Test Overall: **54.7105**; image-clustered95% bootstrap CI **[53.3957,56.0586]**.
+- Yes/No / Free-form: **87.4479 / 21.9243**.
+- Per question type: how12.2302, other16.6667, what17.3294, when0.0000, where55.9165, why0.0000, yes/no87.4479; Free-form question-type macro17.0238.
+- Trainable parameters: Dynamic CA2,634,240 + Sparse Visual1,201,152 = **3,835,392**; Prompt trainable parameters are exactly0.
+- Training:3 epochs,1,845 optimizer steps, runtime6,929.2s, reported train loss12.3435.
+- Diagnostics: P0 norm remains4.91334 with exactly zero gradient. The bridge remains active: last30 shared-S parameter/interface grad norms are0.01944/0.01780 and S-Memory receives35.000% attention. However Dynamic delta/base explodes to a last30 mean **76.77x** because the frozen token-embedding P0 is tiny relative to the learned residual. Dynamic CA is forced to reconstruct nearly the entire domain Prompt instead of refining a learned base.
+- Paired effect versus keep-P bridge: **-1.4288 Overall**, -1.5764 Yes/No and-1.2809 Free-form. No-P-only/keep-P-only counts are297/393 Overall,141/194 Yes/No and156/199 Free-form; McNemar p-values are0.000292,0.00443 and0.0257. The image-clustered paired95% CI for no-P-minus-keep-P Overall is **[-2.2509,-0.6522]**.
+- Paired effect versus winning baseline: **-3.0808 Overall**, -2.3200 Yes/No and-3.8427 Free-form; clustered paired95% CI **[-4.0072,-2.2300]**.
+- Evaluation timing: TTFT mean0.081610s, weighted TPOT0.019485s/token,51.321 decode tokens/s, request mean0.137366s.
+- Conclusion: reject replacing the independent trainable Prompt with frozen P0 plus shared S. The learned P is not redundant scaffolding; it supplies the high-capacity domain anchor around which sample-conditioned CA can operate as a residual. Freezing it harms both binary calibration and open answers and produces a pathological residual/base scale ratio.
+- Output/log path: `/root/autodl-tmp/Qwen3-VL-modify-test/pathvqa/outputs/dynamic_prompt/pathvqa_dynamic_prompt_shared_s_memory_main_merger_no_trainable_p_layers5_11_17_slots8_ca128_lr3e5_seed44_20260828`; selected checkpoint `checkpoints/epoch_3`; diagnostics `dynamic_prompt_diagnostics.jsonl`.
+
 ### PathVQA Yes/No Class-Balance Audit
+
+Correction (2026-08-29): the two `shared_s_memory_main_merger` experiments above did not test the intended raw shared-S architecture. Their implementation captured the sample-conditioned Rep tokens after visual block17, mapped those outputs through `visual.merger`, and fed the result back as a third Text-CA Memory. They therefore reject only a final-anchor Rep feedback shortcut. They do not reject mapping the original, unconditioned shared parameter bank `S` into the LLM prompt space. Two corrected seed44 experiments are pending: (1) retain independent P20 and add a separate zero-initialized CA128 residual over `visual.merger(raw S)` while leaving the winning visual/question Dynamic CA unchanged; (2) remove independent P/P0 entirely and use the two native `visual.merger(raw S)` outputs directly as the prompt and visual/question CA queries. Neither corrected method reads any Rep output from layers5/11/17.
 
 | Method | Yes count | Yes accuracy | No count | No accuracy | Class gap |
 |---|---:|---:|---:|---:|---:|

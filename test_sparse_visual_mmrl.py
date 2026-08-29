@@ -136,6 +136,32 @@ class SparseVisualMMRLTest(unittest.TestCase):
         self.assertGreater(float(adapter.shared_s_text_prompt_grad_norm()), 0.0)
         self.assertTrue(all(parameter.grad is None for parameter in visual.parameters()))
 
+    def test_text_owned_s_is_detached_while_visual_adapter_trains(self):
+        adapter = SparseVisualMMRL(
+            visual_dim=8,
+            text_dim=12,
+            anchor_layers=(1,),
+            rep_token_count=4,
+            attention_dim=4,
+            num_heads=2,
+            text_anchor_tokens=6,
+            text_anchor_bottleneck_dim=4,
+        )
+        text_anchor = torch.randn(6, 12, requires_grad=True)
+        visual_rep = adapter.adapt_read_only_text_anchor(text_anchor)
+        self.assertEqual(tuple(visual_rep.shape), (4, 8))
+        visual_rep.square().mean().backward()
+        self.assertIsNone(text_anchor.grad)
+        self.assertIsNone(adapter.shared_rep)
+        self.assertGreater(
+            float(adapter.text_anchor_up_projection.weight.grad.norm()),
+            0.0,
+        )
+        self.assertIn(
+            "shared_s_visual_adapter_token_entropy_norm",
+            adapter._text_anchor_debug,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -102,6 +102,11 @@ class DynamicPromptTuningModelInterface:
                 if shared_s_prompt_attention is not None
                 else 4
             ),
+            shared_s_visual_bottleneck_dim=(
+                int(sparse_visual.get("text_anchor_bottleneck_dim", 128))
+                if sparse_visual is not None
+                else 128
+            ),
         )
         self.model.load_dynamic_prompt(checkpoint)
         self.model.eval()

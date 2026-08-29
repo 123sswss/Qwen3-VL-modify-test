@@ -46,6 +46,8 @@
 - 纠正版实验B已完成：51.64/87.33/15.91，相对基线下降6.15 Overall和9.86 Free-form，聚类配对Overall CI[-7.10,-5.20]。2-token raw-S基底范数约70，Dynamic残差达到其2.83倍；S虽有强CE梯度但仍处于3e-5视觉学习率组，无法替代LR0.3的P20文本锚点。
 - 决策：停止raw-S硬共享结构，不追加seed、不扫描S学习率、不增加S数量或Token扩展器。当前支持架构仍是57.79的独立P20 + 图文Dynamic CA + 单路径Sparse Visual；后续若继续追求论文核心，应研究优化层面的软耦合/梯度协调，而不是让视觉与文本直接共用同一个可训练参数。
 - 评估协议更新（2026-08-29）：后续PathVQA Dynamic Prompt开发实验固定训练3 epochs，只对`epoch_3`执行一次全量Validation；不再比较epoch1/2、不再自动选择最佳epoch，也不运行Test。`selected_result.tsv`必须标记`fixed_epoch3_validation`，Test仅在架构最终锁定后恢复。Dynamic Prompt因果干预同样默认只运行Validation。
+- Shared-S方向按新证据重新开放一次、但不恢复已否定的raw视觉S硬共享：新增`pathvqa_dynamic_prompt_asymmetric_shared_s_seed44`，令20x2560的文本Prompt本身成为共享S并保持Prompt LR0.3；文本侧直接更新S，视觉侧只能读取`detach(LayerNorm(S))`，经可学习20→8 Token Mixer与2560→128→1024低维Adapter生成视觉Rep基底。视觉Adapter、Visual CA和层嵌入保持Sparse LR3e-5，现有图文Dynamic CA保持3e-4；不使用`visual.merger`，不保留另一套独立P或视觉S。
+- 上述非对称Shared-S只运行PathVQA seed44，固定3 epochs并仅评估epoch3 Validation，不运行Test。对照为同seed的single-pass基线Validation57.5172；若明显低于基线则彻底停止Shared-S，若持平或产生正收益才讨论seed45。必须记录S梯度、视觉Adapter梯度、Token Mixer熵、Adapter输出范数、Dynamic delta/base及三层Visual CA诊断，以确认“文本写、视觉只读”的优化机制实际成立。
 
 ## 总体目标
 

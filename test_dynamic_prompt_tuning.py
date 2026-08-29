@@ -270,6 +270,72 @@ class DynamicPromptTuningTest(unittest.TestCase):
             0.0,
         )
 
+    def test_text_owned_s_remains_the_prompt_and_visual_side_has_no_shared_rep(self):
+        model = DynamicPromptTuningModel(
+            _FakeMultimodalModel(),
+            tokenizer=_FakeTokenizer(),
+            prompt_length=2,
+            init_seed=5,
+            attention_dim=4,
+            num_heads=2,
+            sparse_visual_anchor_layers=(1,),
+            sparse_visual_rep_tokens=4,
+            sparse_visual_attention_dim=4,
+            sparse_visual_heads=2,
+            shared_s_text_mode="text_owned_visual_readonly",
+            shared_s_visual_bottleneck_dim=4,
+        )
+        self.assertIsNotNone(model.soft_prompt)
+        self.assertEqual(model.prompt_length, 2)
+        self.assertIsNone(model.sparse_visual.shared_rep)
+        self.assertEqual(
+            model.sparse_visual.text_anchor_tokens,
+            model.prompt_length,
+        )
+        groups = model.trainable_parameter_groups()
+        self.assertEqual(groups["soft_prompt"], [model.soft_prompt])
+        self.assertTrue(
+            any(
+                parameter is model.sparse_visual.text_anchor_token_mixer
+                for parameter in groups["sparse_visual"]
+            )
+        )
+
+        output = model(**self._batch())
+        prefix = model.base_model.model.language_model.last_embeddings[:, :2]
+        torch.testing.assert_close(prefix.float(), model.soft_prompt.unsqueeze(0))
+        output.loss.backward()
+        self.assertGreater(float(model.soft_prompt.grad.norm()), 0.0)
+
+    def test_text_owned_s_checkpoint_round_trip(self):
+        kwargs = dict(
+            tokenizer=_FakeTokenizer(),
+            prompt_length=2,
+            init_seed=5,
+            attention_dim=4,
+            num_heads=2,
+            sparse_visual_anchor_layers=(1,),
+            sparse_visual_rep_tokens=4,
+            sparse_visual_attention_dim=4,
+            sparse_visual_heads=2,
+            shared_s_text_mode="text_owned_visual_readonly",
+            shared_s_visual_bottleneck_dim=4,
+        )
+        model = DynamicPromptTuningModel(_FakeMultimodalModel(), **kwargs)
+        with torch.no_grad():
+            model.soft_prompt.add_(0.25)
+            model.sparse_visual.text_anchor_token_mixer.add_(0.5)
+        with tempfile.TemporaryDirectory() as directory:
+            model.save_dynamic_prompt(Path(directory))
+            restored = DynamicPromptTuningModel(_FakeMultimodalModel(), **kwargs)
+            restored.load_dynamic_prompt(Path(directory))
+            torch.testing.assert_close(restored.soft_prompt, model.soft_prompt)
+            for key, value in model.sparse_visual.state_dict().items():
+                torch.testing.assert_close(
+                    restored.sparse_visual.state_dict()[key],
+                    value,
+                )
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -198,6 +198,22 @@ class DynamicPromptCallback(TrainerCallback):
             row["shared_s_text_prompt_grad_norm"] = float(
                 sparse_visual.shared_s_text_prompt_grad_norm().item()
             )
+        if (
+            sparse_visual is not None
+            and sparse_visual.text_anchor_tokens
+        ):
+            adapter_grads = [
+                parameter.grad.detach().float().pow(2).sum()
+                for name, parameter in sparse_visual.named_parameters()
+                if name.startswith("text_anchor_") and parameter.grad is not None
+            ]
+            row["shared_s_text_owner_grad_norm"] = row["soft_prompt_grad_norm"]
+            row["shared_s_visual_adapter_grad_norm"] = (
+                float(torch.stack(adapter_grads).sum().sqrt().item())
+                if adapter_grads
+                else 0.0
+            )
+            row["shared_s_visual_to_s_gradient_blocked"] = 1.0
         shared_attention = getattr(model, "shared_s_prompt_attention", None)
         shared_attention_grads = (
             [
@@ -279,11 +295,17 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--sparse-visual-lr", type=float, default=3e-5)
     parser.add_argument(
         "--shared-s-text-mode",
-        choices=("none", "separate_residual", "direct_prompt"),
+        choices=(
+            "none",
+            "separate_residual",
+            "direct_prompt",
+            "text_owned_visual_readonly",
+        ),
         default="none",
     )
     parser.add_argument("--shared-s-attention-dim", type=int, default=128)
     parser.add_argument("--shared-s-heads", type=int, default=4)
+    parser.add_argument("--shared-s-visual-bottleneck-dim", type=int, default=128)
     parser.add_argument("--batch-size", type=int, default=2)
     parser.add_argument("--gradient-accumulation", type=int, default=16)
     parser.add_argument("--dataloader-workers", type=int, default=2)
@@ -303,6 +325,7 @@ def parse_args() -> argparse.Namespace:
             args.sparse_visual_heads,
             args.shared_s_attention_dim,
             args.shared_s_heads,
+            args.shared_s_visual_bottleneck_dim,
         )
         < 1
     ):
@@ -358,6 +381,7 @@ def main() -> int:
         shared_s_text_mode=args.shared_s_text_mode,
         shared_s_attention_dim=args.shared_s_attention_dim,
         shared_s_heads=args.shared_s_heads,
+        shared_s_visual_bottleneck_dim=args.shared_s_visual_bottleneck_dim,
     )
     dataset = PathVQADataset(
         processor=processor,
@@ -406,8 +430,10 @@ def main() -> int:
         f"sparse_heads={args.sparse_visual_heads if args.sparse_visual else 0} "
         f"sparse_injection={'single_pass_insert_strip' if args.sparse_visual else 'none'} "
         f"shared_s_text_mode={args.shared_s_text_mode} "
-        f"shared_s_text_merger={'main_visual_merger' if args.shared_s_text_mode != 'none' else 'none'} "
+        f"shared_s_text_merger={'main_visual_merger' if args.shared_s_text_mode in ('separate_residual', 'direct_prompt') else 'none'} "
         f"shared_s_attention={args.shared_s_attention_dim}x{args.shared_s_heads} "
+        f"shared_s_visual_bottleneck={args.shared_s_visual_bottleneck_dim} "
+        f"shared_s_gradient_policy={'text_write_visual_readonly' if args.shared_s_text_mode == 'text_owned_visual_readonly' else 'joint_or_disabled'} "
         f"train_soft_prompt={model.soft_prompt is not None} "
         "pretrained_prompt_checkpoint=False stage1=False"
     )
@@ -462,10 +488,18 @@ def main() -> int:
         "sparse_visual_learning_rate": args.sparse_visual_lr,
         "shared_s_text_mode": args.shared_s_text_mode,
         "shared_s_text_merger": (
-            "main_visual_merger" if args.shared_s_text_mode != "none" else None
+            "main_visual_merger"
+            if args.shared_s_text_mode in ("separate_residual", "direct_prompt")
+            else None
         ),
         "shared_s_attention_dim": args.shared_s_attention_dim,
         "shared_s_attention_heads": args.shared_s_heads,
+        "shared_s_visual_bottleneck_dim": args.shared_s_visual_bottleneck_dim,
+        "shared_s_gradient_policy": (
+            "text_write_visual_readonly"
+            if args.shared_s_text_mode == "text_owned_visual_readonly"
+            else None
+        ),
         "train_soft_prompt": model.soft_prompt is not None,
         "sparse_visual": (
             {
@@ -476,9 +510,14 @@ def main() -> int:
                 "injection_mode": "single_pass_insert_strip",
                 "shared_s_text_merger": (
                     "main_visual_merger"
-                    if args.shared_s_text_mode != "none"
+                    if args.shared_s_text_mode
+                    in ("separate_residual", "direct_prompt")
                     else None
                 ),
+                "text_owned_s_visual_readonly": (
+                    args.shared_s_text_mode == "text_owned_visual_readonly"
+                ),
+                "text_anchor_bottleneck_dim": args.shared_s_visual_bottleneck_dim,
             }
             if args.sparse_visual
             else None

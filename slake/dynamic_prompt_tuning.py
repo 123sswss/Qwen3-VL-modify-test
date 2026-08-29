@@ -26,6 +26,7 @@ SHARED_S_TEXT_MODES = (
     "none",
     "separate_residual",
     "direct_prompt",
+    "text_owned_visual_readonly",
 )
 
 
@@ -178,6 +179,7 @@ class DynamicPromptTuningModel(nn.Module):
         shared_s_text_mode: str = "none",
         shared_s_attention_dim: int = 128,
         shared_s_heads: int = 4,
+        shared_s_visual_bottleneck_dim: int = 128,
     ) -> None:
         super().__init__()
         if prompt_length < 1:
@@ -217,7 +219,14 @@ class DynamicPromptTuningModel(nn.Module):
                 rep_token_count=sparse_visual_rep_tokens,
                 attention_dim=sparse_visual_attention_dim,
                 num_heads=sparse_visual_heads,
-                map_shared_s_to_text=self.shared_s_text_mode != "none",
+                map_shared_s_to_text=self.shared_s_text_mode
+                in ("separate_residual", "direct_prompt"),
+                text_anchor_tokens=(
+                    self.requested_prompt_length
+                    if self.shared_s_text_mode == "text_owned_visual_readonly"
+                    else None
+                ),
+                text_anchor_bottleneck_dim=shared_s_visual_bottleneck_dim,
             ).to(device=visual_device)
             self.sparse_visual.install(visual_model)
         elif self.shared_s_text_mode != "none":
@@ -651,7 +660,16 @@ class DynamicPromptTuningModel(nn.Module):
             self.sparse_visual.prepare_visual(grid_thw)
             return args, kwargs
 
-        with self.sparse_visual.activate(text_memory, images_per_sample):
+        text_anchor = (
+            self.soft_prompt
+            if self.shared_s_text_mode == "text_owned_visual_readonly"
+            else None
+        )
+        with self.sparse_visual.activate(
+            text_memory,
+            images_per_sample,
+            text_anchor=text_anchor,
+        ):
             handle = visual_model.register_forward_pre_hook(
                 prepare_visual,
                 with_kwargs=True,
@@ -707,7 +725,16 @@ class DynamicPromptTuningModel(nn.Module):
             "shared_s_text_mode": self.shared_s_text_mode,
             "shared_s_text_merger": (
                 "main_visual_merger"
-                if self.shared_s_text_mode != "none"
+                if self.shared_s_text_mode in ("separate_residual", "direct_prompt")
+                else None
+            ),
+            "shared_s_ownership": (
+                {
+                    "owner": "text_prompt",
+                    "visual_access": "detach_layer_norm_adapter",
+                    "visual_adapter_bottleneck_dim": self.sparse_visual.text_anchor_bottleneck_dim,
+                }
+                if self.shared_s_text_mode == "text_owned_visual_readonly"
                 else None
             ),
             "shared_s_prompt_attention": (
@@ -727,10 +754,17 @@ class DynamicPromptTuningModel(nn.Module):
                     "attention_dim": self.sparse_visual.rep_attention.attention_dim,
                     "num_heads": self.sparse_visual.rep_attention.num_heads,
                     "injection_mode": "single_pass_insert_strip",
-                    "map_raw_shared_s_to_text": self.shared_s_text_mode != "none",
+                    "map_raw_shared_s_to_text": self.shared_s_text_mode
+                    in ("separate_residual", "direct_prompt"),
+                    "text_owned_s_visual_readonly": (
+                        self.shared_s_text_mode == "text_owned_visual_readonly"
+                    ),
+                    "text_anchor_tokens": self.sparse_visual.text_anchor_tokens,
+                    "text_anchor_bottleneck_dim": self.sparse_visual.text_anchor_bottleneck_dim,
                     "shared_s_text_merger": (
                         "main_visual_merger"
-                        if self.shared_s_text_mode != "none"
+                        if self.shared_s_text_mode
+                        in ("separate_residual", "direct_prompt")
                         else None
                     ),
                 }

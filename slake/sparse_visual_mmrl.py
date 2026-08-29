@@ -9,6 +9,7 @@ from typing import Any, Dict, Iterator, Sequence
 
 import torch
 from torch import nn
+from torch.nn import functional as F
 
 
 class SparseVisualRepAttention(nn.Module):
@@ -144,6 +145,8 @@ class SparseVisualMMRL(nn.Module):
         attention_dim: int = 128,
         num_heads: int = 4,
         map_shared_s_to_text: bool = False,
+        text_anchor_tokens: int | None = None,
+        text_anchor_bottleneck_dim: int = 128,
     ) -> None:
         super().__init__()
         anchors = tuple(int(index) for index in anchor_layers)
@@ -153,19 +156,60 @@ class SparseVisualMMRL(nn.Module):
             raise ValueError("anchor layer indexes must be non-negative")
         if min(visual_dim, text_dim, rep_token_count, attention_dim, num_heads) < 1:
             raise ValueError("Sparse Visual MMRL dimensions must be positive")
+        if text_anchor_tokens is not None and text_anchor_tokens < 1:
+            raise ValueError("text_anchor_tokens must be positive when enabled")
+        if text_anchor_bottleneck_dim < 1:
+            raise ValueError("text_anchor_bottleneck_dim must be positive")
+        if map_shared_s_to_text and text_anchor_tokens is not None:
+            raise ValueError(
+                "Raw visual-S text mapping and text-owned S are mutually exclusive"
+            )
 
         self.visual_dim = int(visual_dim)
         self.text_dim = int(text_dim)
         self.anchor_layers = anchors
         self.rep_token_count = int(rep_token_count)
         self.map_shared_s_to_text = bool(map_shared_s_to_text)
-        self.shared_rep = nn.Parameter(
-            torch.empty(self.rep_token_count, self.visual_dim)
-        )
+        self.text_anchor_tokens = int(text_anchor_tokens or 0)
+        self.text_anchor_bottleneck_dim = int(text_anchor_bottleneck_dim)
+        if self.text_anchor_tokens:
+            self.register_parameter("shared_rep", None)
+            self.text_anchor_token_mixer = nn.Parameter(
+                torch.zeros(self.rep_token_count, self.text_anchor_tokens)
+            )
+            self.text_anchor_down_projection = nn.Linear(
+                self.text_dim,
+                self.text_anchor_bottleneck_dim,
+                bias=False,
+            )
+            self.text_anchor_up_projection = nn.Linear(
+                self.text_anchor_bottleneck_dim,
+                self.visual_dim,
+                bias=False,
+            )
+            nn.init.xavier_uniform_(self.text_anchor_down_projection.weight)
+            nn.init.normal_(self.text_anchor_up_projection.weight, std=0.002)
+            with torch.no_grad():
+                for slot in range(self.rep_token_count):
+                    center = round(
+                        (slot + 0.5)
+                        * self.text_anchor_tokens
+                        / self.rep_token_count
+                        - 0.5
+                    )
+                    self.text_anchor_token_mixer[slot, center] = 4.0
+        else:
+            self.shared_rep = nn.Parameter(
+                torch.empty(self.rep_token_count, self.visual_dim)
+            )
+            self.register_parameter("text_anchor_token_mixer", None)
+            self.text_anchor_down_projection = None
+            self.text_anchor_up_projection = None
         self.layer_embeddings = nn.Parameter(
             torch.empty(len(self.anchor_layers), 1, self.visual_dim)
         )
-        nn.init.normal_(self.shared_rep, std=0.02)
+        if self.shared_rep is not None:
+            nn.init.normal_(self.shared_rep, std=0.02)
         nn.init.normal_(self.layer_embeddings, std=0.02)
         self.rep_attention = SparseVisualRepAttention(
             visual_dim=self.visual_dim,
@@ -180,6 +224,8 @@ class SparseVisualMMRL(nn.Module):
         self._images_per_sample: torch.Tensor | None = None
         self._image_lengths: torch.Tensor | None = None
         self._image_to_sample: torch.Tensor | None = None
+        self._read_only_shared_rep: torch.Tensor | None = None
+        self._text_anchor_debug: Dict[str, torch.Tensor] = {}
         self._last_shared_s_text_prompt: torch.Tensor | None = None
         self._debug_rows: list[Dict[str, torch.Tensor]] = []
         self._installed = False
@@ -223,14 +269,66 @@ class SparseVisualMMRL(nn.Module):
             f"vision_depth={depth} anchors_0based={list(self.anchor_layers)} "
             f"anchors_natural={[index + 1 for index in self.anchor_layers]} "
             "local_insert_strip=True block_execution=single_pass "
-            f"map_shared_s_to_text={self.map_shared_s_to_text}"
+            f"map_shared_s_to_text={self.map_shared_s_to_text} "
+            f"text_owned_s_visual_readonly={bool(self.text_anchor_tokens)} "
+            f"text_anchor_bottleneck={self.text_anchor_bottleneck_dim if self.text_anchor_tokens else 0}"
         )
+
+    def adapt_read_only_text_anchor(self, text_anchor: torch.Tensor) -> torch.Tensor:
+        """Map detached LLM-space S tokens into visual Rep-token bases."""
+        if not self.text_anchor_tokens:
+            raise RuntimeError("Text-owned Shared-S visual adapter is disabled")
+        if tuple(text_anchor.shape) != (self.text_anchor_tokens, self.text_dim):
+            raise ValueError(
+                "Text-owned Shared-S must have "
+                f"[{self.text_anchor_tokens}, {self.text_dim}], got "
+                f"{tuple(text_anchor.shape)}"
+            )
+        if (
+            self.text_anchor_token_mixer is None
+            or self.text_anchor_down_projection is None
+            or self.text_anchor_up_projection is None
+        ):
+            raise RuntimeError("Text-owned Shared-S visual adapter is incomplete")
+
+        parameter = self.text_anchor_down_projection.weight
+        normalized = F.layer_norm(
+            text_anchor.detach().to(device=parameter.device, dtype=parameter.dtype),
+            (self.text_dim,),
+        )
+        mixing = torch.softmax(self.text_anchor_token_mixer.float(), dim=-1).to(
+            dtype=normalized.dtype
+        )
+        pooled = torch.matmul(mixing, normalized)
+        bottleneck = F.gelu(
+            self.text_anchor_down_projection(pooled),
+            approximate="tanh",
+        )
+        visual_rep = self.text_anchor_up_projection(bottleneck)
+
+        with torch.no_grad():
+            probabilities = mixing.detach().float().clamp_min(1e-8)
+            entropy = -(probabilities * probabilities.log()).sum(dim=-1)
+            entropy = entropy / math.log(float(self.text_anchor_tokens))
+            self._text_anchor_debug = {
+                "shared_s_visual_adapter_token_entropy_norm": entropy.mean(),
+                "shared_s_visual_adapter_rep_norm_mean": visual_rep.detach()
+                .float()
+                .norm(dim=-1)
+                .mean(),
+                "shared_s_visual_adapter_source_norm_mean": text_anchor.detach()
+                .float()
+                .norm(dim=-1)
+                .mean(),
+            }
+        return visual_rep
 
     @contextmanager
     def activate(
         self,
         text_memory: torch.Tensor,
         images_per_sample: torch.Tensor,
+        text_anchor: torch.Tensor | None = None,
     ) -> Iterator[None]:
         if self.active:
             raise RuntimeError("Sparse Visual MMRL context is already active")
@@ -239,6 +337,14 @@ class SparseVisualMMRL(nn.Module):
         self._images_per_sample = images_per_sample.to(dtype=torch.long)
         self._image_lengths = None
         self._image_to_sample = None
+        if self.text_anchor_tokens:
+            if text_anchor is None:
+                raise RuntimeError("Text-owned Shared-S requires a text anchor")
+            self._read_only_shared_rep = self.adapt_read_only_text_anchor(text_anchor)
+        elif text_anchor is not None:
+            raise RuntimeError("A text anchor was provided while its adapter is disabled")
+        else:
+            self._read_only_shared_rep = None
         self._last_shared_s_text_prompt = None
         self._debug_rows = []
         self.debug_context = {}
@@ -250,6 +356,7 @@ class SparseVisualMMRL(nn.Module):
             self._images_per_sample = None
             self._image_lengths = None
             self._image_to_sample = None
+            self._read_only_shared_rep = None
 
     def prepare_visual(self, grid_thw: torch.Tensor) -> None:
         if not self.active:
@@ -357,6 +464,8 @@ class SparseVisualMMRL(nn.Module):
         if not self.map_shared_s_to_text or merger is None:
             raise RuntimeError("Raw Shared-S text mapping is unavailable")
         merger_parameter = next(merger.parameters())
+        if self.shared_rep is None:
+            raise RuntimeError("Raw visual Shared-S is unavailable")
         raw_s = self.shared_rep.to(
             device=merger_parameter.device,
             dtype=merger_parameter.dtype,
@@ -370,7 +479,8 @@ class SparseVisualMMRL(nn.Module):
     def shared_s_text_prompt_grad_norm(self) -> torch.Tensor:
         prompt = self._last_shared_s_text_prompt
         if prompt is None or prompt.grad is None:
-            return self.shared_rep.new_tensor(0.0)
+            parameter = next(self.parameters())
+            return parameter.new_tensor(0.0)
         return prompt.grad.detach().float().norm()
 
     @staticmethod
@@ -478,7 +588,14 @@ class SparseVisualMMRL(nn.Module):
             hidden_states, cu_seqlens
         )
         layer_position = self.anchor_layers.index(layer_index)
-        queries = self.shared_rep.unsqueeze(0) + self.layer_embeddings[layer_position]
+        shared_rep = (
+            self._read_only_shared_rep
+            if self.text_anchor_tokens
+            else self.shared_rep
+        )
+        if shared_rep is None:
+            raise RuntimeError("Sparse Visual Shared-S base is unavailable")
+        queries = shared_rep.unsqueeze(0) + self.layer_embeddings[layer_position]
         queries = queries.expand(len(lengths), -1, -1)
         reps = self.rep_attention(queries, visual_memory, text_memory).to(
             device=hidden_states.device,
@@ -551,11 +668,13 @@ class SparseVisualMMRL(nn.Module):
         debug["sparse_visual_output_to_input_norm_ratio_mean"] = torch.stack(
             [row["output_to_input_norm_ratio"] for row in self._debug_rows]
         ).mean()
+        debug.update(self._text_anchor_debug)
         if self._last_shared_s_text_prompt is not None:
             debug["shared_s_text_prompt_norm_mean"] = (
                 self._last_shared_s_text_prompt.detach().float().norm(dim=-1).mean()
             )
-            debug["shared_s_text_prompt_tokens"] = self.shared_rep.new_tensor(
+            parameter = next(self.parameters())
+            debug["shared_s_text_prompt_tokens"] = parameter.new_tensor(
                 float(self.shared_s_text_prompt_length)
             )
         self.debug_context = debug

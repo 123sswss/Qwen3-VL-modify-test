@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import json
+import math
 import sys
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, Sequence
 
 import torch
 from PIL import Image
@@ -42,6 +43,8 @@ class DynamicPromptTuningModelInterface:
         base_model_path: str,
         intervention: str = "normal",
         memory_lag: int = 32,
+        workspace_visual_write_disabled_layers: Sequence[int] = (),
+        workspace_update_bypassed_layers: Sequence[int] = (),
     ) -> None:
         checkpoint = Path(checkpoint_path).resolve()
         with (checkpoint / DYNAMIC_PROMPT_CONFIG_NAME).open(
@@ -156,6 +159,12 @@ class DynamicPromptTuningModelInterface:
             intervention,
             memory_lag=memory_lag,
         )
+        self.model.configure_workspace_inference_intervention(
+            workspace_visual_write_disabled_layers,
+            workspace_update_bypassed_layers,
+        )
+        self._workspace_debug_sums: Dict[str, float] = {}
+        self._workspace_debug_count = 0
         self.device = next(base_model.parameters()).device
         self.last_generation_timing = None
         print(
@@ -167,14 +176,45 @@ class DynamicPromptTuningModelInterface:
             f"shared_s_text_mode={self.model.shared_s_text_mode} "
             f"shared_workspace={self.model.shared_workspace_enabled} "
             f"train_soft_prompt={self.model.soft_prompt is not None} "
-            f"intervention={intervention} memory_lag={memory_lag}"
+            f"intervention={intervention} memory_lag={memory_lag} "
+            f"workspace_visual_write_disabled={list(workspace_visual_write_disabled_layers)} "
+            f"workspace_update_bypassed={list(workspace_update_bypassed_layers)}"
         )
 
     def reset_inference_state(self) -> None:
         self.model.reset_inference_intervention_state()
+        self._workspace_debug_sums = {}
+        self._workspace_debug_count = 0
 
     def inference_intervention_summary(self) -> Dict[str, Any]:
-        return self.model.inference_intervention_summary()
+        summary = self.model.inference_intervention_summary()
+        summary["workspace_debug_means"] = (
+            {
+                key: value / self._workspace_debug_count
+                for key, value in sorted(self._workspace_debug_sums.items())
+            }
+            if self._workspace_debug_count
+            else {}
+        )
+        summary["workspace_debug_samples"] = self._workspace_debug_count
+        return summary
+
+    def _capture_workspace_debug(self) -> None:
+        captured = False
+        for key, value in self.model.debug_context.items():
+            if not key.startswith("workspace_") or not torch.is_tensor(value):
+                continue
+            if value.numel() != 1:
+                continue
+            scalar = float(value.detach().float().item())
+            if not math.isfinite(scalar):
+                continue
+            self._workspace_debug_sums[key] = (
+                self._workspace_debug_sums.get(key, 0.0) + scalar
+            )
+            captured = True
+        if captured:
+            self._workspace_debug_count += 1
 
     def infer(
         self,
@@ -209,6 +249,7 @@ class DynamicPromptTuningModelInterface:
             output_ids, self.last_generation_timing = generate_with_timing(
                 self.model, inputs, generate_kwargs
             )
+        self._capture_workspace_debug()
         input_length = original_length + self.model.prompt_length
         generated = output_ids[:, input_length:]
         return self.processor.batch_decode(generated, skip_special_tokens=True)[

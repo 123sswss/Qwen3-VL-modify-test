@@ -763,6 +763,7 @@ run_slake_dynamic_prompt_eval() {
   local checkpoint="$1"
   local eval_output_dir="$2"
   local eval_log="$3"
+  shift 3
   if [ ! -f "$checkpoint/dynamic_prompt_config.json" ] \
     || [ ! -f "$checkpoint/dynamic_prompt.pt" ]; then
     echo "[ERR] SLAKE Dynamic Prompt checkpoint 不完整: $checkpoint" >&2
@@ -781,6 +782,7 @@ run_slake_dynamic_prompt_eval() {
       --language all \
       --expected-split test \
       --overwrite \
+      "$@" \
       2>&1 | tee "$eval_log"
   )
 }
@@ -925,6 +927,60 @@ run_slake_dynamic_prompt_full_workspace_17only_seed44() {
     "$test_score" "$checkpoint" \
     >> "$output_dir/selected_result.tsv"
   cat "$output_dir/selected_result.tsv"
+}
+
+run_slake_dynamic_prompt_workspace_path_interventions() {
+  local reference_run="${SLAKE_WORKSPACE_REFERENCE_RUN:-$SLAKE_DYNAMIC_PROMPT_OUTPUT_ROOT/slake_dynamic_prompt_full_workspace_z32_d1024_blocks3_private_p20_private_s8_seed44_20260830}"
+  local checkpoint="$reference_run/checkpoints/epoch_3"
+  if [ ! -f "$checkpoint/dynamic_prompt_config.json" ] \
+    || [ ! -f "$checkpoint/dynamic_prompt.pt" ]; then
+    echo "[ERR] SLAKE three-layer Workspace reference checkpoint not found: $checkpoint" >&2
+    return 1
+  fi
+
+  local output_root
+  output_root="$(available_output_dir "$SLAKE_DYNAMIC_PROMPT_OUTPUT_ROOT" "slake_full_workspace_path_interventions_seed44_${RUN_DATE}")"
+  mkdir -p "$output_root"
+  printf 'reference_run\t%s\ncheckpoint\t%s\n' \
+    "$reference_run" "$checkpoint" > "$output_root/intervention_manifest.tsv"
+
+  run_slake_dynamic_prompt_eval \
+    "$checkpoint" \
+    "$output_root/visual_write_off_l5" \
+    "$output_root/visual_write_off_l5.log" \
+    --workspace-disable-visual-write-layer 5 || return 1
+  run_slake_dynamic_prompt_eval \
+    "$checkpoint" \
+    "$output_root/visual_write_off_l11" \
+    "$output_root/visual_write_off_l11.log" \
+    --workspace-disable-visual-write-layer 11 || return 1
+  run_slake_dynamic_prompt_eval \
+    "$checkpoint" \
+    "$output_root/visual_write_off_l5_l11" \
+    "$output_root/visual_write_off_l5_l11.log" \
+    --workspace-disable-visual-write-layer 5 \
+    --workspace-disable-visual-write-layer 11 || return 1
+  run_slake_dynamic_prompt_eval \
+    "$checkpoint" \
+    "$output_root/workspace_update_off_l5" \
+    "$output_root/workspace_update_off_l5.log" \
+    --workspace-bypass-update-layer 5 || return 1
+  run_slake_dynamic_prompt_eval \
+    "$checkpoint" \
+    "$output_root/workspace_update_off_l11" \
+    "$output_root/workspace_update_off_l11.log" \
+    --workspace-bypass-update-layer 11 || return 1
+  run_slake_dynamic_prompt_eval \
+    "$checkpoint" \
+    "$output_root/workspace_update_off_l5_l11" \
+    "$output_root/workspace_update_off_l5_l11.log" \
+    --workspace-bypass-update-layer 5 \
+    --workspace-bypass-update-layer 11 || return 1
+
+  python diagnostics/compare_slake_workspace_interventions.py \
+    --baseline "$reference_run/eval_test/epoch_3" \
+    --intervention-root "$output_root" || return 1
+  echo "[SLAKE_WORKSPACE_PATH_INTERVENTIONS_DONE] output=$output_root"
 }
 
 run_pathvqa_dynamic_prompt_raw_shared_s_suite_seed44() {
@@ -1390,6 +1446,9 @@ case "$RUN_TARGET" in
   slake_dynamic_prompt_full_workspace_17only_seed44)
     run_slake_dynamic_prompt_full_workspace_17only_seed44 || failures=$((failures + 1))
     ;;
+  slake_dynamic_prompt_workspace_path_interventions)
+    run_slake_dynamic_prompt_workspace_path_interventions || failures=$((failures + 1))
+    ;;
   pathvqa)
     run_pathvqa || failures=$((failures + 1))
     ;;
@@ -1449,7 +1508,7 @@ case "$RUN_TARGET" in
     run_slake || failures=$((failures + 1))
     ;;
   *)
-    echo "[ERR] 未知目标: $RUN_TARGET，可选 train、slake、pathvqa、pathvqa_base、pathvqa_prompt_tuning_seed44、pathvqa_dynamic_prompt_seed44、pathvqa_dynamic_prompt_sparse_visual_single_pass_seed44、pathvqa_dynamic_prompt_raw_shared_s_separate_residual_seed44、pathvqa_dynamic_prompt_raw_shared_s_direct_prompt_seed44、pathvqa_dynamic_prompt_raw_shared_s_suite_seed44、pathvqa_dynamic_prompt_asymmetric_shared_s_seed44、pathvqa_dynamic_prompt_full_workspace_seed44、pathvqa_dynamic_prompt_interventions、pathvqa_minimal_mmrl_prompt20_seed44、pathvqa_lora_visual_attn_r128、pathvqa_lora_visual_attn_r128_then_base、pathvqa_lora_visual_last8_attn_r128、pathvqa_lora_full_model_attn_r8_seed44、pathvqa_last8_lora_minimal_mmrl_relation_suite、slake_final_seeds4、slake_ablation_no_relation_seeds2、slake_ablation_independent_init_seeds2、slake_ablation_static_query_seed45、slake_ablation_mean_pooling_seed45、slake_mean_final_completion_suite、slake_text_guided_balanced_fusion_slots8_seed45、slake_prompt_tuning_seed44、slake_concat_mlp_fusion_seed45、slake_overnight_prompt_and_concat_mlp、slake_ablation_suite、slake_dynamic_prompt_full_workspace_seed44、slake_dynamic_prompt_full_workspace_17only_seed44、all。" >&2
+    echo "[ERR] 未知目标: $RUN_TARGET，可选 train、slake、pathvqa、pathvqa_base、pathvqa_prompt_tuning_seed44、pathvqa_dynamic_prompt_seed44、pathvqa_dynamic_prompt_sparse_visual_single_pass_seed44、pathvqa_dynamic_prompt_raw_shared_s_separate_residual_seed44、pathvqa_dynamic_prompt_raw_shared_s_direct_prompt_seed44、pathvqa_dynamic_prompt_raw_shared_s_suite_seed44、pathvqa_dynamic_prompt_asymmetric_shared_s_seed44、pathvqa_dynamic_prompt_full_workspace_seed44、pathvqa_dynamic_prompt_interventions、pathvqa_minimal_mmrl_prompt20_seed44、pathvqa_lora_visual_attn_r128、pathvqa_lora_visual_attn_r128_then_base、pathvqa_lora_visual_last8_attn_r128、pathvqa_lora_full_model_attn_r8_seed44、pathvqa_last8_lora_minimal_mmrl_relation_suite、slake_final_seeds4、slake_ablation_no_relation_seeds2、slake_ablation_independent_init_seeds2、slake_ablation_static_query_seed45、slake_ablation_mean_pooling_seed45、slake_mean_final_completion_suite、slake_text_guided_balanced_fusion_slots8_seed45、slake_prompt_tuning_seed44、slake_concat_mlp_fusion_seed45、slake_overnight_prompt_and_concat_mlp、slake_ablation_suite、slake_dynamic_prompt_full_workspace_seed44、slake_dynamic_prompt_full_workspace_17only_seed44、slake_dynamic_prompt_workspace_path_interventions、all。" >&2
     exit 2
     ;;
 esac

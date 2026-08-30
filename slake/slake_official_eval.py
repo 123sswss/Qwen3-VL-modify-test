@@ -558,6 +558,20 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--backend", choices=sorted(BACKEND_SPECS), default="base")
     parser.add_argument("--base-model", required=True)
     parser.add_argument("--checkpoint")
+    parser.add_argument(
+        "--workspace-disable-visual-write-layer",
+        action="append",
+        type=int,
+        default=[],
+        help="Inference-only: zero the Workspace visual residual at this 0-based anchor.",
+    )
+    parser.add_argument(
+        "--workspace-bypass-update-layer",
+        action="append",
+        type=int,
+        default=[],
+        help="Inference-only: bypass the Workspace CA/SA/FFN update at this anchor.",
+    )
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--language", choices=("en", "zh", "all"), default="en")
     parser.add_argument("--base-type", action="append", default=[])
@@ -604,6 +618,14 @@ def main() -> int:
         raise ValueError("--resume and --overwrite are mutually exclusive")
     if args.timing_warmup_runs < 0:
         raise ValueError("--timing-warmup-runs must be non-negative")
+    workspace_intervention_requested = bool(
+        args.workspace_disable_visual_write_layer
+        or args.workspace_bypass_update_layer
+    )
+    if workspace_intervention_requested and args.backend != "dynamic-prompt":
+        raise ValueError(
+            "Workspace interventions require --backend dynamic-prompt"
+        )
 
     question_path = args.questions.expanduser().resolve()
     if not question_path.is_file():
@@ -632,10 +654,23 @@ def main() -> int:
 
     output_dir = args.output_dir.expanduser().resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
+    interface_kwargs = (
+        {
+            "workspace_visual_write_disabled_layers": tuple(
+                args.workspace_disable_visual_write_layer
+            ),
+            "workspace_update_bypassed_layers": tuple(
+                args.workspace_bypass_update_layer
+            ),
+        }
+        if args.backend == "dynamic-prompt"
+        else None
+    )
     model = load_slake_model_interface(
         args.backend,
         base_model_path=args.base_model,
         checkpoint_path=args.checkpoint,
+        interface_kwargs=interface_kwargs,
     )
     instruction = "" if args.no_instruction else args.instruction
     run_timing_warmup(
@@ -690,6 +725,10 @@ def main() -> int:
             "timing": timing_summary,
         }
     )
+    if hasattr(model, "inference_intervention_summary"):
+        summary["dynamic_prompt_intervention"] = (
+            model.inference_intervention_summary()
+        )
 
     write_json(output_dir / "slake_predictions.json", official_predictions)
     write_json(output_dir / "slake_details.json", prediction_rows)

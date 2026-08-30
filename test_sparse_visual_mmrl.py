@@ -219,6 +219,127 @@ class SparseVisualMMRLTest(unittest.TestCase):
             {id(parameter) for parameter in adapter.parameters()},
         )
 
+    def test_workspace_inference_interventions_separate_write_from_update(self):
+        torch.manual_seed(19)
+        visual = _FakeVisual()
+        adapter = SparseVisualMMRL(
+            visual_dim=8,
+            text_dim=12,
+            anchor_layers=(1,),
+            rep_token_count=2,
+            attention_dim=4,
+            num_heads=2,
+            shared_workspace=True,
+            workspace_tokens=3,
+            workspace_dim=8,
+            workspace_heads=2,
+            workspace_ffn_dim=16,
+            workspace_visual_attention_dim=4,
+            workspace_visual_heads=2,
+        )
+        adapter.install(visual)
+        adapter.eval()
+        hidden = torch.randn(7, 8)
+        text_memory = torch.randn(2, 12)
+        text_tokens = torch.randn(2, 4, 12)
+        text_mask = torch.tensor(
+            [[True, True, False, False], [True, True, True, False]]
+        )
+        image_counts = torch.tensor([1, 1])
+        grid = torch.tensor([[1, 1, 4], [1, 1, 3]])
+        cu_seqlens = torch.tensor([0, 2, 4, 7], dtype=torch.int32)
+
+        def run_once():
+            with adapter.activate(
+                text_memory,
+                image_counts,
+                text_tokens=text_tokens,
+                text_token_mask=text_mask,
+            ):
+                adapter.prepare_visual(grid)
+                output = visual.blocks[1](hidden, cu_seqlens=cu_seqlens)
+                workspace = adapter.shared_workspace_text_memory().clone()
+                debug = dict(adapter.debug_context)
+            return output, workspace, debug
+
+        run_once()  # Complete the exact-zero initialization audit first.
+        with torch.no_grad():
+            reader = adapter.workspace_visual_attentions[0]
+            reader.output_projection.weight.fill_(0.1)
+            reader.output_projection.bias.zero_()
+
+        adapter.configure_workspace_inference_intervention()
+        normal_output, normal_workspace, _ = run_once()
+        adapter.configure_workspace_inference_intervention(
+            visual_write_disabled_layers=(1,)
+        )
+        disabled_output, disabled_workspace, disabled_debug = run_once()
+        torch.testing.assert_close(disabled_workspace, normal_workspace)
+        self.assertFalse(torch.allclose(disabled_output, normal_output))
+        self.assertEqual(
+            float(disabled_debug["workspace_layer1_visual_write_disabled"]),
+            1.0,
+        )
+
+        adapter.configure_workspace_inference_intervention(
+            update_bypassed_layers=(1,)
+        )
+        _, bypassed_workspace, bypassed_debug = run_once()
+        self.assertFalse(torch.allclose(bypassed_workspace, normal_workspace))
+        self.assertEqual(
+            float(bypassed_debug["workspace_layer1_update_bypassed"]),
+            1.0,
+        )
+        with self.assertRaisesRegex(ValueError, "configured anchors"):
+            adapter.configure_workspace_inference_intervention(
+                visual_write_disabled_layers=(0,)
+            )
+
+    def test_workspace_multilayer_similarity_diagnostics_are_finite(self):
+        torch.manual_seed(23)
+        visual = _FakeVisual()
+        adapter = SparseVisualMMRL(
+            visual_dim=8,
+            text_dim=12,
+            anchor_layers=(0, 1, 2),
+            rep_token_count=2,
+            attention_dim=4,
+            num_heads=2,
+            shared_workspace=True,
+            workspace_tokens=3,
+            workspace_dim=8,
+            workspace_heads=2,
+            workspace_ffn_dim=16,
+            workspace_visual_attention_dim=4,
+            workspace_visual_heads=2,
+        )
+        adapter.install(visual)
+        adapter.eval()
+        hidden = torch.randn(7, 8)
+        cu_seqlens = torch.tensor([0, 2, 4, 7], dtype=torch.int32)
+        with adapter.activate(
+            torch.randn(2, 12),
+            torch.tensor([1, 1]),
+            text_tokens=torch.randn(2, 4, 12),
+            text_token_mask=torch.tensor(
+                [[True, True, False, False], [True, True, True, False]]
+            ),
+        ):
+            adapter.prepare_visual(torch.tensor([[1, 1, 4], [1, 1, 3]]))
+            for block in visual.blocks:
+                hidden = block(hidden, cu_seqlens=cu_seqlens)
+            debug = dict(adapter.debug_context)
+
+        for transition in ("0_to_1", "1_to_2"):
+            for suffix in (
+                "state_cosine_mean",
+                "update_cosine_mean",
+                "visual_delta_cosine_mean",
+            ):
+                key = f"workspace_transition_{transition}_{suffix}"
+                self.assertIn(key, debug)
+                self.assertTrue(torch.isfinite(debug[key]))
+
     def test_full_workspace_production_parameter_count(self):
         adapter = SparseVisualMMRL(
             visual_dim=1024,

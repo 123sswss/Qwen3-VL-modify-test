@@ -514,6 +514,11 @@ class SparseVisualMMRL(nn.Module):
         self._image_to_sample: torch.Tensor | None = None
         self._read_only_shared_rep: torch.Tensor | None = None
         self._workspace_by_image: torch.Tensor | None = None
+        self._workspace_visual_write_disabled_layers: frozenset[int] = frozenset()
+        self._workspace_update_bypassed_layers: frozenset[int] = frozenset()
+        self._workspace_layer_inputs: Dict[int, torch.Tensor] = {}
+        self._workspace_layer_states: Dict[int, torch.Tensor] = {}
+        self._workspace_visual_deltas: Dict[int, torch.Tensor] = {}
         self._text_anchor_debug: Dict[str, torch.Tensor] = {}
         self._last_shared_s_text_prompt: torch.Tensor | None = None
         self._debug_rows: list[Dict[str, torch.Tensor]] = []
@@ -521,6 +526,42 @@ class SparseVisualMMRL(nn.Module):
         self._forward_audited = False
         object.__setattr__(self, "_shared_memory_merger_ref", None)
         self._shared_memory_merge_unit = 0
+
+    def configure_workspace_inference_intervention(
+        self,
+        visual_write_disabled_layers: Sequence[int] = (),
+        update_bypassed_layers: Sequence[int] = (),
+    ) -> None:
+        if self.active:
+            raise RuntimeError("Cannot reconfigure an active Workspace intervention")
+        disabled = frozenset(int(layer) for layer in visual_write_disabled_layers)
+        bypassed = frozenset(int(layer) for layer in update_bypassed_layers)
+        requested = disabled | bypassed
+        if requested and not self.shared_workspace_enabled:
+            raise ValueError("Workspace interventions require shared_workspace")
+        invalid = requested.difference(self.anchor_layers)
+        if invalid:
+            raise ValueError(
+                "Workspace intervention layers must be configured anchors: "
+                f"invalid={sorted(invalid)} anchors={list(self.anchor_layers)}"
+            )
+        self._workspace_visual_write_disabled_layers = disabled
+        self._workspace_update_bypassed_layers = bypassed
+        print(
+            "[SHARED_WORKSPACE_INTERVENTION] "
+            f"visual_write_disabled={sorted(disabled)} "
+            f"update_bypassed={sorted(bypassed)}"
+        )
+
+    def workspace_inference_intervention_summary(self) -> Dict[str, Any]:
+        return {
+            "visual_write_disabled_layers": sorted(
+                self._workspace_visual_write_disabled_layers
+            ),
+            "update_bypassed_layers": sorted(
+                self._workspace_update_bypassed_layers
+            ),
+        }
 
     def shared_workspace_parameters(self) -> list[nn.Parameter]:
         if not self.shared_workspace_enabled:
@@ -678,6 +719,9 @@ class SparseVisualMMRL(nn.Module):
         self._image_lengths = None
         self._image_to_sample = None
         self._workspace_by_image = None
+        self._workspace_layer_inputs = {}
+        self._workspace_layer_states = {}
+        self._workspace_visual_deltas = {}
         if self.text_anchor_tokens:
             if text_anchor is None:
                 raise RuntimeError("Text-owned Shared-S requires a text anchor")
@@ -701,6 +745,9 @@ class SparseVisualMMRL(nn.Module):
             self._image_to_sample = None
             self._read_only_shared_rep = None
             self._workspace_by_image = None
+            self._workspace_layer_inputs = {}
+            self._workspace_layer_states = {}
+            self._workspace_visual_deltas = {}
 
     def prepare_visual(self, grid_thw: torch.Tensor) -> None:
         if not self.active:
@@ -885,12 +932,26 @@ class SparseVisualMMRL(nn.Module):
             device=hidden_states.device,
             dtype=workspace_dtype,
         )
-        workspace = self.workspace_blocks[layer_position](
-            workspace,
-            memory,
-            memory_mask,
-            visual_width,
-        )
+        layer_index = self.anchor_layers[layer_position]
+        self._workspace_layer_inputs[layer_index] = workspace.detach()
+        if layer_index in self._workspace_update_bypassed_layers:
+            if self.training:
+                raise RuntimeError("Workspace update bypass is inference-only")
+            zero = workspace.new_tensor(0.0)
+            self.workspace_blocks[layer_position].debug_context = {
+                "attention_entropy_norm": zero,
+                "visual_attention_mean": zero,
+                "text_attention_mean": zero,
+                "workspace_norm_mean": workspace.detach().float().norm(dim=-1).mean(),
+            }
+        else:
+            workspace = self.workspace_blocks[layer_position](
+                workspace,
+                memory,
+                memory_mask,
+                visual_width,
+            )
+        self._workspace_layer_states[layer_index] = workspace.detach()
         self._workspace_by_image = workspace
         return workspace
 
@@ -1080,6 +1141,14 @@ class SparseVisualMMRL(nn.Module):
                 reps,
                 workspace,
             ).to(device=hidden_states.device, dtype=hidden_states.dtype)
+            self._workspace_visual_deltas[layer_index] = shared_delta.detach()
+            visual_write_disabled = (
+                layer_index in self._workspace_visual_write_disabled_layers
+            )
+            if visual_write_disabled:
+                if self.training:
+                    raise RuntimeError("Workspace visual-write disable is inference-only")
+                shared_delta = torch.zeros_like(shared_delta)
             reps = reps + shared_delta
             block_debug = self.workspace_blocks[layer_position].debug_context
             attention_debug = self.workspace_visual_attentions[
@@ -1104,7 +1173,13 @@ class SparseVisualMMRL(nn.Module):
                 ],
                 "workspace_visual_delta_to_base_ratio": attention_debug[
                     "delta_to_base_ratio"
-                ],
+                ] if not visual_write_disabled else reps.new_tensor(0.0),
+                "workspace_visual_write_disabled": reps.new_tensor(
+                    float(visual_write_disabled)
+                ),
+                "workspace_update_bypassed": reps.new_tensor(
+                    float(layer_index in self._workspace_update_bypassed_layers)
+                ),
             }
         expanded_args, expanded_kwargs = self._expanded_block_inputs(
             reps, args, kwargs, lengths, cu_seqlens
@@ -1190,6 +1265,12 @@ class SparseVisualMMRL(nn.Module):
                 debug[f"workspace_layer{layer}_visual_delta_to_base_ratio"] = row[
                     "workspace_visual_delta_to_base_ratio"
                 ]
+                debug[f"workspace_layer{layer}_visual_write_disabled"] = row[
+                    "workspace_visual_write_disabled"
+                ]
+                debug[f"workspace_layer{layer}_update_bypassed"] = row[
+                    "workspace_update_bypassed"
+                ]
         debug["sparse_visual_rep_to_input_norm_ratio_mean"] = torch.stack(
             [row["rep_to_input_norm_ratio"] for row in self._debug_rows]
         ).mean()
@@ -1203,6 +1284,56 @@ class SparseVisualMMRL(nn.Module):
                     for row in self._debug_rows
                 ]
             ).mean()
+            for previous_layer, current_layer in zip(
+                self.anchor_layers,
+                self.anchor_layers[1:],
+            ):
+                previous_state = self._workspace_layer_states.get(previous_layer)
+                current_state = self._workspace_layer_states.get(current_layer)
+                previous_input = self._workspace_layer_inputs.get(previous_layer)
+                current_input = self._workspace_layer_inputs.get(current_layer)
+                previous_visual_delta = self._workspace_visual_deltas.get(
+                    previous_layer
+                )
+                current_visual_delta = self._workspace_visual_deltas.get(current_layer)
+                prefix = f"workspace_transition_{previous_layer}_to_{current_layer}"
+                if previous_state is not None and current_state is not None:
+                    debug[f"{prefix}_state_cosine_mean"] = F.cosine_similarity(
+                        F.layer_norm(
+                            previous_state.float(),
+                            (previous_state.shape[-1],),
+                        ),
+                        F.layer_norm(
+                            current_state.float(),
+                            (current_state.shape[-1],),
+                        ),
+                        dim=-1,
+                    ).mean()
+                if (
+                    previous_state is not None
+                    and current_state is not None
+                    and previous_input is not None
+                    and current_input is not None
+                ):
+                    previous_update = previous_state.float() - previous_input.float()
+                    current_update = current_state.float() - current_input.float()
+                    debug[f"{prefix}_update_cosine_mean"] = F.cosine_similarity(
+                        previous_update,
+                        current_update,
+                        dim=-1,
+                    ).mean()
+                if (
+                    previous_visual_delta is not None
+                    and current_visual_delta is not None
+                    and previous_visual_delta.shape == current_visual_delta.shape
+                ):
+                    debug[f"{prefix}_visual_delta_cosine_mean"] = (
+                        F.cosine_similarity(
+                            previous_visual_delta.float(),
+                            current_visual_delta.float(),
+                            dim=-1,
+                        ).mean()
+                    )
         debug.update(self._text_anchor_debug)
         if self._last_shared_s_text_prompt is not None:
             debug["shared_s_text_prompt_norm_mean"] = (

@@ -22,6 +22,7 @@ This file is the concise experiment memory shared by the user and Codex. The com
 | Hard Concrete Gate | 44/45/46/47 | **72.71 +/- 1.03** | Scores: 72.59, 71.30, 73.50, 73.45. Higher variance than continuous alpha. |
 | Alpha-weighted Relation | 45/46/47 | **72.62 +/- 0.46** | Scores: 72.73, 72.11, 73.02. Did not improve uniform Relation weighting. |
 | Full Workspace Dynamic Prompt | 44 | **78.37** | 76.90M parameters; 84.09 CLOSED /74.56 OPEN,63.30 KVQA /80.57 VQA,78.79 EN /77.93 ZH. Significant +3.96 over Static Prompt, but Workspace attention is nearly visual-only and parameter efficiency is not yet competitive. |
+| Layer17-only Workspace | 44 | **78.37** | 34.90M parameters; exactly ties the three-layer model with70/70 paired exclusive correct (`p=1.0`) while removing54.62% of trainable parameters. This proves retrained removability, not that layers5/11 were inactive; layer17 grows stronger to compensate. |
 
 ## PathVQA Snapshot
 
@@ -111,4 +112,5 @@ This file is the concise experiment memory shared by the user and Codex. The com
 - 2026-08-30 PathVQA Full Workspace seed44：`Z32x1024 + 3个全Token CA/Self-Attention/FFN4096 Block + 独立文本/视觉共享残差头`，保留P20、Text CA256、私有视觉S8/CA128和层5/11/17单路径注入；76,896,256参数。固定epoch3 Validation **59.4504/90.6240/28.3663**，相对57.5172基线为**+1.9332 Overall、+0.8960 Yes/No、+2.9675 Free-form**；Overall聚类配对95% CI[+1.1747,+2.7132]，Free-form CI[+1.8602,+4.1721]。共享视觉残差末段约为私有Rep的5.25倍且32槽下游读取近似均匀，因此先跑seed45复现与同checkpoint分支缩放干预，再决定如何降参。
 - 2026-08-30 PathVQA全模型Attention LoRA-r8 seed44：7,077,888参数，固定epoch3 Validation **59.3386/92.1920/26.5795**。与Full Workspace的Overall差仅+0.1118且配对p=0.814、CI[-0.7669,+0.9717]，统计上完全打平；但Workspace显著领先Free-form **+1.7869**，LoRA显著领先Yes/No **+1.5680**。LoRA参数仅为Workspace的9.20%，因此Workspace不能主张Overall或参数效率胜出，但其开放题优势为跨模态共享工作区保留了明确价值；下一优先级改为SLAKE seed44泛化验证，而非先跑PathVQA seed45。
 - 2026-08-30 SLAKE Full Workspace seed44：固定PathVQA架构直接迁移后官方Test为**78.37**，相对Static Prompt74.40显著提升**+3.96**（p=7.65e-9），OPEN +4.29、VQA +4.43、中文+4.55，证明跨数据集性能泛化成立。但76.90M参数中50.40M来自三套Workspace Block、12.60M来自三套视觉读头、7.35M来自文本读头；Workspace在层5/11/17末段的视觉注意力达95.2%/99.5%/99.8%，下游读取Z32仍近乎均匀。当前应视为高容量教师/上界，不是最终方法；先做同checkpoint分支干预，再共享三层Block和视觉读头，最后才缩FFN/宽度或修正模态失衡。
-- 策略修正：先增效再降本。视觉/文本token数约475:15，联合softmax在等logit下就会产生约96.9%视觉质量，足以解释Workspace的近视觉独占。下一主实验保持全部76.90M结构与超参，只把每层混合Memory CA改为视觉/文本独立softmax CA并学习融合；先在PathVQA验证高分，再原样迁移SLAKE。参数共享、删读头和缩FFN全部后置。
+- 三层增效计划暂缓：layer17-only证明三层参数化存在可替代冗余，但尚未解释原三层checkpoint怎样使用层5/11。视觉/文本token数不平衡与Z32读取近均匀的问题仍成立；先做同checkpoint路径分解，再决定保留三层协同还是转向34.90M单层结构。
+- 2026-08-30 SLAKE Layer17-only Workspace seed44：仅保留第17层的私有视觉注入、Workspace更新Block和视觉读头，其他配置不变；参数由76.90M降至**34.90M**，官方Test仍为**78.37**。相对三层版本逐题互有70题独占答对，McNemar `p=1.0`，全部子组差异均不显著；训练时间减少9.42%。但第17层共享残差/私有Rep由三层版末窗1.04x升至2.43x，而原第11层为2.08x，说明17-only发生了明显补偿。当前结论是多层参数化可替代，不是层5/11无效。

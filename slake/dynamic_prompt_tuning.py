@@ -359,6 +359,20 @@ class DynamicPromptTuningModel(nn.Module):
         self._intervention_memory_lag = int(memory_lag)
         self.reset_inference_intervention_state()
 
+    def configure_workspace_inference_intervention(
+        self,
+        visual_write_disabled_layers: Sequence[int] = (),
+        update_bypassed_layers: Sequence[int] = (),
+    ) -> None:
+        if self.sparse_visual is None:
+            if visual_write_disabled_layers or update_bypassed_layers:
+                raise ValueError("Workspace interventions require Sparse Visual MMRL")
+            return
+        self.sparse_visual.configure_workspace_inference_intervention(
+            visual_write_disabled_layers,
+            update_bypassed_layers,
+        )
+
     def reset_inference_intervention_state(self) -> None:
         self._intervention_memory_queue.clear()
         self._intervention_delta_sum = None
@@ -369,7 +383,7 @@ class DynamicPromptTuningModel(nn.Module):
         self._intervention_audited = False
 
     def inference_intervention_summary(self) -> Dict[str, Any]:
-        return {
+        summary = {
             "mode": self._intervention_mode,
             "memory_lag": self._intervention_memory_lag,
             "samples_seen": self._intervention_samples_seen,
@@ -390,6 +404,11 @@ class DynamicPromptTuningModel(nn.Module):
                 )
             ),
         }
+        if self.sparse_visual is not None:
+            summary["workspace"] = (
+                self.sparse_visual.workspace_inference_intervention_summary()
+            )
+        return summary
 
     def _apply_memory_intervention(self, memory: torch.Tensor) -> torch.Tensor:
         if self._intervention_mode != "lagged-memory":

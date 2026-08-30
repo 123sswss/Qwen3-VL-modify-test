@@ -1,6 +1,6 @@
 # MMRL Experiment Ledger
 
-Last updated: 2026-08-27
+Last updated: 2026-08-30
 
 This file is the persistent source of truth for completed experiments. Results are recorded from official SLAKE evaluation output or diagnostics supplied during development. Unless noted otherwise, SLAKE evaluation contains 2,094 test questions, uses all languages, and reports percentages.
 
@@ -590,6 +590,42 @@ Storage correction (2026-08-28): by explicit user direction, the `checkpoints/` 
 - Evaluation timing: TTFT mean0.053565s, weighted TPOT0.019811s/token,50.478 decode tokens/s, request mean0.105524s.
 - Conclusion: gradient decoupling works as designed and rescues raw hard sharing from a6.15-point failure to a near-baseline result, but it does not improve the supported method. Free-form is statistically tied while binary calibration degrades significantly. The remaining failure is forward over-coupling, not backward gradient pollution: replacing the independent visual Rep basis with text-derived S causes Visual CA to abandon visual Memory and amplifies Rep strength. Do not add seed45 for this pure replacement architecture. Any final rescue must preserve the independent visual basis and add only a bounded detached-S residual; that would be a new hypothesis rather than a retune of this run.
 - Output/log path: `/root/autodl-tmp/Qwen3-VL-modify-test/pathvqa/outputs/dynamic_prompt/pathvqa_dynamic_prompt_asymmetric_shared_s_text_owned_visual_readonly_layers5_11_17_slots8_adapter128_seed44_20260829`; checkpoint `checkpoints/epoch_3`; diagnostics `dynamic_prompt_diagnostics.jsonl`; evaluation `eval_validation/epoch_3`.
+
+### 2026-08-30 - pathvqa_dynamic_prompt_full_workspace_z32_d1024_blocks3_private_p20_private_s8_seed44_20260829
+
+- Commit/config: commit `deebda4`; preserve the exact supported private baseline components (P20 at LR0.3, Text CA256/8 heads at3e-4, independent visual S8, shared private Visual CA128/4 heads at3e-5 and single-pass insert/strip at visual layers5/11/17). Add a32x1024 sample-conditioned workspace Z that is sequentially updated at the three anchors by independent full-token Cross-Attention, Self-Attention and FFN4096 blocks. Full current-layer visual tokens and full question-token embeddings are the workspace Memory. Separate Text CA1024/16-head and three Visual CA1024/16-head residual readers consume Z; their output projections start at exact zero, and Z is never concatenated into the original private CA Memories.
+- Dataset and split: PathVQA train19,654; fixed full validation6,259 with832 image clusters. Only epoch3 Validation was evaluated under the current protocol; Test was not run.
+- Seed / data seed:44 /42.
+- Controlled change versus the single-pass baseline: add only the full-capacity shared workspace trunk and its four separate residual readers. The private P, private visual S, original Text/Visual CAs, anchor layers, injection rule, data order and their learning rates remain present. Workspace LR is1e-4.
+- Fixed epoch3 Validation Overall: **59.4504**; image-clustered standalone95% CI **[58.0231,60.8857]**.
+- Yes/No / Free-form: **90.6240 /28.3663**; Free-form question-type macro19.4184.
+- Per question type: how8.5271, other14.2857, what23.0377, when0.0000, where70.6601, why0.0000, yes/no90.6240.
+- Trainable parameters: Prompt51,200 + Dynamic CA2,634,240 + private Sparse Visual1,201,152 + Shared Workspace73,009,664 = **76,896,256**.
+- Training:3 epochs,1,845 optimizer steps, runtime7,322s, reported train loss10.93. This is408s /5.9% slower than the exact baseline's6,914.1s despite19.8x trainable parameters.
+- Paired effect versus the exact single-pass baseline epoch3 Validation57.5172/89.7280/25.3989: **+1.9332 Overall, +0.8960 Yes/No and +2.9675 Free-form**. Workspace-only/baseline-only correct counts are352/231 Overall,126/98 Yes/No and226/133 Free-form; exact McNemar p-values are6.13e-7,0.0710 and1.05e-6. Image-clustered paired95% CIs are **[+1.1747,+2.7132] Overall**, [0.0000,+1.7948] Yes/No and **[+1.8602,+4.1721] Free-form**. Predictions are textually identical on4,478/6,259 questions (71.55%).
+- Binary class audit: `yes` improves by+1.9276 points (45 new-only /12 baseline-only, p=1.31e-5, paired clustered CI[+1.0782,+2.8324]); `no` changes by-0.3539 (81/86, p=0.7570, CI[-2.1161,+1.5626]). The aggregate binary gain is affirmative-side, but the primary Overall improvement is not a binary-calibration artifact because the larger Free-form gain is independently significant.
+- Mechanism trajectory: over the first30 versus last30 diagnostic rows, Workspace grad remains healthy0.6160->0.5745 while private Sparse Visual grad falls0.1244->0.0615. Workspace visual delta/private-Rep rises2.836x->5.246x and total Rep/input rises2.479x->5.472x, yet frozen visual Block output/input stays stable1.112x->1.107x. The shared visual path therefore becomes functionally dominant without causing a numerical backbone-output explosion.
+- Workspace behavior: full-token attention becomes strongly selective (layer5/11/17 normalized entropy first30 0.888/0.906/0.821 -> last30 0.377/0.365/0.226), while final text and visual readers remain nearly uniform over32 Z slots (about0.9998 normalized entropy). Current evidence supports a useful deep full-token workspace with global/mean-like downstream readout; it does not yet establish semantic specialization among the32 slots.
+- Final-step diagnostics: Dynamic and Workspace-text delta/base are0.3477 and0.2219; private Sparse grad0.0438 versus Workspace0.5790; layer5/11/17 Workspace visual delta/private-Rep are7.310/5.305/2.671; aggregate Rep/input4.977 and Block output/input1.085. The high score coexists with shared-path takeover, so retaining private branches is structurally true but cooperative contribution from both paths remains unproven.
+- Evaluation timing: TTFT mean0.058198s, weighted TPOT0.019724s/token,50.698 decode tokens/s, request mean0.104538s. Timing is recorded but not used for a strict cross-run claim because the baseline was evaluated under a different runtime session.
+- Conclusion: this is the new PathVQA seed44 development best and validates the high-capacity-first strategy. It clears the pre-registered success rule with a significant Overall gain driven primarily by Free-form improvements. Before parameter reduction, run seed45 for replication and perform same-checkpoint inference interventions that separately disable/scale the Workspace text and visual residual readers; these are required to distinguish useful shared coordination from a high-capacity visual takeover and to choose a principled slimming target.
+- Output/log path: `/root/autodl-tmp/Qwen3-VL-modify-test/pathvqa/outputs/dynamic_prompt/pathvqa_dynamic_prompt_full_workspace_z32_d1024_blocks3_private_p20_private_s8_seed44_20260829`; checkpoint `checkpoints/epoch_3`; diagnostics `dynamic_prompt_diagnostics.jsonl`; evaluation `eval_validation/epoch_3`.
+
+### 2026-08-30 - pathvqa_lora_full_model_attention_r8_seed44_20260830
+
+- Dataset and split: PathVQA train19,654; fixed full validation6,259 with832 image clusters. Only epoch3 Validation was evaluated under the current protocol; Test was not run.
+- Seed / data seed:44 /42.
+- Controlled method: full-model Attention LoRA-r8 with alpha16, dropout0.05 and LR1e-4. It targets qkv/proj in all24 visual Attention layers and q/k/v/o in all36 LLM Self-Attention layers, for48 visual +144 language =192 selected Linear modules. Micro-batch1 with gradient accumulation32 gives effective batch32; training lasts3 epochs.
+- Fixed epoch3 Validation Overall: **59.3386**; image-clustered standalone95% CI **[57.8839,60.7231]**.
+- Yes/No / Free-form: **92.1920 /26.5795**; Free-form question-type macro23.5619.
+- Per question type: how12.4031, other21.4286, what19.7802, when7.6923, where75.3056, why4.7619, yes/no92.1920.
+- Trainable parameters: expected and audited actual **7,077,888**, or0.159236% of4,444,893,696 total parameters.
+- Training:3 epochs,1,845 optimizer steps, runtime14,827.47s, reported train loss0.588059.
+- Paired effect of Full Workspace minus LoRA on the identical Validation questions: **+0.1118 Overall**, **-1.5680 Yes/No** and **+1.7869 Free-form**. Workspace-only/LoRA-only correct counts are329/322 Overall,103/152 Yes/No and226/170 Free-form; exact McNemar p-values are0.8141,0.00258 and0.00564. Image-clustered paired95% CIs are **[-0.7669,+0.9717] Overall**, **[-2.5633,-0.5853] Yes/No** and **[+0.2844,+3.2611] Free-form**. Their predictions are textually identical on4,137/6,259 questions (66.10%).
+- Capability decomposition: Full Workspace exceeds LoRA by+3.2575 on `what` but trails by-4.6455 on `where`. Within Yes/No, Workspace is+2.9206 on `yes` references and-7.0064 on `no` references, so LoRA's aggregate binary advantage mainly reflects markedly better negative-class calibration rather than a uniform gain over both labels.
+- Evaluation timing: TTFT mean0.057489s, weighted TPOT0.030869s/token,32.395 decode tokens/s, request mean0.131781s. Timing is descriptive only because the two methods were evaluated in different runtime sessions.
+- Conclusion: Full Workspace and full-model LoRA-r8 are statistically tied on Overall at seed44, but not functionally equivalent. LoRA is10.87x smaller and significantly stronger on Yes/No, while Full Workspace is significantly stronger on Free-form and `what`, which is the more relevant evidence for sample-conditioned multimodal coordination. This prevents an Overall-only superiority claim but establishes LoRA as a strong, genuinely matched performance baseline rather than evidence that the Workspace idea failed. Cross-dataset SLAKE validation now has higher priority than PathVQA seed45.
+- Output/log path: `/root/autodl-tmp/Qwen3-VL-modify-test/pathvqa/outputs/lora/pathvqa_lora_full_model_attention_r8_seed44_20260830`; checkpoint `checkpoints/epoch_3`; training log `train.log`; evaluation `eval_validation/epoch_3` and `eval_validation_epoch_3.log`.
 
 ### PathVQA Yes/No Class-Balance Audit
 

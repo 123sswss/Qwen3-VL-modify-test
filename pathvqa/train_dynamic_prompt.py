@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Train the single-stage multimodal Dynamic Prompt method on PathVQA."""
+"""Train the single-stage multimodal Dynamic Prompt method on VQA datasets."""
 
 from __future__ import annotations
 
@@ -20,6 +20,7 @@ from transformers import (
 )
 
 from pathvqa.data_pipeline import PathVQADataCollator, PathVQADataset
+from slake.data_pipeline import SLAKEDataCollator, SLAKEDataset
 from slake.dynamic_prompt_tuning import DynamicPromptTuningModel
 
 MODEL_BATCH_KEYS = (
@@ -30,11 +31,30 @@ MODEL_BATCH_KEYS = (
     "labels",
     "mmrl_gating_mask",
 )
+SUPPORTED_DATASETS = ("pathvqa", "slake")
+
+
+def _normalize_dataset_name(dataset_name: str) -> str:
+    normalized = str(dataset_name).strip().lower()
+    if normalized not in SUPPORTED_DATASETS:
+        raise ValueError(
+            f"Unsupported Dynamic Prompt dataset={dataset_name!r}; "
+            f"choices={SUPPORTED_DATASETS}"
+        )
+    return normalized
+
+
+def _dataset_display_name(dataset_name: str) -> str:
+    return "PathVQA" if dataset_name == "pathvqa" else "SLAKE"
 
 
 class DynamicPromptCollator:
-    def __init__(self, processor: Any) -> None:
-        self.base = PathVQADataCollator(processor)
+    def __init__(self, processor: Any, dataset_name: str = "pathvqa") -> None:
+        dataset_name = _normalize_dataset_name(dataset_name)
+        collator_class = (
+            PathVQADataCollator if dataset_name == "pathvqa" else SLAKEDataCollator
+        )
+        self.base = collator_class(processor)
 
     def __call__(self, features: List[Dict[str, Any]]) -> Dict[str, Any]:
         batch = self.base(features)
@@ -145,10 +165,14 @@ class DynamicPromptCallback(TrainerCallback):
         self,
         processor: Any,
         output_dir: Path,
+        dataset_name: str = "pathvqa",
         logging_steps: int = 20,
     ) -> None:
         self.processor = processor
         self.output_dir = output_dir
+        self.log_prefix = _dataset_display_name(
+            _normalize_dataset_name(dataset_name)
+        ).upper()
         self.logging_steps = int(logging_steps)
         self.completed_epochs = set()
         self.diagnostics_path = output_dir / "dynamic_prompt_diagnostics.jsonl"
@@ -274,15 +298,22 @@ class DynamicPromptCallback(TrainerCallback):
         kwargs["model"].save_dynamic_prompt(checkpoint_dir)
         self.processor.save_pretrained(checkpoint_dir)
         print(
-            f"[PATHVQA_DYNAMIC_PROMPT_EPOCH_CHECKPOINT] epoch={epoch_id} "
+            f"[{self.log_prefix}_DYNAMIC_PROMPT_EPOCH_CHECKPOINT] epoch={epoch_id} "
             f"global_step={int(state.global_step)} saved={checkpoint_dir}"
         )
         return control
 
 
-def parse_args() -> argparse.Namespace:
+def parse_args(dataset_name: str = "pathvqa") -> argparse.Namespace:
+    dataset_name = _normalize_dataset_name(dataset_name)
+    display_name = _dataset_display_name(dataset_name)
+    default_data_root = (
+        Path("/root/autodl-tmp/dataset/pathVQA")
+        if dataset_name == "pathvqa"
+        else Path("/root/autodl-tmp/dataset/slake")
+    )
     parser = argparse.ArgumentParser(
-        description="Multimodal Dynamic Prompt Tuning for Qwen3-VL on PathVQA"
+        description=f"Multimodal Dynamic Prompt Tuning for Qwen3-VL on {display_name}"
     )
     parser.add_argument(
         "--model-path",
@@ -292,13 +323,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--data-root",
         type=Path,
-        default=Path("/root/autodl-tmp/dataset/pathVQA"),
+        default=default_data_root,
     )
     parser.add_argument("--cache-dir", type=Path)
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument(
         "--experiment-name",
-        default="pathvqa_dynamic_prompt_mean_ca256_len20",
+        default=f"{dataset_name}_dynamic_prompt_mean_ca256_len20",
     )
     parser.add_argument("--prompt-length", type=int, default=20)
     parser.add_argument("--attention-dim", type=int, default=256)
@@ -410,8 +441,39 @@ def parse_args() -> argparse.Namespace:
     return args
 
 
-def main() -> int:
-    args = parse_args()
+def _build_train_dataset(
+    dataset_name: str,
+    args: argparse.Namespace,
+    processor: Any,
+):
+    if dataset_name == "pathvqa":
+        return PathVQADataset(
+            processor=processor,
+            data_root=args.data_root,
+            split="train",
+            cache_dir=args.cache_dir,
+            ce_enabled=True,
+            seed=args.data_seed,
+            deterministic_sampling=True,
+            max_length=args.max_length,
+        )
+    return SLAKEDataset(
+        processor=processor,
+        questions_path=str(args.data_root / "train.json"),
+        image_root=str(args.data_root / "imgs"),
+        splits=("train",),
+        ce_enabled=True,
+        seed=args.data_seed,
+        deterministic_sampling=True,
+        max_length=args.max_length,
+    )
+
+
+def main(dataset_name: str = "pathvqa") -> int:
+    dataset_name = _normalize_dataset_name(dataset_name)
+    display_name = _dataset_display_name(dataset_name)
+    log_prefix = display_name.upper()
+    args = parse_args(dataset_name)
     random.seed(args.seed)
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
@@ -455,16 +517,7 @@ def main() -> int:
         workspace_visual_attention_dim=args.workspace_visual_attention_dim,
         workspace_visual_heads=args.workspace_visual_heads,
     )
-    dataset = PathVQADataset(
-        processor=processor,
-        data_root=args.data_root,
-        split="train",
-        cache_dir=args.cache_dir,
-        ce_enabled=True,
-        seed=args.data_seed,
-        deterministic_sampling=True,
-        max_length=args.max_length,
-    )
+    dataset = _build_train_dataset(dataset_name, args, processor)
     groups = model.trainable_parameter_groups()
     counts = {
         name: sum(parameter.numel() for parameter in parameters)
@@ -487,7 +540,7 @@ def main() -> int:
             f"expected={args.expected_trainable_parameters} actual={trainable}"
         )
     print(
-        "[PATHVQA_DYNAMIC_PROMPT_CONFIG] "
+        f"[{log_prefix}_DYNAMIC_PROMPT_CONFIG] "
         f"requested_prompt_length={args.prompt_length} "
         f"effective_prompt_length={model.prompt_length} "
         f"hidden_size={model.dynamic_prompt.hidden_size} "
@@ -519,7 +572,11 @@ def main() -> int:
         "pretrained_prompt_checkpoint=False stage1=False"
     )
 
-    callback = DynamicPromptCallback(processor, args.output_dir)
+    callback = DynamicPromptCallback(
+        processor,
+        args.output_dir,
+        dataset_name=dataset_name,
+    )
     trainer = DynamicPromptTrainer(
         model=model,
         prompt_lr=args.prompt_lr,
@@ -547,7 +604,7 @@ def main() -> int:
             data_seed=args.data_seed,
         ),
         train_dataset=dataset,
-        data_collator=DynamicPromptCollator(processor),
+        data_collator=DynamicPromptCollator(processor, dataset_name=dataset_name),
         processing_class=processor,
         callbacks=[callback],
     )
@@ -558,7 +615,7 @@ def main() -> int:
     report = {
         "method": "dynamic_multimodal_prompt_tuning",
         "experiment": args.experiment_name,
-        "dataset": "PathVQA",
+        "dataset": display_name,
         "requested_prompt_length": args.prompt_length,
         "effective_prompt_length": model.prompt_length,
         "attention_dim": args.attention_dim,
@@ -627,7 +684,7 @@ def main() -> int:
     }
     with (args.output_dir / "train_report.json").open("w", encoding="utf-8") as handle:
         json.dump(report, handle, ensure_ascii=False, indent=2, default=str)
-    print(f"[PATHVQA_DYNAMIC_PROMPT_PASS] checkpoint={final_dir}")
+    print(f"[{log_prefix}_DYNAMIC_PROMPT_PASS] checkpoint={final_dir}")
     return 0
 
 

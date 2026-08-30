@@ -572,6 +572,21 @@ def parse_args() -> argparse.Namespace:
         default=[],
         help="Inference-only: bypass the Workspace CA/SA/FFN update at this anchor.",
     )
+    parser.add_argument(
+        "--workspace-disable-visual-rep-write-layer",
+        action="append",
+        type=int,
+        default=[],
+        help=(
+            "Inference-only: compute Workspace and Rep diagnostics but execute "
+            "this visual block without inserting any Rep tokens."
+        ),
+    )
+    parser.add_argument(
+        "--workspace-disable-text-write",
+        action="store_true",
+        help="Inference-only: compute but zero the Workspace Text residual.",
+    )
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--language", choices=("en", "zh", "all"), default="en")
     parser.add_argument("--base-type", action="append", default=[])
@@ -620,7 +635,9 @@ def main() -> int:
         raise ValueError("--timing-warmup-runs must be non-negative")
     workspace_intervention_requested = bool(
         args.workspace_disable_visual_write_layer
+        or args.workspace_disable_visual_rep_write_layer
         or args.workspace_bypass_update_layer
+        or args.workspace_disable_text_write
     )
     if workspace_intervention_requested and args.backend != "dynamic-prompt":
         raise ValueError(
@@ -659,9 +676,13 @@ def main() -> int:
             "workspace_visual_write_disabled_layers": tuple(
                 args.workspace_disable_visual_write_layer
             ),
+            "workspace_visual_rep_write_disabled_layers": tuple(
+                args.workspace_disable_visual_rep_write_layer
+            ),
             "workspace_update_bypassed_layers": tuple(
                 args.workspace_bypass_update_layer
             ),
+            "workspace_text_write_disabled": args.workspace_disable_text_write,
         }
         if args.backend == "dynamic-prompt"
         else None

@@ -44,7 +44,9 @@ class DynamicPromptTuningModelInterface:
         intervention: str = "normal",
         memory_lag: int = 32,
         workspace_visual_write_disabled_layers: Sequence[int] = (),
+        workspace_visual_rep_write_disabled_layers: Sequence[int] = (),
         workspace_update_bypassed_layers: Sequence[int] = (),
+        workspace_text_write_disabled: bool = False,
     ) -> None:
         checkpoint = Path(checkpoint_path).resolve()
         with (checkpoint / DYNAMIC_PROMPT_CONFIG_NAME).open(
@@ -160,8 +162,12 @@ class DynamicPromptTuningModelInterface:
             memory_lag=memory_lag,
         )
         self.model.configure_workspace_inference_intervention(
-            workspace_visual_write_disabled_layers,
-            workspace_update_bypassed_layers,
+            visual_write_disabled_layers=workspace_visual_write_disabled_layers,
+            visual_rep_write_disabled_layers=(
+                workspace_visual_rep_write_disabled_layers
+            ),
+            update_bypassed_layers=workspace_update_bypassed_layers,
+            text_write_disabled=workspace_text_write_disabled,
         )
         self._workspace_debug_sums: Dict[str, float] = {}
         self._workspace_debug_count = 0
@@ -178,7 +184,9 @@ class DynamicPromptTuningModelInterface:
             f"train_soft_prompt={self.model.soft_prompt is not None} "
             f"intervention={intervention} memory_lag={memory_lag} "
             f"workspace_visual_write_disabled={list(workspace_visual_write_disabled_layers)} "
-            f"workspace_update_bypassed={list(workspace_update_bypassed_layers)}"
+            f"workspace_visual_rep_write_disabled={list(workspace_visual_rep_write_disabled_layers)} "
+            f"workspace_update_bypassed={list(workspace_update_bypassed_layers)} "
+            f"workspace_text_write_disabled={workspace_text_write_disabled}"
         )
 
     def reset_inference_state(self) -> None:

@@ -290,6 +290,29 @@ class SparseVisualMMRLTest(unittest.TestCase):
             float(bypassed_debug["workspace_layer1_update_bypassed"]),
             1.0,
         )
+        adapter.configure_workspace_inference_intervention(
+            visual_rep_write_disabled_layers=(1,)
+        )
+        (
+            rep_disabled_output,
+            rep_disabled_workspace,
+            rep_disabled_debug,
+        ) = run_once()
+        torch.testing.assert_close(rep_disabled_workspace, normal_workspace)
+        torch.testing.assert_close(
+            rep_disabled_output,
+            _SegmentMixingBlock()(hidden, cu_seqlens),
+        )
+        self.assertEqual(
+            float(rep_disabled_debug["workspace_layer1_visual_rep_write_disabled"]),
+            1.0,
+        )
+        self.assertEqual(
+            adapter.workspace_inference_intervention_summary()[
+                "visual_rep_write_disabled_layers"
+            ],
+            [1],
+        )
         with self.assertRaisesRegex(ValueError, "configured anchors"):
             adapter.configure_workspace_inference_intervention(
                 visual_write_disabled_layers=(0,)

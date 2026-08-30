@@ -59,7 +59,8 @@
 - 最简SLAKE层消融`slake_dynamic_prompt_full_workspace_17only_seed44`已完成：参数34,895,872，官方Test **78.37**，与三层版本逐题70/70互换、McNemar `p=1.0`；所有子组差异均不显著，训练时间下降9.42%。该结果证明层5/11可在重新训练后被第17层替代，但不证明三层checkpoint中的早期路径没有贡献；17-only末窗第17层共享残差/私有Rep升至2.434x，而三层版第17层为1.038x、原第11层为2.080x。
 - `slake_dynamic_prompt_workspace_path_interventions`已完成：六次推理均复用三层checkpoint。层5/11 Z更新分别或同时旁路均不降分，双旁路为78.41；层5/11视觉写回分别关闭不降，同时关闭为78.08、仅-0.29且不显著。早期Z更新的因果必要性已被否定，早期视觉写回只保留一个很弱且未证实的联合效应。
 - 主结构决策起点转向34.90M layer17-only，不再为保持三层叙事而保留42.00M早期Block/Reader参数。下一次结构实验仍以增效为先：围绕单一Z20同时生成20个视觉Prompt与20个LLM Prompt残差，比较同位置残差叠加与显式concatenate接口；具体结构和控制变量需先讨论定稿，不自动实现或运行。
-- 新增受控增效实验`slake_dynamic_prompt_full_workspace_17only_s20_seed44`：以78.37的layer17-only `S8+Z32`为唯一参考，只将私有视觉基底/插入Rep数从8提高到20，Workspace维持Z32，训练参数由34,895,872增至34,908,160。固定seed44/data_seed42、3 epochs、仅epoch3官方Test；用于判断视觉写回是否受8个Rep Token表达空间限制。只有该实验持平或提升，才追加`S20+Z8`测试Workspace槽数压缩；失败则停止组合训练，避免两项改动互相抵消。
+- `slake_dynamic_prompt_full_workspace_17only_s20_seed44`已完成：S20+Z32为78.22，相对S8+Z32的78.37无显著差异（77/80独占正确，`p=0.873`）。额外Rep显著增强视觉写入并改变157道题，却未提高净准确率，排除“8个Rep表达空间不足”作为当前瓶颈。按停止规则取消S20+Z8训练，不再扫描Rep数量。
+- 已安排不训练的同checkpoint目标`slake_dynamic_prompt_17only_final_path_interventions`，以S8+Z32 layer17-only checkpoint为准串行运行四项：（1）关闭第17层Workspace视觉残差；（2）关闭全部第17层视觉Rep插入但保留Z更新和Text Reader；（3）关闭Workspace Text残差；（4）同时关闭Workspace视觉与文本残差、保留私有视觉Rep。自动生成逐题配对统计；实现和运行均已获用户本次“试试”授权，但仍遵守用户手动启动流程。
 - 诊断修复列为无算力代码任务：定位为什么`DynamicPromptTuningModelInterface._capture_workspace_debug()`只保存Text-reader字段，恢复相邻Z的LayerNorm后余弦、每层更新增量余弦和三层视觉delta余弦。修复后不为补诊断单独重跑旧六项；只有后续获授权的新实验自然复用诊断。
 - 机制待证：末段Workspace视觉残差约为私有Rep的5.25倍、私有Sparse梯度约为Workspace的1/9，但视觉Block输出范数稳定；所有下游Z读取熵约0.9998。当前可以主张高容量全Token共享工作区有效，不能主张32槽已经形成语义分工，也不能声称私有视觉分支对最终增益不可替代。
 

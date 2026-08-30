@@ -515,6 +515,7 @@ class SparseVisualMMRL(nn.Module):
         self._read_only_shared_rep: torch.Tensor | None = None
         self._workspace_by_image: torch.Tensor | None = None
         self._workspace_visual_write_disabled_layers: frozenset[int] = frozenset()
+        self._visual_rep_write_disabled_layers: frozenset[int] = frozenset()
         self._workspace_update_bypassed_layers: frozenset[int] = frozenset()
         self._workspace_layer_inputs: Dict[int, torch.Tensor] = {}
         self._workspace_layer_states: Dict[int, torch.Tensor] = {}
@@ -530,13 +531,17 @@ class SparseVisualMMRL(nn.Module):
     def configure_workspace_inference_intervention(
         self,
         visual_write_disabled_layers: Sequence[int] = (),
+        visual_rep_write_disabled_layers: Sequence[int] = (),
         update_bypassed_layers: Sequence[int] = (),
     ) -> None:
         if self.active:
             raise RuntimeError("Cannot reconfigure an active Workspace intervention")
         disabled = frozenset(int(layer) for layer in visual_write_disabled_layers)
+        rep_disabled = frozenset(
+            int(layer) for layer in visual_rep_write_disabled_layers
+        )
         bypassed = frozenset(int(layer) for layer in update_bypassed_layers)
-        requested = disabled | bypassed
+        requested = disabled | rep_disabled | bypassed
         if requested and not self.shared_workspace_enabled:
             raise ValueError("Workspace interventions require shared_workspace")
         invalid = requested.difference(self.anchor_layers)
@@ -546,10 +551,12 @@ class SparseVisualMMRL(nn.Module):
                 f"invalid={sorted(invalid)} anchors={list(self.anchor_layers)}"
             )
         self._workspace_visual_write_disabled_layers = disabled
+        self._visual_rep_write_disabled_layers = rep_disabled
         self._workspace_update_bypassed_layers = bypassed
         print(
             "[SHARED_WORKSPACE_INTERVENTION] "
             f"visual_write_disabled={sorted(disabled)} "
+            f"visual_rep_write_disabled={sorted(rep_disabled)} "
             f"update_bypassed={sorted(bypassed)}"
         )
 
@@ -557,6 +564,9 @@ class SparseVisualMMRL(nn.Module):
         return {
             "visual_write_disabled_layers": sorted(
                 self._workspace_visual_write_disabled_layers
+            ),
+            "visual_rep_write_disabled_layers": sorted(
+                self._visual_rep_write_disabled_layers
             ),
             "update_bypassed_layers": sorted(
                 self._workspace_update_bypassed_layers
@@ -1128,6 +1138,9 @@ class SparseVisualMMRL(nn.Module):
             device=hidden_states.device,
             dtype=hidden_states.dtype,
         )
+        rep_write_disabled = layer_index in self._visual_rep_write_disabled_layers
+        if rep_write_disabled and self.training:
+            raise RuntimeError("Visual Rep write disable is inference-only")
         workspace_debug = {}
         if self.shared_workspace_enabled:
             workspace_by_image = self._update_shared_workspace(
@@ -1180,25 +1193,37 @@ class SparseVisualMMRL(nn.Module):
                 "workspace_update_bypassed": reps.new_tensor(
                     float(layer_index in self._workspace_update_bypassed_layers)
                 ),
+                "visual_rep_write_disabled": reps.new_tensor(
+                    float(rep_write_disabled)
+                ),
             }
-        expanded_args, expanded_kwargs = self._expanded_block_inputs(
-            reps, args, kwargs, lengths, cu_seqlens
-        )
-        adapted_with_rep = block(*expanded_args, **expanded_kwargs)
-        if not torch.is_tensor(adapted_with_rep):
-            raise TypeError("Sparse Visual expects vision blocks to return a tensor")
-        adapted_segments = torch.split(
-            adapted_with_rep,
-            [length + self.rep_token_count for length in lengths],
-            dim=0,
-        )
-        adapted = torch.cat(
-            [
-                segment[self.rep_token_count :]
-                for segment in adapted_segments
-            ],
-            dim=0,
-        )
+        if rep_write_disabled:
+            adapted = block(*args, **kwargs)
+            if not torch.is_tensor(adapted):
+                raise TypeError(
+                    "Sparse Visual expects vision blocks to return a tensor"
+                )
+        else:
+            expanded_args, expanded_kwargs = self._expanded_block_inputs(
+                reps, args, kwargs, lengths, cu_seqlens
+            )
+            adapted_with_rep = block(*expanded_args, **expanded_kwargs)
+            if not torch.is_tensor(adapted_with_rep):
+                raise TypeError(
+                    "Sparse Visual expects vision blocks to return a tensor"
+                )
+            adapted_segments = torch.split(
+                adapted_with_rep,
+                [length + self.rep_token_count for length in lengths],
+                dim=0,
+            )
+            adapted = torch.cat(
+                [
+                    segment[self.rep_token_count :]
+                    for segment in adapted_segments
+                ],
+                dim=0,
+            )
 
         with torch.no_grad():
             input_norm = hidden_states.detach().float().norm(dim=-1).mean().clamp_min(1e-8)
@@ -1217,7 +1242,8 @@ class SparseVisualMMRL(nn.Module):
                 print(
                     "[SPARSE_VISUAL_SINGLE_PASS_AUDIT] "
                     f"layer={layer_index} units={len(lengths)} reps={self.rep_token_count} "
-                    "insert_before_block=True strip_after_block=True pass=True"
+                    f"insert_before_block={not rep_write_disabled} "
+                    f"strip_after_block={not rep_write_disabled} pass=True"
                 )
                 if layer_index == self.anchor_layers[-1]:
                     self._forward_audited = True
@@ -1267,6 +1293,9 @@ class SparseVisualMMRL(nn.Module):
                 ]
                 debug[f"workspace_layer{layer}_visual_write_disabled"] = row[
                     "workspace_visual_write_disabled"
+                ]
+                debug[f"workspace_layer{layer}_visual_rep_write_disabled"] = row[
+                    "visual_rep_write_disabled"
                 ]
                 debug[f"workspace_layer{layer}_update_bypassed"] = row[
                     "workspace_update_bypassed"

@@ -373,6 +373,39 @@ class DynamicPromptTuningTest(unittest.TestCase):
                 if parameter.requires_grad
             },
         )
+        model.eval()
+        model.configure_workspace_inference_intervention(
+            visual_write_disabled_layers=(1,),
+            visual_rep_write_disabled_layers=(1,),
+            text_write_disabled=True,
+        )
+        intervention = model.inference_intervention_summary()["workspace"]
+        self.assertEqual(intervention["visual_write_disabled_layers"], [1])
+        self.assertEqual(intervention["visual_rep_write_disabled_layers"], [1])
+        self.assertTrue(intervention["text_write_disabled"])
+        workspace_memory = torch.randn(1, 3, 8)
+        model.sparse_visual.shared_workspace_text_memory = lambda: workspace_memory
+        with torch.no_grad():
+            model.workspace_text_attention.output_projection.weight.fill_(0.25)
+            model.workspace_text_attention.output_projection.bias.zero_()
+            model.workspace_text_attention._forward_audited = True
+            model.configure_workspace_inference_intervention()
+            model(**self._batch())
+            normal_prefix = (
+                model.base_model.model.language_model.last_embeddings[:, :2].clone()
+            )
+            model.configure_workspace_inference_intervention(
+                text_write_disabled=True
+            )
+            model(**self._batch())
+            disabled_prefix = (
+                model.base_model.model.language_model.last_embeddings[:, :2]
+            )
+        self.assertFalse(torch.allclose(normal_prefix, disabled_prefix))
+        torch.testing.assert_close(
+            disabled_prefix.float(),
+            model.soft_prompt.unsqueeze(0),
+        )
         with torch.no_grad():
             model.sparse_visual.workspace_seed.add_(0.25)
             model.workspace_text_attention.output_projection.weight.add_(0.5)

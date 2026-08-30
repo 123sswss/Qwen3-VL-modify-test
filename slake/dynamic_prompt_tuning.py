@@ -310,6 +310,7 @@ class DynamicPromptTuningModel(nn.Module):
         self._intervention_samples_seen = 0
         self._intervention_samples_changed = 0
         self._intervention_audited = False
+        self._workspace_text_write_disabled = False
 
     @staticmethod
     def _resolve_visual_token_ids(tokenizer: Any) -> Sequence[int]:
@@ -362,15 +363,30 @@ class DynamicPromptTuningModel(nn.Module):
     def configure_workspace_inference_intervention(
         self,
         visual_write_disabled_layers: Sequence[int] = (),
+        visual_rep_write_disabled_layers: Sequence[int] = (),
         update_bypassed_layers: Sequence[int] = (),
+        text_write_disabled: bool = False,
     ) -> None:
         if self.sparse_visual is None:
-            if visual_write_disabled_layers or update_bypassed_layers:
+            if (
+                visual_write_disabled_layers
+                or visual_rep_write_disabled_layers
+                or update_bypassed_layers
+                or text_write_disabled
+            ):
                 raise ValueError("Workspace interventions require Sparse Visual MMRL")
             return
         self.sparse_visual.configure_workspace_inference_intervention(
-            visual_write_disabled_layers,
-            update_bypassed_layers,
+            visual_write_disabled_layers=visual_write_disabled_layers,
+            visual_rep_write_disabled_layers=visual_rep_write_disabled_layers,
+            update_bypassed_layers=update_bypassed_layers,
+        )
+        if text_write_disabled and not self.shared_workspace_enabled:
+            raise ValueError("Workspace Text intervention requires shared_workspace")
+        self._workspace_text_write_disabled = bool(text_write_disabled)
+        print(
+            "[SHARED_WORKSPACE_TEXT_INTERVENTION] "
+            f"text_write_disabled={self._workspace_text_write_disabled}"
         )
 
     def reset_inference_intervention_state(self) -> None:
@@ -405,9 +421,13 @@ class DynamicPromptTuningModel(nn.Module):
             ),
         }
         if self.sparse_visual is not None:
-            summary["workspace"] = (
+            workspace_summary = (
                 self.sparse_visual.workspace_inference_intervention_summary()
             )
+            workspace_summary["text_write_disabled"] = (
+                self._workspace_text_write_disabled
+            )
+            summary["workspace"] = workspace_summary
         return summary
 
     def _apply_memory_intervention(self, memory: torch.Tensor) -> torch.Tensor:
@@ -677,7 +697,16 @@ class DynamicPromptTuningModel(nn.Module):
                     "workspace_text_memory_tokens": prompt.new_tensor(
                         float(workspace_memory.shape[1])
                     ),
+                    "workspace_text_write_disabled": prompt.new_tensor(
+                        float(self._workspace_text_write_disabled)
+                    ),
                 }
+                if self._workspace_text_write_disabled:
+                    if self.training:
+                        raise RuntimeError(
+                            "Workspace Text write disable is inference-only"
+                        )
+                    workspace_delta = torch.zeros_like(workspace_delta)
             if not self.training:
                 self._intervention_samples_seen += int(prompt.shape[0])
             dynamic = prompt + delta + shared_delta + workspace_delta
@@ -810,7 +839,8 @@ class DynamicPromptTuningModel(nn.Module):
     def generate(self, **kwargs: Any) -> Any:
         expanded, expanded_ids, expanded_context = self._expand_inputs(kwargs)
         with self._injection_context(expanded_ids, expanded_context):
-            return self.base_model.generate(**expanded)
+            output = self.base_model.generate(**expanded)
+        return self._finalize_forward_output(output)
 
     def save_dynamic_prompt(self, output_dir: str | Path) -> None:
         output_path = Path(output_dir)

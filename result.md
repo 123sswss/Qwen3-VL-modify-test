@@ -1,6 +1,6 @@
 # Experiment Result Summary
 
-Last updated: 2026-08-29
+Last updated: 2026-08-30
 
 This file is the concise experiment memory shared by the user and Codex. The complete append-only record remains in `EXPERIMENT_RESULTS.md`.
 
@@ -112,5 +112,5 @@ This file is the concise experiment memory shared by the user and Codex. The com
 - 2026-08-30 PathVQA Full Workspace seed44：`Z32x1024 + 3个全Token CA/Self-Attention/FFN4096 Block + 独立文本/视觉共享残差头`，保留P20、Text CA256、私有视觉S8/CA128和层5/11/17单路径注入；76,896,256参数。固定epoch3 Validation **59.4504/90.6240/28.3663**，相对57.5172基线为**+1.9332 Overall、+0.8960 Yes/No、+2.9675 Free-form**；Overall聚类配对95% CI[+1.1747,+2.7132]，Free-form CI[+1.8602,+4.1721]。共享视觉残差末段约为私有Rep的5.25倍且32槽下游读取近似均匀，因此先跑seed45复现与同checkpoint分支缩放干预，再决定如何降参。
 - 2026-08-30 PathVQA全模型Attention LoRA-r8 seed44：7,077,888参数，固定epoch3 Validation **59.3386/92.1920/26.5795**。与Full Workspace的Overall差仅+0.1118且配对p=0.814、CI[-0.7669,+0.9717]，统计上完全打平；但Workspace显著领先Free-form **+1.7869**，LoRA显著领先Yes/No **+1.5680**。LoRA参数仅为Workspace的9.20%，因此Workspace不能主张Overall或参数效率胜出，但其开放题优势为跨模态共享工作区保留了明确价值；下一优先级改为SLAKE seed44泛化验证，而非先跑PathVQA seed45。
 - 2026-08-30 SLAKE Full Workspace seed44：固定PathVQA架构直接迁移后官方Test为**78.37**，相对Static Prompt74.40显著提升**+3.96**（p=7.65e-9），OPEN +4.29、VQA +4.43、中文+4.55，证明跨数据集性能泛化成立。但76.90M参数中50.40M来自三套Workspace Block、12.60M来自三套视觉读头、7.35M来自文本读头；Workspace在层5/11/17末段的视觉注意力达95.2%/99.5%/99.8%，下游读取Z32仍近乎均匀。当前应视为高容量教师/上界，不是最终方法；先做同checkpoint分支干预，再共享三层Block和视觉读头，最后才缩FFN/宽度或修正模态失衡。
-- 三层增效计划暂缓：layer17-only证明三层参数化存在可替代冗余，但尚未解释原三层checkpoint怎样使用层5/11。视觉/文本token数不平衡与Z32读取近均匀的问题仍成立；先做同checkpoint路径分解，再决定保留三层协同还是转向34.90M单层结构。
+- SLAKE三层Workspace同checkpoint路径分解已完成。单独关闭层5/11视觉写回为+0.19/-0.05，同时关闭为-0.29且均不显著；旁路层5/11 Z更新为+0.19/+0.14，同时旁路为+0.05。最关键的是，双更新旁路令Workspace Memory范数约493降至181而总分仍为78.41，证明早期Z更新只改变数值轨迹、未提供不可替代任务信息。当前证据支持以layer17-only为主结构起点，但两次早期视觉写回仍可能存在很弱的联合协作，不能声称模块完全死亡。预定跨层余弦诊断未被保存，只得到Text-reader诊断；在修复捕获链路前不得为补日志盲目重跑。
 - 2026-08-30 SLAKE Layer17-only Workspace seed44：仅保留第17层的私有视觉注入、Workspace更新Block和视觉读头，其他配置不变；参数由76.90M降至**34.90M**，官方Test仍为**78.37**。相对三层版本逐题互有70题独占答对，McNemar `p=1.0`，全部子组差异均不显著；训练时间减少9.42%。但第17层共享残差/私有Rep由三层版末窗1.04x升至2.43x，而原第11层为2.08x，说明17-only发生了明显补偿。当前结论是多层参数化可替代，不是层5/11无效。

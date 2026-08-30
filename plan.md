@@ -57,8 +57,10 @@
 - 下一顺序调整为：（1）不改Workspace结构和核心超参，将Full Workspace迁移到SLAKE并先跑seed44，验证跨数据集泛化；（2）SLAKE方向成立后再复现PathVQA seed45；（3）对PathVQA seed44同一checkpoint增加Workspace Text-off、Visual-off以及Visual residual scale `0/0.1/0.25/0.5/1.0`推理干预，均只跑Validation；（4）跨数据集和额外seed方向一致且确认有效支路后才设计参数缩减。不得提前扫描Z槽数、宽度、FFN或学习率。
 - SLAKE迁移实验`slake_dynamic_prompt_full_workspace_seed44`已完成：官方Test **78.37**，相对Static Prompt显著+3.96，OPEN/VQA/EN/ZH均有稳定净修复，跨数据集性能泛化成立。与此同时，Workspace深层更新几乎完全忽略文本且Z32读头近似均匀，76.90M参数效率与“共享多模态工作区”机制尚不成立；保留该checkpoint作为高容量教师和降本参考。
 - 最简SLAKE层消融`slake_dynamic_prompt_full_workspace_17only_seed44`已完成：参数34,895,872，官方Test **78.37**，与三层版本逐题70/70互换、McNemar `p=1.0`；所有子组差异均不显著，训练时间下降9.42%。该结果证明层5/11可在重新训练后被第17层替代，但不证明三层checkpoint中的早期路径没有贡献；17-only末窗第17层共享残差/私有Rep升至2.434x，而三层版第17层为1.038x、原第11层为2.080x。
-- 原计划的`modality-separated Workspace`继续暂停。下一优先级为推理目标`slake_dynamic_prompt_workspace_path_interventions`，在**同一个已训练三层checkpoint**上分解早期路径：（1）分别关闭层5、层11及二者的直接Workspace视觉写回，但保留其Z更新和后续传播；（2）再分别旁路层5、层11的Z更新，区分直接视觉写回与跨层Workspace记忆；（3）记录相邻Z的LayerNorm后余弦、每层增量余弦以及三层Workspace视觉delta余弦，判断信息是重复、覆盖还是相互抵消。共六次官方Test推理，不重新训练、不改变权重，基线复用现有78.37逐题结果。
-- 只有上述机制分解完成后才选择主结构：若早期写回和Z更新均可关而不降分，转向34.90M layer17-only；若早期Z更新有用但直接写回无用，保留多尺度只读Workspace并删除早期视觉注入；若各层delta高度重复，改为共享/递归Block；若层5/11贡献被后层覆盖，则设计显式多尺度保留而不是继续串行覆盖同一个Z。
+- `slake_dynamic_prompt_workspace_path_interventions`已完成：六次推理均复用三层checkpoint。层5/11 Z更新分别或同时旁路均不降分，双旁路为78.41；层5/11视觉写回分别关闭不降，同时关闭为78.08、仅-0.29且不显著。早期Z更新的因果必要性已被否定，早期视觉写回只保留一个很弱且未证实的联合效应。
+- 主结构决策起点转向34.90M layer17-only，不再为保持三层叙事而保留42.00M早期Block/Reader参数。下一次结构实验仍以增效为先：围绕单一Z20同时生成20个视觉Prompt与20个LLM Prompt残差，比较同位置残差叠加与显式concatenate接口；具体结构和控制变量需先讨论定稿，不自动实现或运行。
+- 新增受控增效实验`slake_dynamic_prompt_full_workspace_17only_s20_seed44`：以78.37的layer17-only `S8+Z32`为唯一参考，只将私有视觉基底/插入Rep数从8提高到20，Workspace维持Z32，训练参数由34,895,872增至34,908,160。固定seed44/data_seed42、3 epochs、仅epoch3官方Test；用于判断视觉写回是否受8个Rep Token表达空间限制。只有该实验持平或提升，才追加`S20+Z8`测试Workspace槽数压缩；失败则停止组合训练，避免两项改动互相抵消。
+- 诊断修复列为无算力代码任务：定位为什么`DynamicPromptTuningModelInterface._capture_workspace_debug()`只保存Text-reader字段，恢复相邻Z的LayerNorm后余弦、每层更新增量余弦和三层视觉delta余弦。修复后不为补诊断单独重跑旧六项；只有后续获授权的新实验自然复用诊断。
 - 机制待证：末段Workspace视觉残差约为私有Rep的5.25倍、私有Sparse梯度约为Workspace的1/9，但视觉Block输出范数稳定；所有下游Z读取熵约0.9998。当前可以主张高容量全Token共享工作区有效，不能主张32槽已经形成语义分工，也不能声称私有视觉分支对最终增益不可替代。
 
 ## 总体目标

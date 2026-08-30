@@ -12,6 +12,10 @@ from typing import Any, Deque, Dict, Iterator, Sequence
 import torch
 from torch import nn
 
+from slake.directional_concat_workspace import (
+    DirectionalConcatWorkspaceVisual,
+    ZeroInitWorkspaceProjection,
+)
 from slake.sparse_visual_mmrl import LatentResidualAttention, SparseVisualMMRL
 
 DYNAMIC_PROMPT_CONFIG_NAME = "dynamic_prompt_config.json"
@@ -189,6 +193,7 @@ class DynamicPromptTuningModel(nn.Module):
         workspace_text_heads: int = 16,
         workspace_visual_attention_dim: int = 1024,
         workspace_visual_heads: int = 16,
+        directional_concat_workspace: bool = False,
     ) -> None:
         super().__init__()
         if prompt_length < 1:
@@ -206,6 +211,21 @@ class DynamicPromptTuningModel(nn.Module):
             raise ValueError(
                 "The full workspace requires independent private P and visual S"
             )
+        if shared_workspace and directional_concat_workspace:
+            raise ValueError(
+                "Shared Workspace and Directional Concat Workspace are exclusive"
+            )
+        if directional_concat_workspace and shared_s_text_mode != "none":
+            raise ValueError(
+                "Directional Concat Workspace does not use Shared-S text modes"
+            )
+        if directional_concat_workspace and (
+            not sparse_visual_anchor_layers
+            or len(tuple(sparse_visual_anchor_layers)) != 1
+        ):
+            raise ValueError(
+                "Directional Concat Workspace requires exactly one visual anchor"
+            )
         if workspace_text_attention_dim % workspace_text_heads != 0:
             raise ValueError(
                 "workspace_text_attention_dim must be divisible by heads"
@@ -215,10 +235,16 @@ class DynamicPromptTuningModel(nn.Module):
         self.init_seed = int(init_seed)
         self.shared_s_text_mode = shared_s_text_mode
         self.shared_workspace_enabled = bool(shared_workspace)
+        self.directional_concat_workspace_enabled = bool(
+            directional_concat_workspace
+        )
         for parameter in self.base_model.parameters():
             parameter.requires_grad = False
 
         embeddings = self.base_model.get_input_embeddings().weight.detach()
+        self.hidden_size = int(embeddings.shape[-1])
+        self.attention_dim = int(attention_dim)
+        self.num_heads = int(num_heads)
         self.sparse_visual = None
         if sparse_visual_anchor_layers:
             model_core = getattr(self.base_model, "model", None)
@@ -230,38 +256,59 @@ class DynamicPromptTuningModel(nn.Module):
                     "Sparse Visual MMRL requires base_model.model.visual.config.hidden_size"
                 )
             visual_device = next(visual_model.parameters()).device
-            self.sparse_visual = SparseVisualMMRL(
-                visual_dim=int(visual_dim),
-                text_dim=int(embeddings.shape[-1]),
-                anchor_layers=sparse_visual_anchor_layers,
-                rep_token_count=sparse_visual_rep_tokens,
-                attention_dim=sparse_visual_attention_dim,
-                num_heads=sparse_visual_heads,
-                map_shared_s_to_text=self.shared_s_text_mode
-                in ("separate_residual", "direct_prompt"),
-                text_anchor_tokens=(
-                    self.requested_prompt_length
-                    if self.shared_s_text_mode == "text_owned_visual_readonly"
-                    else None
-                ),
-                text_anchor_bottleneck_dim=shared_s_visual_bottleneck_dim,
-                shared_workspace=self.shared_workspace_enabled,
-                workspace_tokens=workspace_tokens,
-                workspace_dim=workspace_dim,
-                workspace_heads=workspace_heads,
-                workspace_ffn_dim=workspace_ffn_dim,
-                workspace_visual_attention_dim=workspace_visual_attention_dim,
-                workspace_visual_heads=workspace_visual_heads,
-            ).to(device=visual_device)
+            if self.directional_concat_workspace_enabled:
+                self.sparse_visual = DirectionalConcatWorkspaceVisual(
+                    visual_dim=int(visual_dim),
+                    text_dim=self.hidden_size,
+                    anchor_layer=int(tuple(sparse_visual_anchor_layers)[0]),
+                    private_prompt_tokens=sparse_visual_rep_tokens,
+                    workspace_tokens=workspace_tokens,
+                    workspace_dim=workspace_dim,
+                    workspace_heads=workspace_heads,
+                ).to(device=visual_device)
+            else:
+                self.sparse_visual = SparseVisualMMRL(
+                    visual_dim=int(visual_dim),
+                    text_dim=self.hidden_size,
+                    anchor_layers=sparse_visual_anchor_layers,
+                    rep_token_count=sparse_visual_rep_tokens,
+                    attention_dim=sparse_visual_attention_dim,
+                    num_heads=sparse_visual_heads,
+                    map_shared_s_to_text=self.shared_s_text_mode
+                    in ("separate_residual", "direct_prompt"),
+                    text_anchor_tokens=(
+                        self.requested_prompt_length
+                        if self.shared_s_text_mode == "text_owned_visual_readonly"
+                        else None
+                    ),
+                    text_anchor_bottleneck_dim=shared_s_visual_bottleneck_dim,
+                    shared_workspace=self.shared_workspace_enabled,
+                    workspace_tokens=workspace_tokens,
+                    workspace_dim=workspace_dim,
+                    workspace_heads=workspace_heads,
+                    workspace_ffn_dim=workspace_ffn_dim,
+                    workspace_visual_attention_dim=workspace_visual_attention_dim,
+                    workspace_visual_heads=workspace_visual_heads,
+                ).to(device=visual_device)
             self.sparse_visual.install(visual_model)
         elif self.shared_s_text_mode != "none":
             raise ValueError("Shared-S text modes require Sparse Visual MMRL")
 
+        self.private_prompt_length = self.requested_prompt_length
+        self.workspace_prompt_length = (
+            int(workspace_tokens)
+            if self.directional_concat_workspace_enabled
+            else 0
+        )
         if self.shared_s_text_mode == "direct_prompt":
             self.prompt_length = self.sparse_visual.shared_s_text_prompt_length
             self.register_parameter("soft_prompt", None)
+            self.register_parameter("workspace_text_anchor", None)
+            self.workspace_text_projection = None
         else:
-            self.prompt_length = self.requested_prompt_length
+            self.prompt_length = (
+                self.private_prompt_length + self.workspace_prompt_length
+            )
             generator = torch.Generator(device="cpu").manual_seed(self.init_seed)
             sampled_rows = torch.randint(
                 embeddings.shape[0],
@@ -270,13 +317,28 @@ class DynamicPromptTuningModel(nn.Module):
                 device="cpu",
             )
             initial_prompt = embeddings[sampled_rows.to(embeddings.device)].clone()
-            self.soft_prompt = nn.Parameter(initial_prompt.float())
+            self.soft_prompt = nn.Parameter(
+                initial_prompt[: self.private_prompt_length].float()
+            )
+            if self.directional_concat_workspace_enabled:
+                self.workspace_text_anchor = nn.Parameter(
+                    initial_prompt[self.private_prompt_length :].float()
+                )
+                self.workspace_text_projection = ZeroInitWorkspaceProjection(
+                    int(workspace_dim),
+                    self.hidden_size,
+                ).to(device=embeddings.device)
+            else:
+                self.register_parameter("workspace_text_anchor", None)
+                self.workspace_text_projection = None
 
-        self.dynamic_prompt = DynamicPromptCrossAttention(
-            hidden_size=int(embeddings.shape[-1]),
-            attention_dim=attention_dim,
-            num_heads=num_heads,
-        ).to(device=embeddings.device)
+        self.dynamic_prompt = None
+        if not self.directional_concat_workspace_enabled:
+            self.dynamic_prompt = DynamicPromptCrossAttention(
+                hidden_size=self.hidden_size,
+                attention_dim=attention_dim,
+                num_heads=num_heads,
+            ).to(device=embeddings.device)
         self.shared_s_prompt_attention = None
         if self.shared_s_text_mode == "separate_residual":
             self.shared_s_prompt_attention = DynamicPromptCrossAttention(
@@ -326,15 +388,35 @@ class DynamicPromptTuningModel(nn.Module):
         return self.base_model.get_input_embeddings()
 
     def trainable_parameter_groups(self) -> Dict[str, list[nn.Parameter]]:
-        dynamic_parameters = list(self.dynamic_prompt.parameters())
+        dynamic_parameters = (
+            list(self.dynamic_prompt.parameters())
+            if self.dynamic_prompt is not None
+            else []
+        )
         if self.shared_s_prompt_attention is not None:
             dynamic_parameters.extend(self.shared_s_prompt_attention.parameters())
+        prompt_parameters = [
+            parameter
+            for parameter in (self.soft_prompt, self.workspace_text_anchor)
+            if parameter is not None
+        ]
         groups = {
-            "soft_prompt": [self.soft_prompt] if self.soft_prompt is not None else [],
+            "soft_prompt": prompt_parameters,
             "dynamic_prompt": dynamic_parameters,
         }
         if self.sparse_visual is not None:
             groups["sparse_visual"] = self.sparse_visual.private_parameters()
+        if self.directional_concat_workspace_enabled:
+            if (
+                self.sparse_visual is None
+                or self.workspace_text_projection is None
+                or self.workspace_text_anchor is None
+            ):
+                raise RuntimeError("Directional Concat Workspace modules are incomplete")
+            groups["shared_workspace"] = (
+                self.sparse_visual.workspace_parameters()
+                + list(self.workspace_text_projection.parameters())
+            )
         if self.shared_workspace_enabled:
             if self.sparse_visual is None or self.workspace_text_attention is None:
                 raise RuntimeError("Shared workspace modules are incomplete")
@@ -349,6 +431,11 @@ class DynamicPromptTuningModel(nn.Module):
         mode: str = "normal",
         memory_lag: int = 32,
     ) -> None:
+        if self.directional_concat_workspace_enabled and mode != "normal":
+            raise ValueError(
+                "Legacy Dynamic Prompt interventions do not apply to "
+                "Directional Concat Workspace"
+            )
         if mode not in DYNAMIC_PROMPT_INTERVENTIONS:
             raise ValueError(
                 f"Unsupported Dynamic Prompt intervention={mode!r}; "
@@ -367,6 +454,18 @@ class DynamicPromptTuningModel(nn.Module):
         update_bypassed_layers: Sequence[int] = (),
         text_write_disabled: bool = False,
     ) -> None:
+        if self.directional_concat_workspace_enabled:
+            if (
+                visual_write_disabled_layers
+                or visual_rep_write_disabled_layers
+                or update_bypassed_layers
+                or text_write_disabled
+            ):
+                raise ValueError(
+                    "Legacy Workspace interventions do not apply to "
+                    "Directional Concat Workspace"
+                )
+            return
         if self.sparse_visual is None:
             if (
                 visual_write_disabled_layers
@@ -421,9 +520,7 @@ class DynamicPromptTuningModel(nn.Module):
             ),
         }
         if self.sparse_visual is not None:
-            workspace_summary = (
-                self.sparse_visual.workspace_inference_intervention_summary()
-            )
+            workspace_summary = self.sparse_visual.workspace_inference_intervention_summary()
             workspace_summary["text_write_disabled"] = (
                 self._workspace_text_write_disabled
             )
@@ -550,7 +647,7 @@ class DynamicPromptTuningModel(nn.Module):
                     output.shape[0], output.device, output.dtype
                 )
             else:
-                prompt = (
+                private_prompt = (
                     self.soft_prompt.to(
                         device=output.device,
                         dtype=output.dtype,
@@ -558,6 +655,18 @@ class DynamicPromptTuningModel(nn.Module):
                     .unsqueeze(0)
                     .expand(output.shape[0], -1, -1)
                 )
+                if self.directional_concat_workspace_enabled:
+                    if self.workspace_text_anchor is None:
+                        raise RuntimeError(
+                            "Directional Workspace text anchor is unavailable"
+                        )
+                    workspace_anchor = self.workspace_text_anchor.to(
+                        device=output.device,
+                        dtype=output.dtype,
+                    ).unsqueeze(0).expand(output.shape[0], -1, -1)
+                    prompt = torch.cat((private_prompt, workspace_anchor), dim=1)
+                else:
+                    prompt = private_prompt
             return torch.cat((prompt, output[:, self.prompt_length :]), dim=1)
 
         handle = embeddings.register_forward_hook(replace_prompt)
@@ -603,6 +712,58 @@ class DynamicPromptTuningModel(nn.Module):
                 # Decode steps reuse the dynamic prompt already stored in KV cache.
                 return args, kwargs
 
+            if self.directional_concat_workspace_enabled:
+                if (
+                    self.sparse_visual is None
+                    or self.workspace_text_projection is None
+                    or self.workspace_text_anchor is None
+                    or self.soft_prompt is None
+                ):
+                    raise RuntimeError(
+                        "Directional Concat Workspace modules are incomplete"
+                    )
+                workspace = self.sparse_visual.shared_workspace_text_memory()
+                workspace_prompt = self.workspace_text_projection(
+                    workspace,
+                    self.workspace_text_anchor,
+                ).to(device=inputs_embeds.device, dtype=inputs_embeds.dtype)
+                private_prompt = inputs_embeds[:, : self.private_prompt_length]
+                dynamic_prompt = torch.cat(
+                    (private_prompt, workspace_prompt),
+                    dim=1,
+                )
+                kwargs["inputs_embeds"] = torch.cat(
+                    (dynamic_prompt, inputs_embeds[:, self.prompt_length :]),
+                    dim=1,
+                )
+                self.debug_context = {
+                    **{
+                        f"workspace_text_{key}": value
+                        for key, value in self.workspace_text_projection.debug_context.items()
+                    },
+                    "workspace_text_memory_norm_mean": workspace.detach()
+                    .float()
+                    .norm(dim=-1)
+                    .mean(),
+                    "workspace_text_memory_tokens": inputs_embeds.new_tensor(
+                        float(workspace.shape[1])
+                    ),
+                    "workspace_private_prompt_norm_mean": private_prompt.detach()
+                    .float()
+                    .norm(dim=-1)
+                    .mean(),
+                }
+                if not self._memory_audited:
+                    print(
+                        "[DIRECTIONAL_CONCAT_WORKSPACE_MEMORY_AUDIT] "
+                        f"private_prompt_tokens={self.private_prompt_length} "
+                        f"workspace_prompt_tokens={self.workspace_prompt_length} "
+                        f"workspace_shape={tuple(workspace.shape)} "
+                        f"total_prompt_tokens={self.prompt_length} pass=True"
+                    )
+                    self._memory_audited = True
+                return args, kwargs
+
             visual_mask = kwargs.get("visual_pos_masks")
             if visual_mask is None:
                 visual_mask = expanded_ids.eq(self.visual_template_token_ids[0])
@@ -631,6 +792,8 @@ class DynamicPromptTuningModel(nn.Module):
             natural_memory = torch.stack((visual_memory, text_memory), dim=1)
             memory = self._apply_memory_intervention(natural_memory)
             prompt = inputs_embeds[:, : self.prompt_length]
+            if self.dynamic_prompt is None:
+                raise RuntimeError("Dynamic Prompt attention is unavailable")
             delta = self._apply_delta_intervention(prompt, memory)
             shared_delta = torch.zeros_like(prompt)
             shared_debug = {}
@@ -795,10 +958,20 @@ class DynamicPromptTuningModel(nn.Module):
             images_per_sample,
             text_anchor=text_anchor,
             text_tokens=(
-                token_embeddings if self.shared_workspace_enabled else None
+                token_embeddings
+                if (
+                    self.shared_workspace_enabled
+                    or self.directional_concat_workspace_enabled
+                )
+                else None
             ),
             text_token_mask=(
-                text_mask if self.shared_workspace_enabled else None
+                text_mask
+                if (
+                    self.shared_workspace_enabled
+                    or self.directional_concat_workspace_enabled
+                )
+                else None
             ),
         ):
             handle = visual_model.register_forward_pre_hook(
@@ -846,14 +1019,22 @@ class DynamicPromptTuningModel(nn.Module):
         output_path = Path(output_dir)
         output_path.mkdir(parents=True, exist_ok=True)
         config = {
-            "method": "dynamic_multimodal_prompt_tuning",
+            "method": (
+                "directional_concat_workspace_prompt_tuning"
+                if self.directional_concat_workspace_enabled
+                else "dynamic_multimodal_prompt_tuning"
+            ),
             "prompt_length": self.prompt_length,
             "requested_prompt_length": self.requested_prompt_length,
-            "hidden_size": self.dynamic_prompt.hidden_size,
-            "attention_dim": self.dynamic_prompt.attention_dim,
-            "num_heads": self.dynamic_prompt.num_heads,
+            "hidden_size": self.hidden_size,
+            "attention_dim": self.attention_dim,
+            "num_heads": self.num_heads,
             "init_seed": self.init_seed,
-            "memory": "mean_visual_plus_mean_question",
+            "memory": (
+                "text_attention_pool_queries_plus_full_visual_kv"
+                if self.directional_concat_workspace_enabled
+                else "mean_visual_plus_mean_question"
+            ),
             "shared_s_text_mode": self.shared_s_text_mode,
             "shared_s_text_merger": (
                 "main_visual_merger"
@@ -900,21 +1081,66 @@ class DynamicPromptTuningModel(nn.Module):
                 if self.shared_workspace_enabled
                 else None
             ),
+            "directional_concat_workspace": (
+                {
+                    "tokens": self.sparse_visual.workspace_tokens,
+                    "dim": self.sparse_visual.workspace_dim,
+                    "heads": self.sparse_visual.workspace_heads,
+                    "anchor_layer": self.sparse_visual.anchor_layers[0],
+                    "private_visual_prompt_tokens": self.sparse_visual.private_prompt_tokens,
+                    "private_text_prompt_tokens": self.private_prompt_length,
+                    "text_workspace_anchor_tokens": self.workspace_prompt_length,
+                    "query": "attention_pool_full_question_tokens",
+                    "memory": "full_layer17_visual_tokens",
+                    "fusion": "text_query_visual_kv_cross_attention",
+                    "visual_output": "anchored_token_concat",
+                    "text_output": "anchored_token_concat",
+                    "zero_init_dynamic_projections": True,
+                    "private_dynamic_text_attention": False,
+                    "private_visual_attention": False,
+                }
+                if self.directional_concat_workspace_enabled
+                else None
+            ),
             "train_soft_prompt": self.soft_prompt is not None,
             "sparse_visual": (
                 {
                     "anchor_layers": list(self.sparse_visual.anchor_layers),
-                    "rep_token_count": self.sparse_visual.rep_token_count,
-                    "attention_dim": self.sparse_visual.rep_attention.attention_dim,
-                    "num_heads": self.sparse_visual.rep_attention.num_heads,
-                    "injection_mode": "single_pass_insert_strip",
+                    "rep_token_count": (
+                        self.sparse_visual.private_prompt_tokens
+                        if self.directional_concat_workspace_enabled
+                        else self.sparse_visual.rep_token_count
+                    ),
+                    "attention_dim": (
+                        0
+                        if self.directional_concat_workspace_enabled
+                        else self.sparse_visual.rep_attention.attention_dim
+                    ),
+                    "num_heads": (
+                        0
+                        if self.directional_concat_workspace_enabled
+                        else self.sparse_visual.rep_attention.num_heads
+                    ),
+                    "injection_mode": (
+                        "directional_concat_single_pass_insert_strip"
+                        if self.directional_concat_workspace_enabled
+                        else "single_pass_insert_strip"
+                    ),
                     "map_raw_shared_s_to_text": self.shared_s_text_mode
                     in ("separate_residual", "direct_prompt"),
                     "text_owned_s_visual_readonly": (
                         self.shared_s_text_mode == "text_owned_visual_readonly"
                     ),
-                    "text_anchor_tokens": self.sparse_visual.text_anchor_tokens,
-                    "text_anchor_bottleneck_dim": self.sparse_visual.text_anchor_bottleneck_dim,
+                    "text_anchor_tokens": (
+                        0
+                        if self.directional_concat_workspace_enabled
+                        else self.sparse_visual.text_anchor_tokens
+                    ),
+                    "text_anchor_bottleneck_dim": (
+                        0
+                        if self.directional_concat_workspace_enabled
+                        else self.sparse_visual.text_anchor_bottleneck_dim
+                    ),
                     "shared_s_text_merger": (
                         "main_visual_merger"
                         if self.shared_s_text_mode
@@ -940,7 +1166,20 @@ class DynamicPromptTuningModel(nn.Module):
                 "dynamic_prompt": {
                     key: value.detach().cpu()
                     for key, value in self.dynamic_prompt.state_dict().items()
-                },
+                } if self.dynamic_prompt is not None else None,
+                "workspace_text_anchor": (
+                    self.workspace_text_anchor.detach().cpu()
+                    if self.workspace_text_anchor is not None
+                    else None
+                ),
+                "workspace_text_projection": (
+                    {
+                        key: value.detach().cpu()
+                        for key, value in self.workspace_text_projection.state_dict().items()
+                    }
+                    if self.workspace_text_projection is not None
+                    else None
+                ),
                 "shared_s_prompt_attention": (
                     {
                         key: value.detach().cpu()
@@ -989,7 +1228,39 @@ class DynamicPromptTuningModel(nn.Module):
                     f"{tuple(self.soft_prompt.shape)}"
                 )
             self.soft_prompt.data.copy_(prompt.to(self.soft_prompt.device))
-        self.dynamic_prompt.load_state_dict(state["dynamic_prompt"], strict=True)
+        dynamic_state = state.get("dynamic_prompt")
+        if (dynamic_state is None) != (self.dynamic_prompt is None):
+            raise ValueError(
+                "Dynamic Prompt checkpoint/model architecture mismatch: "
+                f"checkpoint={dynamic_state is not None} "
+                f"model={self.dynamic_prompt is not None}"
+            )
+        if self.dynamic_prompt is not None:
+            self.dynamic_prompt.load_state_dict(dynamic_state, strict=True)
+        workspace_anchor = state.get("workspace_text_anchor")
+        if (workspace_anchor is None) != (self.workspace_text_anchor is None):
+            raise ValueError(
+                "Workspace text anchor checkpoint/model architecture mismatch"
+            )
+        if self.workspace_text_anchor is not None:
+            if tuple(workspace_anchor.shape) != tuple(self.workspace_text_anchor.shape):
+                raise ValueError("Workspace text anchor shape mismatch")
+            self.workspace_text_anchor.data.copy_(
+                workspace_anchor.to(self.workspace_text_anchor.device)
+            )
+        workspace_projection_state = state.get("workspace_text_projection")
+        if (workspace_projection_state is None) != (
+            self.workspace_text_projection is None
+        ):
+            raise ValueError(
+                "Workspace text projection checkpoint/model architecture mismatch"
+            )
+        if self.workspace_text_projection is not None:
+            self.workspace_text_projection.load_state_dict(
+                workspace_projection_state,
+                strict=True,
+            )
+            self.workspace_text_projection._forward_audited = True
         shared_attention_state = state.get("shared_s_prompt_attention")
         if (shared_attention_state is None) != (self.shared_s_prompt_attention is None):
             raise ValueError(
@@ -1024,10 +1295,14 @@ class DynamicPromptTuningModel(nn.Module):
         if self.sparse_visual is not None:
             self.sparse_visual.load_state_dict(sparse_state, strict=True)
             self.sparse_visual._forward_audited = True
-            for attention in self.sparse_visual.workspace_visual_attentions:
-                attention._forward_audited = True
+            if self.directional_concat_workspace_enabled:
+                self.sparse_visual.workspace_visual_delta._forward_audited = True
+            else:
+                for attention in self.sparse_visual.workspace_visual_attentions:
+                    attention._forward_audited = True
         # A restored checkpoint is no longer expected to have a zero residual.
-        self.dynamic_prompt._forward_audited = True
+        if self.dynamic_prompt is not None:
+            self.dynamic_prompt._forward_audited = True
         print(
             "[DYNAMIC_PROMPT_CHECKPOINT_AUDIT] "
             f"loaded={checkpoint_path} zero_init_check=skipped_for_trained_state"

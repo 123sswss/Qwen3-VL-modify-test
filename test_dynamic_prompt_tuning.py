@@ -423,6 +423,97 @@ class DynamicPromptTuningTest(unittest.TestCase):
                     value,
                 )
 
+    def test_directional_concat_workspace_builds_anchored_prompt30_equivalent(self):
+        kwargs = dict(
+            tokenizer=_FakeTokenizer(),
+            prompt_length=2,
+            init_seed=5,
+            attention_dim=4,
+            num_heads=2,
+            sparse_visual_anchor_layers=(1,),
+            sparse_visual_rep_tokens=2,
+            sparse_visual_attention_dim=4,
+            sparse_visual_heads=2,
+            workspace_tokens=3,
+            workspace_dim=8,
+            workspace_heads=2,
+            directional_concat_workspace=True,
+        )
+        model = DynamicPromptTuningModel(_FakeMultimodalModel(), **kwargs)
+        self.assertIsNone(model.dynamic_prompt)
+        self.assertEqual(model.private_prompt_length, 2)
+        self.assertEqual(model.workspace_prompt_length, 3)
+        self.assertEqual(model.prompt_length, 5)
+        workspace = torch.randn(1, 3, 8)
+        model.sparse_visual.shared_workspace_text_memory = lambda: workspace
+        output = model(**self._batch())
+        prefix = model.base_model.model.language_model.last_embeddings[:, :5]
+        expected = torch.cat(
+            (model.soft_prompt, model.workspace_text_anchor),
+            dim=0,
+        ).unsqueeze(0)
+        torch.testing.assert_close(prefix.float(), expected.float())
+        output.loss.backward()
+        self.assertGreater(float(model.soft_prompt.grad.norm()), 0.0)
+        self.assertGreater(float(model.workspace_text_anchor.grad.norm()), 0.0)
+        self.assertGreater(
+            float(model.workspace_text_projection.output_projection.weight.grad.norm()),
+            0.0,
+        )
+        grouped_ids = {
+            id(parameter)
+            for parameters in model.trainable_parameter_groups().values()
+            for parameter in parameters
+        }
+        self.assertEqual(
+            grouped_ids,
+            {
+                id(parameter)
+                for parameter in model.parameters()
+                if parameter.requires_grad
+            },
+        )
+
+    def test_directional_concat_workspace_checkpoint_round_trip(self):
+        kwargs = dict(
+            tokenizer=_FakeTokenizer(),
+            prompt_length=2,
+            init_seed=5,
+            attention_dim=4,
+            num_heads=2,
+            sparse_visual_anchor_layers=(1,),
+            sparse_visual_rep_tokens=2,
+            sparse_visual_attention_dim=4,
+            sparse_visual_heads=2,
+            workspace_tokens=3,
+            workspace_dim=8,
+            workspace_heads=2,
+            directional_concat_workspace=True,
+        )
+        model = DynamicPromptTuningModel(_FakeMultimodalModel(), **kwargs)
+        with torch.no_grad():
+            model.workspace_text_anchor.add_(0.25)
+            model.workspace_text_projection.output_projection.weight.add_(0.5)
+            model.sparse_visual.workspace_visual_anchor.add_(0.75)
+        with tempfile.TemporaryDirectory() as directory:
+            model.save_dynamic_prompt(Path(directory))
+            restored = DynamicPromptTuningModel(_FakeMultimodalModel(), **kwargs)
+            restored.load_dynamic_prompt(Path(directory))
+            torch.testing.assert_close(
+                restored.workspace_text_anchor,
+                model.workspace_text_anchor,
+            )
+            for key, value in model.workspace_text_projection.state_dict().items():
+                torch.testing.assert_close(
+                    restored.workspace_text_projection.state_dict()[key],
+                    value,
+                )
+            for key, value in model.sparse_visual.state_dict().items():
+                torch.testing.assert_close(
+                    restored.sparse_visual.state_dict()[key],
+                    value,
+                )
+
 
 if __name__ == "__main__":
     unittest.main()

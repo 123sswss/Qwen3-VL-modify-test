@@ -60,9 +60,11 @@
 - `slake_dynamic_prompt_workspace_path_interventions`已完成：六次推理均复用三层checkpoint。层5/11 Z更新分别或同时旁路均不降分，双旁路为78.41；层5/11视觉写回分别关闭不降，同时关闭为78.08、仅-0.29且不显著。早期Z更新的因果必要性已被否定，早期视觉写回只保留一个很弱且未证实的联合效应。
 - 主结构决策起点转向34.90M layer17-only，不再为保持三层叙事而保留42.00M早期Block/Reader参数。下一次结构实验仍以增效为先：围绕单一Z20同时生成20个视觉Prompt与20个LLM Prompt残差，比较同位置残差叠加与显式concatenate接口；具体结构和控制变量需先讨论定稿，不自动实现或运行。
 - `slake_dynamic_prompt_full_workspace_17only_s20_seed44`已完成：S20+Z32为78.22，相对S8+Z32的78.37无显著差异（77/80独占正确，`p=0.873`）。额外Rep显著增强视觉写入并改变157道题，却未提高净准确率，排除“8个Rep表达空间不足”作为当前瓶颈。按停止规则取消S20+Z8训练，不再扫描Rep数量。
-- 已安排不训练的同checkpoint目标`slake_dynamic_prompt_17only_final_path_interventions`，以S8+Z32 layer17-only checkpoint为准串行运行四项：（1）关闭第17层Workspace视觉残差；（2）关闭全部第17层视觉Rep插入但保留Z更新和Text Reader；（3）关闭Workspace Text残差；（4）同时关闭Workspace视觉与文本残差、保留私有视觉Rep。自动生成逐题配对统计；实现和运行均已获用户本次“试试”授权，但仍遵守用户手动启动流程。
+- `slake_dynamic_prompt_17only_final_path_interventions`已完成：关闭Workspace视觉写回为78.08（-0.29，`p=0.471`），关闭全部视觉Rep写回为77.84（-0.53，`p=0.108`）；关闭Workspace文本写回显著降至76.36（-2.01，`p=0.000894`），同时关闭Workspace视觉/文本写回为76.22（-2.15，`p=0.000410`）。直接视觉写回不是当前checkpoint的不可替代性能来源，Workspace Text Reader才是主要最终输出路径。
 - 诊断修复列为无算力代码任务：定位为什么`DynamicPromptTuningModelInterface._capture_workspace_debug()`只保存Text-reader字段，恢复相邻Z的LayerNorm后余弦、每层更新增量余弦和三层视觉delta余弦。修复后不为补诊断单独重跑旧六项；只有后续获授权的新实验自然复用诊断。
-- 机制待证：末段Workspace视觉残差约为私有Rep的5.25倍、私有Sparse梯度约为Workspace的1/9，但视觉Block输出范数稳定；所有下游Z读取熵约0.9998。当前可以主张高容量全Token共享工作区有效，不能主张32槽已经形成语义分工，也不能声称私有视觉分支对最终增益不可替代。
+- 机制待证更新：末段Workspace视觉残差虽很强，但同checkpoint关闭后不显著掉分；所有下游Z读取熵约0.9998，而Workspace Text Reader关闭会显著损失约2分。当前可以主张高容量Workspace通过LLM Prompt接口有效，不能主张直接视觉写回不可替代，也不能把结果解释成视觉信息无效，因为Z更新仍读取完整视觉Token。
+- 原计划的Workspace输入因果干预暂缓：在S8+Z32 layer17-only checkpoint上屏蔽或跨样本错配视觉Memory，仍可用于判断旧Text Reader的约2分收益是否真正来自当前样本视觉条件，但不再排在新结构实验之前，且未获新的运行授权前不实现、不执行。
+- 已定稿并安排`slake_directional_concat_workspace_seed44`：仅在视觉第17层使用一次正统的“完整问题Token注意力池化为Q10、完整视觉Token作K/V”的CA1024/16得到共享`Z10x1024`；视觉端以零初始化`1024->1024` MLP生成动态块并与静态`A_v10`相加，再与私有`S8`显式concat后单次插入/剥离；文本端以零初始化`1024->2560` MLP生成动态块并与静态`A_t10`相加，再与私有`P20`显式concat为Prompt30。删除旧Private Text CA、Private Visual CA和两个Workspace Reader；训练参数精确为12,726,784，学习率为`P20+A_t10:0.3`、`S8:3e-5`、其余共享Workspace:`1e-4`。固定seed44/data_seed42、3 epoch，仅epoch3跑SLAKE官方Test；代码提交后仍由用户手动启动。
 
 ## 总体目标
 

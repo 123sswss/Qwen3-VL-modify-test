@@ -100,20 +100,25 @@ class DynamicPromptTrainer(Trainer):
             + sparse_visual_parameters
             + workspace_parameters
         )
-        if {id(parameter) for parameter in active} != {
-            id(parameter) for parameter in grouped
-        }:
+        active_ids = [id(parameter) for parameter in active]
+        grouped_ids = [id(parameter) for parameter in grouped]
+        if (
+            set(active_ids) != set(grouped_ids)
+            or len(grouped_ids) != len(set(grouped_ids))
+        ):
             raise RuntimeError(
                 "Dynamic Prompt trainable parameters must belong to exactly one optimizer group"
             )
-        optimizer_groups = [
-            {
-                "params": dynamic_parameters,
-                "lr": self.dynamic_lr,
-                "weight_decay": 0.0,
-                "group_name": "dynamic_prompt",
-            },
-        ]
+        optimizer_groups = []
+        if dynamic_parameters:
+            optimizer_groups.append(
+                {
+                    "params": dynamic_parameters,
+                    "lr": self.dynamic_lr,
+                    "weight_decay": 0.0,
+                    "group_name": "dynamic_prompt",
+                }
+            )
         if prompt_parameters:
             optimizer_groups.insert(
                 0,
@@ -188,11 +193,22 @@ class DynamicPromptCallback(TrainerCallback):
         prompt_grad = (
             model.soft_prompt.grad if model.soft_prompt is not None else None
         )
-        dynamic_grads = [
-            parameter.grad.detach().float().pow(2).sum()
-            for parameter in model.dynamic_prompt.parameters()
-            if parameter.grad is not None
-        ]
+        workspace_text_anchor = getattr(model, "workspace_text_anchor", None)
+        workspace_text_anchor_grad = (
+            workspace_text_anchor.grad
+            if workspace_text_anchor is not None
+            else None
+        )
+        dynamic_attention = getattr(model, "dynamic_prompt", None)
+        dynamic_grads = (
+            [
+                parameter.grad.detach().float().pow(2).sum()
+                for parameter in dynamic_attention.parameters()
+                if parameter.grad is not None
+            ]
+            if dynamic_attention is not None
+            else []
+        )
         dynamic_grad_norm = (
             torch.stack(dynamic_grads).sum().sqrt()
             if dynamic_grads
@@ -227,6 +243,16 @@ class DynamicPromptCallback(TrainerCallback):
                 if prompt_grad is not None
                 else 0.0
             ),
+            "workspace_text_anchor_norm": (
+                float(workspace_text_anchor.detach().float().norm().item())
+                if workspace_text_anchor is not None
+                else 0.0
+            ),
+            "workspace_text_anchor_grad_norm": (
+                float(workspace_text_anchor_grad.detach().float().norm().item())
+                if workspace_text_anchor_grad is not None
+                else 0.0
+            ),
             "dynamic_prompt_grad_norm": float(dynamic_grad_norm.item()),
             "sparse_visual_grad_norm": float(sparse_grad_norm.item()),
             "shared_workspace_grad_norm": (
@@ -237,7 +263,7 @@ class DynamicPromptCallback(TrainerCallback):
         }
         if (
             sparse_visual is not None
-            and sparse_visual.map_shared_s_to_text
+            and getattr(sparse_visual, "map_shared_s_to_text", False)
         ):
             shared_rep_grad = sparse_visual.shared_rep.grad
             row["shared_s_parameter_grad_norm"] = (
@@ -250,7 +276,7 @@ class DynamicPromptCallback(TrainerCallback):
             )
         if (
             sparse_visual is not None
-            and sparse_visual.text_anchor_tokens
+            and getattr(sparse_visual, "text_anchor_tokens", 0)
         ):
             adapter_grads = [
                 parameter.grad.detach().float().pow(2).sum()
@@ -364,6 +390,7 @@ def parse_args(dataset_name: str = "pathvqa") -> argparse.Namespace:
     parser.add_argument("--shared-s-heads", type=int, default=4)
     parser.add_argument("--shared-s-visual-bottleneck-dim", type=int, default=128)
     parser.add_argument("--shared-workspace", action="store_true")
+    parser.add_argument("--directional-concat-workspace", action="store_true")
     parser.add_argument("--workspace-tokens", type=int, default=32)
     parser.add_argument("--workspace-dim", type=int, default=1024)
     parser.add_argument("--workspace-heads", type=int, default=16)
@@ -438,6 +465,20 @@ def parse_args(dataset_name: str = "pathvqa") -> argparse.Namespace:
         parser.error("--shared-workspace requires --sparse-visual")
     if args.shared_workspace and args.shared_s_text_mode != "none":
         parser.error("--shared-workspace requires independent private P and visual S")
+    if args.directional_concat_workspace and not args.sparse_visual:
+        parser.error("--directional-concat-workspace requires --sparse-visual")
+    if args.directional_concat_workspace and args.shared_workspace:
+        parser.error(
+            "--directional-concat-workspace and --shared-workspace are exclusive"
+        )
+    if args.directional_concat_workspace and args.shared_s_text_mode != "none":
+        parser.error(
+            "--directional-concat-workspace does not use Shared-S text modes"
+        )
+    if args.directional_concat_workspace and len(args.sparse_visual_anchor_layers) != 1:
+        parser.error(
+            "--directional-concat-workspace requires exactly one visual anchor"
+        )
     return args
 
 
@@ -516,6 +557,7 @@ def main(dataset_name: str = "pathvqa") -> int:
         workspace_text_heads=args.workspace_text_heads,
         workspace_visual_attention_dim=args.workspace_visual_attention_dim,
         workspace_visual_heads=args.workspace_visual_heads,
+        directional_concat_workspace=args.directional_concat_workspace,
     )
     dataset = _build_train_dataset(dataset_name, args, processor)
     groups = model.trainable_parameter_groups()
@@ -543,8 +585,9 @@ def main(dataset_name: str = "pathvqa") -> int:
         f"[{log_prefix}_DYNAMIC_PROMPT_CONFIG] "
         f"requested_prompt_length={args.prompt_length} "
         f"effective_prompt_length={model.prompt_length} "
-        f"hidden_size={model.dynamic_prompt.hidden_size} "
-        f"attention_dim={args.attention_dim} heads={args.attention_heads} "
+        f"hidden_size={model.hidden_size} "
+        f"attention_dim={args.attention_dim if model.dynamic_prompt is not None else 0} "
+        f"heads={args.attention_heads if model.dynamic_prompt is not None else 0} "
         f"parameters={counts} total={trainable} "
         f"epochs={args.epochs} prompt_lr={args.prompt_lr} "
         f"dynamic_lr={args.dynamic_lr} seed={args.seed} data_seed={args.data_seed} "
@@ -553,22 +596,25 @@ def main(dataset_name: str = "pathvqa") -> int:
         f"sparse_rep_tokens={args.sparse_visual_rep_tokens if args.sparse_visual else 0} "
         f"sparse_attention_dim={args.sparse_visual_attention_dim if args.sparse_visual else 0} "
         f"sparse_heads={args.sparse_visual_heads if args.sparse_visual else 0} "
-        f"sparse_injection={'single_pass_insert_strip' if args.sparse_visual else 'none'} "
+        f"sparse_injection={'directional_concat_single_pass_insert_strip' if args.directional_concat_workspace else ('single_pass_insert_strip' if args.sparse_visual else 'none')} "
         f"shared_s_text_mode={args.shared_s_text_mode} "
         f"shared_s_text_merger={'main_visual_merger' if args.shared_s_text_mode in ('separate_residual', 'direct_prompt') else 'none'} "
         f"shared_s_attention={args.shared_s_attention_dim}x{args.shared_s_heads} "
         f"shared_s_visual_bottleneck={args.shared_s_visual_bottleneck_dim} "
         f"shared_s_gradient_policy={'text_write_visual_readonly' if args.shared_s_text_mode == 'text_owned_visual_readonly' else 'joint_or_disabled'} "
         f"shared_workspace={args.shared_workspace} "
+        f"directional_concat_workspace={args.directional_concat_workspace} "
         f"workspace_tokens={args.workspace_tokens if args.shared_workspace else 0} "
-        f"workspace_dim={args.workspace_dim if args.shared_workspace else 0} "
+        f"directional_workspace_tokens={args.workspace_tokens if args.directional_concat_workspace else 0} "
+        f"workspace_dim={args.workspace_dim if (args.shared_workspace or args.directional_concat_workspace) else 0} "
         f"workspace_blocks={len(args.sparse_visual_anchor_layers) if args.shared_workspace else 0} "
-        f"workspace_heads={args.workspace_heads if args.shared_workspace else 0} "
+        f"workspace_heads={args.workspace_heads if (args.shared_workspace or args.directional_concat_workspace) else 0} "
         f"workspace_ffn_dim={args.workspace_ffn_dim if args.shared_workspace else 0} "
         f"workspace_text_ca={args.workspace_text_attention_dim if args.shared_workspace else 0}x{args.workspace_text_heads if args.shared_workspace else 0} "
         f"workspace_visual_ca={args.workspace_visual_attention_dim if args.shared_workspace else 0}x{args.workspace_visual_heads if args.shared_workspace else 0} "
         f"workspace_lr={args.workspace_lr} "
         f"train_soft_prompt={model.soft_prompt is not None} "
+        f"text_workspace_anchor_tokens={model.workspace_prompt_length} "
         "pretrained_prompt_checkpoint=False stage1=False"
     )
 
@@ -656,14 +702,46 @@ def main(dataset_name: str = "pathvqa") -> int:
             if args.shared_workspace
             else None
         ),
+        "directional_concat_workspace": (
+            {
+                "tokens": args.workspace_tokens,
+                "dim": args.workspace_dim,
+                "heads": args.workspace_heads,
+                "anchor_layer": int(args.sparse_visual_anchor_layers[0]),
+                "private_visual_prompt_tokens": args.sparse_visual_rep_tokens,
+                "private_text_prompt_tokens": args.prompt_length,
+                "text_workspace_anchor_tokens": args.workspace_tokens,
+                "query": "attention_pool_full_question_tokens",
+                "memory": "full_visual_tokens",
+                "fusion": "text_query_visual_kv_cross_attention",
+                "output_interface": "anchored_token_concat",
+                "zero_init_dynamic_projections": True,
+                "learning_rate": args.workspace_lr,
+            }
+            if args.directional_concat_workspace
+            else None
+        ),
         "train_soft_prompt": model.soft_prompt is not None,
         "sparse_visual": (
             {
                 "anchor_layers": list(args.sparse_visual_anchor_layers),
                 "rep_token_count": args.sparse_visual_rep_tokens,
-                "attention_dim": args.sparse_visual_attention_dim,
-                "attention_heads": args.sparse_visual_heads,
-                "injection_mode": "single_pass_insert_strip",
+                "attention_dim": (
+                    0
+                    if args.directional_concat_workspace
+                    else args.sparse_visual_attention_dim
+                ),
+                "attention_heads": (
+                    0
+                    if args.directional_concat_workspace
+                    else args.sparse_visual_heads
+                ),
+                "injection_mode": (
+                    "directional_concat_single_pass_insert_strip"
+                    if args.directional_concat_workspace
+                    else "single_pass_insert_strip"
+                ),
+                "directional_concat_workspace": args.directional_concat_workspace,
                 "shared_s_text_merger": (
                     "main_visual_merger"
                     if args.shared_s_text_mode

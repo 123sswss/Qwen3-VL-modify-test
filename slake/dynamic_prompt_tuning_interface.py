@@ -70,6 +70,8 @@ class DynamicPromptTuningModelInterface:
         sparse_visual = config.get("sparse_visual")
         shared_s_prompt_attention = config.get("shared_s_prompt_attention")
         shared_workspace = config.get("shared_workspace")
+        directional_workspace = config.get("directional_concat_workspace")
+        workspace_config = directional_workspace or shared_workspace
         self.model = DynamicPromptTuningModel(
             base_model,
             tokenizer=self.processor.tokenizer,
@@ -115,18 +117,18 @@ class DynamicPromptTuningModelInterface:
             ),
             shared_workspace=shared_workspace is not None,
             workspace_tokens=(
-                int(shared_workspace["tokens"])
-                if shared_workspace is not None
+                int(workspace_config["tokens"])
+                if workspace_config is not None
                 else 32
             ),
             workspace_dim=(
-                int(shared_workspace["dim"])
-                if shared_workspace is not None
+                int(workspace_config["dim"])
+                if workspace_config is not None
                 else 1024
             ),
             workspace_heads=(
-                int(shared_workspace["heads"])
-                if shared_workspace is not None
+                int(workspace_config["heads"])
+                if workspace_config is not None
                 else 16
             ),
             workspace_ffn_dim=(
@@ -154,6 +156,7 @@ class DynamicPromptTuningModelInterface:
                 if shared_workspace is not None
                 else 16
             ),
+            directional_concat_workspace=directional_workspace is not None,
         )
         self.model.load_dynamic_prompt(checkpoint)
         self.model.eval()
@@ -176,11 +179,12 @@ class DynamicPromptTuningModelInterface:
         print(
             "[dynamic-prompt] "
             f"loaded={checkpoint} prompt_length={self.model.prompt_length} "
-            f"attention_dim={self.model.dynamic_prompt.attention_dim} "
-            f"heads={self.model.dynamic_prompt.num_heads} "
+            f"attention_dim={self.model.attention_dim if self.model.dynamic_prompt is not None else 0} "
+            f"heads={self.model.num_heads if self.model.dynamic_prompt is not None else 0} "
             f"sparse_visual={sparse_visual is not None} "
             f"shared_s_text_mode={self.model.shared_s_text_mode} "
             f"shared_workspace={self.model.shared_workspace_enabled} "
+            f"directional_concat_workspace={self.model.directional_concat_workspace_enabled} "
             f"train_soft_prompt={self.model.soft_prompt is not None} "
             f"intervention={intervention} memory_lag={memory_lag} "
             f"workspace_visual_write_disabled={list(workspace_visual_write_disabled_layers)} "

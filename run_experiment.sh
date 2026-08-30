@@ -1000,6 +1000,72 @@ run_slake_dynamic_prompt_full_workspace_17only_s20_seed44() {
   cat "$output_dir/selected_result.tsv"
 }
 
+run_slake_directional_concat_workspace_seed44() {
+  local experiment_name="slake_directional_concat_workspace_z10_d1024_l17_private_p20_s8"
+  local run_seed=44
+  local epochs="${SLAKE_DYNAMIC_PROMPT_EPOCHS:-3}"
+  if [ "$epochs" -ne 3 ]; then
+    echo "[ERR] SLAKE Directional Concat Workspace protocol requires epochs=3, got: $epochs" >&2
+    return 2
+  fi
+
+  local output_dir
+  output_dir="$(available_output_dir "$SLAKE_DYNAMIC_PROMPT_OUTPUT_ROOT" "${experiment_name}_seed${run_seed}_${RUN_DATE}")"
+  mkdir -p "$output_dir"
+  echo "[SLAKE_DIRECTIONAL_CONCAT_WORKSPACE] experiment=$experiment_name seed=$run_seed data_seed=42 anchor=17 private_text_prompt=20 text_workspace_anchor=10 private_visual_prompt=8 visual_workspace_anchor=10 workspace=10x1024 query=text_attention_pooling kv=full_visual cross_attention=1024x16 visual_output=token_concat text_output=token_concat zero_init_dynamic_mlp=true old_private_text_ca=false old_private_visual_ca=false workspace_lr=${SLAKE_DIRECTIONAL_WORKSPACE_LR:-1e-4} expected_trainable=12726784 protocol=fixed_epoch3_test output=$output_dir"
+  (
+    cd "$ROOT_DIR" || exit 1
+    python -m unittest test_dynamic_prompt_tuning.py test_sparse_visual_mmrl.py || exit 1
+    python -m slake.train_dynamic_prompt \
+      --model-path "$MODEL_PATH" \
+      --data-root "$SLAKE_DATA_ROOT" \
+      --output-dir "$output_dir" \
+      --experiment-name "$experiment_name" \
+      --prompt-length 20 \
+      --attention-dim 256 \
+      --attention-heads 8 \
+      --sparse-visual \
+      --sparse-visual-anchor-layers 17 \
+      --sparse-visual-rep-tokens 8 \
+      --sparse-visual-attention-dim 128 \
+      --sparse-visual-heads 4 \
+      --sparse-visual-lr "${SLAKE_SPARSE_VISUAL_LR:-3e-5}" \
+      --shared-s-text-mode none \
+      --directional-concat-workspace \
+      --workspace-tokens 10 \
+      --workspace-dim 1024 \
+      --workspace-heads 16 \
+      --workspace-lr "${SLAKE_DIRECTIONAL_WORKSPACE_LR:-1e-4}" \
+      --epochs "$epochs" \
+      --seed "$run_seed" \
+      --data-seed 42 \
+      --prompt-lr "${SLAKE_DYNAMIC_PROMPT_STATIC_LR:-0.3}" \
+      --dynamic-lr "${SLAKE_DYNAMIC_PROMPT_LR:-3e-4}" \
+      --batch-size "${SLAKE_DYNAMIC_PROMPT_BATCH_SIZE:-2}" \
+      --gradient-accumulation "${SLAKE_DYNAMIC_PROMPT_GRAD_ACCUM:-16}" \
+      --dataloader-workers "${SLAKE_DYNAMIC_PROMPT_WORKERS:-2}" \
+      --expected-trainable-parameters 12726784 \
+      2>&1 | tee "$output_dir/train.log"
+  ) || return 1
+
+  local checkpoint="$output_dir/checkpoints/epoch_3"
+  echo "[SLAKE_DYNAMIC_PROMPT_FIXED_TEST] protocol=fixed_epoch3_test split=test checkpoint=$checkpoint"
+  run_slake_dynamic_prompt_eval \
+    "$checkpoint" \
+    "$output_dir/eval_test/epoch_3" \
+    "$output_dir/eval_test_epoch_3.log" || return 1
+
+  local test_score
+  test_score="$(python -c 'import json,sys;print(json.load(open(sys.argv[1],encoding="utf-8"))["overall_accuracy"])' "$output_dir/eval_test/epoch_3/slake_summary.json")" || return 1
+  printf 'experiment\tseed\tprotocol\ttest_epoch\ttest_accuracy\tcheckpoint\n' \
+    > "$output_dir/selected_result.tsv"
+  printf '%s\t%s\t%s\t%s\t%s\t%s\n' \
+    "$experiment_name" "$run_seed" fixed_epoch3_test 3 \
+    "$test_score" "$checkpoint" \
+    >> "$output_dir/selected_result.tsv"
+  cat "$output_dir/selected_result.tsv"
+}
+
 run_slake_dynamic_prompt_workspace_path_interventions() {
   local reference_run="${SLAKE_WORKSPACE_REFERENCE_RUN:-$SLAKE_DYNAMIC_PROMPT_OUTPUT_ROOT/slake_dynamic_prompt_full_workspace_z32_d1024_blocks3_private_p20_private_s8_seed44_20260830}"
   local checkpoint="$reference_run/checkpoints/epoch_3"
@@ -1563,6 +1629,9 @@ case "$RUN_TARGET" in
   slake_dynamic_prompt_full_workspace_17only_s20_seed44)
     run_slake_dynamic_prompt_full_workspace_17only_s20_seed44 || failures=$((failures + 1))
     ;;
+  slake_directional_concat_workspace_seed44)
+    run_slake_directional_concat_workspace_seed44 || failures=$((failures + 1))
+    ;;
   slake_dynamic_prompt_workspace_path_interventions)
     run_slake_dynamic_prompt_workspace_path_interventions || failures=$((failures + 1))
     ;;
@@ -1628,7 +1697,7 @@ case "$RUN_TARGET" in
     run_slake || failures=$((failures + 1))
     ;;
   *)
-    echo "[ERR] 未知目标: $RUN_TARGET，可选 train、slake、pathvqa、pathvqa_base、pathvqa_prompt_tuning_seed44、pathvqa_dynamic_prompt_seed44、pathvqa_dynamic_prompt_sparse_visual_single_pass_seed44、pathvqa_dynamic_prompt_raw_shared_s_separate_residual_seed44、pathvqa_dynamic_prompt_raw_shared_s_direct_prompt_seed44、pathvqa_dynamic_prompt_raw_shared_s_suite_seed44、pathvqa_dynamic_prompt_asymmetric_shared_s_seed44、pathvqa_dynamic_prompt_full_workspace_seed44、pathvqa_dynamic_prompt_interventions、pathvqa_minimal_mmrl_prompt20_seed44、pathvqa_lora_visual_attn_r128、pathvqa_lora_visual_attn_r128_then_base、pathvqa_lora_visual_last8_attn_r128、pathvqa_lora_full_model_attn_r8_seed44、pathvqa_last8_lora_minimal_mmrl_relation_suite、slake_final_seeds4、slake_ablation_no_relation_seeds2、slake_ablation_independent_init_seeds2、slake_ablation_static_query_seed45、slake_ablation_mean_pooling_seed45、slake_mean_final_completion_suite、slake_text_guided_balanced_fusion_slots8_seed45、slake_prompt_tuning_seed44、slake_concat_mlp_fusion_seed45、slake_overnight_prompt_and_concat_mlp、slake_ablation_suite、slake_dynamic_prompt_full_workspace_seed44、slake_dynamic_prompt_full_workspace_17only_seed44、slake_dynamic_prompt_full_workspace_17only_s20_seed44、slake_dynamic_prompt_workspace_path_interventions、slake_dynamic_prompt_17only_final_path_interventions、all。" >&2
+    echo "[ERR] 未知目标: $RUN_TARGET，可选 train、slake、pathvqa、pathvqa_base、pathvqa_prompt_tuning_seed44、pathvqa_dynamic_prompt_seed44、pathvqa_dynamic_prompt_sparse_visual_single_pass_seed44、pathvqa_dynamic_prompt_raw_shared_s_separate_residual_seed44、pathvqa_dynamic_prompt_raw_shared_s_direct_prompt_seed44、pathvqa_dynamic_prompt_raw_shared_s_suite_seed44、pathvqa_dynamic_prompt_asymmetric_shared_s_seed44、pathvqa_dynamic_prompt_full_workspace_seed44、pathvqa_dynamic_prompt_interventions、pathvqa_minimal_mmrl_prompt20_seed44、pathvqa_lora_visual_attn_r128、pathvqa_lora_visual_attn_r128_then_base、pathvqa_lora_visual_last8_attn_r128、pathvqa_lora_full_model_attn_r8_seed44、pathvqa_last8_lora_minimal_mmrl_relation_suite、slake_final_seeds4、slake_ablation_no_relation_seeds2、slake_ablation_independent_init_seeds2、slake_ablation_static_query_seed45、slake_ablation_mean_pooling_seed45、slake_mean_final_completion_suite、slake_text_guided_balanced_fusion_slots8_seed45、slake_prompt_tuning_seed44、slake_concat_mlp_fusion_seed45、slake_overnight_prompt_and_concat_mlp、slake_ablation_suite、slake_dynamic_prompt_full_workspace_seed44、slake_dynamic_prompt_full_workspace_17only_seed44、slake_dynamic_prompt_full_workspace_17only_s20_seed44、slake_directional_concat_workspace_seed44、slake_dynamic_prompt_workspace_path_interventions、slake_dynamic_prompt_17only_final_path_interventions、all。" >&2
     exit 2
     ;;
 esac

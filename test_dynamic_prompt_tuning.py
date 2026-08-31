@@ -685,6 +685,10 @@ class DynamicPromptTuningTest(unittest.TestCase):
             summary["question_query_intervention_scope"],
             "directional_ca_question_q_only",
         )
+        self.assertEqual(
+            summary["intervention_scope"],
+            "directional_ca_question_q_only",
+        )
 
         module.reset_inference_intervention_state()
         reset_summary = module.workspace_inference_intervention_summary()

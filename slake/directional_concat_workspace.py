@@ -215,6 +215,17 @@ class DirectionalConcatWorkspaceVisual(nn.Module):
             if id(parameter) != private_id
         ]
 
+    def _conditioning_intervention_scope(self) -> str:
+        visual_active = self._visual_memory_mode != "normal"
+        question_active = self._question_query_mode != "normal"
+        if visual_active and question_active:
+            return "directional_ca_conditioning_only"
+        if visual_active:
+            return "directional_ca_visual_kv_only"
+        if question_active:
+            return "directional_ca_question_q_only"
+        return "none"
+
     def configure_inference_intervention(
         self,
         visual_delta_scale: float = 1.0,
@@ -252,6 +263,7 @@ class DirectionalConcatWorkspaceVisual(nn.Module):
         self._visual_memory_mode = mode
         self._question_query_mode = query_mode
         self.reset_inference_intervention_state()
+        intervention_scope = self._conditioning_intervention_scope()
         print(
             "[DIRECTIONAL_CONCAT_WORKSPACE_VISUAL_INTERVENTION] "
             f"visual_delta_scale={scale} visual_memory_mode={mode} "
@@ -259,7 +271,7 @@ class DirectionalConcatWorkspaceVisual(nn.Module):
             f"visual_dynamic_write={self.visual_dynamic_write} "
             "original_image_input_unchanged=True "
             "original_question_input_unchanged=True "
-            "intervention_scope=directional_ca_conditioning_only "
+            f"intervention_scope={intervention_scope} "
             "anchors_preserved=True "
             "token_count_preserved=True"
         )
@@ -951,7 +963,7 @@ class DirectionalConcatWorkspaceVisual(nn.Module):
             "original_question_input_unchanged": True,
             "visual_memory_intervention_scope": "directional_ca_visual_kv_only",
             "question_query_intervention_scope": "directional_ca_question_q_only",
-            "intervention_scope": "directional_ca_conditioning_only",
+            "intervention_scope": self._conditioning_intervention_scope(),
             "anchors_preserved": True,
             "token_count_preserved": True,
         }

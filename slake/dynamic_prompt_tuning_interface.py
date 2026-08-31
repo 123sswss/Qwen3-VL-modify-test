@@ -160,6 +160,11 @@ class DynamicPromptTuningModelInterface:
                 else 16
             ),
             directional_concat_workspace=directional_workspace is not None,
+            directional_visual_dynamic_write=(
+                bool(directional_workspace.get("visual_dynamic_write", True))
+                if directional_workspace is not None
+                else True
+            ),
         )
         self.model.load_dynamic_prompt(checkpoint)
         self.model.eval()

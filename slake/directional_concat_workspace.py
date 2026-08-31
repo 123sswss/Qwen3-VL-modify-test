@@ -106,6 +106,7 @@ class DirectionalConcatWorkspaceVisual(nn.Module):
         workspace_tokens: int = 10,
         workspace_dim: int = 1024,
         workspace_heads: int = 16,
+        visual_dynamic_write: bool = True,
     ) -> None:
         super().__init__()
         if min(
@@ -133,6 +134,7 @@ class DirectionalConcatWorkspaceVisual(nn.Module):
         self.workspace_tokens = int(workspace_tokens)
         self.workspace_dim = int(workspace_dim)
         self.workspace_heads = int(workspace_heads)
+        self.visual_dynamic_write = bool(visual_dynamic_write)
         self.visual_prompt_tokens = (
             self.private_prompt_tokens + self.workspace_tokens
         )
@@ -160,9 +162,13 @@ class DirectionalConcatWorkspaceVisual(nn.Module):
             self.workspace_heads,
             batch_first=True,
         )
-        self.workspace_visual_delta = ZeroInitWorkspaceProjection(
-            self.workspace_dim,
-            self.visual_dim,
+        self.workspace_visual_delta = (
+            ZeroInitWorkspaceProjection(
+                self.workspace_dim,
+                self.visual_dim,
+            )
+            if self.visual_dynamic_write
+            else None
         )
 
         self.active = False
@@ -206,6 +212,10 @@ class DirectionalConcatWorkspaceVisual(nn.Module):
             raise ValueError(
                 "Directional visual delta scale must be finite and in [0, 1]"
             )
+        if not self.visual_dynamic_write and scale != 1.0:
+            raise ValueError(
+                "Directional visual delta scale requires visual_dynamic_write"
+            )
         mode = str(visual_memory_mode)
         if mode not in DIRECTIONAL_VISUAL_MEMORY_INTERVENTIONS:
             raise ValueError(
@@ -222,6 +232,7 @@ class DirectionalConcatWorkspaceVisual(nn.Module):
         print(
             "[DIRECTIONAL_CONCAT_WORKSPACE_VISUAL_INTERVENTION] "
             f"visual_delta_scale={scale} visual_memory_mode={mode} "
+            f"visual_dynamic_write={self.visual_dynamic_write} "
             "original_image_input_unchanged=True "
             "intervention_scope=directional_ca_visual_kv_only "
             "anchors_preserved=True "
@@ -344,6 +355,7 @@ class DirectionalConcatWorkspaceVisual(nn.Module):
             f"anchor_natural={anchor + 1} private_visual_tokens="
             f"{self.private_prompt_tokens} workspace_tokens={self.workspace_tokens} "
             f"workspace_dim={self.workspace_dim} heads={self.workspace_heads} "
+            f"visual_dynamic_write={self.visual_dynamic_write} "
             "text_query_visual_kv=True token_concat=True block_execution=single_pass"
         )
 
@@ -730,11 +742,31 @@ class DirectionalConcatWorkspaceVisual(nn.Module):
         workspace = workspace_by_image.index_select(
             0, image_ids.to(workspace_by_image.device)
         )
-        workspace_visual = self.workspace_visual_delta(
-            workspace,
-            self.workspace_visual_anchor,
-            delta_scale=self._visual_delta_scale,
-        ).to(device=hidden_states.device, dtype=hidden_states.dtype)
+        if self.workspace_visual_delta is not None:
+            workspace_visual = self.workspace_visual_delta(
+                workspace,
+                self.workspace_visual_anchor,
+                delta_scale=self._visual_delta_scale,
+            )
+            workspace_visual_debug = {
+                f"workspace_visual_{key}": value
+                for key, value in self.workspace_visual_delta.debug_context.items()
+            }
+        else:
+            workspace_visual = self.workspace_visual_anchor.unsqueeze(0).expand(
+                workspace.shape[0], -1, -1
+            )
+            zero = workspace.detach().new_tensor(0.0)
+            workspace_visual_debug = {
+                "workspace_visual_raw_delta_norm_mean": zero,
+                "workspace_visual_delta_norm_mean": zero,
+                "workspace_visual_delta_to_anchor_ratio": zero,
+                "workspace_visual_delta_scale": zero,
+            }
+        workspace_visual = workspace_visual.to(
+            device=hidden_states.device,
+            dtype=hidden_states.dtype,
+        )
         private_visual = self.private_visual_prompt.to(
             device=hidden_states.device,
             dtype=hidden_states.dtype,
@@ -771,10 +803,10 @@ class DirectionalConcatWorkspaceVisual(nn.Module):
             ).mean()
             self.debug_context.update(
                 {
-                    **{
-                        f"workspace_visual_{key}": value
-                        for key, value in self.workspace_visual_delta.debug_context.items()
-                    },
+                    **workspace_visual_debug,
+                    "workspace_visual_dynamic_write_enabled": hidden_states.new_tensor(
+                        float(self.visual_dynamic_write)
+                    ),
                     "workspace_private_visual_prompt_norm_mean": private_norm,
                     "workspace_visual_anchor_norm_mean": workspace_anchor_norm,
                     "workspace_visual_output_to_input_ratio": output_norm
@@ -792,6 +824,7 @@ class DirectionalConcatWorkspaceVisual(nn.Module):
                     f"layer={layer_index} units={len(lengths)} "
                     f"private_tokens={self.private_prompt_tokens} "
                     f"workspace_tokens={self.workspace_tokens} "
+                    f"visual_dynamic_write={self.visual_dynamic_write} "
                     "insert_before_block=True strip_after_block=True pass=True"
                 )
                 self._forward_audited = True
@@ -802,6 +835,7 @@ class DirectionalConcatWorkspaceVisual(nn.Module):
             "mode": "directional_concat",
             "anchor_layers": list(self.anchor_layers),
             "visual_delta_scale": self._visual_delta_scale,
+            "visual_dynamic_write": self.visual_dynamic_write,
             "visual_memory_mode": self._visual_memory_mode,
             "visual_memory_images_seen": self._visual_memory_images_seen,
             "visual_memory_images_mismatched": (

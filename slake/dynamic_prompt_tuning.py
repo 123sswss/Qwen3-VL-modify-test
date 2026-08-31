@@ -194,6 +194,7 @@ class DynamicPromptTuningModel(nn.Module):
         workspace_visual_attention_dim: int = 1024,
         workspace_visual_heads: int = 16,
         directional_concat_workspace: bool = False,
+        directional_visual_dynamic_write: bool = True,
     ) -> None:
         super().__init__()
         if prompt_length < 1:
@@ -238,6 +239,9 @@ class DynamicPromptTuningModel(nn.Module):
         self.directional_concat_workspace_enabled = bool(
             directional_concat_workspace
         )
+        self.directional_visual_dynamic_write = bool(
+            directional_visual_dynamic_write
+        )
         for parameter in self.base_model.parameters():
             parameter.requires_grad = False
 
@@ -265,6 +269,7 @@ class DynamicPromptTuningModel(nn.Module):
                     workspace_tokens=workspace_tokens,
                     workspace_dim=workspace_dim,
                     workspace_heads=workspace_heads,
+                    visual_dynamic_write=self.directional_visual_dynamic_write,
                 ).to(device=visual_device)
             else:
                 self.sparse_visual = SparseVisualMMRL(
@@ -1147,6 +1152,11 @@ class DynamicPromptTuningModel(nn.Module):
                     "fusion": "text_query_visual_kv_cross_attention",
                     "visual_output": "anchored_token_concat",
                     "text_output": "anchored_token_concat",
+                    "visual_dynamic_write": self.sparse_visual.visual_dynamic_write,
+                    "text_dynamic_projection_zero_initialized": True,
+                    "visual_dynamic_projection_zero_initialized": (
+                        self.sparse_visual.visual_dynamic_write
+                    ),
                     "zero_init_dynamic_projections": True,
                     "private_dynamic_text_attention": False,
                     "private_visual_attention": False,
@@ -1348,7 +1358,8 @@ class DynamicPromptTuningModel(nn.Module):
             self.sparse_visual.load_state_dict(sparse_state, strict=True)
             self.sparse_visual._forward_audited = True
             if self.directional_concat_workspace_enabled:
-                self.sparse_visual.workspace_visual_delta._forward_audited = True
+                if self.sparse_visual.workspace_visual_delta is not None:
+                    self.sparse_visual.workspace_visual_delta._forward_audited = True
             else:
                 for attention in self.sparse_visual.workspace_visual_attentions:
                     attention._forward_audited = True

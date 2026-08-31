@@ -1,3 +1,4 @@
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -508,6 +509,71 @@ class DynamicPromptTuningTest(unittest.TestCase):
                     restored.workspace_text_projection.state_dict()[key],
                     value,
                 )
+            for key, value in model.sparse_visual.state_dict().items():
+                torch.testing.assert_close(
+                    restored.sparse_visual.state_dict()[key],
+                    value,
+                )
+
+    def test_directional_concat_static_visual_anchor_checkpoint_round_trip(self):
+        kwargs = dict(
+            tokenizer=_FakeTokenizer(),
+            prompt_length=2,
+            init_seed=5,
+            attention_dim=4,
+            num_heads=2,
+            sparse_visual_anchor_layers=(1,),
+            sparse_visual_rep_tokens=2,
+            sparse_visual_attention_dim=4,
+            sparse_visual_heads=2,
+            workspace_tokens=3,
+            workspace_dim=8,
+            workspace_heads=2,
+            directional_concat_workspace=True,
+            directional_visual_dynamic_write=False,
+        )
+        model = DynamicPromptTuningModel(_FakeMultimodalModel(), **kwargs)
+        self.assertIsNone(model.sparse_visual.workspace_visual_delta)
+        grouped_ids = {
+            id(parameter)
+            for parameters in model.trainable_parameter_groups().values()
+            for parameter in parameters
+        }
+        self.assertEqual(
+            grouped_ids,
+            {
+                id(parameter)
+                for parameter in model.parameters()
+                if parameter.requires_grad
+            },
+        )
+        with torch.no_grad():
+            model.workspace_text_anchor.add_(0.25)
+            model.sparse_visual.workspace_visual_anchor.add_(0.75)
+        with tempfile.TemporaryDirectory() as directory:
+            checkpoint = Path(directory)
+            model.save_dynamic_prompt(checkpoint)
+            with (checkpoint / "dynamic_prompt_config.json").open(
+                "r", encoding="utf-8"
+            ) as handle:
+                config = json.load(handle)
+            self.assertFalse(
+                config["directional_concat_workspace"]["visual_dynamic_write"]
+            )
+            state = torch.load(
+                checkpoint / "dynamic_prompt.pt",
+                map_location="cpu",
+                weights_only=True,
+            )
+            self.assertFalse(
+                any(
+                    key.startswith("workspace_visual_delta.")
+                    for key in state["sparse_visual"]
+                )
+            )
+            restored = DynamicPromptTuningModel(_FakeMultimodalModel(), **kwargs)
+            restored.load_dynamic_prompt(checkpoint)
+            self.assertIsNone(restored.sparse_visual.workspace_visual_delta)
             for key, value in model.sparse_visual.state_dict().items():
                 torch.testing.assert_close(
                     restored.sparse_visual.state_dict()[key],

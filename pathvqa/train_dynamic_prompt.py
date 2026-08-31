@@ -391,6 +391,11 @@ def parse_args(dataset_name: str = "pathvqa") -> argparse.Namespace:
     parser.add_argument("--shared-s-visual-bottleneck-dim", type=int, default=128)
     parser.add_argument("--shared-workspace", action="store_true")
     parser.add_argument("--directional-concat-workspace", action="store_true")
+    parser.add_argument(
+        "--directional-visual-dynamic-write",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+    )
     parser.add_argument("--workspace-tokens", type=int, default=32)
     parser.add_argument("--workspace-dim", type=int, default=1024)
     parser.add_argument("--workspace-heads", type=int, default=16)
@@ -479,6 +484,11 @@ def parse_args(dataset_name: str = "pathvqa") -> argparse.Namespace:
         parser.error(
             "--directional-concat-workspace requires exactly one visual anchor"
         )
+    if not args.directional_concat_workspace and not args.directional_visual_dynamic_write:
+        parser.error(
+            "--no-directional-visual-dynamic-write requires "
+            "--directional-concat-workspace"
+        )
     return args
 
 
@@ -558,6 +568,7 @@ def main(dataset_name: str = "pathvqa") -> int:
         workspace_visual_attention_dim=args.workspace_visual_attention_dim,
         workspace_visual_heads=args.workspace_visual_heads,
         directional_concat_workspace=args.directional_concat_workspace,
+        directional_visual_dynamic_write=args.directional_visual_dynamic_write,
     )
     dataset = _build_train_dataset(dataset_name, args, processor)
     groups = model.trainable_parameter_groups()
@@ -604,6 +615,7 @@ def main(dataset_name: str = "pathvqa") -> int:
         f"shared_s_gradient_policy={'text_write_visual_readonly' if args.shared_s_text_mode == 'text_owned_visual_readonly' else 'joint_or_disabled'} "
         f"shared_workspace={args.shared_workspace} "
         f"directional_concat_workspace={args.directional_concat_workspace} "
+        f"directional_visual_dynamic_write={args.directional_visual_dynamic_write if args.directional_concat_workspace else False} "
         f"workspace_tokens={args.workspace_tokens if args.shared_workspace else 0} "
         f"directional_workspace_tokens={args.workspace_tokens if args.directional_concat_workspace else 0} "
         f"workspace_dim={args.workspace_dim if (args.shared_workspace or args.directional_concat_workspace) else 0} "
@@ -715,6 +727,17 @@ def main(dataset_name: str = "pathvqa") -> int:
                 "memory": "full_visual_tokens",
                 "fusion": "text_query_visual_kv_cross_attention",
                 "output_interface": "anchored_token_concat",
+                "visual_dynamic_write": args.directional_visual_dynamic_write,
+                "visual_output_interface": (
+                    "dynamic_anchor_token_concat"
+                    if args.directional_visual_dynamic_write
+                    else "static_anchor_token_concat"
+                ),
+                "text_output_interface": "dynamic_anchor_token_concat",
+                "text_dynamic_projection_zero_initialized": True,
+                "visual_dynamic_projection_zero_initialized": (
+                    args.directional_visual_dynamic_write
+                ),
                 "zero_init_dynamic_projections": True,
                 "learning_rate": args.workspace_lr,
             }

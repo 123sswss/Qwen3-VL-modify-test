@@ -486,6 +486,66 @@ class SparseVisualMMRLTest(unittest.TestCase):
             0.5,
         )
 
+    def test_directional_concat_without_visual_dynamic_write_uses_static_anchor(self):
+        torch.manual_seed(30)
+        visual = _FakeVisual()
+        adapter = DirectionalConcatWorkspaceVisual(
+            visual_dim=8,
+            text_dim=12,
+            anchor_layer=1,
+            private_prompt_tokens=2,
+            workspace_tokens=3,
+            workspace_dim=8,
+            workspace_heads=2,
+            visual_dynamic_write=False,
+        )
+        self.assertIsNone(adapter.workspace_visual_delta)
+        adapter.install(visual)
+        hidden = torch.randn(7, 8)
+        text_tokens = torch.randn(2, 4, 12)
+        text_mask = torch.tensor(
+            [[True, True, False, False], [True, True, True, False]]
+        )
+        cu_seqlens = torch.tensor([0, 2, 4, 7], dtype=torch.int32)
+        with adapter.activate(
+            torch.randn(2, 12),
+            torch.tensor([1, 1]),
+            text_tokens=text_tokens,
+            text_token_mask=text_mask,
+        ):
+            adapter.prepare_visual(torch.tensor([[1, 1, 4], [1, 1, 3]]))
+            output = visual.blocks[1](hidden, cu_seqlens=cu_seqlens)
+            workspace = adapter.shared_workspace_text_memory()
+            self.assertEqual(
+                float(
+                    adapter.debug_context[
+                        "workspace_visual_dynamic_write_enabled"
+                    ]
+                ),
+                0.0,
+            )
+            self.assertEqual(
+                float(adapter.debug_context["workspace_visual_delta_norm_mean"]),
+                0.0,
+            )
+            loss = output.square().mean() + workspace.square().mean()
+        self.assertEqual(visual.blocks[1].block.calls, 1)
+        self.assertEqual(tuple(output.shape), tuple(hidden.shape))
+        loss.backward()
+        self.assertGreater(float(adapter.private_visual_prompt.grad.norm()), 0.0)
+        self.assertGreater(float(adapter.workspace_visual_anchor.grad.norm()), 0.0)
+        self.assertGreater(
+            float(adapter.workspace_cross_attention.in_proj_weight.grad.norm()),
+            0.0,
+        )
+        self.assertFalse(
+            adapter.workspace_inference_intervention_summary()[
+                "visual_dynamic_write"
+            ]
+        )
+        with self.assertRaisesRegex(ValueError, "requires visual_dynamic_write"):
+            adapter.configure_inference_intervention(visual_delta_scale=0.5)
+
     def test_workspace_projection_scales_only_dynamic_delta(self):
         torch.manual_seed(31)
         projection = ZeroInitWorkspaceProjection(8, 12)
@@ -597,6 +657,25 @@ class SparseVisualMMRLTest(unittest.TestCase):
             + workspace_text_anchor.numel()
         )
         self.assertEqual(total, 12_726_784)
+
+        static_visual_adapter = DirectionalConcatWorkspaceVisual(
+            visual_dim=1024,
+            text_dim=2560,
+            anchor_layer=17,
+            private_prompt_tokens=8,
+            workspace_tokens=10,
+            workspace_dim=1024,
+            workspace_heads=16,
+            visual_dynamic_write=False,
+        )
+        self.assertIsNone(static_visual_adapter.workspace_visual_delta)
+        static_total = (
+            sum(parameter.numel() for parameter in static_visual_adapter.parameters())
+            + sum(parameter.numel() for parameter in text_projection.parameters())
+            + private_text_prompt.numel()
+            + workspace_text_anchor.numel()
+        )
+        self.assertEqual(static_total, 10_625_536)
 
 
 if __name__ == "__main__":

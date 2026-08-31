@@ -579,6 +579,10 @@ class DynamicPromptTuningTest(unittest.TestCase):
             model.configure_workspace_inference_intervention(
                 directional_text_delta_scale=0.5,
             )
+        with self.assertRaisesRegex(RuntimeError, "inference-only"):
+            model.configure_workspace_inference_intervention(
+                directional_visual_memory_mode="previous-distinct-image",
+            )
 
 
 if __name__ == "__main__":

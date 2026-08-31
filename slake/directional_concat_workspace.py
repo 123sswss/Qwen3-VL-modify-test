@@ -12,6 +12,12 @@ from torch import nn
 from slake.sparse_visual_mmrl import SparseVisualInjectionBlock
 
 
+DIRECTIONAL_VISUAL_MEMORY_INTERVENTIONS = (
+    "normal",
+    "previous-distinct-image",
+)
+
+
 class ZeroInitWorkspaceProjection(nn.Module):
     """Map workspace slots to anchored prompt tokens with a zero initial delta."""
 
@@ -170,6 +176,14 @@ class DirectionalConcatWorkspaceVisual(nn.Module):
         self._installed = False
         self._forward_audited = False
         self._visual_delta_scale = 1.0
+        self._visual_memory_mode = "normal"
+        self._last_visual_memory: torch.Tensor | None = None
+        self._previous_distinct_visual_memory: torch.Tensor | None = None
+        self._visual_memory_images_seen = 0
+        self._visual_memory_images_mismatched = 0
+        self._visual_memory_images_natural = 0
+        self._visual_memory_mismatch_rate = torch.tensor(0.0)
+        self._visual_memory_source_cosine = torch.tensor(1.0)
 
     def private_parameters(self) -> list[nn.Parameter]:
         return [self.private_visual_prompt]
@@ -185,22 +199,131 @@ class DirectionalConcatWorkspaceVisual(nn.Module):
     def configure_inference_intervention(
         self,
         visual_delta_scale: float = 1.0,
+        visual_memory_mode: str = "normal",
     ) -> None:
         scale = float(visual_delta_scale)
         if not math.isfinite(scale) or not 0.0 <= scale <= 1.0:
             raise ValueError(
                 "Directional visual delta scale must be finite and in [0, 1]"
             )
-        if self.training and scale != 1.0:
+        mode = str(visual_memory_mode)
+        if mode not in DIRECTIONAL_VISUAL_MEMORY_INTERVENTIONS:
+            raise ValueError(
+                "Unsupported Directional visual memory intervention="
+                f"{mode!r}; choices={DIRECTIONAL_VISUAL_MEMORY_INTERVENTIONS}"
+            )
+        if self.training and (scale != 1.0 or mode != "normal"):
             raise RuntimeError(
-                "Directional visual delta scaling is inference-only"
+                "Directional visual interventions are inference-only"
             )
         self._visual_delta_scale = scale
+        self._visual_memory_mode = mode
+        self.reset_inference_intervention_state()
         print(
             "[DIRECTIONAL_CONCAT_WORKSPACE_VISUAL_INTERVENTION] "
-            f"visual_delta_scale={scale} anchors_preserved=True "
+            f"visual_delta_scale={scale} visual_memory_mode={mode} "
+            "original_image_input_unchanged=True "
+            "intervention_scope=directional_ca_visual_kv_only "
+            "anchors_preserved=True "
             "token_count_preserved=True"
         )
+
+    def reset_inference_intervention_state(self) -> None:
+        self._last_visual_memory = None
+        self._previous_distinct_visual_memory = None
+        self._visual_memory_images_seen = 0
+        self._visual_memory_images_mismatched = 0
+        self._visual_memory_images_natural = 0
+        self._visual_memory_mismatch_rate = torch.tensor(0.0)
+        self._visual_memory_source_cosine = torch.tensor(1.0)
+
+    @staticmethod
+    def _same_visual_memory(
+        left: torch.Tensor,
+        right: torch.Tensor,
+    ) -> bool:
+        return left.shape == right.shape and bool(torch.equal(left, right))
+
+    def _apply_visual_memory_intervention(
+        self,
+        visual_tokens: torch.Tensor,
+        visual_mask: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        if self._visual_memory_mode == "normal":
+            self._visual_memory_mismatch_rate = visual_tokens.new_tensor(0.0)
+            self._visual_memory_source_cosine = visual_tokens.new_tensor(1.0)
+            return visual_tokens, visual_mask
+        if self.training:
+            raise RuntimeError(
+                "Directional visual memory intervention is inference-only"
+            )
+
+        selected_memories = []
+        mismatch_flags = []
+        source_cosines = []
+        for image_index in range(visual_tokens.shape[0]):
+            current = visual_tokens[image_index][visual_mask[image_index]].detach()
+            if current.numel() == 0:
+                raise RuntimeError("Directional visual memory cannot be empty")
+            cached_current = current.clone()
+            source = current
+            mismatched = False
+            if self._last_visual_memory is None:
+                self._last_visual_memory = cached_current
+            elif self._same_visual_memory(current, self._last_visual_memory):
+                if self._previous_distinct_visual_memory is not None:
+                    source = self._previous_distinct_visual_memory
+                    mismatched = True
+            else:
+                self._previous_distinct_visual_memory = self._last_visual_memory
+                self._last_visual_memory = cached_current
+                source = self._previous_distinct_visual_memory
+                mismatched = True
+
+            selected_memories.append(source)
+            mismatch_flags.append(mismatched)
+            current_mean = current.float().mean(dim=0)
+            source_mean = source.float().mean(dim=0)
+            source_cosines.append(
+                torch.nn.functional.cosine_similarity(
+                    current_mean,
+                    source_mean,
+                    dim=0,
+                )
+            )
+
+        width = max(memory.shape[0] for memory in selected_memories)
+        selected_tokens = visual_tokens.new_zeros(
+            len(selected_memories),
+            width,
+            self.visual_dim,
+        )
+        selected_mask = torch.zeros(
+            len(selected_memories),
+            width,
+            dtype=torch.bool,
+            device=visual_tokens.device,
+        )
+        for image_index, memory in enumerate(selected_memories):
+            selected_tokens[image_index, : memory.shape[0]] = memory.to(
+                device=visual_tokens.device,
+                dtype=visual_tokens.dtype,
+            )
+            selected_mask[image_index, : memory.shape[0]] = True
+
+        mismatched_count = sum(mismatch_flags)
+        image_count = len(mismatch_flags)
+        self._visual_memory_images_seen += image_count
+        self._visual_memory_images_mismatched += mismatched_count
+        self._visual_memory_images_natural += image_count - mismatched_count
+        self._visual_memory_mismatch_rate = visual_tokens.new_tensor(
+            mismatched_count / image_count
+        )
+        self._visual_memory_source_cosine = torch.stack(source_cosines).mean().to(
+            device=visual_tokens.device,
+            dtype=visual_tokens.dtype,
+        )
+        return selected_tokens, selected_mask
 
     def install(self, visual_model: nn.Module) -> None:
         if self._installed:
@@ -389,12 +512,17 @@ class DirectionalConcatWorkspaceVisual(nn.Module):
         pooling = torch.softmax(pooling_scores.float(), dim=-1).to(dtype=dtype)
         queries = torch.matmul(pooling, text_values)
 
-        normalized_visual = self.workspace_visual_memory_norm(visual_tokens)
+        attention_visual_tokens, attention_visual_mask = (
+            self._apply_visual_memory_intervention(visual_tokens, visual_mask)
+        )
+        normalized_visual = self.workspace_visual_memory_norm(
+            attention_visual_tokens
+        )
         cross, cross_weights = self.workspace_cross_attention(
             self.workspace_query_norm(queries),
             normalized_visual,
             normalized_visual,
-            key_padding_mask=~visual_mask,
+            key_padding_mask=~attention_visual_mask,
             need_weights=True,
             average_attn_weights=False,
         )
@@ -415,13 +543,13 @@ class DirectionalConcatWorkspaceVisual(nn.Module):
             ).sum(dim=-1)
             text_entropy = text_entropy / text_counts.log()[:, None]
             cross_f = cross_weights.detach().float()
-            visual_mask_f = visual_mask[:, None, None, :]
+            visual_mask_f = attention_visual_mask[:, None, None, :]
             cross_safe = torch.where(
                 visual_mask_f,
                 cross_f.clamp_min(1e-8),
                 torch.ones_like(cross_f),
             )
-            visual_counts = visual_mask.sum(dim=-1).clamp_min(2).float()
+            visual_counts = attention_visual_mask.sum(dim=-1).clamp_min(2).float()
             visual_entropy = -(
                 cross_f * cross_safe.log() * visual_mask_f
             ).sum(dim=-1)
@@ -455,9 +583,15 @@ class DirectionalConcatWorkspaceVisual(nn.Module):
                 "workspace_slot_pairwise_cosine_mean": pairwise[
                     :, off_diagonal
                 ].mean(),
-                "workspace_visual_tokens_mean": visual_mask.sum(dim=-1)
+                "workspace_visual_tokens_mean": attention_visual_mask.sum(dim=-1)
                 .float()
                 .mean(),
+                "workspace_visual_memory_mismatch_rate": (
+                    self._visual_memory_mismatch_rate
+                ),
+                "workspace_visual_memory_source_cosine_mean": (
+                    self._visual_memory_source_cosine
+                ),
                 "workspace_text_tokens_mean": text_mask.sum(dim=-1)
                 .float()
                 .mean(),
@@ -668,6 +802,14 @@ class DirectionalConcatWorkspaceVisual(nn.Module):
             "mode": "directional_concat",
             "anchor_layers": list(self.anchor_layers),
             "visual_delta_scale": self._visual_delta_scale,
+            "visual_memory_mode": self._visual_memory_mode,
+            "visual_memory_images_seen": self._visual_memory_images_seen,
+            "visual_memory_images_mismatched": (
+                self._visual_memory_images_mismatched
+            ),
+            "visual_memory_images_natural": self._visual_memory_images_natural,
+            "original_image_input_unchanged": True,
+            "intervention_scope": "directional_ca_visual_kv_only",
             "anchors_preserved": True,
             "token_count_preserved": True,
         }

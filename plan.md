@@ -65,7 +65,8 @@
 - 机制待证更新：末段Workspace视觉残差虽很强，但同checkpoint关闭后不显著掉分；所有下游Z读取熵约0.9998，而Workspace Text Reader关闭会显著损失约2分。当前可以主张高容量Workspace通过LLM Prompt接口有效，不能主张直接视觉写回不可替代，也不能把结果解释成视觉信息无效，因为Z更新仍读取完整视觉Token。
 - 原计划的Workspace输入因果干预暂缓：在S8+Z32 layer17-only checkpoint上屏蔽或跨样本错配视觉Memory，仍可用于判断旧Text Reader的约2分收益是否真正来自当前样本视觉条件，但不再排在新结构实验之前，且未获新的运行授权前不实现、不执行。
 - `slake_directional_concat_workspace_seed44`已完成：12,726,784参数，官方Test77.17；相对34.90M layer17-only参考-1.19且逐题`p=0.0725`，相对Static Prompt仍显著+2.77、`p=0.000112`。它证明一次Directional CA加显式双侧concat可以用36.5%的参数保留大部分收益，但未达到“先增效”的主方法要求，也未缩短训练时间。Z10槽余弦0.941、视觉更新/query3.35x、文本delta/anchor0.50，当前问题是共享槽趋同和双侧写入过强，不是模块不学习。禁止原样补seed；若继续，先做同checkpoint文本/视觉动态块缩放或关闭诊断，再决定调整输出约束、锚点学习率或恢复容量。
-- 已安排无训练目标`slake_directional_concat_workspace_delta_interventions`：复用上述seed44 epoch3 checkpoint和77.17正常预测，保持`P20+A_t10`、`S8+A_v10`、Prompt30、视觉18个插入token及全部位置不变，只分别设置文本MLP动态增量scale为0/0.5、视觉MLP动态增量scale为0/0.5，共四次官方Test推理并自动生成逐题McNemar比较。该控制用于区分文本写入过强、视觉写入有害和Z内容本身不足；实现提交后仍由用户手动启动。
+- `slake_directional_concat_workspace_delta_interventions`已完成：文本动态delta减半为76.03（-1.15，`p=0.0079`），归零为74.26（-2.91，`p=1.88e-7`）；完整文本写入显著且单调最优，否定“文本写入过强”假设。视觉动态delta减半为77.22、归零为77.13，相对77.17均仅正负0.05且`p=1.0`，证明该checkpoint的Z到视觉动态写回可旁路，即使其delta/anchor为28.17x。当前不得继续扫描文本scale；若追求增效，应改进Z槽多样性/文本侧转换能力。若追求降参，可在新训练中删除约2.10M的视觉动态投影，但在删除完整视觉插入接口前仍需区分`S8+A_v10`的作用。
+- 已安排同checkpoint视觉条件因果控制`slake_directional_concat_workspace_visual_memory_mismatch`：保持原始图像输入、自然视觉特征计算、问题Query、全部Prompt位置与权重不变，只将Directional CA读取的layer17视觉K/V替换为上一张不同图像的Memory；错配后的共享Z仍按原checkpoint同时进入两个输出头。评测预热使用与首题不同的图像作缓存种子，并强制审计2,094个正式样本全部实际错配；若显著掉分，证明Z到文本Prompt的收益确实依赖当前样本视觉条件，若不掉分则该方法主要是问题条件化Prompt。实现后仍由用户手动启动。
 
 ## 总体目标
 

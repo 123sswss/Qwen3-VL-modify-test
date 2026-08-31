@@ -508,6 +508,67 @@ class SparseVisualMMRLTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "in \\[0, 1\\]"):
             projection(workspace, anchor, delta_scale=1.1)
 
+    def test_directional_visual_memory_uses_previous_distinct_image(self):
+        adapter = DirectionalConcatWorkspaceVisual(
+            visual_dim=8,
+            text_dim=12,
+            anchor_layer=1,
+            private_prompt_tokens=2,
+            workspace_tokens=3,
+            workspace_dim=8,
+            workspace_heads=2,
+        ).eval()
+        adapter.configure_inference_intervention(
+            visual_memory_mode="previous-distinct-image"
+        )
+
+        def apply(memory):
+            mask = torch.ones(
+                memory.shape[:2],
+                dtype=torch.bool,
+                device=memory.device,
+            )
+            return adapter._apply_visual_memory_intervention(memory, mask)
+
+        image_a = torch.arange(24, dtype=torch.float32).reshape(1, 3, 8)
+        image_b = torch.arange(16, dtype=torch.float32).reshape(1, 2, 8) + 100
+        image_c = torch.arange(32, dtype=torch.float32).reshape(1, 4, 8) + 200
+
+        selected, selected_mask = apply(image_a)
+        torch.testing.assert_close(selected[selected_mask], image_a.reshape(-1, 8))
+        selected, selected_mask = apply(image_a.clone())
+        torch.testing.assert_close(selected[selected_mask], image_a.reshape(-1, 8))
+        selected, selected_mask = apply(image_b)
+        torch.testing.assert_close(selected[selected_mask], image_a.reshape(-1, 8))
+        selected, selected_mask = apply(image_b.clone())
+        torch.testing.assert_close(selected[selected_mask], image_a.reshape(-1, 8))
+        selected, selected_mask = apply(image_c)
+        torch.testing.assert_close(selected[selected_mask], image_b.reshape(-1, 8))
+
+        summary = adapter.workspace_inference_intervention_summary()
+        self.assertEqual(summary["visual_memory_mode"], "previous-distinct-image")
+        self.assertEqual(summary["visual_memory_images_seen"], 5)
+        self.assertEqual(summary["visual_memory_images_mismatched"], 3)
+        self.assertEqual(summary["visual_memory_images_natural"], 2)
+        self.assertTrue(summary["original_image_input_unchanged"])
+        self.assertEqual(
+            summary["intervention_scope"],
+            "directional_ca_visual_kv_only",
+        )
+        adapter.reset_inference_intervention_state()
+        reset_summary = adapter.workspace_inference_intervention_summary()
+        self.assertEqual(reset_summary["visual_memory_images_seen"], 0)
+        self.assertEqual(reset_summary["visual_memory_images_mismatched"], 0)
+        with self.assertRaisesRegex(ValueError, "Unsupported"):
+            adapter.configure_inference_intervention(
+                visual_memory_mode="not-a-mode"
+            )
+        adapter.train()
+        with self.assertRaisesRegex(RuntimeError, "inference-only"):
+            adapter.configure_inference_intervention(
+                visual_memory_mode="previous-distinct-image"
+            )
+
     def test_directional_concat_workspace_production_parameter_count(self):
         adapter = DirectionalConcatWorkspaceVisual(
             visual_dim=1024,

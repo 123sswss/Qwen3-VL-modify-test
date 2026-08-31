@@ -456,9 +456,11 @@ class DynamicPromptTuningModel(nn.Module):
         text_write_disabled: bool = False,
         directional_text_delta_scale: float = 1.0,
         directional_visual_delta_scale: float = 1.0,
+        directional_visual_memory_mode: str = "normal",
     ) -> None:
         text_scale = float(directional_text_delta_scale)
         visual_scale = float(directional_visual_delta_scale)
+        visual_memory_mode = str(directional_visual_memory_mode)
         for name, scale in (
             ("text", text_scale),
             ("visual", visual_scale),
@@ -467,8 +469,12 @@ class DynamicPromptTuningModel(nn.Module):
                 raise ValueError(
                     f"Directional {name} delta scale must be finite and in [0, 1]"
                 )
-        if self.training and (text_scale != 1.0 or visual_scale != 1.0):
-            raise RuntimeError("Directional delta scaling is inference-only")
+        if self.training and (
+            text_scale != 1.0
+            or visual_scale != 1.0
+            or visual_memory_mode != "normal"
+        ):
+            raise RuntimeError("Directional interventions are inference-only")
         if self.directional_concat_workspace_enabled:
             if (
                 visual_write_disabled_layers
@@ -485,6 +491,7 @@ class DynamicPromptTuningModel(nn.Module):
             self._directional_text_delta_scale = text_scale
             self.sparse_visual.configure_inference_intervention(
                 visual_delta_scale=visual_scale,
+                visual_memory_mode=visual_memory_mode,
             )
             print(
                 "[DIRECTIONAL_CONCAT_WORKSPACE_TEXT_INTERVENTION] "
@@ -492,9 +499,13 @@ class DynamicPromptTuningModel(nn.Module):
                 "token_count_preserved=True"
             )
             return
-        if text_scale != 1.0 or visual_scale != 1.0:
+        if (
+            text_scale != 1.0
+            or visual_scale != 1.0
+            or visual_memory_mode != "normal"
+        ):
             raise ValueError(
-                "Directional delta scales require Directional Concat Workspace"
+                "Directional interventions require Directional Concat Workspace"
             )
         if self.sparse_visual is None:
             if (
@@ -526,6 +537,11 @@ class DynamicPromptTuningModel(nn.Module):
         self._intervention_samples_seen = 0
         self._intervention_samples_changed = 0
         self._intervention_audited = False
+        if (
+            self.directional_concat_workspace_enabled
+            and self.sparse_visual is not None
+        ):
+            self.sparse_visual.reset_inference_intervention_state()
 
     def inference_intervention_summary(self) -> Dict[str, Any]:
         summary = {

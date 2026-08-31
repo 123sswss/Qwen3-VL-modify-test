@@ -465,6 +465,20 @@ def run_timing_warmup(
         print(f"[SLAKE_TIMING_WARMUP {index}/{runs}] complete")
 
 
+def select_distinct_visual_memory_prime(
+    records: Sequence[Mapping[str, Any]],
+) -> Mapping[str, Any]:
+    if not records:
+        raise ValueError("Directional visual memory priming requires records")
+    first_image = records[0]["_slake_image_name"]
+    for record in reversed(records):
+        if record["_slake_image_name"] != first_image:
+            return record
+    raise ValueError(
+        "Directional visual memory mismatch requires at least two distinct images"
+    )
+
+
 def run_inference(
     records: Sequence[Dict[str, Any]],
     model: Any,
@@ -605,6 +619,16 @@ def parse_args() -> argparse.Namespace:
             "while preserving its anchor tokens and sequence length."
         ),
     )
+    parser.add_argument(
+        "--directional-visual-memory-mode",
+        choices=("normal", "previous-distinct-image"),
+        default="normal",
+        help=(
+            "Inference-only: replace only the Directional CA visual K/V with "
+            "the previous distinct image's layer17 memory. The base VLM still "
+            "receives the correct original image."
+        ),
+    )
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--language", choices=("en", "zh", "all"), default="en")
     parser.add_argument("--base-type", action="append", default=[])
@@ -651,6 +675,17 @@ def main() -> int:
         raise ValueError("--resume and --overwrite are mutually exclusive")
     if args.timing_warmup_runs < 0:
         raise ValueError("--timing-warmup-runs must be non-negative")
+    if args.directional_visual_memory_mode != "normal":
+        if args.timing_warmup_runs < 1:
+            raise ValueError(
+                "Directional visual memory mismatch requires at least one "
+                "timing warmup run for deterministic priming"
+            )
+        if args.resume:
+            raise ValueError(
+                "Directional visual memory mismatch cannot resume because its "
+                "state depends on the complete deterministic sample order"
+            )
     for name, scale in (
         ("directional text", args.directional_text_delta_scale),
         ("directional visual", args.directional_visual_delta_scale),
@@ -664,6 +699,7 @@ def main() -> int:
         or args.workspace_disable_text_write
         or args.directional_text_delta_scale != 1.0
         or args.directional_visual_delta_scale != 1.0
+        or args.directional_visual_memory_mode != "normal"
     )
     if workspace_intervention_requested and args.backend != "dynamic-prompt":
         raise ValueError(
@@ -711,6 +747,9 @@ def main() -> int:
             "workspace_text_write_disabled": args.workspace_disable_text_write,
             "directional_text_delta_scale": args.directional_text_delta_scale,
             "directional_visual_delta_scale": args.directional_visual_delta_scale,
+            "directional_visual_memory_mode": (
+                args.directional_visual_memory_mode
+            ),
         }
         if args.backend == "dynamic-prompt"
         else None
@@ -722,8 +761,18 @@ def main() -> int:
         interface_kwargs=interface_kwargs,
     )
     instruction = "" if args.no_instruction else args.instruction
+    warmup_records = records
+    if args.directional_visual_memory_mode == "previous-distinct-image":
+        prime_record = select_distinct_visual_memory_prime(records)
+        warmup_records = (prime_record,)
+        print(
+            "[SLAKE_DIRECTIONAL_VISUAL_MEMORY_PRIME] "
+            f"first_eval_image={records[0]['_slake_image_name']} "
+            f"prime_image={prime_record['_slake_image_name']} "
+            "distinct=True excluded_from_accuracy=True"
+        )
     run_timing_warmup(
-        records,
+        warmup_records,
         model,
         runs=args.timing_warmup_runs,
         max_new_tokens=args.max_new_tokens,
@@ -777,6 +826,33 @@ def main() -> int:
     if hasattr(model, "inference_intervention_summary"):
         summary["dynamic_prompt_intervention"] = (
             model.inference_intervention_summary()
+        )
+    if args.directional_visual_memory_mode == "previous-distinct-image":
+        workspace_summary = summary["dynamic_prompt_intervention"]["workspace"]
+        mismatched = int(workspace_summary["visual_memory_images_mismatched"])
+        natural = int(workspace_summary["visual_memory_images_natural"])
+        seen = int(workspace_summary["visual_memory_images_seen"])
+        expected = len(prediction_rows)
+        expected_seen = expected + args.timing_warmup_runs
+        if mismatched != expected or natural != args.timing_warmup_runs:
+            raise RuntimeError(
+                "Directional visual memory mismatch audit failed: "
+                f"expected_mismatched={expected} actual_mismatched={mismatched} "
+                f"expected_natural_warmups={args.timing_warmup_runs} "
+                f"actual_natural={natural} seen={seen}"
+            )
+        if seen != expected_seen:
+            raise RuntimeError(
+                "Directional visual memory invocation count changed: "
+                f"expected={expected_seen} actual={seen}"
+            )
+        workspace_summary["visual_memory_mismatch_audit_pass"] = True
+        print(
+            "[SLAKE_DIRECTIONAL_VISUAL_MEMORY_AUDIT_PASS] "
+            f"official_samples={expected} mismatched={mismatched} "
+            f"natural_warmups={natural} seen={seen} "
+            "original_image_input_unchanged=True "
+            "intervention_scope=directional_ca_visual_kv_only"
         )
 
     write_json(output_dir / "slake_predictions.json", official_predictions)

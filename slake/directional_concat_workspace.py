@@ -125,10 +125,6 @@ class DirectionalConcatWorkspaceVisual(nn.Module):
             raise ValueError("Directional Workspace dimensions must be positive")
         if anchor_layer < 0:
             raise ValueError("Directional Workspace anchor must be non-negative")
-        if workspace_dim != visual_dim:
-            raise ValueError(
-                "Directional Workspace currently keeps visual width unchanged"
-            )
         if workspace_dim % workspace_heads != 0:
             raise ValueError("workspace_dim must be divisible by workspace_heads")
 
@@ -162,6 +158,11 @@ class DirectionalConcatWorkspaceVisual(nn.Module):
         )
         self.workspace_query_norm = nn.LayerNorm(self.workspace_dim)
         self.workspace_visual_memory_norm = nn.LayerNorm(self.visual_dim)
+        self.workspace_visual_memory_projection = (
+            nn.Identity()
+            if self.workspace_dim == self.visual_dim
+            else nn.Linear(self.visual_dim, self.workspace_dim, bias=False)
+        )
         self.workspace_cross_attention = nn.MultiheadAttention(
             self.workspace_dim,
             self.workspace_heads,
@@ -632,8 +633,8 @@ class DirectionalConcatWorkspaceVisual(nn.Module):
         attention_visual_tokens, attention_visual_mask = (
             self._apply_visual_memory_intervention(visual_tokens, visual_mask)
         )
-        normalized_visual = self.workspace_visual_memory_norm(
-            attention_visual_tokens
+        normalized_visual = self.workspace_visual_memory_projection(
+            self.workspace_visual_memory_norm(attention_visual_tokens)
         )
         cross, cross_weights = self.workspace_cross_attention(
             self.workspace_query_norm(queries),
@@ -709,6 +710,13 @@ class DirectionalConcatWorkspaceVisual(nn.Module):
                 "workspace_visual_tokens_mean": attention_visual_mask.sum(dim=-1)
                 .float()
                 .mean(),
+                "workspace_visual_projected_norm_mean": normalized_visual.detach()
+                .float()
+                .norm(dim=-1)
+                .mean(),
+                "workspace_visual_projection_enabled": workspace.new_tensor(
+                    float(self.workspace_dim != self.visual_dim)
+                ),
                 "workspace_visual_memory_mismatch_rate": (
                     self._visual_memory_mismatch_rate
                 ),

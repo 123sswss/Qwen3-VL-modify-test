@@ -495,11 +495,16 @@ class SparseVisualMMRLTest(unittest.TestCase):
             anchor_layer=1,
             private_prompt_tokens=2,
             workspace_tokens=3,
-            workspace_dim=8,
+            workspace_dim=4,
             workspace_heads=2,
             visual_dynamic_write=False,
         )
         self.assertIsNone(adapter.workspace_visual_delta)
+        self.assertIsInstance(adapter.workspace_visual_memory_projection, nn.Linear)
+        self.assertEqual(
+            tuple(adapter.workspace_visual_memory_projection.weight.shape),
+            (4, 8),
+        )
         adapter.install(visual)
         hidden = torch.randn(7, 8)
         text_tokens = torch.randn(2, 4, 12)
@@ -527,6 +532,14 @@ class SparseVisualMMRLTest(unittest.TestCase):
             self.assertEqual(
                 float(adapter.debug_context["workspace_visual_delta_norm_mean"]),
                 0.0,
+            )
+            self.assertEqual(
+                float(
+                    adapter.debug_context[
+                        "workspace_visual_projection_enabled"
+                    ]
+                ),
+                1.0,
             )
             loss = output.square().mean() + workspace.square().mean()
         self.assertEqual(visual.blocks[1].block.calls, 1)
@@ -647,6 +660,7 @@ class SparseVisualMMRLTest(unittest.TestCase):
             sum(parameter.numel() for parameter in adapter.workspace_parameters()),
             8_966_144,
         )
+        self.assertIsInstance(adapter.workspace_visual_memory_projection, nn.Identity)
         text_projection = ZeroInitWorkspaceProjection(1024, 2560)
         private_text_prompt = nn.Parameter(torch.empty(20, 2560))
         workspace_text_anchor = nn.Parameter(torch.empty(10, 2560))
@@ -676,6 +690,35 @@ class SparseVisualMMRLTest(unittest.TestCase):
             + workspace_text_anchor.numel()
         )
         self.assertEqual(static_total, 10_625_536)
+
+        compressed_adapter = DirectionalConcatWorkspaceVisual(
+            visual_dim=1024,
+            text_dim=2560,
+            anchor_layer=17,
+            private_prompt_tokens=8,
+            workspace_tokens=10,
+            workspace_dim=512,
+            workspace_heads=16,
+            visual_dynamic_write=False,
+        )
+        compressed_text_projection = ZeroInitWorkspaceProjection(512, 2560)
+        compressed_total = (
+            sum(parameter.numel() for parameter in compressed_adapter.parameters())
+            + sum(
+                parameter.numel()
+                for parameter in compressed_text_projection.parameters()
+            )
+            + private_text_prompt.numel()
+            + workspace_text_anchor.numel()
+        )
+        self.assertEqual(
+            sum(
+                parameter.numel()
+                for parameter in compressed_adapter.workspace_parameters()
+            ),
+            2_929_664,
+        )
+        self.assertEqual(compressed_total, 4_591_616)
 
 
 if __name__ == "__main__":

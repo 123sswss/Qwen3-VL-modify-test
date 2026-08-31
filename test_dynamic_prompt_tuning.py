@@ -7,6 +7,7 @@ from types import SimpleNamespace
 import torch
 import torch.nn as nn
 
+from slake.directional_concat_workspace import DirectionalConcatWorkspaceVisual
 from slake.dynamic_prompt_tuning import (
     DynamicPromptCrossAttention,
     DynamicPromptTuningModel,
@@ -648,6 +649,74 @@ class DynamicPromptTuningTest(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "inference-only"):
             model.configure_workspace_inference_intervention(
                 directional_visual_memory_mode="previous-distinct-image",
+            )
+
+    def test_directional_question_query_uses_previous_distinct_source(self):
+        module = DirectionalConcatWorkspaceVisual(
+            visual_dim=8,
+            text_dim=8,
+            anchor_layer=1,
+            private_prompt_tokens=2,
+            workspace_tokens=3,
+            workspace_dim=8,
+            workspace_heads=2,
+            visual_dynamic_write=False,
+        ).eval()
+        module.configure_inference_intervention(
+            question_query_mode="previous-distinct-question"
+        )
+        first = torch.arange(24, dtype=torch.float32).reshape(1, 3, 8)
+        second = first + 100.0
+
+        first_selected = module._apply_question_query_intervention(first)
+        second_selected = module._apply_question_query_intervention(second)
+        repeated_selected = module._apply_question_query_intervention(second)
+
+        torch.testing.assert_close(first_selected, first)
+        torch.testing.assert_close(second_selected, first)
+        torch.testing.assert_close(repeated_selected, first)
+        summary = module.workspace_inference_intervention_summary()
+        self.assertEqual(summary["question_query_mode"], "previous-distinct-question")
+        self.assertEqual(summary["question_query_units_seen"], 3)
+        self.assertEqual(summary["question_query_units_mismatched"], 2)
+        self.assertEqual(summary["question_query_units_natural"], 1)
+        self.assertTrue(summary["original_question_input_unchanged"])
+        self.assertEqual(
+            summary["question_query_intervention_scope"],
+            "directional_ca_question_q_only",
+        )
+
+        module.reset_inference_intervention_state()
+        reset_summary = module.workspace_inference_intervention_summary()
+        self.assertEqual(reset_summary["question_query_units_seen"], 0)
+        self.assertEqual(reset_summary["question_query_units_mismatched"], 0)
+
+    def test_directional_question_query_configuration_propagates(self):
+        model = DynamicPromptTuningModel(
+            _FakeMultimodalModel(),
+            tokenizer=_FakeTokenizer(),
+            prompt_length=2,
+            init_seed=5,
+            attention_dim=4,
+            num_heads=2,
+            sparse_visual_anchor_layers=(1,),
+            sparse_visual_rep_tokens=2,
+            sparse_visual_attention_dim=4,
+            sparse_visual_heads=2,
+            workspace_tokens=3,
+            workspace_dim=8,
+            workspace_heads=2,
+            directional_concat_workspace=True,
+            directional_visual_dynamic_write=False,
+        ).eval()
+        model.configure_workspace_inference_intervention(
+            directional_question_query_mode="previous-distinct-question"
+        )
+        summary = model.inference_intervention_summary()["workspace"]
+        self.assertEqual(summary["question_query_mode"], "previous-distinct-question")
+        with self.assertRaisesRegex(ValueError, "Unsupported Directional"):
+            model.configure_workspace_inference_intervention(
+                directional_question_query_mode="invalid"
             )
 
 

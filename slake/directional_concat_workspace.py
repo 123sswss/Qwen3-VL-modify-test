@@ -17,6 +17,11 @@ DIRECTIONAL_VISUAL_MEMORY_INTERVENTIONS = (
     "previous-distinct-image",
 )
 
+DIRECTIONAL_QUESTION_QUERY_INTERVENTIONS = (
+    "normal",
+    "previous-distinct-question",
+)
+
 
 class ZeroInitWorkspaceProjection(nn.Module):
     """Map workspace slots to anchored prompt tokens with a zero initial delta."""
@@ -183,6 +188,7 @@ class DirectionalConcatWorkspaceVisual(nn.Module):
         self._forward_audited = False
         self._visual_delta_scale = 1.0
         self._visual_memory_mode = "normal"
+        self._question_query_mode = "normal"
         self._last_visual_memory: torch.Tensor | None = None
         self._previous_distinct_visual_memory: torch.Tensor | None = None
         self._visual_memory_images_seen = 0
@@ -190,6 +196,13 @@ class DirectionalConcatWorkspaceVisual(nn.Module):
         self._visual_memory_images_natural = 0
         self._visual_memory_mismatch_rate = torch.tensor(0.0)
         self._visual_memory_source_cosine = torch.tensor(1.0)
+        self._last_question_query: torch.Tensor | None = None
+        self._previous_distinct_question_query: torch.Tensor | None = None
+        self._question_query_units_seen = 0
+        self._question_query_units_mismatched = 0
+        self._question_query_units_natural = 0
+        self._question_query_mismatch_rate = torch.tensor(0.0)
+        self._question_query_source_cosine = torch.tensor(1.0)
 
     def private_parameters(self) -> list[nn.Parameter]:
         return [self.private_visual_prompt]
@@ -206,6 +219,7 @@ class DirectionalConcatWorkspaceVisual(nn.Module):
         self,
         visual_delta_scale: float = 1.0,
         visual_memory_mode: str = "normal",
+        question_query_mode: str = "normal",
     ) -> None:
         scale = float(visual_delta_scale)
         if not math.isfinite(scale) or not 0.0 <= scale <= 1.0:
@@ -222,19 +236,30 @@ class DirectionalConcatWorkspaceVisual(nn.Module):
                 "Unsupported Directional visual memory intervention="
                 f"{mode!r}; choices={DIRECTIONAL_VISUAL_MEMORY_INTERVENTIONS}"
             )
-        if self.training and (scale != 1.0 or mode != "normal"):
+        query_mode = str(question_query_mode)
+        if query_mode not in DIRECTIONAL_QUESTION_QUERY_INTERVENTIONS:
+            raise ValueError(
+                "Unsupported Directional question query intervention="
+                f"{query_mode!r}; choices={DIRECTIONAL_QUESTION_QUERY_INTERVENTIONS}"
+            )
+        if self.training and (
+            scale != 1.0 or mode != "normal" or query_mode != "normal"
+        ):
             raise RuntimeError(
-                "Directional visual interventions are inference-only"
+                "Directional conditioning interventions are inference-only"
             )
         self._visual_delta_scale = scale
         self._visual_memory_mode = mode
+        self._question_query_mode = query_mode
         self.reset_inference_intervention_state()
         print(
             "[DIRECTIONAL_CONCAT_WORKSPACE_VISUAL_INTERVENTION] "
             f"visual_delta_scale={scale} visual_memory_mode={mode} "
+            f"question_query_mode={query_mode} "
             f"visual_dynamic_write={self.visual_dynamic_write} "
             "original_image_input_unchanged=True "
-            "intervention_scope=directional_ca_visual_kv_only "
+            "original_question_input_unchanged=True "
+            "intervention_scope=directional_ca_conditioning_only "
             "anchors_preserved=True "
             "token_count_preserved=True"
         )
@@ -247,6 +272,13 @@ class DirectionalConcatWorkspaceVisual(nn.Module):
         self._visual_memory_images_natural = 0
         self._visual_memory_mismatch_rate = torch.tensor(0.0)
         self._visual_memory_source_cosine = torch.tensor(1.0)
+        self._last_question_query = None
+        self._previous_distinct_question_query = None
+        self._question_query_units_seen = 0
+        self._question_query_units_mismatched = 0
+        self._question_query_units_natural = 0
+        self._question_query_mismatch_rate = torch.tensor(0.0)
+        self._question_query_source_cosine = torch.tensor(1.0)
 
     @staticmethod
     def _same_visual_memory(
@@ -335,6 +367,66 @@ class DirectionalConcatWorkspaceVisual(nn.Module):
             dtype=visual_tokens.dtype,
         )
         return selected_tokens, selected_mask
+
+    def _apply_question_query_intervention(
+        self,
+        queries: torch.Tensor,
+    ) -> torch.Tensor:
+        if self._question_query_mode == "normal":
+            self._question_query_mismatch_rate = queries.new_tensor(0.0)
+            self._question_query_source_cosine = queries.new_tensor(1.0)
+            return queries
+        if self.training:
+            raise RuntimeError(
+                "Directional question query intervention is inference-only"
+            )
+
+        selected_queries = []
+        mismatch_flags = []
+        source_cosines = []
+        for unit_index in range(queries.shape[0]):
+            current = queries[unit_index].detach()
+            cached_current = current.clone()
+            source = current
+            mismatched = False
+            if self._last_question_query is None:
+                self._last_question_query = cached_current
+            elif self._same_visual_memory(current, self._last_question_query):
+                if self._previous_distinct_question_query is not None:
+                    source = self._previous_distinct_question_query
+                    mismatched = True
+            else:
+                self._previous_distinct_question_query = self._last_question_query
+                self._last_question_query = cached_current
+                source = self._previous_distinct_question_query
+                mismatched = True
+
+            selected_queries.append(source)
+            mismatch_flags.append(mismatched)
+            source_cosines.append(
+                torch.nn.functional.cosine_similarity(
+                    current.float().flatten(),
+                    source.float().flatten(),
+                    dim=0,
+                )
+            )
+
+        mismatched_count = sum(mismatch_flags)
+        unit_count = len(mismatch_flags)
+        self._question_query_units_seen += unit_count
+        self._question_query_units_mismatched += mismatched_count
+        self._question_query_units_natural += unit_count - mismatched_count
+        self._question_query_mismatch_rate = queries.new_tensor(
+            mismatched_count / unit_count
+        )
+        self._question_query_source_cosine = torch.stack(source_cosines).mean().to(
+            device=queries.device,
+            dtype=queries.dtype,
+        )
+        return torch.stack(selected_queries).to(
+            device=queries.device,
+            dtype=queries.dtype,
+        )
 
     def install(self, visual_model: nn.Module) -> None:
         if self._installed:
@@ -522,7 +614,8 @@ class DirectionalConcatWorkspaceVisual(nn.Module):
             torch.finfo(pooling_scores.dtype).min,
         )
         pooling = torch.softmax(pooling_scores.float(), dim=-1).to(dtype=dtype)
-        queries = torch.matmul(pooling, text_values)
+        natural_queries = torch.matmul(pooling, text_values)
+        queries = self._apply_question_query_intervention(natural_queries)
 
         attention_visual_tokens, attention_visual_mask = (
             self._apply_visual_memory_intervention(visual_tokens, visual_mask)
@@ -586,6 +679,12 @@ class DirectionalConcatWorkspaceVisual(nn.Module):
                 "workspace_visual_attention_entropy_norm": visual_entropy.mean(),
                 "workspace_cross_delta_norm_mean": cross_norm,
                 "workspace_text_query_norm_mean": query_norm,
+                "workspace_question_query_mismatch_rate": (
+                    self._question_query_mismatch_rate
+                ),
+                "workspace_question_query_source_cosine_mean": (
+                    self._question_query_source_cosine
+                ),
                 "workspace_cross_delta_to_query_ratio": cross_norm
                 / query_norm.clamp_min(1e-8),
                 "workspace_norm_mean": workspace.detach()
@@ -842,8 +941,17 @@ class DirectionalConcatWorkspaceVisual(nn.Module):
                 self._visual_memory_images_mismatched
             ),
             "visual_memory_images_natural": self._visual_memory_images_natural,
+            "question_query_mode": self._question_query_mode,
+            "question_query_units_seen": self._question_query_units_seen,
+            "question_query_units_mismatched": (
+                self._question_query_units_mismatched
+            ),
+            "question_query_units_natural": self._question_query_units_natural,
             "original_image_input_unchanged": True,
-            "intervention_scope": "directional_ca_visual_kv_only",
+            "original_question_input_unchanged": True,
+            "visual_memory_intervention_scope": "directional_ca_visual_kv_only",
+            "question_query_intervention_scope": "directional_ca_question_q_only",
+            "intervention_scope": "directional_ca_conditioning_only",
             "anchors_preserved": True,
             "token_count_preserved": True,
         }

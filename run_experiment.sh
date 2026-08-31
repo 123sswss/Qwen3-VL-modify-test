@@ -1302,6 +1302,55 @@ run_slake_directional_concat_workspace_visual_memory_mismatch() {
   echo "[SLAKE_DIRECTIONAL_CONCAT_VISUAL_MEMORY_MISMATCH_DONE] output=$output_root"
 }
 
+run_pathvqa_directional_concat_workspace_conditioning_mismatch() {
+  local reference_run="${PATHVQA_DIRECTIONAL_REFERENCE_RUN:-$PATHVQA_DYNAMIC_PROMPT_OUTPUT_ROOT/pathvqa_directional_concat_workspace_text_dynamic_only_z10_d1024_l17_private_p20_s8_seed44_20260831}"
+  local checkpoint="$reference_run/checkpoints/epoch_3"
+  local baseline="$reference_run/eval_validation/epoch_3"
+  if [ ! -f "$checkpoint/dynamic_prompt_config.json" ] \
+    || [ ! -f "$checkpoint/dynamic_prompt.pt" ]; then
+    echo "[ERR] PathVQA Directional checkpoint not found: $checkpoint" >&2
+    return 1
+  fi
+  if [ ! -f "$baseline/pathvqa_comparisons.json" ]; then
+    echo "[ERR] PathVQA Directional baseline predictions not found: $baseline" >&2
+    return 1
+  fi
+
+  local output_root
+  output_root="$(available_output_dir "$PATHVQA_DYNAMIC_PROMPT_OUTPUT_ROOT" "pathvqa_directional_concat_conditioning_mismatch_seed44_${RUN_DATE}")"
+  mkdir -p "$output_root"
+  printf 'reference_run\t%s\ncheckpoint\t%s\nbaseline\t%s\nsplit\tvalidation\ntraining\tnone\nquestion_q_control\tprevious_distinct_question_only_for_directional_ca_q\nvisual_kv_control\tprevious_distinct_image_only_for_directional_ca_kv\noriginal_vlm_inputs\tunchanged\n' \
+    "$reference_run" "$checkpoint" "$baseline" \
+    > "$output_root/intervention_manifest.tsv"
+
+  (
+    cd "$ROOT_DIR" || exit 1
+    CUDA_VISIBLE_DEVICES='' python -m unittest \
+      test_dynamic_prompt_tuning.py \
+      test_sparse_visual_mmrl.py \
+      test_pathvqa_directional_interventions.py
+  ) || return 1
+
+  run_pathvqa_dynamic_prompt_eval \
+    "$checkpoint" \
+    validation \
+    "$output_root/question_q_previous_distinct" \
+    "$output_root/question_q_previous_distinct.log" \
+    --directional-question-query-mode previous-distinct-question || return 1
+
+  run_pathvqa_dynamic_prompt_eval \
+    "$checkpoint" \
+    validation \
+    "$output_root/visual_kv_previous_distinct_image" \
+    "$output_root/visual_kv_previous_distinct_image.log" \
+    --directional-visual-memory-mode previous-distinct-image || return 1
+
+  python diagnostics/compare_pathvqa_conditioning_mismatches.py \
+    --baseline "$baseline" \
+    --intervention-root "$output_root" || return 1
+  echo "[PATHVQA_DIRECTIONAL_CONDITIONING_MISMATCH_DONE] output=$output_root"
+}
+
 run_pathvqa_dynamic_prompt_raw_shared_s_suite_seed44() {
   run_pathvqa_dynamic_prompt_raw_shared_s_separate_residual_seed44 || return 1
   run_pathvqa_dynamic_prompt_raw_shared_s_direct_prompt_seed44 || return 1
@@ -1783,6 +1832,9 @@ case "$RUN_TARGET" in
   slake_directional_concat_workspace_visual_memory_mismatch)
     run_slake_directional_concat_workspace_visual_memory_mismatch || failures=$((failures + 1))
     ;;
+  pathvqa_directional_concat_workspace_conditioning_mismatch)
+    run_pathvqa_directional_concat_workspace_conditioning_mismatch || failures=$((failures + 1))
+    ;;
   pathvqa)
     run_pathvqa || failures=$((failures + 1))
     ;;
@@ -1845,7 +1897,7 @@ case "$RUN_TARGET" in
     run_slake || failures=$((failures + 1))
     ;;
   *)
-    echo "[ERR] 未知目标: $RUN_TARGET，可选 train、slake、pathvqa、pathvqa_base、pathvqa_prompt_tuning_seed44、pathvqa_dynamic_prompt_seed44、pathvqa_directional_concat_workspace_text_dynamic_only_seed44、pathvqa_dynamic_prompt_sparse_visual_single_pass_seed44、pathvqa_dynamic_prompt_raw_shared_s_separate_residual_seed44、pathvqa_dynamic_prompt_raw_shared_s_direct_prompt_seed44、pathvqa_dynamic_prompt_raw_shared_s_suite_seed44、pathvqa_dynamic_prompt_asymmetric_shared_s_seed44、pathvqa_dynamic_prompt_full_workspace_seed44、pathvqa_dynamic_prompt_interventions、pathvqa_minimal_mmrl_prompt20_seed44、pathvqa_lora_visual_attn_r128、pathvqa_lora_visual_attn_r128_then_base、pathvqa_lora_visual_last8_attn_r128、pathvqa_lora_full_model_attn_r8_seed44、pathvqa_last8_lora_minimal_mmrl_relation_suite、slake_final_seeds4、slake_ablation_no_relation_seeds2、slake_ablation_independent_init_seeds2、slake_ablation_static_query_seed45、slake_ablation_mean_pooling_seed45、slake_mean_final_completion_suite、slake_text_guided_balanced_fusion_slots8_seed45、slake_prompt_tuning_seed44、slake_concat_mlp_fusion_seed45、slake_overnight_prompt_and_concat_mlp、slake_ablation_suite、slake_dynamic_prompt_full_workspace_seed44、slake_dynamic_prompt_full_workspace_17only_seed44、slake_dynamic_prompt_full_workspace_17only_s20_seed44、slake_directional_concat_workspace_seed44、slake_directional_concat_workspace_delta_interventions、slake_directional_concat_workspace_visual_memory_mismatch、slake_dynamic_prompt_workspace_path_interventions、slake_dynamic_prompt_17only_final_path_interventions、all。" >&2
+    echo "[ERR] 未知目标: $RUN_TARGET，可选 train、slake、pathvqa、pathvqa_base、pathvqa_prompt_tuning_seed44、pathvqa_dynamic_prompt_seed44、pathvqa_directional_concat_workspace_text_dynamic_only_seed44、pathvqa_directional_concat_workspace_conditioning_mismatch、pathvqa_dynamic_prompt_sparse_visual_single_pass_seed44、pathvqa_dynamic_prompt_raw_shared_s_separate_residual_seed44、pathvqa_dynamic_prompt_raw_shared_s_direct_prompt_seed44、pathvqa_dynamic_prompt_raw_shared_s_suite_seed44、pathvqa_dynamic_prompt_asymmetric_shared_s_seed44、pathvqa_dynamic_prompt_full_workspace_seed44、pathvqa_dynamic_prompt_interventions、pathvqa_minimal_mmrl_prompt20_seed44、pathvqa_lora_visual_attn_r128、pathvqa_lora_visual_attn_r128_then_base、pathvqa_lora_visual_last8_attn_r128、pathvqa_lora_full_model_attn_r8_seed44、pathvqa_last8_lora_minimal_mmrl_relation_suite、slake_final_seeds4、slake_ablation_no_relation_seeds2、slake_ablation_independent_init_seeds2、slake_ablation_static_query_seed45、slake_ablation_mean_pooling_seed45、slake_mean_final_completion_suite、slake_text_guided_balanced_fusion_slots8_seed45、slake_prompt_tuning_seed44、slake_concat_mlp_fusion_seed45、slake_overnight_prompt_and_concat_mlp、slake_ablation_suite、slake_dynamic_prompt_full_workspace_seed44、slake_dynamic_prompt_full_workspace_17only_seed44、slake_dynamic_prompt_full_workspace_17only_s20_seed44、slake_directional_concat_workspace_seed44、slake_directional_concat_workspace_delta_interventions、slake_directional_concat_workspace_visual_memory_mismatch、slake_dynamic_prompt_workspace_path_interventions、slake_dynamic_prompt_17only_final_path_interventions、all。" >&2
     exit 2
     ;;
 esac

@@ -50,6 +50,7 @@ class DynamicPromptTuningModelInterface:
         directional_text_delta_scale: float = 1.0,
         directional_visual_delta_scale: float = 1.0,
         directional_visual_memory_mode: str = "normal",
+        directional_question_query_mode: str = "normal",
     ) -> None:
         checkpoint = Path(checkpoint_path).resolve()
         with (checkpoint / DYNAMIC_PROMPT_CONFIG_NAME).open(
@@ -182,6 +183,7 @@ class DynamicPromptTuningModelInterface:
             directional_text_delta_scale=directional_text_delta_scale,
             directional_visual_delta_scale=directional_visual_delta_scale,
             directional_visual_memory_mode=directional_visual_memory_mode,
+            directional_question_query_mode=directional_question_query_mode,
         )
         self._workspace_debug_sums: Dict[str, float] = {}
         self._workspace_debug_count = 0
@@ -204,13 +206,18 @@ class DynamicPromptTuningModelInterface:
             f"workspace_text_write_disabled={workspace_text_write_disabled} "
             f"directional_text_delta_scale={directional_text_delta_scale} "
             f"directional_visual_delta_scale={directional_visual_delta_scale} "
-            f"directional_visual_memory_mode={directional_visual_memory_mode}"
+            f"directional_visual_memory_mode={directional_visual_memory_mode} "
+            f"directional_question_query_mode={directional_question_query_mode}"
         )
 
     def reset_inference_state(self) -> None:
         self.model.reset_inference_intervention_state()
+        self.reset_inference_measurements()
+
+    def reset_inference_measurements(self) -> None:
         self._workspace_debug_sums = {}
         self._workspace_debug_count = 0
+        self.last_generation_timing = None
 
     def inference_intervention_summary(self) -> Dict[str, Any]:
         summary = self.model.inference_intervention_summary()

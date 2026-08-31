@@ -462,10 +462,12 @@ class DynamicPromptTuningModel(nn.Module):
         directional_text_delta_scale: float = 1.0,
         directional_visual_delta_scale: float = 1.0,
         directional_visual_memory_mode: str = "normal",
+        directional_question_query_mode: str = "normal",
     ) -> None:
         text_scale = float(directional_text_delta_scale)
         visual_scale = float(directional_visual_delta_scale)
         visual_memory_mode = str(directional_visual_memory_mode)
+        question_query_mode = str(directional_question_query_mode)
         for name, scale in (
             ("text", text_scale),
             ("visual", visual_scale),
@@ -478,6 +480,7 @@ class DynamicPromptTuningModel(nn.Module):
             text_scale != 1.0
             or visual_scale != 1.0
             or visual_memory_mode != "normal"
+            or question_query_mode != "normal"
         ):
             raise RuntimeError("Directional interventions are inference-only")
         if self.directional_concat_workspace_enabled:
@@ -497,6 +500,7 @@ class DynamicPromptTuningModel(nn.Module):
             self.sparse_visual.configure_inference_intervention(
                 visual_delta_scale=visual_scale,
                 visual_memory_mode=visual_memory_mode,
+                question_query_mode=question_query_mode,
             )
             print(
                 "[DIRECTIONAL_CONCAT_WORKSPACE_TEXT_INTERVENTION] "
@@ -508,6 +512,7 @@ class DynamicPromptTuningModel(nn.Module):
             text_scale != 1.0
             or visual_scale != 1.0
             or visual_memory_mode != "normal"
+            or question_query_mode != "normal"
         ):
             raise ValueError(
                 "Directional interventions require Directional Concat Workspace"

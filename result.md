@@ -1,6 +1,6 @@
 # Experiment Result Summary
 
-Last updated: 2026-08-30
+Last updated: 2026-08-31
 
 This file is the concise experiment memory shared by the user and Codex. The complete append-only record remains in `EXPERIMENT_RESULTS.md`.
 
@@ -119,3 +119,4 @@ This file is the concise experiment memory shared by the user and Codex. The com
 - SLAKE Directional Concat Workspace seed44：单层text-Q/visual-KV CA得到Z10，分别经零初始化MLP生成显式concat的视觉10-token与LLM10-token块，总参数**12.73M**。官方Test **77.17**，相对34.90M layer17-only参考-1.19（77/102独占，`p=0.0725`），但相对Static Prompt显著+2.77（139/81，`p=0.000112`）。参数减少63.5%却无训练加速；Z槽余弦仍0.941、视觉更新/query为3.35x、文本delta/anchor为0.50，说明简化有效但共享槽仍趋同且两个写入过强。它是有价值的紧凑Pareto点，不是新的最高分主结构。
 - SLAKE Directional Concat同checkpoint缩放：文本`MLP(Z)`降至0.5后为**76.03**（-1.15，26/50，`p=0.0079`），归零后为**74.26**（-2.91，38/99，`p=1.88e-7`），且OPEN/KVQA/中文分别较正常值下降4.29/3.37/3.48，证明完整文本动态写入是主要有效路径而非过强干扰。视觉`MLP(Z)`降至0.5为**77.22**、归零为**77.13**，相对77.17均仅正负0.05且`p=1.0`；即使视觉delta/anchor从28.17x归零也无净影响。结论：动态视觉写回可旁路，剩余性能差距在Z构造/槽多样性或文本变换能力，不在输出缩放。
 - SLAKE Directional Concat视觉Memory错配控制：保持原图完整VLM输入不变，只将Directional CA的视觉K/V换成上一张不同图像，2,094/2,094正式样本全部审计通过。总分由**77.17降至76.41**，错配/正常独占正确10/26，McNemar `p=0.0113`；CLOSED/OPEN分别下降0.72/0.80。即便错配视觉Memory与原Memory平均余弦仍高达0.916，净损失仍显著，证明`当前图像视觉K/V -> Z -> LLM动态Prompt`存在真实但幅度有限的图像条件贡献；不能再把该方法解释为纯问题条件Prompt，也不能据此恢复已被否定的视觉动态写回。
+- PathVQA Directional Text-Dynamic-Only seed44：删除无效的`Z -> visual dynamic MLP`但保留静态`S8+A_v10`视觉插入、P20/A_t10、问题Q10、层17完整视觉K/V及`Z -> LLM Prompt`，参数降至**10.63M**。固定epoch3 Validation为**59.5782/91.5520/27.6962**，相对7.08M全模型Attention LoRA-r8仅+0.2397 Overall且不显著（336/321，`p=0.585`，聚类配对CI[-0.600,+1.138]），因此只能主张统计持平；但它以少86.18%参数打平76.90M Full Workspace，并显著超过57.5172单路径基线+2.0610（382/253，`p=3.46e-7`，CI[+1.286,+2.891]），Yes/No和Free-form均显著提升。结论：数值止损线通过，新路线保留为强Pareto候选，但停止继续堆结构，下一步只做复现与问题/图像条件机制控制。

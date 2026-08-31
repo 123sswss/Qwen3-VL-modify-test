@@ -19,6 +19,10 @@ if str(REPO_ROOT) not in sys.path:
 from pathvqa.data_pipeline import PathVQAParquetStore
 from pathvqa.model_interfaces import BACKEND_SPECS, load_pathvqa_model_interface
 from pathvqa.pathvqa_vqa_metric import evaluate_pathvqa_predictions
+from slake.directional_concat_workspace import (
+    DIRECTIONAL_QUESTION_QUERY_INTERVENTIONS,
+    DIRECTIONAL_VISUAL_MEMORY_INTERVENTIONS,
+)
 from slake.dynamic_prompt_tuning import DYNAMIC_PROMPT_INTERVENTIONS
 from slake.slake_official_eval import (
     _normalized_timing,
@@ -72,6 +76,181 @@ def run_timing_warmup(
         finally:
             image.close()
         print(f"[PATHVQA_TIMING_WARMUP {index}/{runs}] complete")
+
+
+def _distinct_priming_record(
+    store: PathVQAParquetStore,
+    first_record: Mapping[str, Any],
+) -> tuple[Mapping[str, Any], str, str]:
+    first_image = store.load_image(dict(first_record))
+    try:
+        first_image_id = image_fingerprint(first_image)
+    finally:
+        first_image.close()
+    first_question = str(first_record["question"]).strip()
+
+    for candidate in reversed(store.samples):
+        if str(candidate["question"]).strip() == first_question:
+            continue
+        candidate_image = store.load_image(dict(candidate))
+        try:
+            candidate_image_id = image_fingerprint(candidate_image)
+        finally:
+            candidate_image.close()
+        if candidate_image_id != first_image_id:
+            return candidate, first_image_id, candidate_image_id
+    raise RuntimeError(
+        "Could not find a PathVQA priming record with both a distinct question "
+        "and a distinct image"
+    )
+
+
+def prime_directional_intervention(
+    store: PathVQAParquetStore,
+    records: Sequence[Mapping[str, Any]],
+    model: Any,
+    max_new_tokens: int,
+    temperature: float,
+    instruction: str | None,
+    question_query_mode: str,
+    visual_memory_mode: str,
+) -> Dict[str, Any] | None:
+    if question_query_mode == "normal" and visual_memory_mode == "normal":
+        return None
+    if not records:
+        raise ValueError("Directional intervention priming requires scored records")
+
+    record, first_image_id, priming_image_id = _distinct_priming_record(
+        store,
+        records[0],
+    )
+    prompt = build_prompt(str(record["question"]), instruction)
+    image = store.load_image(dict(record))
+    try:
+        model.infer(
+            image,
+            prompt,
+            max_new_tokens=max_new_tokens,
+            temperature=temperature,
+        )
+    finally:
+        image.close()
+    if hasattr(model, "reset_inference_measurements"):
+        model.reset_inference_measurements()
+
+    metadata = {
+        "excluded_from_scoring": True,
+        "question_id": str(record["question_id"]),
+        "question_distinct_from_first_scored": (
+            str(record["question"]).strip()
+            != str(records[0]["question"]).strip()
+        ),
+        "image_distinct_from_first_scored": priming_image_id != first_image_id,
+        "question_query_mode": question_query_mode,
+        "visual_memory_mode": visual_memory_mode,
+    }
+    if not metadata["question_distinct_from_first_scored"]:
+        raise RuntimeError("Directional priming question is not distinct")
+    if not metadata["image_distinct_from_first_scored"]:
+        raise RuntimeError("Directional priming image is not distinct")
+    print(
+        "[PATHVQA_DIRECTIONAL_INTERVENTION_PRIME] "
+        f"question_id={metadata['question_id']} "
+        "excluded_from_scoring=True question_distinct=True image_distinct=True"
+    )
+    return metadata
+
+
+def audit_directional_intervention(
+    intervention: Mapping[str, Any],
+    scored_count: int,
+    priming: Mapping[str, Any] | None,
+    question_query_mode: str,
+    visual_memory_mode: str,
+) -> Dict[str, Any] | None:
+    if question_query_mode == "normal" and visual_memory_mode == "normal":
+        return None
+    workspace = intervention.get("workspace")
+    if not isinstance(workspace, Mapping):
+        raise RuntimeError("Directional intervention summary is unavailable")
+    if priming is None:
+        raise RuntimeError("Directional intervention was not primed")
+    for key in (
+        "excluded_from_scoring",
+        "question_distinct_from_first_scored",
+        "image_distinct_from_first_scored",
+    ):
+        if priming.get(key) is not True:
+            raise RuntimeError(
+                f"Directional intervention priming audit failed: {key}="
+                f"{priming.get(key)!r}"
+            )
+
+    common_expected = {
+        "original_image_input_unchanged": True,
+        "original_question_input_unchanged": True,
+        "anchors_preserved": True,
+        "token_count_preserved": True,
+    }
+    for key, expected in common_expected.items():
+        if workspace.get(key) is not expected:
+            raise RuntimeError(
+                f"Directional intervention audit failed: {key}={workspace.get(key)!r}"
+            )
+    if workspace.get("question_query_mode") != question_query_mode:
+        raise RuntimeError("Directional question-Q mode propagation audit failed")
+    if workspace.get("visual_memory_mode") != visual_memory_mode:
+        raise RuntimeError("Directional visual-K/V mode propagation audit failed")
+
+    audit: Dict[str, Any] = {
+        **common_expected,
+        "scored_samples": int(scored_count),
+        "excluded_priming_samples": 1,
+        "question_query_mode": question_query_mode,
+        "visual_memory_mode": visual_memory_mode,
+        "mode_propagation_audit_pass": True,
+    }
+    if question_query_mode != "normal":
+        expected_seen = scored_count + 1
+        actual = {
+            "seen": int(workspace.get("question_query_units_seen", -1)),
+            "mismatched": int(
+                workspace.get("question_query_units_mismatched", -1)
+            ),
+            "natural": int(workspace.get("question_query_units_natural", -1)),
+        }
+        expected = {"seen": expected_seen, "mismatched": scored_count, "natural": 1}
+        if actual != expected:
+            raise RuntimeError(
+                "Directional question-Q mismatch audit failed: "
+                f"expected={expected} actual={actual}"
+            )
+        audit["question_query_counts"] = actual
+        audit["question_query_mismatch_audit_pass"] = True
+    if visual_memory_mode != "normal":
+        expected_seen = scored_count + 1
+        actual = {
+            "seen": int(workspace.get("visual_memory_images_seen", -1)),
+            "mismatched": int(
+                workspace.get("visual_memory_images_mismatched", -1)
+            ),
+            "natural": int(workspace.get("visual_memory_images_natural", -1)),
+        }
+        expected = {"seen": expected_seen, "mismatched": scored_count, "natural": 1}
+        if actual != expected:
+            raise RuntimeError(
+                "Directional visual-K/V mismatch audit failed: "
+                f"expected={expected} actual={actual}"
+            )
+        audit["visual_memory_counts"] = actual
+        audit["visual_memory_mismatch_audit_pass"] = True
+    print(
+        "[PATHVQA_DIRECTIONAL_INTERVENTION_AUDIT_PASS] "
+        f"scored={scored_count} excluded_priming=1 "
+        f"question_query_mode={question_query_mode} "
+        f"visual_memory_mode={visual_memory_mode}"
+    )
+    return audit
 
 
 def run_inference(
@@ -176,6 +355,16 @@ def parse_args() -> argparse.Namespace:
         default="normal",
     )
     parser.add_argument("--dynamic-prompt-memory-lag", type=int, default=32)
+    parser.add_argument(
+        "--directional-question-query-mode",
+        choices=DIRECTIONAL_QUESTION_QUERY_INTERVENTIONS,
+        default="normal",
+    )
+    parser.add_argument(
+        "--directional-visual-memory-mode",
+        choices=DIRECTIONAL_VISUAL_MEMORY_INTERVENTIONS,
+        default="normal",
+    )
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--max-new-tokens", type=int, default=32)
     parser.add_argument("--temperature", type=float, default=0.0)
@@ -204,17 +393,21 @@ def main() -> int:
         raise ValueError("--bootstrap-iterations must be positive")
     if args.dynamic_prompt_memory_lag < 1:
         raise ValueError("--dynamic-prompt-memory-lag must be positive")
-    if (
-        args.backend != "dynamic-prompt"
-        and args.dynamic_prompt_intervention != "normal"
-    ):
+    dynamic_intervention_requested = (
+        args.dynamic_prompt_intervention != "normal"
+        or args.directional_question_query_mode != "normal"
+        or args.directional_visual_memory_mode != "normal"
+    )
+    if args.backend != "dynamic-prompt" and dynamic_intervention_requested:
         raise ValueError(
             "Dynamic Prompt interventions require --backend dynamic-prompt"
         )
-    if args.resume and args.dynamic_prompt_intervention in {
-        "mean-residual",
-        "lagged-memory",
-    }:
+    stateful_intervention_requested = (
+        args.dynamic_prompt_intervention in {"mean-residual", "lagged-memory"}
+        or args.directional_question_query_mode != "normal"
+        or args.directional_visual_memory_mode != "normal"
+    )
+    if args.resume and stateful_intervention_requested:
         raise ValueError(
             "Stateful Dynamic Prompt interventions do not support --resume; "
             "rerun with --overwrite"
@@ -238,6 +431,12 @@ def main() -> int:
         {
             "intervention": args.dynamic_prompt_intervention,
             "memory_lag": args.dynamic_prompt_memory_lag,
+            "directional_question_query_mode": (
+                args.directional_question_query_mode
+            ),
+            "directional_visual_memory_mode": (
+                args.directional_visual_memory_mode
+            ),
         }
         if args.backend == "dynamic-prompt"
         else None
@@ -260,6 +459,16 @@ def main() -> int:
     )
     if hasattr(model, "reset_inference_state"):
         model.reset_inference_state()
+    priming = prime_directional_intervention(
+        store,
+        records,
+        model,
+        max_new_tokens=args.max_new_tokens,
+        temperature=args.temperature,
+        instruction=instruction,
+        question_query_mode=args.directional_question_query_mode,
+        visual_memory_mode=args.directional_visual_memory_mode,
+    )
     prediction_rows = run_inference(
         store,
         records,
@@ -303,9 +512,18 @@ def main() -> int:
         }
     )
     if hasattr(model, "inference_intervention_summary"):
-        summary["dynamic_prompt_intervention"] = (
-            model.inference_intervention_summary()
+        intervention_summary = model.inference_intervention_summary()
+        summary["dynamic_prompt_intervention"] = intervention_summary
+        directional_audit = audit_directional_intervention(
+            intervention_summary,
+            scored_count=len(prediction_rows),
+            priming=priming,
+            question_query_mode=args.directional_question_query_mode,
+            visual_memory_mode=args.directional_visual_memory_mode,
         )
+        if directional_audit is not None:
+            summary["directional_conditioning_audit"] = directional_audit
+            summary["directional_conditioning_priming"] = priming
 
     official_predictions = [
         {"question_id": row["question_id"], "answer": row["answer"]}

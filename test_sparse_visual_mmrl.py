@@ -419,6 +419,8 @@ class SparseVisualMMRLTest(unittest.TestCase):
             workspace_dim=8,
             workspace_heads=2,
         )
+        adapter.eval()
+        adapter.configure_inference_intervention(visual_delta_scale=0.5)
         adapter.install(visual)
         hidden = torch.randn(7, 8)
         text_tokens = torch.randn(2, 4, 12)
@@ -444,6 +446,19 @@ class SparseVisualMMRLTest(unittest.TestCase):
                 ),
                 0.0,
             )
+            self.assertEqual(
+                float(adapter.debug_context["workspace_visual_delta_scale"]),
+                0.5,
+            )
+            self.assertTrue(
+                bool(
+                    torch.isfinite(
+                        adapter.debug_context[
+                            "workspace_visual_attention_entropy_norm"
+                        ]
+                    )
+                )
+            )
             loss = output.square().mean() + workspace.square().mean()
         self.assertEqual(visual.blocks[1].block.calls, 1)
         self.assertEqual(tuple(output.shape), tuple(hidden.shape))
@@ -464,6 +479,34 @@ class SparseVisualMMRLTest(unittest.TestCase):
             private_ids | workspace_ids,
             {id(parameter) for parameter in adapter.parameters()},
         )
+        self.assertEqual(
+            adapter.workspace_inference_intervention_summary()[
+                "visual_delta_scale"
+            ],
+            0.5,
+        )
+
+    def test_workspace_projection_scales_only_dynamic_delta(self):
+        torch.manual_seed(31)
+        projection = ZeroInitWorkspaceProjection(8, 12)
+        workspace = torch.randn(2, 3, 8)
+        anchor = torch.randn(3, 12)
+        projection(workspace, anchor)
+        with torch.no_grad():
+            projection.output_projection.weight.fill_(0.1)
+            projection.output_projection.bias.fill_(0.05)
+        full = projection(workspace, anchor, delta_scale=1.0)
+        half = projection(workspace, anchor, delta_scale=0.5)
+        off = projection(workspace, anchor, delta_scale=0.0)
+        expanded_anchor = anchor.unsqueeze(0).expand_as(off)
+        torch.testing.assert_close(off, expanded_anchor)
+        torch.testing.assert_close(
+            half - expanded_anchor,
+            (full - expanded_anchor) * 0.5,
+        )
+        self.assertEqual(float(projection.debug_context["delta_scale"]), 0.0)
+        with self.assertRaisesRegex(ValueError, "in \\[0, 1\\]"):
+            projection(workspace, anchor, delta_scale=1.1)
 
     def test_directional_concat_workspace_production_parameter_count(self):
         adapter = DirectionalConcatWorkspaceVisual(

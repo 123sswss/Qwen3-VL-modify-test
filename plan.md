@@ -64,7 +64,8 @@
 - 诊断修复列为无算力代码任务：定位为什么`DynamicPromptTuningModelInterface._capture_workspace_debug()`只保存Text-reader字段，恢复相邻Z的LayerNorm后余弦、每层更新增量余弦和三层视觉delta余弦。修复后不为补诊断单独重跑旧六项；只有后续获授权的新实验自然复用诊断。
 - 机制待证更新：末段Workspace视觉残差虽很强，但同checkpoint关闭后不显著掉分；所有下游Z读取熵约0.9998，而Workspace Text Reader关闭会显著损失约2分。当前可以主张高容量Workspace通过LLM Prompt接口有效，不能主张直接视觉写回不可替代，也不能把结果解释成视觉信息无效，因为Z更新仍读取完整视觉Token。
 - 原计划的Workspace输入因果干预暂缓：在S8+Z32 layer17-only checkpoint上屏蔽或跨样本错配视觉Memory，仍可用于判断旧Text Reader的约2分收益是否真正来自当前样本视觉条件，但不再排在新结构实验之前，且未获新的运行授权前不实现、不执行。
-- 已定稿并安排`slake_directional_concat_workspace_seed44`：仅在视觉第17层使用一次正统的“完整问题Token注意力池化为Q10、完整视觉Token作K/V”的CA1024/16得到共享`Z10x1024`；视觉端以零初始化`1024->1024` MLP生成动态块并与静态`A_v10`相加，再与私有`S8`显式concat后单次插入/剥离；文本端以零初始化`1024->2560` MLP生成动态块并与静态`A_t10`相加，再与私有`P20`显式concat为Prompt30。删除旧Private Text CA、Private Visual CA和两个Workspace Reader；训练参数精确为12,726,784，学习率为`P20+A_t10:0.3`、`S8:3e-5`、其余共享Workspace:`1e-4`。固定seed44/data_seed42、3 epoch，仅epoch3跑SLAKE官方Test；代码提交后仍由用户手动启动。
+- `slake_directional_concat_workspace_seed44`已完成：12,726,784参数，官方Test77.17；相对34.90M layer17-only参考-1.19且逐题`p=0.0725`，相对Static Prompt仍显著+2.77、`p=0.000112`。它证明一次Directional CA加显式双侧concat可以用36.5%的参数保留大部分收益，但未达到“先增效”的主方法要求，也未缩短训练时间。Z10槽余弦0.941、视觉更新/query3.35x、文本delta/anchor0.50，当前问题是共享槽趋同和双侧写入过强，不是模块不学习。禁止原样补seed；若继续，先做同checkpoint文本/视觉动态块缩放或关闭诊断，再决定调整输出约束、锚点学习率或恢复容量。
+- 已安排无训练目标`slake_directional_concat_workspace_delta_interventions`：复用上述seed44 epoch3 checkpoint和77.17正常预测，保持`P20+A_t10`、`S8+A_v10`、Prompt30、视觉18个插入token及全部位置不变，只分别设置文本MLP动态增量scale为0/0.5、视觉MLP动态增量scale为0/0.5，共四次官方Test推理并自动生成逐题McNemar比较。该控制用于区分文本写入过强、视觉写入有害和Z内容本身不足；实现提交后仍由用户手动启动。
 
 ## 总体目标
 

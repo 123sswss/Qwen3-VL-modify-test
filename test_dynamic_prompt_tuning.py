@@ -514,6 +514,72 @@ class DynamicPromptTuningTest(unittest.TestCase):
                     value,
                 )
 
+    def test_directional_concat_scales_text_delta_without_changing_positions(self):
+        kwargs = dict(
+            tokenizer=_FakeTokenizer(),
+            prompt_length=2,
+            init_seed=5,
+            attention_dim=4,
+            num_heads=2,
+            sparse_visual_anchor_layers=(1,),
+            sparse_visual_rep_tokens=2,
+            sparse_visual_attention_dim=4,
+            sparse_visual_heads=2,
+            workspace_tokens=3,
+            workspace_dim=8,
+            workspace_heads=2,
+            directional_concat_workspace=True,
+        )
+        model = DynamicPromptTuningModel(_FakeMultimodalModel(), **kwargs).eval()
+        workspace = torch.randn(1, 3, 8)
+        model.sparse_visual.shared_workspace_text_memory = lambda: workspace
+        with torch.no_grad():
+            model(**self._batch())
+            model.workspace_text_projection.output_projection.weight.fill_(0.1)
+            model.workspace_text_projection.output_projection.bias.fill_(0.05)
+
+            model.configure_workspace_inference_intervention(
+                directional_text_delta_scale=1.0,
+                directional_visual_delta_scale=1.0,
+            )
+            model(**self._batch())
+            full = model.base_model.model.language_model.last_embeddings[:, :5].clone()
+
+            model.configure_workspace_inference_intervention(
+                directional_text_delta_scale=0.5,
+                directional_visual_delta_scale=1.0,
+            )
+            model(**self._batch())
+            half = model.base_model.model.language_model.last_embeddings[:, :5].clone()
+
+            model.configure_workspace_inference_intervention(
+                directional_text_delta_scale=0.0,
+                directional_visual_delta_scale=1.0,
+            )
+            model(**self._batch())
+            off = model.base_model.model.language_model.last_embeddings[:, :5].clone()
+
+        torch.testing.assert_close(full[:, :2], off[:, :2])
+        torch.testing.assert_close(half[:, :2], off[:, :2])
+        torch.testing.assert_close(
+            half[:, 2:] - off[:, 2:],
+            (full[:, 2:] - off[:, 2:]) * 0.5,
+        )
+        summary = model.inference_intervention_summary()["workspace"]
+        self.assertEqual(summary["text_delta_scale"], 0.0)
+        self.assertEqual(summary["visual_delta_scale"], 1.0)
+        self.assertTrue(summary["anchors_preserved"])
+        self.assertTrue(summary["token_count_preserved"])
+        with self.assertRaisesRegex(ValueError, "in \\[0, 1\\]"):
+            model.configure_workspace_inference_intervention(
+                directional_text_delta_scale=-0.1,
+            )
+        model.train()
+        with self.assertRaisesRegex(RuntimeError, "inference-only"):
+            model.configure_workspace_inference_intervention(
+                directional_text_delta_scale=0.5,
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

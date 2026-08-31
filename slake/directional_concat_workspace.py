@@ -33,6 +33,7 @@ class ZeroInitWorkspaceProjection(nn.Module):
         self,
         workspace: torch.Tensor,
         anchor: torch.Tensor,
+        delta_scale: float = 1.0,
     ) -> torch.Tensor:
         if workspace.ndim != 3 or workspace.shape[-1] != self.workspace_dim:
             raise ValueError("Workspace projection received invalid slots")
@@ -40,6 +41,9 @@ class ZeroInitWorkspaceProjection(nn.Module):
             raise ValueError(
                 "Workspace text anchor must match slot count and output width"
             )
+        scale = float(delta_scale)
+        if not math.isfinite(scale) or not 0.0 <= scale <= 1.0:
+            raise ValueError("Workspace delta_scale must be finite and in [0, 1]")
         parameter = self.input_projection.weight
         dtype = parameter.dtype
         hidden = torch.nn.functional.gelu(
@@ -51,18 +55,22 @@ class ZeroInitWorkspaceProjection(nn.Module):
             approximate="tanh",
         )
         delta = self.output_projection(hidden).to(dtype=workspace.dtype)
+        scaled_delta = delta * scale
         anchored = anchor.to(
             device=delta.device,
             dtype=delta.dtype,
-        ).unsqueeze(0) + delta
+        ).unsqueeze(0) + scaled_delta
 
         with torch.no_grad():
             anchor_norm = anchor.detach().float().norm(dim=-1).mean()
-            delta_norm = delta.detach().float().norm(dim=-1).mean()
+            raw_delta_norm = delta.detach().float().norm(dim=-1).mean()
+            delta_norm = scaled_delta.detach().float().norm(dim=-1).mean()
             self.debug_context = {
                 "anchor_norm_mean": anchor_norm,
+                "raw_delta_norm_mean": raw_delta_norm,
                 "delta_norm_mean": delta_norm,
                 "delta_to_anchor_ratio": delta_norm / anchor_norm.clamp_min(1e-8),
+                "delta_scale": delta.new_tensor(scale),
             }
             if not self._forward_audited:
                 max_abs = float(delta.detach().float().abs().max().item())
@@ -161,6 +169,7 @@ class DirectionalConcatWorkspaceVisual(nn.Module):
         self._workspace_by_image: torch.Tensor | None = None
         self._installed = False
         self._forward_audited = False
+        self._visual_delta_scale = 1.0
 
     def private_parameters(self) -> list[nn.Parameter]:
         return [self.private_visual_prompt]
@@ -172,6 +181,26 @@ class DirectionalConcatWorkspaceVisual(nn.Module):
             for parameter in self.parameters()
             if id(parameter) != private_id
         ]
+
+    def configure_inference_intervention(
+        self,
+        visual_delta_scale: float = 1.0,
+    ) -> None:
+        scale = float(visual_delta_scale)
+        if not math.isfinite(scale) or not 0.0 <= scale <= 1.0:
+            raise ValueError(
+                "Directional visual delta scale must be finite and in [0, 1]"
+            )
+        if self.training and scale != 1.0:
+            raise RuntimeError(
+                "Directional visual delta scaling is inference-only"
+            )
+        self._visual_delta_scale = scale
+        print(
+            "[DIRECTIONAL_CONCAT_WORKSPACE_VISUAL_INTERVENTION] "
+            f"visual_delta_scale={scale} anchors_preserved=True "
+            "token_count_preserved=True"
+        )
 
     def install(self, visual_model: nn.Module) -> None:
         if self._installed:
@@ -373,14 +402,29 @@ class DirectionalConcatWorkspaceVisual(nn.Module):
         self._workspace_by_image = workspace
 
         with torch.no_grad():
-            pooling_f = pooling.detach().float().clamp_min(1e-8)
+            pooling_f = pooling.detach().float()
+            text_mask_f = text_mask[:, None, :]
+            pooling_safe = torch.where(
+                text_mask_f,
+                pooling_f.clamp_min(1e-8),
+                torch.ones_like(pooling_f),
+            )
             text_counts = text_mask.sum(dim=-1).clamp_min(2).float()
-            text_entropy = -(pooling_f * pooling_f.log()).sum(dim=-1)
+            text_entropy = -(
+                pooling_f * pooling_safe.log() * text_mask_f
+            ).sum(dim=-1)
             text_entropy = text_entropy / text_counts.log()[:, None]
-            cross_f = cross_weights.detach().float().clamp_min(1e-8)
-            cross_f = cross_f * visual_mask[:, None, None, :]
+            cross_f = cross_weights.detach().float()
+            visual_mask_f = visual_mask[:, None, None, :]
+            cross_safe = torch.where(
+                visual_mask_f,
+                cross_f.clamp_min(1e-8),
+                torch.ones_like(cross_f),
+            )
             visual_counts = visual_mask.sum(dim=-1).clamp_min(2).float()
-            visual_entropy = -(cross_f * cross_f.log()).sum(dim=-1)
+            visual_entropy = -(
+                cross_f * cross_safe.log() * visual_mask_f
+            ).sum(dim=-1)
             visual_entropy = visual_entropy / visual_counts.log()[:, None, None]
             query_norm = queries.detach().float().norm(dim=-1).mean()
             cross_norm = cross.detach().float().norm(dim=-1).mean()
@@ -555,6 +599,7 @@ class DirectionalConcatWorkspaceVisual(nn.Module):
         workspace_visual = self.workspace_visual_delta(
             workspace,
             self.workspace_visual_anchor,
+            delta_scale=self._visual_delta_scale,
         ).to(device=hidden_states.device, dtype=hidden_states.dtype)
         private_visual = self.private_visual_prompt.to(
             device=hidden_states.device,
@@ -622,4 +667,7 @@ class DirectionalConcatWorkspaceVisual(nn.Module):
         return {
             "mode": "directional_concat",
             "anchor_layers": list(self.anchor_layers),
+            "visual_delta_scale": self._visual_delta_scale,
+            "anchors_preserved": True,
+            "token_count_preserved": True,
         }

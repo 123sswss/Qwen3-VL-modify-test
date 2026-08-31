@@ -373,6 +373,7 @@ class DynamicPromptTuningModel(nn.Module):
         self._intervention_samples_changed = 0
         self._intervention_audited = False
         self._workspace_text_write_disabled = False
+        self._directional_text_delta_scale = 1.0
 
     @staticmethod
     def _resolve_visual_token_ids(tokenizer: Any) -> Sequence[int]:
@@ -453,7 +454,21 @@ class DynamicPromptTuningModel(nn.Module):
         visual_rep_write_disabled_layers: Sequence[int] = (),
         update_bypassed_layers: Sequence[int] = (),
         text_write_disabled: bool = False,
+        directional_text_delta_scale: float = 1.0,
+        directional_visual_delta_scale: float = 1.0,
     ) -> None:
+        text_scale = float(directional_text_delta_scale)
+        visual_scale = float(directional_visual_delta_scale)
+        for name, scale in (
+            ("text", text_scale),
+            ("visual", visual_scale),
+        ):
+            if not math.isfinite(scale) or not 0.0 <= scale <= 1.0:
+                raise ValueError(
+                    f"Directional {name} delta scale must be finite and in [0, 1]"
+                )
+        if self.training and (text_scale != 1.0 or visual_scale != 1.0):
+            raise RuntimeError("Directional delta scaling is inference-only")
         if self.directional_concat_workspace_enabled:
             if (
                 visual_write_disabled_layers
@@ -465,7 +480,22 @@ class DynamicPromptTuningModel(nn.Module):
                     "Legacy Workspace interventions do not apply to "
                     "Directional Concat Workspace"
                 )
+            if self.sparse_visual is None:
+                raise RuntimeError("Directional Concat Workspace is unavailable")
+            self._directional_text_delta_scale = text_scale
+            self.sparse_visual.configure_inference_intervention(
+                visual_delta_scale=visual_scale,
+            )
+            print(
+                "[DIRECTIONAL_CONCAT_WORKSPACE_TEXT_INTERVENTION] "
+                f"text_delta_scale={text_scale} anchors_preserved=True "
+                "token_count_preserved=True"
+            )
             return
+        if text_scale != 1.0 or visual_scale != 1.0:
+            raise ValueError(
+                "Directional delta scales require Directional Concat Workspace"
+            )
         if self.sparse_visual is None:
             if (
                 visual_write_disabled_layers
@@ -521,9 +551,14 @@ class DynamicPromptTuningModel(nn.Module):
         }
         if self.sparse_visual is not None:
             workspace_summary = self.sparse_visual.workspace_inference_intervention_summary()
-            workspace_summary["text_write_disabled"] = (
-                self._workspace_text_write_disabled
-            )
+            if self.directional_concat_workspace_enabled:
+                workspace_summary["text_delta_scale"] = (
+                    self._directional_text_delta_scale
+                )
+            else:
+                workspace_summary["text_write_disabled"] = (
+                    self._workspace_text_write_disabled
+                )
             summary["workspace"] = workspace_summary
         return summary
 
@@ -726,6 +761,7 @@ class DynamicPromptTuningModel(nn.Module):
                 workspace_prompt = self.workspace_text_projection(
                     workspace,
                     self.workspace_text_anchor,
+                    delta_scale=self._directional_text_delta_scale,
                 ).to(device=inputs_embeds.device, dtype=inputs_embeds.dtype)
                 private_prompt = inputs_embeds[:, : self.private_prompt_length]
                 dynamic_prompt = torch.cat(

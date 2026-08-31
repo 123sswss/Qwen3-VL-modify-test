@@ -587,6 +587,24 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Inference-only: compute but zero the Workspace Text residual.",
     )
+    parser.add_argument(
+        "--directional-text-delta-scale",
+        type=float,
+        default=1.0,
+        help=(
+            "Inference-only: scale MLP(Z) at the Directional LLM prompt output "
+            "while preserving its anchor tokens and sequence length."
+        ),
+    )
+    parser.add_argument(
+        "--directional-visual-delta-scale",
+        type=float,
+        default=1.0,
+        help=(
+            "Inference-only: scale MLP(Z) at the Directional visual prompt output "
+            "while preserving its anchor tokens and sequence length."
+        ),
+    )
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--language", choices=("en", "zh", "all"), default="en")
     parser.add_argument("--base-type", action="append", default=[])
@@ -633,11 +651,19 @@ def main() -> int:
         raise ValueError("--resume and --overwrite are mutually exclusive")
     if args.timing_warmup_runs < 0:
         raise ValueError("--timing-warmup-runs must be non-negative")
+    for name, scale in (
+        ("directional text", args.directional_text_delta_scale),
+        ("directional visual", args.directional_visual_delta_scale),
+    ):
+        if not math.isfinite(scale) or not 0.0 <= scale <= 1.0:
+            raise ValueError(f"{name} delta scale must be finite and in [0, 1]")
     workspace_intervention_requested = bool(
         args.workspace_disable_visual_write_layer
         or args.workspace_disable_visual_rep_write_layer
         or args.workspace_bypass_update_layer
         or args.workspace_disable_text_write
+        or args.directional_text_delta_scale != 1.0
+        or args.directional_visual_delta_scale != 1.0
     )
     if workspace_intervention_requested and args.backend != "dynamic-prompt":
         raise ValueError(
@@ -683,6 +709,8 @@ def main() -> int:
                 args.workspace_bypass_update_layer
             ),
             "workspace_text_write_disabled": args.workspace_disable_text_write,
+            "directional_text_delta_scale": args.directional_text_delta_scale,
+            "directional_visual_delta_scale": args.directional_visual_delta_scale,
         }
         if args.backend == "dynamic-prompt"
         else None

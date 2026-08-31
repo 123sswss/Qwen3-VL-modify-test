@@ -1163,6 +1163,54 @@ run_slake_dynamic_prompt_17only_final_path_interventions() {
   echo "[SLAKE_17ONLY_FINAL_PATH_INTERVENTIONS_DONE] output=$output_root"
 }
 
+run_slake_directional_concat_workspace_delta_interventions() {
+  local reference_run="${SLAKE_DIRECTIONAL_CONCAT_REFERENCE_RUN:-$SLAKE_DYNAMIC_PROMPT_OUTPUT_ROOT/slake_directional_concat_workspace_z10_d1024_l17_private_p20_s8_seed44_20260830}"
+  local checkpoint="$reference_run/checkpoints/epoch_3"
+  local baseline="$reference_run/eval_test/epoch_3"
+  if [ ! -f "$checkpoint/dynamic_prompt_config.json" ] \
+    || [ ! -f "$checkpoint/dynamic_prompt.pt" ]; then
+    echo "[ERR] SLAKE Directional Concat checkpoint not found: $checkpoint" >&2
+    return 1
+  fi
+  if [ ! -f "$baseline/slake_comparisons.json" ]; then
+    echo "[ERR] SLAKE Directional Concat baseline predictions not found: $baseline" >&2
+    return 1
+  fi
+
+  local output_root
+  output_root="$(available_output_dir "$SLAKE_DYNAMIC_PROMPT_OUTPUT_ROOT" "slake_directional_concat_delta_interventions_seed44_${RUN_DATE}")"
+  mkdir -p "$output_root"
+  printf 'reference_run\t%s\ncheckpoint\t%s\nbaseline\t%s\ncontrol\tanchors_and_token_counts_preserved\n' \
+    "$reference_run" "$checkpoint" "$baseline" \
+    > "$output_root/intervention_manifest.tsv"
+
+  run_slake_dynamic_prompt_eval \
+    "$checkpoint" \
+    "$output_root/text_delta_off" \
+    "$output_root/text_delta_off.log" \
+    --directional-text-delta-scale 0 || return 1
+  run_slake_dynamic_prompt_eval \
+    "$checkpoint" \
+    "$output_root/text_delta_half" \
+    "$output_root/text_delta_half.log" \
+    --directional-text-delta-scale 0.5 || return 1
+  run_slake_dynamic_prompt_eval \
+    "$checkpoint" \
+    "$output_root/visual_delta_off" \
+    "$output_root/visual_delta_off.log" \
+    --directional-visual-delta-scale 0 || return 1
+  run_slake_dynamic_prompt_eval \
+    "$checkpoint" \
+    "$output_root/visual_delta_half" \
+    "$output_root/visual_delta_half.log" \
+    --directional-visual-delta-scale 0.5 || return 1
+
+  python diagnostics/compare_slake_workspace_interventions.py \
+    --baseline "$baseline" \
+    --intervention-root "$output_root" || return 1
+  echo "[SLAKE_DIRECTIONAL_CONCAT_DELTA_INTERVENTIONS_DONE] output=$output_root"
+}
+
 run_pathvqa_dynamic_prompt_raw_shared_s_suite_seed44() {
   run_pathvqa_dynamic_prompt_raw_shared_s_separate_residual_seed44 || return 1
   run_pathvqa_dynamic_prompt_raw_shared_s_direct_prompt_seed44 || return 1
@@ -1637,6 +1685,9 @@ case "$RUN_TARGET" in
     ;;
   slake_dynamic_prompt_17only_final_path_interventions)
     run_slake_dynamic_prompt_17only_final_path_interventions || failures=$((failures + 1))
+    ;;
+  slake_directional_concat_workspace_delta_interventions)
+    run_slake_directional_concat_workspace_delta_interventions || failures=$((failures + 1))
     ;;
   pathvqa)
     run_pathvqa || failures=$((failures + 1))

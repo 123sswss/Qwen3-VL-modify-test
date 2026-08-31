@@ -47,6 +47,8 @@ class DynamicPromptTuningModelInterface:
         workspace_visual_rep_write_disabled_layers: Sequence[int] = (),
         workspace_update_bypassed_layers: Sequence[int] = (),
         workspace_text_write_disabled: bool = False,
+        directional_text_delta_scale: float = 1.0,
+        directional_visual_delta_scale: float = 1.0,
     ) -> None:
         checkpoint = Path(checkpoint_path).resolve()
         with (checkpoint / DYNAMIC_PROMPT_CONFIG_NAME).open(
@@ -171,6 +173,8 @@ class DynamicPromptTuningModelInterface:
             ),
             update_bypassed_layers=workspace_update_bypassed_layers,
             text_write_disabled=workspace_text_write_disabled,
+            directional_text_delta_scale=directional_text_delta_scale,
+            directional_visual_delta_scale=directional_visual_delta_scale,
         )
         self._workspace_debug_sums: Dict[str, float] = {}
         self._workspace_debug_count = 0
@@ -190,7 +194,9 @@ class DynamicPromptTuningModelInterface:
             f"workspace_visual_write_disabled={list(workspace_visual_write_disabled_layers)} "
             f"workspace_visual_rep_write_disabled={list(workspace_visual_rep_write_disabled_layers)} "
             f"workspace_update_bypassed={list(workspace_update_bypassed_layers)} "
-            f"workspace_text_write_disabled={workspace_text_write_disabled}"
+            f"workspace_text_write_disabled={workspace_text_write_disabled} "
+            f"directional_text_delta_scale={directional_text_delta_scale} "
+            f"directional_visual_delta_scale={directional_visual_delta_scale}"
         )
 
     def reset_inference_state(self) -> None:

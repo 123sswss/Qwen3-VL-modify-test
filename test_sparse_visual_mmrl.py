@@ -691,34 +691,54 @@ class SparseVisualMMRLTest(unittest.TestCase):
         )
         self.assertEqual(static_total, 10_625_536)
 
-        compressed_adapter = DirectionalConcatWorkspaceVisual(
-            visual_dim=1024,
-            text_dim=2560,
-            anchor_layer=17,
-            private_prompt_tokens=8,
-            workspace_tokens=10,
-            workspace_dim=512,
-            workspace_heads=16,
-            visual_dynamic_write=False,
-        )
-        compressed_text_projection = ZeroInitWorkspaceProjection(512, 2560)
-        compressed_total = (
-            sum(parameter.numel() for parameter in compressed_adapter.parameters())
-            + sum(
-                parameter.numel()
-                for parameter in compressed_text_projection.parameters()
-            )
-            + private_text_prompt.numel()
-            + workspace_text_anchor.numel()
-        )
-        self.assertEqual(
-            sum(
-                parameter.numel()
-                for parameter in compressed_adapter.workspace_parameters()
-            ),
-            2_929_664,
-        )
-        self.assertEqual(compressed_total, 4_591_616)
+        compressed_expectations = {
+            256: (1_224_192, 2_033_408),
+            512: (2_929_664, 4_591_616),
+            768: (5_159_424, 7_805_184),
+        }
+        for workspace_dim, (
+            expected_workspace_parameters,
+            expected_total,
+        ) in compressed_expectations.items():
+            with self.subTest(workspace_dim=workspace_dim):
+                compressed_adapter = DirectionalConcatWorkspaceVisual(
+                    visual_dim=1024,
+                    text_dim=2560,
+                    anchor_layer=17,
+                    private_prompt_tokens=8,
+                    workspace_tokens=10,
+                    workspace_dim=workspace_dim,
+                    workspace_heads=16,
+                    visual_dynamic_write=False,
+                )
+                compressed_text_projection = ZeroInitWorkspaceProjection(
+                    workspace_dim,
+                    2560,
+                )
+                compressed_total = (
+                    sum(
+                        parameter.numel()
+                        for parameter in compressed_adapter.parameters()
+                    )
+                    + sum(
+                        parameter.numel()
+                        for parameter in compressed_text_projection.parameters()
+                    )
+                    + private_text_prompt.numel()
+                    + workspace_text_anchor.numel()
+                )
+                self.assertIsInstance(
+                    compressed_adapter.workspace_visual_memory_projection,
+                    nn.Linear,
+                )
+                self.assertEqual(
+                    sum(
+                        parameter.numel()
+                        for parameter in compressed_adapter.workspace_parameters()
+                    ),
+                    expected_workspace_parameters,
+                )
+                self.assertEqual(compressed_total, expected_total)
 
 
 if __name__ == "__main__":

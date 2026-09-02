@@ -1103,8 +1103,23 @@ run_pathvqa_qdpt_d768_learned_static_query_seed44() {
   run_qdpt_d768_final_dataset pathvqa learned_static_query 44
 }
 
-run_pathvqa_qdpt_d768_direct_visual_z_concat_seed44() {
-  run_qdpt_d768_final_dataset pathvqa direct_visual_z_concat 44
+run_pathvqa_qdpt_d768_direct_visual_z_concat_seeds44_46() {
+  local failures=0
+  local run_seed
+  for run_seed in 44 45 46; do
+    echo "[QDPT_DIRECT_VISUAL_Z_SUITE] seed=$run_seed status=starting"
+    if run_qdpt_d768_final_dataset \
+      pathvqa direct_visual_z_concat "$run_seed"; then
+      echo "[QDPT_DIRECT_VISUAL_Z_SUITE] seed=$run_seed status=completed"
+    else
+      echo "[QDPT_DIRECT_VISUAL_Z_SUITE] seed=$run_seed status=failed_continue" >&2
+      failures=$((failures + 1))
+    fi
+  done
+  if [ "$failures" -ne 0 ]; then
+    echo "[ERR] Direct visual Z seed suite failures=$failures" >&2
+    return 1
+  fi
 }
 
 run_qdpt_d768_final_pathvqa_slake_seed44() {
@@ -2199,8 +2214,8 @@ case "$RUN_TARGET" in
   pathvqa_qdpt_d768_learned_static_query_seed44)
     run_pathvqa_qdpt_d768_learned_static_query_seed44 || failures=$((failures + 1))
     ;;
-  pathvqa_qdpt_d768_direct_visual_z_concat_seed44)
-    run_pathvqa_qdpt_d768_direct_visual_z_concat_seed44 || failures=$((failures + 1))
+  pathvqa_qdpt_d768_direct_visual_z_concat_seeds44_46)
+    run_pathvqa_qdpt_d768_direct_visual_z_concat_seeds44_46 || failures=$((failures + 1))
     ;;
   qdpt_d768_final_pathvqa_slake_seed44)
     run_qdpt_d768_final_pathvqa_slake_seed44 || failures=$((failures + 1))
@@ -2258,7 +2273,7 @@ case "$RUN_TARGET" in
     run_slake || failures=$((failures + 1))
     ;;
   *)
-    echo "[ERR] 未知目标: $RUN_TARGET；新增 QDPT 目标: pathvqa_qdpt_d768_no_static_visual_seed44、pathvqa_qdpt_d768_no_static_visual_resume_eval、pathvqa_qdpt_d768_learned_static_query_seed44、pathvqa_qdpt_d768_direct_visual_z_concat_seed44、qdpt_d768_final_pathvqa_slake_seed44。" >&2
+    echo "[ERR] 未知目标: $RUN_TARGET；新增 QDPT 目标: pathvqa_qdpt_d768_no_static_visual_seed44、pathvqa_qdpt_d768_no_static_visual_resume_eval、pathvqa_qdpt_d768_learned_static_query_seed44、pathvqa_qdpt_d768_direct_visual_z_concat_seeds44_46、qdpt_d768_final_pathvqa_slake_seed44。" >&2
     exit 2
     ;;
 esac

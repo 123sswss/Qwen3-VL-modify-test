@@ -1064,6 +1064,26 @@ run_pathvqa_qdpt_d768_no_static_visual_seed44() {
   run_qdpt_d768_final_dataset pathvqa no_static_visual 44
 }
 
+run_pathvqa_qdpt_d768_no_static_visual_resume_eval() {
+  local reference_run="${PATHVQA_QDPT_NO_STATIC_RUN:-}"
+  if [ -z "$reference_run" ]; then
+    reference_run="$(ls -dt \
+      "$PATHVQA_DYNAMIC_PROMPT_OUTPUT_ROOT"/pathvqa_qdpt_d768_question_q10_l17_p20_no_static_visual_seed44_* \
+      2>/dev/null | head -1)"
+  fi
+  if [ -z "$reference_run" ] \
+    || [ ! -f "$reference_run/checkpoints/epoch_3/dynamic_prompt_config.json" ] \
+    || [ ! -f "$reference_run/checkpoints/epoch_3/dynamic_prompt.pt" ]; then
+    echo "[ERR] No complete no-static-visual epoch3 checkpoint found: $reference_run" >&2
+    return 1
+  fi
+  echo "[QDPT_NO_STATIC_VISUAL_RESUME_EVAL] training=false checkpoint=$reference_run/checkpoints/epoch_3"
+  run_pathvqa_dynamic_prompt_epoch3_validation \
+    "$reference_run" \
+    "pathvqa_qdpt_d768_question_q10_l17_p20_no_static_visual_seed44" \
+    44
+}
+
 run_pathvqa_qdpt_d768_learned_static_query_seed44() {
   run_qdpt_d768_final_dataset pathvqa learned_static_query 44
 }
@@ -2154,6 +2174,9 @@ case "$RUN_TARGET" in
   pathvqa_qdpt_d768_no_static_visual_seed44)
     run_pathvqa_qdpt_d768_no_static_visual_seed44 || failures=$((failures + 1))
     ;;
+  pathvqa_qdpt_d768_no_static_visual_resume_eval)
+    run_pathvqa_qdpt_d768_no_static_visual_resume_eval || failures=$((failures + 1))
+    ;;
   pathvqa_qdpt_d768_learned_static_query_seed44)
     run_pathvqa_qdpt_d768_learned_static_query_seed44 || failures=$((failures + 1))
     ;;
@@ -2213,7 +2236,7 @@ case "$RUN_TARGET" in
     run_slake || failures=$((failures + 1))
     ;;
   *)
-    echo "[ERR] 未知目标: $RUN_TARGET；新增 QDPT 目标: pathvqa_qdpt_d768_no_static_visual_seed44、pathvqa_qdpt_d768_learned_static_query_seed44、qdpt_d768_final_pathvqa_slake_seed44。" >&2
+    echo "[ERR] 未知目标: $RUN_TARGET；新增 QDPT 目标: pathvqa_qdpt_d768_no_static_visual_seed44、pathvqa_qdpt_d768_no_static_visual_resume_eval、pathvqa_qdpt_d768_learned_static_query_seed44、qdpt_d768_final_pathvqa_slake_seed44。" >&2
     exit 2
     ;;
 esac

@@ -841,7 +841,7 @@ class SparseVisualMMRLTest(unittest.TestCase):
             visual_dim=1024,
             text_dim=2560,
             anchor_layer=17,
-            private_prompt_tokens=8,
+            private_prompt_tokens=0,
             workspace_tokens=10,
             workspace_dim=768,
             workspace_heads=16,
@@ -861,6 +861,18 @@ class SparseVisualMMRLTest(unittest.TestCase):
         )
         self.assertEqual(total(no_static), 7_786_752)
         self.assertEqual(total(learned_static), 7_805_184)
+        with self.assertRaisesRegex(ValueError, "must be positive"):
+            DirectionalConcatWorkspaceVisual(
+                visual_dim=1024,
+                text_dim=2560,
+                anchor_layer=17,
+                private_prompt_tokens=0,
+                workspace_tokens=10,
+                workspace_dim=768,
+                workspace_heads=16,
+                visual_dynamic_write=False,
+                static_visual_write=True,
+            )
 
 
 if __name__ == "__main__":

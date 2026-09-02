@@ -124,12 +124,18 @@ class DirectionalConcatWorkspaceVisual(nn.Module):
         if min(
             visual_dim,
             text_dim,
-            private_prompt_tokens,
             workspace_tokens,
             workspace_dim,
             workspace_heads,
         ) < 1:
             raise ValueError("Directional Workspace dimensions must be positive")
+        if private_prompt_tokens < 0 or (
+            static_visual_write and private_prompt_tokens < 1
+        ):
+            raise ValueError(
+                "private_prompt_tokens must be positive when static visual "
+                "write is enabled, and non-negative otherwise"
+            )
         if anchor_layer < 0:
             raise ValueError("Directional Workspace anchor must be non-negative")
         if workspace_dim % workspace_heads != 0:

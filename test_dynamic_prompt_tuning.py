@@ -724,7 +724,11 @@ class DynamicPromptTuningTest(unittest.TestCase):
             )
 
     def test_directional_control_config_checkpoint_round_trip(self):
-        def build(static_visual_write, query_source):
+        def build(
+            static_visual_write,
+            query_source,
+            direct_visual_z_tokens=False,
+        ):
             return DynamicPromptTuningModel(
                 _FakeMultimodalModel(),
                 tokenizer=_FakeTokenizer(),
@@ -740,18 +744,25 @@ class DynamicPromptTuningTest(unittest.TestCase):
                 directional_concat_workspace=True,
                 directional_visual_dynamic_write=False,
                 directional_static_visual_write=static_visual_write,
+                directional_direct_visual_z_tokens=direct_visual_z_tokens,
                 directional_query_source=query_source,
             )
 
-        for static_visual_write, query_source in (
-            (False, "question_attention_pooling"),
-            (True, "learned_static"),
+        for static_visual_write, query_source, direct_visual_z_tokens in (
+            (False, "question_attention_pooling", False),
+            (True, "learned_static", False),
+            (True, "question_attention_pooling", True),
         ):
             with self.subTest(
                 static_visual_write=static_visual_write,
                 query_source=query_source,
+                direct_visual_z_tokens=direct_visual_z_tokens,
             ):
-                model = build(static_visual_write, query_source)
+                model = build(
+                    static_visual_write,
+                    query_source,
+                    direct_visual_z_tokens,
+                )
                 with tempfile.TemporaryDirectory() as directory:
                     output = Path(directory)
                     model.save_dynamic_prompt(output)
@@ -764,7 +775,15 @@ class DynamicPromptTuningTest(unittest.TestCase):
                         config["static_visual_write"], static_visual_write
                     )
                     self.assertEqual(config["query"], query_source)
-                    restored = build(static_visual_write, query_source)
+                    self.assertEqual(
+                        config["direct_visual_z_tokens"],
+                        direct_visual_z_tokens,
+                    )
+                    restored = build(
+                        static_visual_write,
+                        query_source,
+                        direct_visual_z_tokens,
+                    )
                     restored.load_dynamic_prompt(output)
                     for key, value in model.sparse_visual.state_dict().items():
                         torch.testing.assert_close(

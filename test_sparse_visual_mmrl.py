@@ -861,6 +861,21 @@ class SparseVisualMMRLTest(unittest.TestCase):
         )
         self.assertEqual(total(no_static), 7_786_752)
         self.assertEqual(total(learned_static), 7_805_184)
+        direct_visual_z = DirectionalConcatWorkspaceVisual(
+            visual_dim=1024,
+            text_dim=2560,
+            anchor_layer=17,
+            private_prompt_tokens=0,
+            workspace_tokens=10,
+            workspace_dim=768,
+            workspace_heads=16,
+            visual_dynamic_write=False,
+            static_visual_write=True,
+            direct_visual_z_tokens=True,
+        )
+        self.assertIsNone(direct_visual_z.private_visual_prompt)
+        self.assertEqual(direct_visual_z.visual_prompt_tokens, 20)
+        self.assertEqual(total(direct_visual_z), 8_585_984)
         with self.assertRaisesRegex(ValueError, "must be positive"):
             DirectionalConcatWorkspaceVisual(
                 visual_dim=1024,
@@ -872,6 +887,67 @@ class SparseVisualMMRLTest(unittest.TestCase):
                 workspace_heads=16,
                 visual_dynamic_write=False,
                 static_visual_write=True,
+            )
+
+    def test_directional_direct_visual_z_concat_is_single_pass_and_trainable(self):
+        torch.manual_seed(34)
+        visual = _FakeVisual()
+        adapter = DirectionalConcatWorkspaceVisual(
+            visual_dim=8,
+            text_dim=12,
+            anchor_layer=1,
+            private_prompt_tokens=0,
+            workspace_tokens=3,
+            workspace_dim=8,
+            workspace_heads=2,
+            visual_dynamic_write=False,
+            static_visual_write=True,
+            direct_visual_z_tokens=True,
+        )
+        self.assertEqual(adapter.visual_prompt_tokens, 6)
+        self.assertEqual(adapter.private_parameters(), [])
+        adapter.install(visual)
+        hidden = torch.randn(7, 8)
+        text_tokens = torch.randn(2, 4, 12)
+        text_mask = torch.tensor(
+            [[True, True, False, False], [True, True, True, False]]
+        )
+        cu_seqlens = torch.tensor([0, 2, 4, 7], dtype=torch.int32)
+        with adapter.activate(
+            torch.randn(2, 12),
+            torch.tensor([1, 1]),
+            text_tokens=text_tokens,
+            text_token_mask=text_mask,
+        ):
+            adapter.prepare_visual(torch.tensor([[1, 1, 4], [1, 1, 3]]))
+            output = visual.blocks[1](hidden, cu_seqlens=cu_seqlens)
+            loss = output.square().mean()
+        self.assertEqual(visual.blocks[1].block.calls, 1)
+        self.assertEqual(tuple(output.shape), tuple(hidden.shape))
+        self.assertEqual(
+            float(adapter.debug_context["workspace_direct_visual_z_enabled"]),
+            1.0,
+        )
+        loss.backward()
+        self.assertGreater(float(adapter.workspace_visual_anchor.grad.norm()), 0.0)
+        self.assertGreater(
+            float(adapter.direct_visual_z_projection[1].weight.grad.norm()),
+            0.0,
+        )
+        summary = adapter.workspace_inference_intervention_summary()
+        self.assertTrue(summary["direct_visual_z_tokens"])
+        with self.assertRaisesRegex(ValueError, "mutually exclusive"):
+            DirectionalConcatWorkspaceVisual(
+                visual_dim=8,
+                text_dim=12,
+                anchor_layer=1,
+                private_prompt_tokens=0,
+                workspace_tokens=3,
+                workspace_dim=8,
+                workspace_heads=2,
+                visual_dynamic_write=True,
+                static_visual_write=True,
+                direct_visual_z_tokens=True,
             )
 
 

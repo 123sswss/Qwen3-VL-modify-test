@@ -916,6 +916,18 @@ These results remain useful negative evidence and should not be rerun unless a n
 
 ## Provisional Training Resource Observations
 
+### 2026-09-02 - pathvqa_qdpt_d768_question_q10_l17_p20_no_static_visual_seed44
+
+- Commit/config: commits `20d8ebb` and checkpoint-reload fix `6e1e745`; D768 QDPT seed44 with the entire layer17 static visual insertion removed. The controlled model has no private `S_v8`, no static visual `A_v10`, no visual token insertion/strip and no dynamic visual write. It preserves P20, text anchor A_t10, question-attention-pooled Q10, full pre-Block17 visual K/V, CA768/16, Z10 and `Z -> dynamic LLM Prompt` exactly.
+- Dataset and split: PathVQA official Validation, all6,259 questions and832 image clusters; fixed epoch3-only full evaluation. Seed/data seed44/42.
+- Controlled change versus D768 seed44 reference: remove all18 Layer17 Static Visual Prompt Tokens (`S_v8+A_v10`) and execute the frozen Block17 once on its unmodified original visual sequence. Directional CA continues to read the same full pre-Block17 visual Token source.
+- Trainable parameters: **7,786,752** = soft/text anchors76,800 + Directional/Text modules7,709,952; sparse visual group0. This removes only18,432 parameters from the7,805,184 reference. Training runtime6,142.33s,1,845 steps and train loss11.39386; Prompt LR0.3 and Directional LR1e-4 unchanged.
+- Validation Overall: **58.4438**, standalone image-clustered95% CI **[57.0164,59.8655]**. Yes/No / Free-form: **90.9440 /26.0370**. Per question type: how10.8527, other7.1429, what21.7425, when0.0000, where60.1467, why4.7619, yes/no90.9440; Free-form type macro17.4411.
+- Paired against the exact D768 seed44 reference59.5622: **-1.1184 Overall**; no-static-only/reference-only correct261/331, exact McNemar `p=0.004530`, image-clustered paired95% CI **[-1.8938,-0.3484]**. Yes/No changes only-0.0960, while Free-form falls **-2.1378**. The largest type loss is `where` **-12.4694**, followed by how-1.5504 and what-0.5495.
+- Diagnostics remain active rather than collapsed: slot cosine0.6407, question-pooling entropy0.6430, visual-attention entropy0.6484, Cross-Attention delta/query1.2556, text delta/anchor0.5019 and Z norm33.8075. Static visual write, visual Prompt norms and sparse visual gradients are exactly zero by construction. The text-conditioned route is therefore healthy but cannot recover the missing visual calibration effect.
+- Conclusion: reject deletion of the complete static visual insertion. Its gain is statistically significant and concentrated in open/spatial questions, while binary accuracy is unchanged. The former `S_v8` and `A_v10` have no functional distinction after dynamic visual write removal beyond slot position, optimizer group and learning rate; if retained in the paper they should be presented jointly as **18 Layer17 Static Visual Prompt Tokens**, not as two semantic modules. This experiment establishes necessity of the combined static visual Prompt set, not the individual contribution of8 versus10 tokens.
+- Output path: `/root/autodl-tmp/Qwen3-VL-modify-test/pathvqa/outputs/dynamic_prompt/pathvqa_qdpt_d768_question_q10_l17_p20_no_static_visual_seed44_20260902`; checkpoint `checkpoints/epoch_3`, Validation under `eval_validation/epoch_3`, diagnostics `dynamic_prompt_diagnostics.jsonl`, report `train_report.json`. Paired analysis was generated in server-temporary `/tmp/qdpt_no_static_compare_20260902` and can be reproduced from the two saved prediction files.
+
 ### 2026-09-02 - PathVQA QDPT-D768 training peak VRAM
 
 - Method/config: locked PathVQA Directional Text-Dynamic-Only D768 training configuration used by the Day 2 multi-seed suite; observation was made during the QDPT-D768 phase.

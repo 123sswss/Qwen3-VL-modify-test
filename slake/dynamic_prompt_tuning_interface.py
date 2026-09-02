@@ -178,6 +178,11 @@ class DynamicPromptTuningModelInterface:
                 if directional_workspace is not None
                 else True
             ),
+            directional_direct_visual_z_tokens=(
+                bool(directional_workspace.get("direct_visual_z_tokens", False))
+                if directional_workspace is not None
+                else False
+            ),
             directional_query_source=(
                 str(directional_query_source)
             ),
@@ -214,6 +219,7 @@ class DynamicPromptTuningModelInterface:
             f"shared_workspace={self.model.shared_workspace_enabled} "
             f"directional_concat_workspace={self.model.directional_concat_workspace_enabled} "
             f"directional_static_visual_write={self.model.directional_static_visual_write} "
+            f"directional_direct_visual_z_tokens={self.model.directional_direct_visual_z_tokens} "
             f"directional_query_source={self.model.directional_query_source} "
             f"train_soft_prompt={self.model.soft_prompt is not None} "
             f"intervention={intervention} memory_lag={memory_lag} "

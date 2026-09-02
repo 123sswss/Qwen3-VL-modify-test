@@ -817,9 +817,10 @@ run_pathvqa_directional_concat_workspace_text_dynamic_only_seed44() {
     "$output_dir" "$experiment_name" "$run_seed"
 }
 
-run_pathvqa_directional_concat_workspace_text_dynamic_only_compressed_seed44() {
+run_pathvqa_directional_concat_workspace_text_dynamic_only_compressed() {
   local workspace_dim="$1"
   local expected_trainable="$2"
+  local run_seed="${3:-44}"
   if [ "$workspace_dim" -ne 256 ] \
     && [ "$workspace_dim" -ne 512 ] \
     && [ "$workspace_dim" -ne 768 ]; then
@@ -827,7 +828,6 @@ run_pathvqa_directional_concat_workspace_text_dynamic_only_compressed_seed44() {
     return 2
   fi
   local experiment_name="pathvqa_directional_concat_workspace_text_dynamic_only_z10_d${workspace_dim}_l17_private_p20_s8"
-  local run_seed=44
   local epochs="${PATHVQA_DYNAMIC_PROMPT_EPOCHS:-3}"
   if [ "$epochs" -ne 3 ]; then
     echo "[ERR] PathVQA Directional d${workspace_dim} protocol requires epochs=3, got: $epochs" >&2
@@ -887,18 +887,24 @@ run_pathvqa_directional_concat_workspace_text_dynamic_only_compressed_seed44() {
 }
 
 run_pathvqa_directional_concat_workspace_text_dynamic_only_d256_seed44() {
-  run_pathvqa_directional_concat_workspace_text_dynamic_only_compressed_seed44 \
-    256 2033408
+  run_pathvqa_directional_concat_workspace_text_dynamic_only_compressed \
+    256 2033408 44
 }
 
 run_pathvqa_directional_concat_workspace_text_dynamic_only_d512_seed44() {
-  run_pathvqa_directional_concat_workspace_text_dynamic_only_compressed_seed44 \
-    512 4591616
+  run_pathvqa_directional_concat_workspace_text_dynamic_only_compressed \
+    512 4591616 44
 }
 
 run_pathvqa_directional_concat_workspace_text_dynamic_only_d768_seed44() {
-  run_pathvqa_directional_concat_workspace_text_dynamic_only_compressed_seed44 \
-    768 7805184
+  run_pathvqa_directional_concat_workspace_text_dynamic_only_compressed \
+    768 7805184 44
+}
+
+run_pathvqa_directional_concat_workspace_text_dynamic_only_d768_seed() {
+  local run_seed="$1"
+  run_pathvqa_directional_concat_workspace_text_dynamic_only_compressed \
+    768 7805184 "$run_seed"
 }
 
 run_pathvqa_directional_width_ablation_seed44() {
@@ -1524,9 +1530,9 @@ run_pathvqa_lora_visual_last8_attn_r128() {
     run_pathvqa_lora_visual_attn_r128
 }
 
-run_pathvqa_lora_full_model_attn_r8_seed44() {
+run_pathvqa_lora_full_model_attn_r8() {
   local experiment_name=pathvqa_lora_full_model_attention_r8
-  local run_seed=44
+  local run_seed="$1"
   local epochs="${PATHVQA_LORA_EPOCHS:-3}"
   if [ "$epochs" -ne 3 ]; then
     echo "[ERR] Full-model LoRA 对比协议要求 epochs=3，当前为: $epochs" >&2
@@ -1580,6 +1586,36 @@ run_pathvqa_lora_full_model_attn_r8_seed44() {
     "$experiment_name" "$run_seed" "$validation_score" "$checkpoint" \
     >> "$output_dir/selected_result.tsv"
   cat "$output_dir/selected_result.tsv"
+}
+
+run_pathvqa_lora_full_model_attn_r8_seed44() {
+  run_pathvqa_lora_full_model_attn_r8 44
+}
+
+run_pathvqa_day2_d768_lora_r8_seeds45_46() {
+  local suite_failures=0
+
+  echo "[PATHVQA_DAY2_SUITE] 1/4 D768 seed45"
+  run_pathvqa_directional_concat_workspace_text_dynamic_only_d768_seed 45 \
+    || suite_failures=$((suite_failures + 1))
+
+  echo "[PATHVQA_DAY2_SUITE] 2/4 D768 seed46"
+  run_pathvqa_directional_concat_workspace_text_dynamic_only_d768_seed 46 \
+    || suite_failures=$((suite_failures + 1))
+
+  echo "[PATHVQA_DAY2_SUITE] 3/4 Full-Attention LoRA-r8 seed45"
+  run_pathvqa_lora_full_model_attn_r8 45 \
+    || suite_failures=$((suite_failures + 1))
+
+  echo "[PATHVQA_DAY2_SUITE] 4/4 Full-Attention LoRA-r8 seed46"
+  run_pathvqa_lora_full_model_attn_r8 46 \
+    || suite_failures=$((suite_failures + 1))
+
+  if [ "$suite_failures" -ne 0 ]; then
+    echo "[ERR] PathVQA Day 2 suite finished with failed experiments=$suite_failures; all four experiments were attempted." >&2
+    return 1
+  fi
+  echo "[PATHVQA_DAY2_SUITE_DONE] all four experiments completed successfully"
 }
 
 run_pathvqa_last8_lora_minimal_mmrl_relation_suite() {
@@ -1990,6 +2026,9 @@ case "$RUN_TARGET" in
   pathvqa_lora_full_model_attn_r8_seed44)
     run_pathvqa_lora_full_model_attn_r8_seed44 || failures=$((failures + 1))
     ;;
+  pathvqa_day2_d768_lora_r8_seeds45_46)
+    run_pathvqa_day2_d768_lora_r8_seeds45_46 || failures=$((failures + 1))
+    ;;
   pathvqa_last8_lora_minimal_mmrl_relation_suite)
     run_pathvqa_last8_lora_minimal_mmrl_relation_suite || failures=$((failures + 1))
     ;;
@@ -1998,7 +2037,7 @@ case "$RUN_TARGET" in
     run_slake || failures=$((failures + 1))
     ;;
   *)
-    echo "[ERR] 未知目标: $RUN_TARGET，可选 train、slake、pathvqa、pathvqa_base、pathvqa_prompt_tuning_seed44、pathvqa_dynamic_prompt_seed44、pathvqa_directional_concat_workspace_text_dynamic_only_seed44、pathvqa_directional_concat_workspace_text_dynamic_only_d256_seed44、pathvqa_directional_concat_workspace_text_dynamic_only_d512_seed44、pathvqa_directional_concat_workspace_text_dynamic_only_d768_seed44、pathvqa_directional_width_ablation_seed44、pathvqa_directional_concat_workspace_conditioning_mismatch、pathvqa_dynamic_prompt_sparse_visual_single_pass_seed44、pathvqa_dynamic_prompt_raw_shared_s_separate_residual_seed44、pathvqa_dynamic_prompt_raw_shared_s_direct_prompt_seed44、pathvqa_dynamic_prompt_raw_shared_s_suite_seed44、pathvqa_dynamic_prompt_asymmetric_shared_s_seed44、pathvqa_dynamic_prompt_full_workspace_seed44、pathvqa_dynamic_prompt_interventions、pathvqa_minimal_mmrl_prompt20_seed44、pathvqa_lora_visual_attn_r128、pathvqa_lora_visual_attn_r128_then_base、pathvqa_lora_visual_last8_attn_r128、pathvqa_lora_full_model_attn_r8_seed44、pathvqa_last8_lora_minimal_mmrl_relation_suite、slake_final_seeds4、slake_ablation_no_relation_seeds2、slake_ablation_independent_init_seeds2、slake_ablation_static_query_seed45、slake_ablation_mean_pooling_seed45、slake_mean_final_completion_suite、slake_text_guided_balanced_fusion_slots8_seed45、slake_prompt_tuning_seed44、slake_concat_mlp_fusion_seed45、slake_overnight_prompt_and_concat_mlp、slake_ablation_suite、slake_dynamic_prompt_full_workspace_seed44、slake_dynamic_prompt_full_workspace_17only_seed44、slake_dynamic_prompt_full_workspace_17only_s20_seed44、slake_directional_concat_workspace_seed44、slake_directional_concat_workspace_delta_interventions、slake_directional_concat_workspace_visual_memory_mismatch、slake_dynamic_prompt_workspace_path_interventions、slake_dynamic_prompt_17only_final_path_interventions、all。" >&2
+    echo "[ERR] 未知目标: $RUN_TARGET，可选 train、slake、pathvqa、pathvqa_base、pathvqa_prompt_tuning_seed44、pathvqa_dynamic_prompt_seed44、pathvqa_directional_concat_workspace_text_dynamic_only_seed44、pathvqa_directional_concat_workspace_text_dynamic_only_d256_seed44、pathvqa_directional_concat_workspace_text_dynamic_only_d512_seed44、pathvqa_directional_concat_workspace_text_dynamic_only_d768_seed44、pathvqa_directional_width_ablation_seed44、pathvqa_directional_concat_workspace_conditioning_mismatch、pathvqa_dynamic_prompt_sparse_visual_single_pass_seed44、pathvqa_dynamic_prompt_raw_shared_s_separate_residual_seed44、pathvqa_dynamic_prompt_raw_shared_s_direct_prompt_seed44、pathvqa_dynamic_prompt_raw_shared_s_suite_seed44、pathvqa_dynamic_prompt_asymmetric_shared_s_seed44、pathvqa_dynamic_prompt_full_workspace_seed44、pathvqa_dynamic_prompt_interventions、pathvqa_minimal_mmrl_prompt20_seed44、pathvqa_lora_visual_attn_r128、pathvqa_lora_visual_attn_r128_then_base、pathvqa_lora_visual_last8_attn_r128、pathvqa_lora_full_model_attn_r8_seed44、pathvqa_day2_d768_lora_r8_seeds45_46、pathvqa_last8_lora_minimal_mmrl_relation_suite、slake_final_seeds4、slake_ablation_no_relation_seeds2、slake_ablation_independent_init_seeds2、slake_ablation_static_query_seed45、slake_ablation_mean_pooling_seed45、slake_mean_final_completion_suite、slake_text_guided_balanced_fusion_slots8_seed45、slake_prompt_tuning_seed44、slake_concat_mlp_fusion_seed45、slake_overnight_prompt_and_concat_mlp、slake_ablation_suite、slake_dynamic_prompt_full_workspace_seed44、slake_dynamic_prompt_full_workspace_17only_seed44、slake_dynamic_prompt_full_workspace_17only_s20_seed44、slake_directional_concat_workspace_seed44、slake_directional_concat_workspace_delta_interventions、slake_directional_concat_workspace_visual_memory_mismatch、slake_dynamic_prompt_workspace_path_interventions、slake_dynamic_prompt_17only_final_path_interventions、all。" >&2
     exit 2
     ;;
 esac

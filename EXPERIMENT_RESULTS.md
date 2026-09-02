@@ -904,3 +904,14 @@ These results remain useful negative evidence and should not be rerun unless a n
 - Evaluation timing: TTFT mean0.051371s, weighted TPOT0.019723s/token,50.702 decode tokens/s and request mean0.098197s. Lower request mean is descriptive only; no controlled speed claim is made.
 - Conclusion: D256 establishes the lower capacity boundary. It saves parameters aggressively but significantly harms both binary and open questions, and should appear only as the lowest-width ablation. Do not continue to D128 or add intermediate widths: the fixed four-point table already shows a plateau at768-1024, a tolerable D512 tradeoff and a D256 cliff.
 - Output/log path: `/root/autodl-tmp/Qwen3-VL-modify-test/pathvqa/outputs/dynamic_prompt/pathvqa_directional_concat_workspace_text_dynamic_only_z10_d256_l17_private_p20_s8_seed44_20260901`; selected checkpoint `checkpoints/epoch_3`; Validation under `eval_validation/epoch_3`; diagnostics `dynamic_prompt_diagnostics.jsonl`; training report `train_report.json`.
+
+## Provisional Training Resource Observations
+
+### 2026-09-02 - PathVQA QDPT-D768 training peak VRAM
+
+- Method/config: locked PathVQA Directional Text-Dynamic-Only D768 training configuration used by the Day 2 multi-seed suite; observation was made during the QDPT-D768 phase.
+- GPU: GPU 0, single-GPU training.
+- Observed peak device-memory usage: **25,349 MiB (24.75 GiB)**.
+- Observation timestamp: **2026-09-02 10:58:46 +08:00**.
+- Measurement source: user-provided AutoDL monitoring-panel screenshot. Treat this as an external device-level peak observation, which may include CUDA context and non-PyTorch allocations; it is not interchangeable with `torch.cuda.max_memory_allocated()`.
+- Comparison status: pending a Full-Attention LoRA-r8 measurement collected through the same monitoring interface.

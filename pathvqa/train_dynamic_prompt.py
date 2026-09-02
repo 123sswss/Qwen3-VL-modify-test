@@ -396,6 +396,16 @@ def parse_args(dataset_name: str = "pathvqa") -> argparse.Namespace:
         action=argparse.BooleanOptionalAction,
         default=True,
     )
+    parser.add_argument(
+        "--directional-static-visual-write",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+    )
+    parser.add_argument(
+        "--directional-query-source",
+        choices=("question_attention_pooling", "learned_static"),
+        default="question_attention_pooling",
+    )
     parser.add_argument("--workspace-tokens", type=int, default=32)
     parser.add_argument("--workspace-dim", type=int, default=1024)
     parser.add_argument("--workspace-heads", type=int, default=16)
@@ -489,6 +499,24 @@ def parse_args(dataset_name: str = "pathvqa") -> argparse.Namespace:
             "--no-directional-visual-dynamic-write requires "
             "--directional-concat-workspace"
         )
+    if not args.directional_concat_workspace and not args.directional_static_visual_write:
+        parser.error(
+            "--no-directional-static-visual-write requires "
+            "--directional-concat-workspace"
+        )
+    if args.directional_visual_dynamic_write and not args.directional_static_visual_write:
+        parser.error(
+            "--directional-visual-dynamic-write requires "
+            "--directional-static-visual-write"
+        )
+    if (
+        not args.directional_concat_workspace
+        and args.directional_query_source != "question_attention_pooling"
+    ):
+        parser.error(
+            "--directional-query-source applies only to "
+            "--directional-concat-workspace"
+        )
     return args
 
 
@@ -569,6 +597,8 @@ def main(dataset_name: str = "pathvqa") -> int:
         workspace_visual_heads=args.workspace_visual_heads,
         directional_concat_workspace=args.directional_concat_workspace,
         directional_visual_dynamic_write=args.directional_visual_dynamic_write,
+        directional_static_visual_write=args.directional_static_visual_write,
+        directional_query_source=args.directional_query_source,
     )
     dataset = _build_train_dataset(dataset_name, args, processor)
     groups = model.trainable_parameter_groups()
@@ -604,10 +634,10 @@ def main(dataset_name: str = "pathvqa") -> int:
         f"dynamic_lr={args.dynamic_lr} seed={args.seed} data_seed={args.data_seed} "
         f"sparse_visual={args.sparse_visual} "
         f"sparse_anchors={list(args.sparse_visual_anchor_layers) if args.sparse_visual else []} "
-        f"sparse_rep_tokens={args.sparse_visual_rep_tokens if args.sparse_visual else 0} "
+        f"sparse_rep_tokens={args.sparse_visual_rep_tokens if args.sparse_visual and (not args.directional_concat_workspace or args.directional_static_visual_write) else 0} "
         f"sparse_attention_dim={args.sparse_visual_attention_dim if args.sparse_visual else 0} "
         f"sparse_heads={args.sparse_visual_heads if args.sparse_visual else 0} "
-        f"sparse_injection={'directional_concat_single_pass_insert_strip' if args.directional_concat_workspace else ('single_pass_insert_strip' if args.sparse_visual else 'none')} "
+        f"sparse_injection={('directional_concat_single_pass_insert_strip' if args.directional_static_visual_write else 'directional_read_only_single_pass_hook') if args.directional_concat_workspace else ('single_pass_insert_strip' if args.sparse_visual else 'none')} "
         f"shared_s_text_mode={args.shared_s_text_mode} "
         f"shared_s_text_merger={'main_visual_merger' if args.shared_s_text_mode in ('separate_residual', 'direct_prompt') else 'none'} "
         f"shared_s_attention={args.shared_s_attention_dim}x{args.shared_s_heads} "
@@ -616,6 +646,8 @@ def main(dataset_name: str = "pathvqa") -> int:
         f"shared_workspace={args.shared_workspace} "
         f"directional_concat_workspace={args.directional_concat_workspace} "
         f"directional_visual_dynamic_write={args.directional_visual_dynamic_write if args.directional_concat_workspace else False} "
+        f"directional_static_visual_write={args.directional_static_visual_write if args.directional_concat_workspace else False} "
+        f"directional_query_source={args.directional_query_source if args.directional_concat_workspace else 'none'} "
         f"workspace_tokens={args.workspace_tokens if args.shared_workspace else 0} "
         f"directional_workspace_tokens={args.workspace_tokens if args.directional_concat_workspace else 0} "
         f"workspace_dim={args.workspace_dim if (args.shared_workspace or args.directional_concat_workspace) else 0} "
@@ -720,18 +752,31 @@ def main(dataset_name: str = "pathvqa") -> int:
                 "dim": args.workspace_dim,
                 "heads": args.workspace_heads,
                 "anchor_layer": int(args.sparse_visual_anchor_layers[0]),
-                "private_visual_prompt_tokens": args.sparse_visual_rep_tokens,
+                "private_visual_prompt_tokens": (
+                    args.sparse_visual_rep_tokens
+                    if args.directional_static_visual_write
+                    else 0
+                ),
                 "private_text_prompt_tokens": args.prompt_length,
                 "text_workspace_anchor_tokens": args.workspace_tokens,
-                "query": "attention_pool_full_question_tokens",
+                "query": args.directional_query_source,
                 "memory": "full_visual_tokens",
                 "fusion": "text_query_visual_kv_cross_attention",
-                "output_interface": "anchored_token_concat",
+                "output_interface": (
+                    "anchored_token_concat"
+                    if args.directional_static_visual_write
+                    else "text_prompt_only_with_visual_read_hook"
+                ),
                 "visual_dynamic_write": args.directional_visual_dynamic_write,
+                "static_visual_write": args.directional_static_visual_write,
                 "visual_output_interface": (
-                    "dynamic_anchor_token_concat"
-                    if args.directional_visual_dynamic_write
-                    else "static_anchor_token_concat"
+                    (
+                        "dynamic_anchor_token_concat"
+                        if args.directional_visual_dynamic_write
+                        else "static_anchor_token_concat"
+                    )
+                    if args.directional_static_visual_write
+                    else "read_only_layer17_hook"
                 ),
                 "text_output_interface": "dynamic_anchor_token_concat",
                 "text_dynamic_projection_zero_initialized": True,
@@ -748,7 +793,14 @@ def main(dataset_name: str = "pathvqa") -> int:
         "sparse_visual": (
             {
                 "anchor_layers": list(args.sparse_visual_anchor_layers),
-                "rep_token_count": args.sparse_visual_rep_tokens,
+                "rep_token_count": (
+                    args.sparse_visual_rep_tokens
+                    if (
+                        not args.directional_concat_workspace
+                        or args.directional_static_visual_write
+                    )
+                    else 0
+                ),
                 "attention_dim": (
                     0
                     if args.directional_concat_workspace
@@ -760,7 +812,11 @@ def main(dataset_name: str = "pathvqa") -> int:
                     else args.sparse_visual_heads
                 ),
                 "injection_mode": (
-                    "directional_concat_single_pass_insert_strip"
+                    (
+                        "directional_concat_single_pass_insert_strip"
+                        if args.directional_static_visual_write
+                        else "directional_read_only_single_pass_hook"
+                    )
                     if args.directional_concat_workspace
                     else "single_pass_insert_strip"
                 ),

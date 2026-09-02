@@ -907,6 +907,173 @@ run_pathvqa_directional_concat_workspace_text_dynamic_only_d768_seed() {
     768 7805184 "$run_seed"
 }
 
+run_qdpt_d768_final_dataset() {
+  local dataset="$1"
+  local variant="$2"
+  local run_seed="${3:-44}"
+  local dataset_prefix data_root output_root train_module eval_protocol
+  local -a data_flags
+  case "$dataset" in
+    pathvqa)
+      dataset_prefix="pathvqa"
+      data_root="$PATHVQA_DATA_ROOT"
+      output_root="$PATHVQA_DYNAMIC_PROMPT_OUTPUT_ROOT"
+      train_module="pathvqa.train_dynamic_prompt"
+      eval_protocol="fixed_epoch3_validation"
+      data_flags=(--cache-dir "$PATHVQA_CACHE_ROOT")
+      ;;
+    slake)
+      dataset_prefix="slake"
+      data_root="$SLAKE_DATA_ROOT"
+      output_root="$SLAKE_DYNAMIC_PROMPT_OUTPUT_ROOT"
+      train_module="slake.train_dynamic_prompt"
+      eval_protocol="fixed_epoch3_test"
+      data_flags=()
+      ;;
+    *)
+      echo "[ERR] Unsupported QDPT final dataset: $dataset" >&2
+      return 2
+      ;;
+  esac
+
+  local experiment_stem expected_trainable query_source static_visual_write
+  local private_visual_tokens visual_workspace_tokens
+  local -a control_flags
+  case "$variant" in
+    question_static_visual)
+      experiment_stem="qdpt_d768_question_q10_l17_p20_s8_av10"
+      expected_trainable=7805184
+      query_source="question_attention_pooling"
+      static_visual_write=true
+      private_visual_tokens=8
+      visual_workspace_tokens=10
+      control_flags=(
+        --directional-query-source question_attention_pooling
+        --directional-static-visual-write
+      )
+      ;;
+    no_static_visual)
+      experiment_stem="qdpt_d768_question_q10_l17_p20_no_static_visual"
+      expected_trainable=7786752
+      query_source="question_attention_pooling"
+      static_visual_write=false
+      private_visual_tokens=0
+      visual_workspace_tokens=0
+      control_flags=(
+        --directional-query-source question_attention_pooling
+        --no-directional-static-visual-write
+      )
+      ;;
+    learned_static_query)
+      experiment_stem="qdpt_d768_learned_q10_l17_p20_s8_av10"
+      expected_trainable=7805184
+      query_source="learned_static"
+      static_visual_write=true
+      private_visual_tokens=8
+      visual_workspace_tokens=10
+      control_flags=(
+        --directional-query-source learned_static
+        --directional-static-visual-write
+      )
+      ;;
+    *)
+      echo "[ERR] Unsupported QDPT D768 variant: $variant" >&2
+      return 2
+      ;;
+  esac
+
+  local epochs="${QDPT_FINAL_EPOCHS:-3}"
+  if [ "$epochs" -ne 3 ]; then
+    echo "[ERR] QDPT final protocol requires epochs=3, got: $epochs" >&2
+    return 2
+  fi
+  if ! python -c 'import datasets, pyarrow' >/dev/null 2>&1; then
+    echo "[ERR] QDPT final protocol requires datasets and pyarrow" >&2
+    return 2
+  fi
+
+  local experiment_name="${dataset_prefix}_${experiment_stem}_seed${run_seed}"
+  local output_dir
+  output_dir="$(available_output_dir "$output_root" "${experiment_name}_${RUN_DATE}")"
+  mkdir -p "$output_dir"
+  echo "[QDPT_D768_FINAL_CONFIG] dataset=$dataset experiment=$experiment_name seed=$run_seed data_seed=42 anchor=17 private_text_prompt=20 text_workspace_anchor=10 private_visual_prompt=$private_visual_tokens visual_workspace_anchor=$visual_workspace_tokens workspace=10x768 query_source=$query_source visual_kv=full_layer17_tokens static_visual_write=$static_visual_write visual_dynamic_write=false text_output=dynamic_anchor_token_concat expected_trainable=$expected_trainable epochs=3 full_evaluation=$eval_protocol intermediate_full_evaluation=disabled output=$output_dir"
+  (
+    cd "$ROOT_DIR" || exit 1
+    python -m unittest \
+      test_dynamic_prompt_tuning.py \
+      test_sparse_visual_mmrl.py \
+      test_pathvqa_directional_interventions.py || exit 1
+    python -m "$train_module" \
+      --model-path "$MODEL_PATH" \
+      --data-root "$data_root" \
+      "${data_flags[@]}" \
+      --output-dir "$output_dir" \
+      --experiment-name "$experiment_name" \
+      --prompt-length 20 \
+      --attention-dim 256 \
+      --attention-heads 8 \
+      --sparse-visual \
+      --sparse-visual-anchor-layers 17 \
+      --sparse-visual-rep-tokens 8 \
+      --sparse-visual-attention-dim 128 \
+      --sparse-visual-heads 4 \
+      --sparse-visual-lr "${QDPT_FINAL_SPARSE_VISUAL_LR:-3e-5}" \
+      --shared-s-text-mode none \
+      --directional-concat-workspace \
+      --no-directional-visual-dynamic-write \
+      "${control_flags[@]}" \
+      --workspace-tokens 10 \
+      --workspace-dim 768 \
+      --workspace-heads 16 \
+      --workspace-lr "${QDPT_FINAL_WORKSPACE_LR:-1e-4}" \
+      --epochs 3 \
+      --seed "$run_seed" \
+      --data-seed 42 \
+      --prompt-lr "${QDPT_FINAL_STATIC_LR:-0.3}" \
+      --dynamic-lr "${QDPT_FINAL_DYNAMIC_LR:-3e-4}" \
+      --batch-size "${QDPT_FINAL_BATCH_SIZE:-2}" \
+      --gradient-accumulation "${QDPT_FINAL_GRAD_ACCUM:-16}" \
+      --dataloader-workers "${QDPT_FINAL_WORKERS:-2}" \
+      --expected-trainable-parameters "$expected_trainable" \
+      2>&1 | tee "$output_dir/train.log"
+  ) || return 1
+
+  if [ "$dataset" = "pathvqa" ]; then
+    run_pathvqa_dynamic_prompt_epoch3_validation \
+      "$output_dir" "$experiment_name" "$run_seed"
+    return $?
+  fi
+
+  local checkpoint="$output_dir/checkpoints/epoch_3"
+  echo "[SLAKE_DYNAMIC_PROMPT_FIXED_TEST] protocol=$eval_protocol split=test checkpoint=$checkpoint"
+  run_slake_dynamic_prompt_eval \
+    "$checkpoint" \
+    "$output_dir/eval_test/epoch_3" \
+    "$output_dir/eval_test_epoch_3.log" || return 1
+  local test_score
+  test_score="$(python -c 'import json,sys;print(json.load(open(sys.argv[1],encoding="utf-8"))["overall_accuracy"])' "$output_dir/eval_test/epoch_3/slake_summary.json")" || return 1
+  printf 'experiment\tseed\tprotocol\ttest_epoch\ttest_accuracy\tcheckpoint\n' \
+    > "$output_dir/selected_result.tsv"
+  printf '%s\t%s\t%s\t3\t%s\t%s\n' \
+    "$experiment_name" "$run_seed" "$eval_protocol" "$test_score" "$checkpoint" \
+    >> "$output_dir/selected_result.tsv"
+  cat "$output_dir/selected_result.tsv"
+}
+
+run_pathvqa_qdpt_d768_no_static_visual_seed44() {
+  run_qdpt_d768_final_dataset pathvqa no_static_visual 44
+}
+
+run_pathvqa_qdpt_d768_learned_static_query_seed44() {
+  run_qdpt_d768_final_dataset pathvqa learned_static_query 44
+}
+
+run_qdpt_d768_final_pathvqa_slake_seed44() {
+  local variant="${QDPT_FINAL_VARIANT:-question_static_visual}"
+  run_qdpt_d768_final_dataset pathvqa "$variant" 44 || return 1
+  run_qdpt_d768_final_dataset slake "$variant" 44
+}
+
 run_pathvqa_directional_width_ablation_seed44() {
   run_pathvqa_directional_concat_workspace_text_dynamic_only_d768_seed44 || return 1
   run_pathvqa_directional_concat_workspace_text_dynamic_only_d256_seed44
@@ -1984,6 +2151,15 @@ case "$RUN_TARGET" in
   pathvqa_directional_concat_workspace_text_dynamic_only_d768_seed44)
     run_pathvqa_directional_concat_workspace_text_dynamic_only_d768_seed44 || failures=$((failures + 1))
     ;;
+  pathvqa_qdpt_d768_no_static_visual_seed44)
+    run_pathvqa_qdpt_d768_no_static_visual_seed44 || failures=$((failures + 1))
+    ;;
+  pathvqa_qdpt_d768_learned_static_query_seed44)
+    run_pathvqa_qdpt_d768_learned_static_query_seed44 || failures=$((failures + 1))
+    ;;
+  qdpt_d768_final_pathvqa_slake_seed44)
+    run_qdpt_d768_final_pathvqa_slake_seed44 || failures=$((failures + 1))
+    ;;
   pathvqa_directional_width_ablation_seed44)
     run_pathvqa_directional_width_ablation_seed44 || failures=$((failures + 1))
     ;;
@@ -2037,7 +2213,7 @@ case "$RUN_TARGET" in
     run_slake || failures=$((failures + 1))
     ;;
   *)
-    echo "[ERR] 未知目标: $RUN_TARGET，可选 train、slake、pathvqa、pathvqa_base、pathvqa_prompt_tuning_seed44、pathvqa_dynamic_prompt_seed44、pathvqa_directional_concat_workspace_text_dynamic_only_seed44、pathvqa_directional_concat_workspace_text_dynamic_only_d256_seed44、pathvqa_directional_concat_workspace_text_dynamic_only_d512_seed44、pathvqa_directional_concat_workspace_text_dynamic_only_d768_seed44、pathvqa_directional_width_ablation_seed44、pathvqa_directional_concat_workspace_conditioning_mismatch、pathvqa_dynamic_prompt_sparse_visual_single_pass_seed44、pathvqa_dynamic_prompt_raw_shared_s_separate_residual_seed44、pathvqa_dynamic_prompt_raw_shared_s_direct_prompt_seed44、pathvqa_dynamic_prompt_raw_shared_s_suite_seed44、pathvqa_dynamic_prompt_asymmetric_shared_s_seed44、pathvqa_dynamic_prompt_full_workspace_seed44、pathvqa_dynamic_prompt_interventions、pathvqa_minimal_mmrl_prompt20_seed44、pathvqa_lora_visual_attn_r128、pathvqa_lora_visual_attn_r128_then_base、pathvqa_lora_visual_last8_attn_r128、pathvqa_lora_full_model_attn_r8_seed44、pathvqa_day2_d768_lora_r8_seeds45_46、pathvqa_last8_lora_minimal_mmrl_relation_suite、slake_final_seeds4、slake_ablation_no_relation_seeds2、slake_ablation_independent_init_seeds2、slake_ablation_static_query_seed45、slake_ablation_mean_pooling_seed45、slake_mean_final_completion_suite、slake_text_guided_balanced_fusion_slots8_seed45、slake_prompt_tuning_seed44、slake_concat_mlp_fusion_seed45、slake_overnight_prompt_and_concat_mlp、slake_ablation_suite、slake_dynamic_prompt_full_workspace_seed44、slake_dynamic_prompt_full_workspace_17only_seed44、slake_dynamic_prompt_full_workspace_17only_s20_seed44、slake_directional_concat_workspace_seed44、slake_directional_concat_workspace_delta_interventions、slake_directional_concat_workspace_visual_memory_mismatch、slake_dynamic_prompt_workspace_path_interventions、slake_dynamic_prompt_17only_final_path_interventions、all。" >&2
+    echo "[ERR] 未知目标: $RUN_TARGET；新增 QDPT 目标: pathvqa_qdpt_d768_no_static_visual_seed44、pathvqa_qdpt_d768_learned_static_query_seed44、qdpt_d768_final_pathvqa_slake_seed44。" >&2
     exit 2
     ;;
 esac

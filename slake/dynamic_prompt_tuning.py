@@ -195,6 +195,8 @@ class DynamicPromptTuningModel(nn.Module):
         workspace_visual_heads: int = 16,
         directional_concat_workspace: bool = False,
         directional_visual_dynamic_write: bool = True,
+        directional_static_visual_write: bool = True,
+        directional_query_source: str = "question_attention_pooling",
     ) -> None:
         super().__init__()
         if prompt_length < 1:
@@ -242,6 +244,10 @@ class DynamicPromptTuningModel(nn.Module):
         self.directional_visual_dynamic_write = bool(
             directional_visual_dynamic_write
         )
+        self.directional_static_visual_write = bool(
+            directional_static_visual_write
+        )
+        self.directional_query_source = str(directional_query_source)
         for parameter in self.base_model.parameters():
             parameter.requires_grad = False
 
@@ -270,6 +276,8 @@ class DynamicPromptTuningModel(nn.Module):
                     workspace_dim=workspace_dim,
                     workspace_heads=workspace_heads,
                     visual_dynamic_write=self.directional_visual_dynamic_write,
+                    static_visual_write=self.directional_static_visual_write,
+                    query_source=self.directional_query_source,
                 ).to(device=visual_device)
             else:
                 self.sparse_visual = SparseVisualMMRL(
@@ -1093,7 +1101,7 @@ class DynamicPromptTuningModel(nn.Module):
             "num_heads": self.num_heads,
             "init_seed": self.init_seed,
             "memory": (
-                "text_attention_pool_queries_plus_full_visual_kv"
+                f"{self.directional_query_source}_queries_plus_full_visual_kv"
                 if self.directional_concat_workspace_enabled
                 else "mean_visual_plus_mean_question"
             ),
@@ -1149,15 +1157,24 @@ class DynamicPromptTuningModel(nn.Module):
                     "dim": self.sparse_visual.workspace_dim,
                     "heads": self.sparse_visual.workspace_heads,
                     "anchor_layer": self.sparse_visual.anchor_layers[0],
-                    "private_visual_prompt_tokens": self.sparse_visual.private_prompt_tokens,
+                    "private_visual_prompt_tokens": (
+                        self.sparse_visual.private_prompt_tokens
+                        if self.sparse_visual.static_visual_write
+                        else 0
+                    ),
                     "private_text_prompt_tokens": self.private_prompt_length,
                     "text_workspace_anchor_tokens": self.workspace_prompt_length,
-                    "query": "attention_pool_full_question_tokens",
+                    "query": self.sparse_visual.query_source,
                     "memory": "full_layer17_visual_tokens",
                     "fusion": "text_query_visual_kv_cross_attention",
-                    "visual_output": "anchored_token_concat",
+                    "visual_output": (
+                        "anchored_token_concat"
+                        if self.sparse_visual.static_visual_write
+                        else "read_only_layer17_hook"
+                    ),
                     "text_output": "anchored_token_concat",
                     "visual_dynamic_write": self.sparse_visual.visual_dynamic_write,
+                    "static_visual_write": self.sparse_visual.static_visual_write,
                     "text_dynamic_projection_zero_initialized": True,
                     "visual_dynamic_projection_zero_initialized": (
                         self.sparse_visual.visual_dynamic_write
@@ -1175,8 +1192,15 @@ class DynamicPromptTuningModel(nn.Module):
                     "anchor_layers": list(self.sparse_visual.anchor_layers),
                     "rep_token_count": (
                         self.sparse_visual.private_prompt_tokens
-                        if self.directional_concat_workspace_enabled
-                        else self.sparse_visual.rep_token_count
+                        if (
+                            self.directional_concat_workspace_enabled
+                            and self.sparse_visual.static_visual_write
+                        )
+                        else (
+                            0
+                            if self.directional_concat_workspace_enabled
+                            else self.sparse_visual.rep_token_count
+                        )
                     ),
                     "attention_dim": (
                         0
@@ -1189,7 +1213,11 @@ class DynamicPromptTuningModel(nn.Module):
                         else self.sparse_visual.rep_attention.num_heads
                     ),
                     "injection_mode": (
-                        "directional_concat_single_pass_insert_strip"
+                        (
+                            "directional_concat_single_pass_insert_strip"
+                            if self.sparse_visual.static_visual_write
+                            else "directional_read_only_single_pass_hook"
+                        )
                         if self.directional_concat_workspace_enabled
                         else "single_pass_insert_strip"
                     ),

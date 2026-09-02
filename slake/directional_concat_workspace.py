@@ -22,6 +22,11 @@ DIRECTIONAL_QUESTION_QUERY_INTERVENTIONS = (
     "previous-distinct-question",
 )
 
+DIRECTIONAL_QUERY_SOURCES = (
+    "question_attention_pooling",
+    "learned_static",
+)
+
 
 class ZeroInitWorkspaceProjection(nn.Module):
     """Map workspace slots to anchored prompt tokens with a zero initial delta."""
@@ -112,6 +117,8 @@ class DirectionalConcatWorkspaceVisual(nn.Module):
         workspace_dim: int = 1024,
         workspace_heads: int = 16,
         visual_dynamic_write: bool = True,
+        static_visual_write: bool = True,
+        query_source: str = "question_attention_pooling",
     ) -> None:
         super().__init__()
         if min(
@@ -127,6 +134,15 @@ class DirectionalConcatWorkspaceVisual(nn.Module):
             raise ValueError("Directional Workspace anchor must be non-negative")
         if workspace_dim % workspace_heads != 0:
             raise ValueError("workspace_dim must be divisible by workspace_heads")
+        if query_source not in DIRECTIONAL_QUERY_SOURCES:
+            raise ValueError(
+                f"Unsupported Directional query_source={query_source!r}; "
+                f"choices={DIRECTIONAL_QUERY_SOURCES}"
+            )
+        if visual_dynamic_write and not static_visual_write:
+            raise ValueError(
+                "Directional visual dynamic write requires static visual write"
+            )
 
         self.visual_dim = int(visual_dim)
         self.text_dim = int(text_dim)
@@ -136,26 +152,42 @@ class DirectionalConcatWorkspaceVisual(nn.Module):
         self.workspace_dim = int(workspace_dim)
         self.workspace_heads = int(workspace_heads)
         self.visual_dynamic_write = bool(visual_dynamic_write)
+        self.static_visual_write = bool(static_visual_write)
+        self.query_source = str(query_source)
         self.visual_prompt_tokens = (
             self.private_prompt_tokens + self.workspace_tokens
+            if self.static_visual_write
+            else 0
         )
 
-        self.private_visual_prompt = nn.Parameter(
-            torch.empty(self.private_prompt_tokens, self.visual_dim)
-        )
-        self.workspace_visual_anchor = nn.Parameter(
-            torch.empty(self.workspace_tokens, self.visual_dim)
-        )
-        nn.init.normal_(self.private_visual_prompt, std=0.02)
-        nn.init.normal_(self.workspace_visual_anchor, std=0.02)
+        if self.static_visual_write:
+            self.private_visual_prompt = nn.Parameter(
+                torch.empty(self.private_prompt_tokens, self.visual_dim)
+            )
+            self.workspace_visual_anchor = nn.Parameter(
+                torch.empty(self.workspace_tokens, self.visual_dim)
+            )
+            nn.init.normal_(self.private_visual_prompt, std=0.02)
+            nn.init.normal_(self.workspace_visual_anchor, std=0.02)
+        else:
+            self.register_parameter("private_visual_prompt", None)
+            self.register_parameter("workspace_visual_anchor", None)
 
         self.workspace_text_query_norm = nn.LayerNorm(self.text_dim)
         self.workspace_text_value_projection = nn.Linear(
             self.text_dim, self.workspace_dim, bias=False
         )
-        self.workspace_text_score_projection = nn.Linear(
-            self.text_dim, self.workspace_tokens, bias=False
-        )
+        if self.query_source == "question_attention_pooling":
+            self.workspace_text_score_projection = nn.Linear(
+                self.text_dim, self.workspace_tokens, bias=False
+            )
+            self.register_parameter("learned_static_query", None)
+        else:
+            self.workspace_text_score_projection = None
+            self.learned_static_query = nn.Parameter(
+                torch.empty(self.workspace_tokens, self.text_dim)
+            )
+            nn.init.normal_(self.learned_static_query, std=0.02)
         self.workspace_query_norm = nn.LayerNorm(self.workspace_dim)
         self.workspace_visual_memory_norm = nn.LayerNorm(self.visual_dim)
         self.workspace_visual_memory_projection = (
@@ -173,7 +205,7 @@ class DirectionalConcatWorkspaceVisual(nn.Module):
                 self.workspace_dim,
                 self.visual_dim,
             )
-            if self.visual_dynamic_write
+            if self.visual_dynamic_write and self.static_visual_write
             else None
         )
 
@@ -206,14 +238,22 @@ class DirectionalConcatWorkspaceVisual(nn.Module):
         self._question_query_source_cosine = torch.tensor(1.0)
 
     def private_parameters(self) -> list[nn.Parameter]:
-        return [self.private_visual_prompt]
+        return (
+            [self.private_visual_prompt]
+            if self.private_visual_prompt is not None
+            else []
+        )
 
     def workspace_parameters(self) -> list[nn.Parameter]:
-        private_id = id(self.private_visual_prompt)
+        private_id = (
+            id(self.private_visual_prompt)
+            if self.private_visual_prompt is not None
+            else None
+        )
         return [
             parameter
             for parameter in self.parameters()
-            if id(parameter) != private_id
+            if private_id is None or id(parameter) != private_id
         ]
 
     def _conditioning_intervention_scope(self) -> str:
@@ -259,6 +299,10 @@ class DirectionalConcatWorkspaceVisual(nn.Module):
         ):
             raise RuntimeError(
                 "Directional conditioning interventions are inference-only"
+            )
+        if self.query_source == "learned_static" and query_mode != "normal":
+            raise ValueError(
+                "Question-query mismatch requires question_attention_pooling"
             )
         self._visual_delta_scale = scale
         self._visual_memory_mode = mode
@@ -461,7 +505,9 @@ class DirectionalConcatWorkspaceVisual(nn.Module):
             f"{self.private_prompt_tokens} workspace_tokens={self.workspace_tokens} "
             f"workspace_dim={self.workspace_dim} heads={self.workspace_heads} "
             f"visual_dynamic_write={self.visual_dynamic_write} "
-            "text_query_visual_kv=True token_concat=True block_execution=single_pass"
+            f"static_visual_write={self.static_visual_write} "
+            f"query_source={self.query_source} text_query_visual_kv=True "
+            f"token_concat={self.static_visual_write} block_execution=single_pass"
         )
 
     @contextmanager
@@ -617,17 +663,27 @@ class DirectionalConcatWorkspaceVisual(nn.Module):
         text_mask = self._text_token_mask.to(hidden_states.device).index_select(
             0, image_to_sample
         )
-        normalized_text = self.workspace_text_query_norm(text_tokens)
-        text_values = self.workspace_text_value_projection(normalized_text)
-        pooling_scores = self.workspace_text_score_projection(
-            normalized_text
-        ).transpose(1, 2)
-        pooling_scores = pooling_scores.masked_fill(
-            ~text_mask[:, None, :],
-            torch.finfo(pooling_scores.dtype).min,
-        )
-        pooling = torch.softmax(pooling_scores.float(), dim=-1).to(dtype=dtype)
-        natural_queries = torch.matmul(pooling, text_values)
+        if self.query_source == "question_attention_pooling":
+            normalized_text = self.workspace_text_query_norm(text_tokens)
+            text_values = self.workspace_text_value_projection(normalized_text)
+            pooling_scores = self.workspace_text_score_projection(
+                normalized_text
+            ).transpose(1, 2)
+            pooling_scores = pooling_scores.masked_fill(
+                ~text_mask[:, None, :],
+                torch.finfo(pooling_scores.dtype).min,
+            )
+            pooling = torch.softmax(pooling_scores.float(), dim=-1).to(dtype=dtype)
+            natural_queries = torch.matmul(pooling, text_values)
+        else:
+            static_query = self.learned_static_query.to(
+                device=hidden_states.device,
+                dtype=dtype,
+            )
+            natural_queries = self.workspace_text_value_projection(
+                self.workspace_text_query_norm(static_query)
+            ).unsqueeze(0).expand(len(image_segments), -1, -1)
+            pooling = None
         queries = self._apply_question_query_intervention(natural_queries)
 
         attention_visual_tokens, attention_visual_mask = (
@@ -648,18 +704,23 @@ class DirectionalConcatWorkspaceVisual(nn.Module):
         self._workspace_by_image = workspace
 
         with torch.no_grad():
-            pooling_f = pooling.detach().float()
-            text_mask_f = text_mask[:, None, :]
-            pooling_safe = torch.where(
-                text_mask_f,
-                pooling_f.clamp_min(1e-8),
-                torch.ones_like(pooling_f),
-            )
-            text_counts = text_mask.sum(dim=-1).clamp_min(2).float()
-            text_entropy = -(
-                pooling_f * pooling_safe.log() * text_mask_f
-            ).sum(dim=-1)
-            text_entropy = text_entropy / text_counts.log()[:, None]
+            if pooling is not None:
+                pooling_f = pooling.detach().float()
+                text_mask_f = text_mask[:, None, :]
+                pooling_safe = torch.where(
+                    text_mask_f,
+                    pooling_f.clamp_min(1e-8),
+                    torch.ones_like(pooling_f),
+                )
+                text_counts = text_mask.sum(dim=-1).clamp_min(2).float()
+                text_entropy = -(
+                    pooling_f * pooling_safe.log() * text_mask_f
+                ).sum(dim=-1)
+                text_entropy = text_entropy / text_counts.log()[:, None]
+                text_tokens_used = text_mask.sum(dim=-1).float().mean()
+            else:
+                text_entropy = queries.new_zeros(queries.shape[:2], dtype=torch.float32)
+                text_tokens_used = queries.new_tensor(0.0)
             cross_f = cross_weights.detach().float()
             visual_mask_f = attention_visual_mask[:, None, None, :]
             cross_safe = torch.where(
@@ -717,15 +778,16 @@ class DirectionalConcatWorkspaceVisual(nn.Module):
                 "workspace_visual_projection_enabled": workspace.new_tensor(
                     float(self.workspace_dim != self.visual_dim)
                 ),
+                "workspace_query_is_static": workspace.new_tensor(
+                    float(self.query_source == "learned_static")
+                ),
                 "workspace_visual_memory_mismatch_rate": (
                     self._visual_memory_mismatch_rate
                 ),
                 "workspace_visual_memory_source_cosine_mean": (
                     self._visual_memory_source_cosine
                 ),
-                "workspace_text_tokens_mean": text_mask.sum(dim=-1)
-                .float()
-                .mean(),
+                "workspace_text_tokens_mean": text_tokens_used,
             }
         return workspace
 
@@ -858,6 +920,40 @@ class DirectionalConcatWorkspaceVisual(nn.Module):
             )
         lengths, image_ids = self._segment_layout(hidden_states, cu_seqlens)
         workspace_by_image = self._build_workspace(hidden_states)
+        if not self.static_visual_write:
+            adapted = block(*args, **kwargs)
+            if not torch.is_tensor(adapted):
+                raise TypeError("Directional Workspace visual block must return a tensor")
+            with torch.no_grad():
+                input_norm = hidden_states.detach().float().norm(dim=-1).mean()
+                output_norm = adapted.detach().float().norm(dim=-1).mean()
+                zero = input_norm.new_tensor(0.0)
+                self.debug_context.update(
+                    {
+                        "workspace_visual_dynamic_write_enabled": zero,
+                        "workspace_static_visual_write_enabled": zero,
+                        "workspace_private_visual_prompt_norm_mean": zero,
+                        "workspace_visual_anchor_norm_mean": zero,
+                        "workspace_visual_raw_delta_norm_mean": zero,
+                        "workspace_visual_delta_norm_mean": zero,
+                        "workspace_visual_delta_to_anchor_ratio": zero,
+                        "workspace_visual_delta_scale": zero,
+                        "workspace_visual_output_to_input_ratio": output_norm
+                        / input_norm.clamp_min(1e-8),
+                        "workspace_visual_prompt_to_input_ratio": zero,
+                    }
+                )
+                if not self._forward_audited:
+                    print(
+                        "[DIRECTIONAL_CONCAT_WORKSPACE_FORWARD_AUDIT] "
+                        f"layer={layer_index} units={len(lengths)} "
+                        "private_tokens=0 workspace_tokens=0 "
+                        "visual_dynamic_write=False static_visual_write=False "
+                        "insert_before_block=False strip_after_block=False "
+                        "read_visual_kv_before_block=True pass=True"
+                    )
+                    self._forward_audited = True
+            return adapted
         workspace = workspace_by_image.index_select(
             0, image_ids.to(workspace_by_image.device)
         )
@@ -926,6 +1022,9 @@ class DirectionalConcatWorkspaceVisual(nn.Module):
                     "workspace_visual_dynamic_write_enabled": hidden_states.new_tensor(
                         float(self.visual_dynamic_write)
                     ),
+                    "workspace_static_visual_write_enabled": hidden_states.new_tensor(
+                        1.0
+                    ),
                     "workspace_private_visual_prompt_norm_mean": private_norm,
                     "workspace_visual_anchor_norm_mean": workspace_anchor_norm,
                     "workspace_visual_output_to_input_ratio": output_norm
@@ -944,7 +1043,8 @@ class DirectionalConcatWorkspaceVisual(nn.Module):
                     f"private_tokens={self.private_prompt_tokens} "
                     f"workspace_tokens={self.workspace_tokens} "
                     f"visual_dynamic_write={self.visual_dynamic_write} "
-                    "insert_before_block=True strip_after_block=True pass=True"
+                    "static_visual_write=True insert_before_block=True "
+                    "strip_after_block=True pass=True"
                 )
                 self._forward_audited = True
         return adapted
@@ -953,6 +1053,8 @@ class DirectionalConcatWorkspaceVisual(nn.Module):
         return {
             "mode": "directional_concat",
             "anchor_layers": list(self.anchor_layers),
+            "static_visual_write": self.static_visual_write,
+            "query_source": self.query_source,
             "visual_delta_scale": self._visual_delta_scale,
             "visual_dynamic_write": self.visual_dynamic_write,
             "visual_memory_mode": self._visual_memory_mode,

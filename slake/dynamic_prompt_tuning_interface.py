@@ -76,6 +76,13 @@ class DynamicPromptTuningModelInterface:
         shared_workspace = config.get("shared_workspace")
         directional_workspace = config.get("directional_concat_workspace")
         workspace_config = directional_workspace or shared_workspace
+        directional_query_source = (
+            directional_workspace.get("query", "question_attention_pooling")
+            if directional_workspace is not None
+            else "question_attention_pooling"
+        )
+        if directional_query_source == "attention_pool_full_question_tokens":
+            directional_query_source = "question_attention_pooling"
         self.model = DynamicPromptTuningModel(
             base_model,
             tokenizer=self.processor.tokenizer,
@@ -166,6 +173,14 @@ class DynamicPromptTuningModelInterface:
                 if directional_workspace is not None
                 else True
             ),
+            directional_static_visual_write=(
+                bool(directional_workspace.get("static_visual_write", True))
+                if directional_workspace is not None
+                else True
+            ),
+            directional_query_source=(
+                str(directional_query_source)
+            ),
         )
         self.model.load_dynamic_prompt(checkpoint)
         self.model.eval()
@@ -198,6 +213,8 @@ class DynamicPromptTuningModelInterface:
             f"shared_s_text_mode={self.model.shared_s_text_mode} "
             f"shared_workspace={self.model.shared_workspace_enabled} "
             f"directional_concat_workspace={self.model.directional_concat_workspace_enabled} "
+            f"directional_static_visual_write={self.model.directional_static_visual_write} "
+            f"directional_query_source={self.model.directional_query_source} "
             f"train_soft_prompt={self.model.soft_prompt is not None} "
             f"intervention={intervention} memory_lag={memory_lag} "
             f"workspace_visual_write_disabled={list(workspace_visual_write_disabled_layers)} "

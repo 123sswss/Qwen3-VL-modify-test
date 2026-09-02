@@ -740,6 +740,128 @@ class SparseVisualMMRLTest(unittest.TestCase):
                 )
                 self.assertEqual(compressed_total, expected_total)
 
+    def test_directional_no_static_visual_is_read_only_single_pass(self):
+        torch.manual_seed(32)
+        visual = _FakeVisual()
+        adapter = DirectionalConcatWorkspaceVisual(
+            visual_dim=8,
+            text_dim=12,
+            anchor_layer=1,
+            private_prompt_tokens=2,
+            workspace_tokens=3,
+            workspace_dim=8,
+            workspace_heads=2,
+            visual_dynamic_write=False,
+            static_visual_write=False,
+        )
+        self.assertIsNone(adapter.private_visual_prompt)
+        self.assertIsNone(adapter.workspace_visual_anchor)
+        self.assertEqual(adapter.private_parameters(), [])
+        adapter.install(visual)
+        hidden = torch.randn(7, 8)
+        text_tokens = torch.randn(2, 4, 12)
+        text_mask = torch.tensor(
+            [[True, True, False, False], [True, True, True, False]]
+        )
+        cu_seqlens = torch.tensor([0, 2, 4, 7], dtype=torch.int32)
+        expected = _SegmentMixingBlock()(hidden, cu_seqlens)
+        with adapter.activate(
+            torch.randn(2, 12),
+            torch.tensor([1, 1]),
+            text_tokens=text_tokens,
+            text_token_mask=text_mask,
+        ):
+            adapter.prepare_visual(torch.tensor([[1, 1, 4], [1, 1, 3]]))
+            output = visual.blocks[1](hidden, cu_seqlens=cu_seqlens)
+            workspace = adapter.shared_workspace_text_memory()
+        torch.testing.assert_close(output, expected, rtol=0.0, atol=0.0)
+        self.assertEqual(visual.blocks[1].block.calls, 1)
+        self.assertEqual(tuple(workspace.shape), (2, 3, 8))
+        self.assertEqual(
+            float(adapter.debug_context["workspace_static_visual_write_enabled"]),
+            0.0,
+        )
+        self.assertFalse(
+            adapter.workspace_inference_intervention_summary()[
+                "static_visual_write"
+            ]
+        )
+
+    def test_directional_learned_static_query_ignores_question_tokens(self):
+        torch.manual_seed(33)
+        adapter = DirectionalConcatWorkspaceVisual(
+            visual_dim=8,
+            text_dim=12,
+            anchor_layer=1,
+            private_prompt_tokens=2,
+            workspace_tokens=3,
+            workspace_dim=8,
+            workspace_heads=2,
+            visual_dynamic_write=False,
+            query_source="learned_static",
+        ).eval()
+        self.assertIsNone(adapter.workspace_text_score_projection)
+        self.assertEqual(tuple(adapter.learned_static_query.shape), (3, 12))
+        hidden = torch.randn(7, 8)
+        mask = torch.ones(2, 4, dtype=torch.bool)
+
+        def build(text_tokens):
+            adapter._text_tokens = text_tokens
+            adapter._text_token_mask = mask
+            adapter._image_to_sample = torch.tensor([0, 0, 1])
+            adapter._image_lengths = torch.tensor([2, 2, 3])
+            return adapter._build_workspace(hidden).detach().clone()
+
+        first = build(torch.randn(2, 4, 12))
+        second = build(torch.randn(2, 4, 12) + 100.0)
+        torch.testing.assert_close(first, second)
+        self.assertEqual(
+            float(adapter.debug_context["workspace_query_is_static"]),
+            1.0,
+        )
+        with self.assertRaisesRegex(ValueError, "requires question_attention_pooling"):
+            adapter.configure_inference_intervention(
+                question_query_mode="previous-distinct-question"
+            )
+
+    def test_directional_d768_control_parameter_counts(self):
+        text_projection = ZeroInitWorkspaceProjection(768, 2560)
+        private_text_prompt = nn.Parameter(torch.empty(20, 2560))
+        workspace_text_anchor = nn.Parameter(torch.empty(10, 2560))
+
+        def total(adapter):
+            return (
+                sum(parameter.numel() for parameter in adapter.parameters())
+                + sum(parameter.numel() for parameter in text_projection.parameters())
+                + private_text_prompt.numel()
+                + workspace_text_anchor.numel()
+            )
+
+        no_static = DirectionalConcatWorkspaceVisual(
+            visual_dim=1024,
+            text_dim=2560,
+            anchor_layer=17,
+            private_prompt_tokens=8,
+            workspace_tokens=10,
+            workspace_dim=768,
+            workspace_heads=16,
+            visual_dynamic_write=False,
+            static_visual_write=False,
+        )
+        learned_static = DirectionalConcatWorkspaceVisual(
+            visual_dim=1024,
+            text_dim=2560,
+            anchor_layer=17,
+            private_prompt_tokens=8,
+            workspace_tokens=10,
+            workspace_dim=768,
+            workspace_heads=16,
+            visual_dynamic_write=False,
+            query_source="learned_static",
+        )
+        self.assertEqual(total(no_static), 7_786_752)
+        self.assertEqual(total(learned_static), 7_805_184)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -723,6 +723,54 @@ class DynamicPromptTuningTest(unittest.TestCase):
                 directional_question_query_mode="invalid"
             )
 
+    def test_directional_control_config_checkpoint_round_trip(self):
+        def build(static_visual_write, query_source):
+            return DynamicPromptTuningModel(
+                _FakeMultimodalModel(),
+                tokenizer=_FakeTokenizer(),
+                prompt_length=2,
+                init_seed=5,
+                attention_dim=4,
+                num_heads=2,
+                sparse_visual_anchor_layers=(1,),
+                sparse_visual_rep_tokens=2,
+                workspace_tokens=3,
+                workspace_dim=8,
+                workspace_heads=2,
+                directional_concat_workspace=True,
+                directional_visual_dynamic_write=False,
+                directional_static_visual_write=static_visual_write,
+                directional_query_source=query_source,
+            )
+
+        for static_visual_write, query_source in (
+            (False, "question_attention_pooling"),
+            (True, "learned_static"),
+        ):
+            with self.subTest(
+                static_visual_write=static_visual_write,
+                query_source=query_source,
+            ):
+                model = build(static_visual_write, query_source)
+                with tempfile.TemporaryDirectory() as directory:
+                    output = Path(directory)
+                    model.save_dynamic_prompt(output)
+                    config = json.loads(
+                        (output / "dynamic_prompt_config.json").read_text(
+                            encoding="utf-8"
+                        )
+                    )["directional_concat_workspace"]
+                    self.assertEqual(
+                        config["static_visual_write"], static_visual_write
+                    )
+                    self.assertEqual(config["query"], query_source)
+                    restored = build(static_visual_write, query_source)
+                    restored.load_dynamic_prompt(output)
+                    for key, value in model.sparse_visual.state_dict().items():
+                        torch.testing.assert_close(
+                            restored.sparse_visual.state_dict()[key], value
+                        )
+
 
 if __name__ == "__main__":
     unittest.main()

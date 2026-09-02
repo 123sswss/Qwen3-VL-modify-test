@@ -258,9 +258,9 @@ Day 1 结束后不再增加：
 
 ### Day 1：方法冻结与文献边界（2026-09-02）
 
-- [ ] 实现并本地测试 no-static-visual D768。
-- [ ] 实现并本地测试 learned-static-query D768。
-- [ ] 准备 PathVQA/SLAKE 最终统一启动脚本，确认实验名、参数审计和只在最终 epoch 全量评估。
+- [x] 实现 no-static-visual D768；参数审计固定为 7,786,752，已通过本地 Python 编译与脚本静态检查，PyTorch 单测由启动脚本在训练前强制执行。
+- [x] 实现 learned-static-query D768；以 10x2560 learned Query 等参数替换问题池化打分矩阵，总参数保持 7,805,184，已通过本地 Python 编译与脚本静态检查。
+- [x] 准备 PathVQA/SLAKE 最终统一启动脚本；实验名编码数据集、D、Query 来源、视觉模式与 seed，统一强制 3 epochs 且只在 epoch 3 全量评估。
 - [ ] 中午前判断 IA3 是否能低风险接入；不能则从计划删除。
 - [ ] 完成 CoCoOp、MaPLe、Q-Former、LION、MASP 的碰撞矩阵。
 - [ ] 审计 PathVQA/SLAKE 同领域论文的 split 与 metric。

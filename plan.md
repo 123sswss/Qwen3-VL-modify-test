@@ -1,160 +1,339 @@
-# 一周投稿实验计划
+# 五天论文收尾计划
 
-## 2026-08-27 方向修正：Dynamic Multimodal Prompt
+> 执行周期：2026-09-02 至 2026-09-06
+> 当前阶段：停止开放式架构探索，围绕已经验证的 Question-Guided Directional Prompt Tuning 完成方法冻结、对比实验、统计分析和论文初稿。
+> 数据源约束：Windows 工作区是唯一事实来源；本地修改、测试、提交和推送后，服务器仅执行 `source /etc/network_turbo; git pull --ff-only`。
 
-- 当前主线从视觉层内部 MMRL 转为冻结完整 VLM 主干的 Dynamic Multimodal Prompt Tuning；旧 MMRL、Relation 与 Utility Gate 计划保留为历史方案，不再阻塞新方法验证。
-- 方法必须单阶段训练：20个 Static Prompt 与图文条件动态 CA 从同一初始状态联合优化，禁止加载训练完成的 Static Prompt checkpoint 作为主方法 warm-start。
-- Static Prompt 同时作为 LLM 前缀基底与 CA Query；图像 Merger 后视觉 Token 和仅问题侧文本 Token 分别 Mean Pooling 为两个 Memory，监督答案 Token 必须从文本 Memory 严格排除。
-- Dynamic CA 首版使用256维、8头和零初始化输出投影，产生20个 Prompt 残差；最终仍只向 LLM 入口插入20个 Token，不增加 Static Prompt 基线之外的序列长度。
-- 视觉编码器、视觉 Merger 和 LLM 全部冻结；Static Prompt 使用LR0.3，动态 CA 首轮使用LR3e-4，两组共享3轮线性调度与validation选模，训练参数预计2,685,440。
-- 首个决策实验固定为 PathVQA seed44。成功线为显著超过 Static Prompt55.83，重点检查 Free-form是否超过21.27并接近或超过last8 Visual LoRA23.41；若不超过Static Prompt，不追加多seed。
-- 必须记录动态残差/静态Prompt范数比、图文注意力比例、注意力熵、两组梯度范数、参数量和延迟；首步必须审计动态残差精确为0。
-- 回退仅保留为后续附加性质：可报告Attention Mask关闭Prompt后的约98% Base输出一致性，但不作为当前方法成立条件，也不在首轮实验中实现KV-cache受损的动态屏蔽。
-- PathVQA seed44 首轮已完成：Dynamic Prompt 为56.54/89.83/23.21，超过 Static Prompt55.83/90.33/21.27，主要收益是 Free-form+1.94；但配对图像聚类 Overall 差值95% CI为[-0.10,+1.55]，单seed不足以声称稳定总分提升。
-- 训练诊断显示两Memory注意力在首轮早期迅速硬化，末期熵约0.00010、视觉注意力质量固定为44.375%。该现象不等于动态分支失效，因为Value与残差仍依赖样本，但禁止在因果验证前声称样本级动态路由。
-- 三项 checkpoint 因果干预已完成：`delta=0` 为49.29，前32样本平均residual为43.19，lag32错配Memory为48.58，均显著低于正常56.54。正常相对错配Memory的聚类配对95% CI为[+6.99,+8.89]，证明当前样本条件有效；近零注意力熵应解释为固定模态分工，而不是动态分支失效。
-- 下一正式优先级是同seed配对运行 PathVQA Static Prompt seed45 与 Dynamic Prompt seed45；两者保持3 epochs和现有超参，先验证Free-form与Overall趋势能否复现。只有seed45仍支持动态收益，才进入SLAKE迁移或额外seed。epoch3 validation仍上升，但5 epochs重训排在seed45复现之后，避免根据seed44 test继续调参。
-- 不再追加 seed44 的结构小改。视觉Memory与文本Memory的单独错配可作为后续机制消融，但当前联合错配、零残差和均值残差已经足以证明样本条件性，不阻塞多seed验证。
-- 2026-08-28 受控追加一次 seed44 视觉协同小试：保留 Dynamic Prompt20+CA256 主干不变，只在原生视觉层5/11/17（0-based）加入独立插入/立即剥离的局部 Rep 分支。共享8个1024维 Rep，使用CA128/4头读取当前视觉段均值与问题文本均值，以零初始化 `tanh(gamma_l)` 融合，并对三层局部输出施加平均 Relation0.05。新增1,201,155参数、总计3,886,595参数；若不超过当前56.54则停止视觉协同扩展，若有任何正收益再考虑seed45。
-- 首轮零初始化运行在step460仍只有 `sparse_visual_delta_ratio_mean=7.69e-6`，Relation缩放项为 `2.72e-11`；分支有梯度但实际视觉改变量落在BF16近零区。重跑时仅把实际初始融合比例从0改为0.05（内部参数为`atanh(0.05)`），Sparse LR仍保持3e-4，其余配置不变；实验名加入`init0050`以避免与首轮混淆。
-- `init0050` 重跑已完成：PathVQA seed44 为56.02/88.88/23.12，低于 Dynamic Prompt 的56.54/89.83/23.21。Sparse 分支已有效激活但由第11层主导，未形成主指标互补；不追加seed45，不再调该视觉协同架构。
-- 纠正（2026-08-28）：上述“停止视觉协同扩展”结论忽略了完整三轮轨迹。Sparse Visual 在epoch1相对原 Dynamic Prompt 同轮提升Overall +2.01、Yes/No +0.74、Free-form +3.29，随后epoch2坍缩并在epoch3恢复，更符合分支联合优化不稳定而非结构完全无效。允许追加一次严格的学习率诊断，除此之外仍不扩结构、不加seed。
-- 待运行 `pathvqa_dynamic_prompt_sparse_visual_layers5_11_17_slots8_ca128_init0050_relation0050_sparse_lr3e5_seed44`：唯一变量是Sparse Visual LR由3e-4降至3e-5；Prompt LR0.3、Dynamic CA LR3e-4、初始化0.05、Relation0.05、结构、seed和数据顺序保持不变。主要诊断是epoch2是否不再从epoch1下降3.23个百分点；若训练轨迹稳定且最终接近或超过56.54，支持“分支更新时间尺度不匹配”的改进方向，否则停止单纯LR调节。
-- 上述LR诊断已完成并达到成功线：Validation为54.53 ->55.14 ->56.85，Test为57.51/89.62/25.35；相对原 Dynamic Prompt 的配对聚类95% CI为[+0.20,+1.73] Overall、[+0.84,+3.44] Free-form。仅降低Sparse LR便消除epoch2坍缩并取得显著净增益，确认后续方向是轻量、慢更新的视觉协同，而不是增强视觉分支幅度。
-- 旧双路径Sparse Visual的`checkpoints/`与`final/`已按用户要求删除，仅保留日志和评估证据，因此原57.51 checkpoint不再能运行Sparse-off干预。
-- 新实现改为标准单路径Rep Token注入：每个锚点只执行一次原生视觉Block，直接计算`Strip(Block([R;h]))`；彻底移除Residual Scale、Relation及其诊断和参数。Sparse参数1,201,152，总训练参数3,886,592，继续固定LR3e-5。新运行目标为`pathvqa_dynamic_prompt_sparse_visual_single_pass_seed44`，实验名显式包含`single_pass`；该实现尚未运行，不能继承57.51分数。
-- 算力恢复后的第一优先级是运行上述single-pass seed44，先判断去掉双路径后能否保留低LR收益与降低训练/推理耗时；取消继续扫描Sparse LR。只有single-pass成立后才追加额外seed和同checkpoint Sparse-off干预。
+## 1. 总决策
 
-### 今晚单Seed共享S递进实验（已完成）
+1. **主模型采用 D768**：PathVQA Validation 为 59.5622，7.805M 可训练参数；与 D1024 的 59.5782 统计等价，同时参数减少 26.54%。
+2. **效率模型采用 D512**：PathVQA Validation 为 58.6835，4.592M 参数；参数少于 Full-Attention LoRA-r8，Overall 与其统计持平。
+3. **D1024 只作为容量上界**：10.626M 参数，59.5782；不再作为默认主模型。
+4. **D256 只作为容量下界**：2.033M 参数，57.1497；已经出现注意力近似均匀、跨模态更新不足的容量悬崖。
+5. **宽度搜索结束**：不再追加 D128、D384、D640、D896 等中间配置，也不再扫描槽数、层数、Gate 或新融合模块。
+6. **五天内完成投稿版本**：Day 1 后冻结架构；若多随机种子结果削弱现有结论，则降低论文措辞，不再用救火实验延长项目。
 
-- 三项全部固定PathVQA seed44/data_seed42、3 epochs、相同数据顺序、20个LLM前缀位置、Dynamic CA256/8头、Sparse Visual层5/11/17、8个1024维共享S、Visual CA128/4头、Sparse LR3e-5、Text CA LR3e-4和validation选模。每项只测试所选最佳epoch一次，不扫描学习率。
-- 实验1 `pathvqa_dynamic_prompt_sparse_visual_single_pass_seed44`：单路径新基线。保留独立可学习P（LR0.3）和现有Text CA，不加入S到文本侧的直接桥梁。目标是判断`Strip(Block([R;h]))`能否接近历史双路径57.51，并建立后两项的同实现对照；它不是旧57.51的严格复现。
-- 实验2 `pathvqa_dynamic_prompt_shared_s_memory_keep_p_seed44`：保留实验1的独立可学习P；捕获第17层最后视觉锚点的8个条件化Rep，经冻结的普通`visual.merger`按原生2x2规则映射成2个LLM入口空间向量，再按样本均值汇聚为额外S-Memory并加入Text CA Memory。P仍作为20个Query和残差基底。普通Visual Merger的输出原生用于替换LLM入口视觉Token；不使用面向LLM第0/1/2层后残差的`deepstack_merger_list`。冻结Merger不增加训练参数，S通过视觉路径与文本路径共同接收CE梯度，但始终使用自己的3e-5学习率。
-- 实验3 `pathvqa_dynamic_prompt_shared_s_memory_no_trainable_p_seed44`：与实验2完全相同，但移除独立可学习P。保留同一初始化得到的20个冻结P0作为Text CA Query/长度骨架，最终前缀为`P0 + TextCA(P0, [visual, text, S-Memory])`；这样唯一核心变量是51,200参数的独立P是否可训练，不额外混入前缀长度或新Token扩展器差异。
-- 主要比较依次为实验2-实验1（共享S跨视觉/文本桥梁是否有用）和实验3-实验2（独立可学习P是否必要）。报告Overall、Yes/No、Free-form、问题类型、三轮Validation、聚类配对CI、逐样本fix/break、参数量、训练时间、TTFT、Sparse分支总梯度、共享S参数梯度及S-Memory接口梯度；后两者用于确认文本桥梁参与反传，不冒充严格的逐路径梯度分解。
-- 决策规则：实验2若不低于实验1且Free-form有正向净修复，则保留共享S桥梁；实验3若与实验2差距不超过0.5 Overall，可采用更纯粹的共享S叙事，否则保留独立P并将硬共享版本作为必要消融。三项完成前不追加seed、不修改S数量、不自建新MLP。
-- 三项实现完成后使用单一串行目标`pathvqa_dynamic_prompt_shared_s_suite_seed44`依次运行，任一项训练、validation选模或test失败即停止后续实验，避免在基线失效时继续消耗整夜算力。
-- 实验1完成：single-pass baseline Validation55.06 ->56.21 ->57.52，Test **57.79/89.77/25.77**，超过已删除checkpoint的历史双路径57.51点估计。标准单路径成立并成为新参考。
-- 实验2完成：keep-P共享S-Memory为 **56.14/89.02/23.21**，相对实验1下降1.65 Overall和2.56 Free-form，聚类配对Overall CI为[-2.43,-0.92]。桥梁梯度健康且获得23.75%注意力，因此按预设规则删除该方向，不追加seed或结构修补。
-- 实验3完成：冻结P0为 **54.71/87.45/21.92**，相对实验2再降1.43 Overall，聚类配对CI为[-2.25,-0.65]；Dynamic residual/base末期均值76.8x。独立可学习P被确认为必要组件，纯共享S叙事停止。
-- 后续候选仅保留single-pass baseline的额外seed与同checkpoint Sparse-off机制干预；是否立即运行seed45由下一轮讨论决定，不自动启动。共享S-Memory实验2/3不再追加预算。
-- 更正（2026-08-29）：上述实验2/3把第17层视觉Block输出的条件化Rep经Merger回流到Text CA，偏离了原始“未经Visual CA的共享参数S直接分叉到视觉侧与文本侧”设计。56.14/54.71只否定末层Rep回流捷径，不能否定raw-S共享。旧结果保留但撤销“共享S终止”的外推结论。
-- 纠正版实验A（本方版本）：保留57.79基线的独立P20、原图文Dynamic CA256和视觉层5/11/17注入不变；仅将raw S经冻结普通`visual.merger`变成2个领域Token，再由独立零输出初始化CA128读取为20个额外残差。最终前缀为`P + Delta_sample + Delta_raw_S`，新增约1.324M参数，S仍只属于Sparse LR3e-5组。
-- 纠正版实验B（用户版本）：完全删除独立P及冻结P0；raw S经同一冻结`visual.merger`原生得到2个LLM入口Token，直接作为前缀基底和现有图文Dynamic CA256的Query。视觉侧仍从同一个raw S生成层5/11/17 Rep。禁止增加扩展MLP或偷偷补回20个Query位置。
-- 两次固定PathVQA seed44/data_seed42、3 epochs、相同数据顺序与Sparse LR3e-5，串行目标为`pathvqa_dynamic_prompt_raw_shared_s_suite_seed44`；不重复57.79基线。重点记录raw-S文本接口梯度、独立Shared-S CA梯度、两种delta/base、Validation轨迹、Overall/Yes-No/Free-form及逐样本配对结果。
-- 纠正版实验A已完成：54.95/88.31/21.54，相对57.79基线下降2.84 Overall和4.23 Free-form，聚类配对Overall CI[-3.67,-2.04]。raw-S残差仅约P的3.95%但梯度健康，视觉CA层11/17转为96.5%/91.2%视觉质量；结果强烈支持跨支路优化干扰，但尚未用stop-gradient区分反向梯度冲突与前向残差内容有害。
-- 纠正版实验B已完成：51.64/87.33/15.91，相对基线下降6.15 Overall和9.86 Free-form，聚类配对Overall CI[-7.10,-5.20]。2-token raw-S基底范数约70，Dynamic残差达到其2.83倍；S虽有强CE梯度但仍处于3e-5视觉学习率组，无法替代LR0.3的P20文本锚点。
-- 决策：停止raw-S硬共享结构，不追加seed、不扫描S学习率、不增加S数量或Token扩展器。当前支持架构仍是57.79的独立P20 + 图文Dynamic CA + 单路径Sparse Visual；后续若继续追求论文核心，应研究优化层面的软耦合/梯度协调，而不是让视觉与文本直接共用同一个可训练参数。
-- 评估协议更新（2026-08-29）：后续PathVQA Dynamic Prompt开发实验固定训练3 epochs，只对`epoch_3`执行一次全量Validation；不再比较epoch1/2、不再自动选择最佳epoch，也不运行Test。`selected_result.tsv`必须标记`fixed_epoch3_validation`，Test仅在架构最终锁定后恢复。Dynamic Prompt因果干预同样默认只运行Validation。
-- Shared-S方向按新证据重新开放一次、但不恢复已否定的raw视觉S硬共享：新增`pathvqa_dynamic_prompt_asymmetric_shared_s_seed44`，令20x2560的文本Prompt本身成为共享S并保持Prompt LR0.3；文本侧直接更新S，视觉侧只能读取`detach(LayerNorm(S))`，经可学习20→8 Token Mixer与2560→128→1024低维Adapter生成视觉Rep基底。视觉Adapter、Visual CA和层嵌入保持Sparse LR3e-5，现有图文Dynamic CA保持3e-4；不使用`visual.merger`，不保留另一套独立P或视觉S。
-- 上述非对称Shared-S只运行PathVQA seed44，固定3 epochs并仅评估epoch3 Validation，不运行Test。对照为同seed的single-pass基线Validation57.5172；若明显低于基线则彻底停止Shared-S，若持平或产生正收益才讨论seed45。必须记录S梯度、视觉Adapter梯度、Token Mixer熵、Adapter输出范数、Dynamic delta/base及三层Visual CA诊断，以确认“文本写、视觉只读”的优化机制实际成立。
-- 非对称Shared-S seed44已完成：固定epoch3 Validation为56.8142/88.2240/25.4946，相对精确基线57.5172/89.7280/25.3989为-0.7030/-1.5040/+0.0957；Overall聚类配对95% CI[-1.4045,+0.0161]，Yes/No退化显著而Free-form完全打平。梯度隔离和Adapter均正常，但Visual CA三层视觉质量由约68%/50%/61%降至29%/27%/29%，Rep/input反而显著增大，说明纯替换把视觉分支文本化并放大。该结构不追加seed45；若仍抢救共享锚点，只允许“保留独立视觉S + 有界stop-gradient文本S残差”这一项新假设。
-- 强标准对照`pathvqa_lora_full_model_attention_r8_seed44`已完成：PathVQA seed44/data_seed42，LoRA rank8、alpha16、dropout0.05、LR1e-4，覆盖24层视觉Attention的qkv/proj与36层LLM Self-Attention的q/k/v/o，共192个Linear目标、精确7,077,888个训练参数。固定epoch3 Validation为**59.3386/92.1920/26.5795**，与Full Workspace的Overall统计打平；LoRA显著领先Yes/No1.5680，Workspace显著领先Free-form1.7869。
-- 方向调整（2026-08-29）：停止用删除私有参数、低维瓶颈或硬共享换取小参数量。下一阶段先建立高容量性能上限，再做蒸馏、共享权重或低秩化。新结构必须完整保留57.5172 Validation基线的独立P20、原Text CA256、独立视觉S8、原Visual CA128和层5/11/17单路径注入。
-- 新增唯一主实验`pathvqa_dynamic_prompt_full_workspace_seed44`：增加32x1024样本级共享多模态工作区Z；Z在视觉层5/11/17依次经过各自独立的全Token Cross-Attention、Self-Attention和FFN4096更新，Memory为该层完整视觉Token与完整问题Token，而非Mean Pooling。原文本与视觉私有支路继续独立工作；Z只通过独立Text CA1024/16头和三组Visual CA1024/16头提供附加残差，不拼入原CA Memory、不替换P或S。四个共享残差头输出投影严格零初始化，使训练第0步等价于当前基线。
-- 上述工作区实验固定PathVQA seed44/data_seed42、Prompt LR0.3、原Dynamic CA LR3e-4、原Sparse Visual LR3e-5、Workspace LR1e-4、3 epochs；只评估epoch3 Validation、不跑Test。重点记录Workspace总梯度、三层Z的视觉/文本注意力质量和熵、Z范数、三层视觉共享残差比例、文本共享残差比例及原私有分支诊断。只有Validation超过57.5172且主要收益不只来自Yes/No，才追加seed45并进入降本消融；失败时先根据独立残差头诊断定位，不扫描槽数或维度。
-- Full Workspace seed44已完成：固定epoch3 Validation **59.4504/90.6240/28.3663**，相对精确基线为+1.9332/+0.8960/+2.9675；聚类配对95% CI为[+1.1747,+2.7132] Overall和[+1.8602,+4.1721] Free-form，达到预设成功线并成为新开发基线。该结果不跑Test，正式Test仍等待架构与seed复现锁定。
-- 下一顺序调整为：（1）不改Workspace结构和核心超参，将Full Workspace迁移到SLAKE并先跑seed44，验证跨数据集泛化；（2）SLAKE方向成立后再复现PathVQA seed45；（3）对PathVQA seed44同一checkpoint增加Workspace Text-off、Visual-off以及Visual residual scale `0/0.1/0.25/0.5/1.0`推理干预，均只跑Validation；（4）跨数据集和额外seed方向一致且确认有效支路后才设计参数缩减。不得提前扫描Z槽数、宽度、FFN或学习率。
-- SLAKE迁移实验`slake_dynamic_prompt_full_workspace_seed44`已完成：官方Test **78.37**，相对Static Prompt显著+3.96，OPEN/VQA/EN/ZH均有稳定净修复，跨数据集性能泛化成立。与此同时，Workspace深层更新几乎完全忽略文本且Z32读头近似均匀，76.90M参数效率与“共享多模态工作区”机制尚不成立；保留该checkpoint作为高容量教师和降本参考。
-- 最简SLAKE层消融`slake_dynamic_prompt_full_workspace_17only_seed44`已完成：参数34,895,872，官方Test **78.37**，与三层版本逐题70/70互换、McNemar `p=1.0`；所有子组差异均不显著，训练时间下降9.42%。该结果证明层5/11可在重新训练后被第17层替代，但不证明三层checkpoint中的早期路径没有贡献；17-only末窗第17层共享残差/私有Rep升至2.434x，而三层版第17层为1.038x、原第11层为2.080x。
-- `slake_dynamic_prompt_workspace_path_interventions`已完成：六次推理均复用三层checkpoint。层5/11 Z更新分别或同时旁路均不降分，双旁路为78.41；层5/11视觉写回分别关闭不降，同时关闭为78.08、仅-0.29且不显著。早期Z更新的因果必要性已被否定，早期视觉写回只保留一个很弱且未证实的联合效应。
-- 主结构决策起点转向34.90M layer17-only，不再为保持三层叙事而保留42.00M早期Block/Reader参数。下一次结构实验仍以增效为先：围绕单一Z20同时生成20个视觉Prompt与20个LLM Prompt残差，比较同位置残差叠加与显式concatenate接口；具体结构和控制变量需先讨论定稿，不自动实现或运行。
-- `slake_dynamic_prompt_full_workspace_17only_s20_seed44`已完成：S20+Z32为78.22，相对S8+Z32的78.37无显著差异（77/80独占正确，`p=0.873`）。额外Rep显著增强视觉写入并改变157道题，却未提高净准确率，排除“8个Rep表达空间不足”作为当前瓶颈。按停止规则取消S20+Z8训练，不再扫描Rep数量。
-- `slake_dynamic_prompt_17only_final_path_interventions`已完成：关闭Workspace视觉写回为78.08（-0.29，`p=0.471`），关闭全部视觉Rep写回为77.84（-0.53，`p=0.108`）；关闭Workspace文本写回显著降至76.36（-2.01，`p=0.000894`），同时关闭Workspace视觉/文本写回为76.22（-2.15，`p=0.000410`）。直接视觉写回不是当前checkpoint的不可替代性能来源，Workspace Text Reader才是主要最终输出路径。
-- 诊断修复列为无算力代码任务：定位为什么`DynamicPromptTuningModelInterface._capture_workspace_debug()`只保存Text-reader字段，恢复相邻Z的LayerNorm后余弦、每层更新增量余弦和三层视觉delta余弦。修复后不为补诊断单独重跑旧六项；只有后续获授权的新实验自然复用诊断。
-- 机制待证更新：末段Workspace视觉残差虽很强，但同checkpoint关闭后不显著掉分；所有下游Z读取熵约0.9998，而Workspace Text Reader关闭会显著损失约2分。当前可以主张高容量Workspace通过LLM Prompt接口有效，不能主张直接视觉写回不可替代，也不能把结果解释成视觉信息无效，因为Z更新仍读取完整视觉Token。
-- 原计划的Workspace输入因果干预暂缓：在S8+Z32 layer17-only checkpoint上屏蔽或跨样本错配视觉Memory，仍可用于判断旧Text Reader的约2分收益是否真正来自当前样本视觉条件，但不再排在新结构实验之前，且未获新的运行授权前不实现、不执行。
-- `slake_directional_concat_workspace_seed44`已完成：12,726,784参数，官方Test77.17；相对34.90M layer17-only参考-1.19且逐题`p=0.0725`，相对Static Prompt仍显著+2.77、`p=0.000112`。它证明一次Directional CA加显式双侧concat可以用36.5%的参数保留大部分收益，但未达到“先增效”的主方法要求，也未缩短训练时间。Z10槽余弦0.941、视觉更新/query3.35x、文本delta/anchor0.50，当前问题是共享槽趋同和双侧写入过强，不是模块不学习。禁止原样补seed；若继续，先做同checkpoint文本/视觉动态块缩放或关闭诊断，再决定调整输出约束、锚点学习率或恢复容量。
-- `slake_directional_concat_workspace_delta_interventions`已完成：文本动态delta减半为76.03（-1.15，`p=0.0079`），归零为74.26（-2.91，`p=1.88e-7`）；完整文本写入显著且单调最优，否定“文本写入过强”假设。视觉动态delta减半为77.22、归零为77.13，相对77.17均仅正负0.05且`p=1.0`，证明该checkpoint的Z到视觉动态写回可旁路，即使其delta/anchor为28.17x。当前不得继续扫描文本scale；若追求增效，应改进Z槽多样性/文本侧转换能力。若追求降参，可在新训练中删除约2.10M的视觉动态投影，但在删除完整视觉插入接口前仍需区分`S8+A_v10`的作用。
-- 同checkpoint视觉条件因果控制`slake_directional_concat_workspace_visual_memory_mismatch`已完成：保持原图完整VLM输入不变，只错配Directional CA的视觉K/V，2,094/2,094正式样本审计通过。总分77.17 -> **76.41**，错配/正常独占正确10/26，McNemar `p=0.0113`；在错配Memory余弦仍高达0.916的条件下仍显著损失0.76分，证明`当前图像视觉K/V -> Z -> LLM动态Prompt`有真实但有限的因果贡献。视觉动态写回依旧可删除，不能把这项结果外推为视觉编码器内部微调必要。
-- 路线止损建议（待讨论确认）：不再把旧视觉-only MMRL作为默认主线。它保留完整回退机制和成熟消融，但PathVQA当前49.41显著落后scope-matched Visual LoRA53.85及Static Prompt55.83，论文实证风险并不低于新路线。优先把新路线收缩为`问题Q -> 当前图像视觉K/V -> Z -> LLM动态Prompt`，删除无因果价值的Z-to-visual动态写回；只允许一个预注册的PathVQA seed44迁移作为最终去留实验，不再搜索层数、槽数或新模块。若该紧凑结构在PathVQA不能明显超过57.52的现有单路径联合基线或不能接近59.34的LoRA，则立即停止新架构研究，回到旧路线整理投稿。
-- 止损规则确认（2026-08-31）：新方法探索截止到`2026-09-01 12:00 Asia/Shanghai`。截止前只运行一个PathVQA决胜实验`pathvqa_directional_concat_workspace_text_dynamic_only_z10_d1024_l17_private_p20_s8_seed44`：完整保留P20、私有视觉S8、静态视觉锚点A_v10、静态文本锚点A_t10、问题Q10、层17完整视觉K/V、Directional CA生成Z10以及`Z -> LLM动态Prompt`，仅删除`Z -> visual dynamic MLP`，视觉层仍插入`S8 + A_v10`并单次Block后Strip。精确参数为10,625,536，固定seed44/data seed42、3 epochs、仅epoch3 Validation、不跑Test。硬停止线为必须超过全模型Attention LoRA-r8的59.3386 Overall且不能以Free-form明显退化换取；打平或更低均因参数仍为LoRA的1.50倍而判失败。除非出现足以改变论文主线的重大突破，截止后停止一切新架构搜索，撤回旧视觉-only MMRL路线完成论文闭环。
-- PathVQA决胜实验已完成：固定epoch3 Validation **59.5782/91.5520/27.6962**，10,625,536参数。它数值超过LoRA-r8的59.3386且Free-form高1.1168，但逐题336/321、`p=0.585`、聚类配对CI[-0.600,+1.138]，只构成统计持平；不得在论文中宣称显著战胜LoRA。与此同时，它相对57.5172单路径基线显著+2.0610（`p=3.46e-7`，CI[+1.286,+2.891]），并以少86.18%参数统计打平76.90M Full Workspace，达到足以保留新路线的参数效率突破。自此停止开放式结构搜索；后续只允许seed复现、问题Q错配/静态Query与视觉K/V错配等机制控制，以及锁定结构后的降本，不再新增Workspace、层数、槽数或融合模块。
-- PathVQA同checkpoint机制控制已排入下一手动目标`pathvqa_directional_concat_workspace_conditioning_mismatch`，不训练且只跑Validation：其一保持原图、原问题和原生VLM输入不变，仅把Directional CA的`Q10`换成上一条不同问题的`Q10`；其二仅把Directional CA的视觉K/V换成上一张不同图像。两项均在reset后用一条问题和图像都异于首条正式样本的不计分推理完成状态预热，要求6,259/6,259正式样本全部错配审计通过，再用逐题McNemar和图像聚类配对CI判断问题条件与图像条件各自的因果贡献；结果出来前不开始512维压缩。
-- 上述PathVQA条件错配已完成：问题`Q10`错配使Overall **59.5782 -> 49.9441**（-9.6341，`p=1.37e-108`，配对CI[-10.5451,-8.7203]），视觉K/V错配使其降至**52.5483**（-7.0299，`p=2.70e-62`，CI[-7.9508,-6.1191]）；两项均为6,259/6,259正式样本错配且原生图文输入不变。机制证据已经闭环，不再增加条件来源消融。下一步允许进入预注册的512维压缩，并在压缩前或同时安排一个完全取消视觉编码器内部Token插入、仅只读原始层17特征的最终结构控制。
-- 512维压缩实验`pathvqa_directional_concat_workspace_text_dynamic_only_d512_seed44`已完成：Validation **58.6835/90.8480/26.6114**，4,591,616参数。相对D1024显著-0.8947（`p=0.0174`，配对CI[-1.665,-0.127]），但相对LoRA-r8的Overall差-0.6551不显著（`p=0.1247`，CI[-1.542,+0.223]），且Free-form基本相同。结论是“有真实精度代价的有效Pareto压缩”，不是无损替代：D1024作为精度主配置，D512作为效率消融。
-- Directional宽度被正式定义为类似LoRA rank的可调容量参数，固定形成`D256/D512/D768/D1024`四点消融表。待补D256（**2,033,408**参数）与D768（**7,805,184**参数），两者只改变Directional latent宽度，保持Z10、CA16 heads、P20/S8、层17、学习率、seed44/data seed42、3 epochs及epoch3 Validation协议完全一致。运行目标为`pathvqa_directional_width_ablation_seed44`，顺序D768后D256；完成后停止增加中间宽度，不根据结果继续扫描。
+## 2. 论文定位与核心叙事
 
-## 总体目标
+### 2.1 暂定题目
 
-- 主贡献：冻结 LLM，通过 128-slot MMRL 对视觉编码器进行图文条件化垂直专精。
-- 安全扩展：Utility Gate 在混合部署中决定是否启用 MMRL，不负责提高垂直数据集上限。
-- 主数据集：PathVQA，承担主结果、完整核心消融和视觉专精结论，各正式方法运行 seed44/45。
-- 第二正式数据集：SLAKE，承担多语言、知识型与混合问题上的稳健性验证，各正式方法运行 seed44/45，并优先复用已有有效结果。
-- 内部验证：自建数据集仅运行 seed44，不调参、不承担核心结论。
-- 通用域：LLaVA-150K 提供 Gate 负例候选，VQAv2 固定验证子集评估能力保持。
+**Question-Guided Directional Prompting for Parameter-Efficient Domain Adaptation of Frozen Multimodal Large Language Models**
 
-## Day 1：定稿与缺口审计
+暂定方法名：**Question-Guided Directional Prompt Tuning（QDPT）**。正式使用前必须完成名称和方法碰撞检索，必要时更名，但不因此改动模型。
 
-- 锁定 MMRL：128-slot Attention Pooling、共享 CA、same-init layer MLP、Relation 0.05。
-- specialist 训练必须保留现有 Stage 1 Gate、两套 pooling 及其初始化/随机数路径；不得通过删除 Gate、跳过 Stage 1 后再硬设 `G=1` 来训练。
-- Stage 3 仅允许使用已经多 seed 验证过的 `open_full_ce` 协议：保留完整 Gate 路径但令专业 CE 训练的数据流全开。它与 `No gate (G=1)` 消融不是同一个实验。
-- 核实 SLAKE Base、视觉 LoRA、Prompt Tuning、MMRL 的正式分数、参数量、日志和 checkpoint；缺失项进入补跑队列。
-- PathVQA 原始文件完整性已核对：官方 7/3/3 个 Parquet 分片及 SHA-256 全部匹配，规模为 train 19,654、validation 6,259、test 6,719。
-- 完成 PathVQA 内容审计：答案规范、问题类型分布、按图像哈希恢复同图 QA、重复样本和训练测试泄漏。
-- 审计自建数据集：只记录规模、来源、划分、质量限制和不可开源原因。
-- 整理视觉 Prompt、ViT Adapter、条件 PEFT、样本级路由和安全回退相关工作，产出碰撞对照表。
-- 在验证集建立 Base/MMRL 逐样本对照，统计双方正确性转换和 Oracle 上限。
-- 检查 always-on MMRL 是否明显损害 VQAv2；只有存在通用域退化时，Gate 才作为有效贡献。
-- PathVQA 必须额外统计 Yes/No、What、非 Yes/No、问题类型 macro average，并按图像聚类计算 bootstrap 置信区间，防止 49.8% Yes/No 和同图多 QA 夸大收益。
-- 当天产出最终实验矩阵、缺失 checkpoint 清单、数据审计报告和论文主张表。
+### 2.2 要解决的问题
 
-## Utility Gate
+冻结多模态大模型进行垂直领域适配时，现有两类方法各有明显缺口：
 
-- 每个垂直 specialist 配置独立 Gate，不训练跨 specialist 的统一路由器。
-- 先按原始 Stage 1 + `open_full_ce` Stage 3 协议训练并冻结 specialist，再离线生成 Utility，最后只训练 Utility Gate；禁止 Utility Gate 与 MMRL 联合反向传播。
-- 离线计算答案 token 平均损失：`utility = CE_base - CE_mmrl`。
-- LLaVA-150K 只是负例候选池；仅选择 `utility < 0`、即 MMRL 确实有害的多模态样本作为负例。
-- LLaVA 数量不超过垂直 Utility 样本数量，使用稳定样本 ID 和图像级去重，防止 150K 数据压倒垂直样本。
-- Gate 继续使用现有图像加问题 `Task_classifier`，训练时使用连续 Utility 软标签。
-- 保留已验证的 alpha-probability 瓶颈：`alpha = sigmoid(Task_classifier(...))` 是 Utility Gate 的连续训练变量；训练阶段不进行 Hard-Concrete 采样，也不把 alpha 提前阈值化成硬 `G`。
-- specialist 冻结后，Utility Gate 的梯度只更新 Gate pooling 与 `Task_classifier`；连续 alpha 保证路由器本身有平滑梯度，但不得反向改写已经定稿的 MMRL specialist。
-- 默认使用垂直训练集生成 Utility；若正负任一类低于 10% 或 probe `AUROC < 0.55`，自动改用 validation 留出监督。
-- 阈值在 validation 上校准，目标是优先保证垂直 specialist 召回率；不确定样本默认开启 MMRL。
-- 推理主结果采用由 alpha 校准得到的硬路由：`G=0` 完全跳过 MMRL，`G=1` 运行 specialist；额外报告 soft-alpha 推理作为诊断，但不把它作为“精确安全回退”的主结果。
-- `always_off/always_on` 只用于同一冻结 checkpoint 的 Utility 采集、Oracle 和推理对照，不再通过两种模式分别重训 specialist。
-- 保留“垂直数据全为正、LLaVA 全为负”的旧来源 Gate 作为必要对照，证明 Utility 监督不是普通数据集分类。
+- Static Prompt Tuning 参数极少，但所有样本共享同一组提示，无法针对当前问题从当前图像中定向提取证据。
+- LoRA 通过修改大量注意力投影获得较强性能，但其作用范围广、参数与训练成本随目标模块增加，而且缺少显式、可审计的“问题如何选择视觉证据”路径。
 
-历史约束：`No gate (G=1)` 消融为 71.97，而保留 Stage 1 与完整 Gate 路径的 `open_full_ce` seed44 为 73.93。现有证据说明删除 Gate/跳过 Stage 1 会改变初始化与优化轨迹，不能把该联合干预简单归因于门值本身；后续实验必须保持训练路径一致，只在冻结模型上比较路由。旧 alpha-probability 实验为 `72.92 +/- 0.59`，Hard Concrete 为 `72.71 +/- 1.03`，说明连续 alpha 降低了路由训练方差，但相对 `open_full_ce` 的 `72.94 +/- 0.66` 没有稳定均值增益。
+本论文不再主张“必须改写视觉编码器内部特征”，而是研究一个更具体的问题：**冻结视觉编码器已经产生了有用视觉证据时，能否通过当前问题定向读取这些证据，并把结果写入 LLM Prompt，从而以较小、可调的适配容量达到接近 LoRA 的性能？**
 
-新增运行接口包括 `--gate-mode {always_on,always_off,source,utility}`、`--gate-threshold`、Utility 缓存路径和 LLaVA 候选数量。输出逐样本 `utility_records.jsonl`、阈值扫描、路由指标和 Gate checkpoint。
+### 2.3 核心洞察
 
-## 正式实验
+领域 VQA 的瓶颈不一定是视觉特征完全缺失，也可能是模型没有根据当前问题选择和解释已有视觉证据。QDPT 使用完整问题 Token 生成查询，以冻结视觉特征为 K/V，只把匹配后的跨模态结果写入语言入口：
 
-| 实验组 | PathVQA | SLAKE | 自建 |
-|---|---:|---:|---:|
-| Base | 1次 | 1次 | 1次 |
-| Visual LoRA | seed44/45 | seed44/45 | 不跑 |
-| Static Prompt Tuning | seed44/45 | seed44/45 | 不跑 |
-| MMRL | seed44/45 | seed44/45 | seed44 |
-| Utility Gate | seed44 | seed44 | seed44 |
-| Source-label Gate | seed44 | seed44 | 不跑 |
-| No Relation | seed44 | seed44 | 不跑 |
-| Mean Pooling | seed44 | seed44 | 不跑 |
-| Independent Init | seed44 | 复用已有结果 | 不跑 |
-| 归一化 Concat-MLP | seed44 | seed45 | 不跑 |
+`当前问题 Q -> 当前图像冻结视觉 K/V -> Directional CA -> 动态 LLM Prompt`
 
-- PathVQA 已完成的全部24层 Attention LoRA-r128 仅作为更宽作用域的上界。正式匹配基线必须运行 seed44 的视觉层17-24 Attention qkv/proj LoRA-r128，使作用层范围与 MMRL 一致；在该结果完成前不比较两种架构的优劣。
-- 当前优先队列固定为三项 seed44 串行实验：视觉层17-24 Attention LoRA-r128；极简 `7,927,808` 参数 MMRL（Mean Pooling、共享高维 `S` 直接进入共享 CA）Relation0；同一极简 MMRL Relation0.05。两项 MMRL 必须复用同一 Stage1 checkpoint 与初始 MMRL 状态，三项都按 validation 选择最佳 epoch 后仅测试一次。
-- 上述三项已完成：last8 LoRA53.85，极简 MMRL Relation046.84，Relation0.0549.41。Relation 的干净配对收益为+2.57；若继续确认，只补一个额外 seed，不再扩展成完整2x2矩阵。
-- 位置编码控制实验已完成：固定5x8网格得到47.67，低于共同原点的49.41；该方向停止，不追加可学习坐标实验。只有未来建立明确的 Rep Token-图像区域对齐监督后才重新考虑空间位置。
-- PathVQA 传统静态 Prompt Tuning 已完成：20个共享软提示 token、51,200参数、seed44 得到55.83，超过 minimal MMRL49.41与 last8 LoRA53.85；Yes/No90.33，但 Free-form21.27仍低于 last8 LoRA23.41。下一架构方向转为图文条件化动态 LLM Prompt，目标是保留静态 Prompt 的二分类校准并补足开放题，不再继续扩展 ViT 内部位置或 slot 结构。
-- 决胜实验已完成：minimal MMRL+Relation0.05+Static Prompt20 得到55.75，与 Static Prompt 单独55.83打平；Yes/No88.94、Free-form22.52，仍未超过 last8 LoRA 的 Free-form23.41。两分支梯度均健康，因此结论是当前内部ViT MMRL与静态LLM Prompt功能重叠且存在能力权衡，不再追加seed或组合小变体，下一实现直接转向图文条件化动态LLM Prompt。
-- 自建数据集只报告 Base、MMRL、Gated 三项，使用主实验超参，不根据结果调整。
-- 不再声称 128-slot Pooling 优于 Mean Pooling，除非 PathVQA 给出明确证据。
-- PathVQA 上的 MMRL 增益必须同时出现在 What 或非 Yes/No 问题中；若增益只来自 Yes/No，不得归因于视觉表征改进。
-- Gate 成功标准：垂直准确率相对 always-on MMRL 下降不超过 0.5 个百分点，并恢复至少 80% 的通用域性能损失。
-- 若 always-on MMRL 在 VQAv2 上几乎不退化，或 Gate 无法满足上述标准，则 Gate 只作为负结果，不列为主要贡献。
+这条路径把“任务先验”和“样本条件信息”分开：静态 Prompt 提供领域锚点，动态 Prompt 提供当前图文对齐后的增量信息。
 
-## 时间与验收
+### 2.4 预期贡献
 
-- Day 2：实现冻结 checkpoint 的路由覆盖、Utility 采集、连续 alpha Gate、缓存格式、Gate 独立训练和监控。
-- Day 3：完成 PathVQA 数据依赖与字段预检后直接运行 Base/MMRL seed44，随后完成 Base/MMRL 一致性测试和 seed44 Gate；不单独安排 smoke test。
-- Day 4：双卡并行运行 PathVQA 与 SLAKE 正式 seed44/45。
-- Day 5：补 Visual LoRA、Prompt Tuning 以及跨数据集核心消融。
-- Day 6：完成 Gate、VQAv2 通用保持和自建数据集单 seed。
-- Day 7：冻结结果，生成均值方差、参数量、训练成本、延迟、路由曲线、消融表和论文提纲。
-- `G=0` 必须与 Base 确定性生成完全一致，并通过 logits 数值一致性测试。
-- Utility 缓存必须验证样本 ID 唯一、答案 token 数非零、损失有限、数据划分无交叉。
-- Gate 报告 AUROC、AUPRC、Brier、ECE、FPR、FNR、domain recall、general close rate 和 Oracle regret。
-- 每个实验完成后立即更新 `EXPERIMENT_RESULTS.md`，记录失败结果，并提交、推送 Git 备份。
+1. **问题引导的方向性交叉注意力**：不是使用与样本无关的 learned query，而是由完整问题 Token 聚合得到 Q，对当前图像的冻结视觉 Token 执行定向读取，并生成动态 LLM Prompt。
+2. **可调的宽度参数 D**：将跨模态适配宽度设计成类似 LoRA rank 的容量旋钮，实证得到 D256 性能悬崖、D512 效率点和 D768-D1024 性能平台。
+3. **因果机制证据**：问题 Q 错配和视觉 K/V 错配分别造成 9.63 和 7.03 个点损失，证明模型依赖当前问题与当前图像的正确配对；动态视觉写回关闭无损，支持 read-only vision / write-only language 的收缩方向。
+4. **性能与效率证据**：D768 在 PathVQA 上与 Full-Attention LoRA-r8 Overall 统计持平，并显著提高 Free-form 与 `what`；D512 在参数少于 LoRA-r8 时仍与其 Overall 统计持平。
+
+### 2.5 必须克制的表述
+
+- 不宣称 D768 在 Overall 上显著优于 LoRA-r8；当前结论是**统计持平、能力分布不同**。
+- 不把错配实验的掉分直接解释成问题与图像各自的独立贡献，错配本身可能比关闭输入更具破坏性。
+- 在静态视觉插入 `S8 + A_v10` 完成训练级消融前，不宣称视觉编码器内部干预完全无用或完全不需要。
+- 不再把 Utility Gate、安全回退或 98% Base 一致性作为新路线主叙事；这些内容只属于旧路线背景或未来工作。
+- 不宣称优于采用不同骨干、不同数据划分或不同评价脚本的同领域论文；这些结果只能作为文献背景。
+- 不把参数更少等同于训练更快；实际训练时间还受冻结骨干前向和全视觉 Token CA 支配。
+
+## 3. 最终方法结构与冻结条件
+
+### 3.1 当前候选结构
+
+1. 冻结基础 VLM。
+2. 完整问题 Token 经 attention pooling 得到 `Q10`。
+3. 冻结视觉编码器 layer17 的完整视觉 Token 作为 K/V。
+4. Directional CA 在宽度 D 中计算匹配表示 `Z10`。
+5. `Z10 -> MLP -> anchored dynamic LLM prompt`。
+6. 动态 Prompt 与静态 `P20` 拼接后进入冻结 LLM。
+7. 当前 checkpoint 仍保留 layer17 的静态视觉插入 `S8 + A_v10`；动态 `Z -> visual` 写回已经删除。
+
+### 3.2 Day 1 必做的两项定型实验
+
+#### A. 静态视觉插入消融
+
+重新训练 D768 seed44，完全移除 `S8 + A_v10` 及其 layer17 insert/block/strip 路径，其余训练配置保持一致。
+
+决策规则：
+
+- 若 Overall 下降不超过 0.3，且图像聚类配对 95% CI 包含 0：删除静态视觉插入，最终方法定型为 **read-only vision / write-only language**。
+- 若下降超过 0.3 且达到统计或跨子组一致的实质影响：保留静态视觉校准支路，但只描述为与方向性文本 Prompt 互补，不夸大其贡献。
+- 若结果处于灰区：以结构简洁性为优先，结合参数量、训练时间、Free-form 和跨数据集表现决定；不追加新的视觉支路搜索。
+
+#### B. learned static query 控制
+
+重新训练 D768 seed44，将问题生成的 `Q10` 替换为同数量、同宽度的可学习静态 Query；视觉 K/V、Prompt 数量、MLP、训练步数与优化器不变。
+
+目的：区分本方法与普通 Q-Former/learned-query 视觉聚合器，验证收益是否确实来自**当前问题条件化的查询**，而不是增加一组通用查询和参数。
+
+#### C. 可选 question-only 控制
+
+若 Day 1 前两项按时完成，可训练一个不读取视觉 K/V、只由问题生成动态 Prompt 的等容量控制。该实验用于排除纯问题捷径；若实现或运行会影响主实验进度，立即取消，因为现有视觉 K/V 错配已经提供了较强机制证据。
+
+### 3.3 架构冻结规则
+
+Day 1 结束后不再增加：
+
+- 新的 CA、Q-Former、Workspace Block、共享 S、Gate、分类器或 MoE。
+- 新的视觉插入层、Prompt 槽数、注意力头数、MLP 深度或残差缩放扫描。
+- 新的宽度 D。
+- 为追回单个 seed 小幅掉分而设计的补丁。
+
+## 4. 对比方法设计
+
+所有对比必须分为两个层级，禁止把不同协议结果混为“同表公平对比”。
+
+### 4.1 同一骨干、同一数据与评价协议的可控 PEFT 基线
+
+主表保留 **5 个基线家族**，其中真正需要新增运行的只有 LoRA rank 补点和最多一个可选轻量基线：
+
+| 家族 | 配置 | 作用 | 状态 |
+|---|---|---|---|
+| Frozen Base | 不训练参数 | 适配增益下界 | PathVQA 已有 |
+| Static Prompt Tuning | P20，51.2K 参数 | 样本无关 Prompt 基线 | PathVQA/SLAKE 已有 |
+| Full-Attention LoRA | r4/r8/r16 | 与作用于视觉+LLM Attention 的强通用 PEFT 正面对比 | r8 seed44 已有；补 r4/r16 |
+| Visual-Only LoRA | last8-r128、all24-r128 | 与只作用视觉编码器的方法比较 | PathVQA 已有 |
+| IA3 或同等级轻量 PEFT | 单一标准配置 | 增加一个非 Prompt、非 LoRA 的通用轻量基线 | 可选，Day 1 中午前未完成实现即删除 |
+
+公平性要求：
+
+- 冻结同一 Qwen3-VL 基座，使用相同 train/val/test split、图像预处理、最大生成长度和官方归一化 exact match。
+- 报告可训练参数、训练时间、TTFT、TPOT；不只比较准确率。
+- LoRA rank sweep 只做 r4/r8/r16，不扩展到视觉模块组合搜索。
+- IA3 不是论文成立的前置条件，禁止因实现困难拖延五天计划。
+
+### 4.2 同领域论文方法
+
+相关工作与独立文献表计划纳入 **4 个核心方法，最多再加 2 个补充方法**：
+
+核心候选：
+
+1. **MEVF**：传统医学 VQA 表征融合方法。
+2. **PubMedCLIP**：医学图文预训练视觉表征方法。
+3. **M3AE**：医学多模态预训练方法。
+4. **MedVInT**：面向医学视觉问答/指令适配的方法。
+
+补充候选：
+
+5. **LLaVA-Med**：仅在其确实报告可比 SLAKE/PathVQA 划分和指标时列入数值表，否则只写 Related Work。
+6. **PMC-LLaVA**：同上，不满足协议可比性时不做横向数值结论。
+
+纳入数值表前逐项审计：基础模型、数据划分、是否使用外部医学数据、答案生成或分类设置、评价归一化、报告的是 Validation 还是 Test。协议不同的结果放入“Reported results under original protocols”独立表，并明确**不可与受控 Qwen3-VL 实验直接排名**。
+
+### 4.3 方法碰撞与相关工作审计
+
+必须重点核对以下路线，目标不是继续改模型，而是划清贡献边界：
+
+- CoCoOp：条件 Prompt 的经典范式。
+- MaPLe：多模态/深层 Prompt 学习。
+- BLIP-2 Q-Former：learned query 读取冻结视觉特征。
+- LION：双层视觉知识与 soft prompting。
+- MASP：多方面视觉 Query 模块与静态 soft prompt。
+
+需要回答的区别：Query 是否来自当前问题、K/V 是否来自当前图像、动态结果写入哪里、是否修改冻结骨干、是否提供逐样本错配证据、容量宽度是否可调。
+
+## 5. 数据集与统一实验协议
+
+### 5.1 数据集角色
+
+- **PathVQA：主数据集。** 用于方法选择、宽度曲线、LoRA 对比、机制控制和主要统计结论。
+- **SLAKE：跨数据集验证。** 最终架构必须原样迁移，不允许根据 SLAKE 重新搜索层数、宽度或槽数。
+- **自建电气数据集：补充应用案例。** 质量有限且不可开源，只允许最终方法单 seed 一次运行；若前四天资源紧张则取消，不影响主论文。
+
+### 5.2 划分和 Test 使用规则
+
+1. 架构选择只使用 Validation。
+2. Day 1 冻结最终结构后，不再根据 Test 修改模型。
+3. 每个最终 checkpoint 只执行一次正式 Test。
+4. 旧 SLAKE Directional 结果包含已经删除的动态视觉写回或不同宽度，不能冒充最终 D768 架构的跨数据集结果。
+5. 所有失败和负结果继续写入 `EXPERIMENT_RESULTS.md`，简要结论同步到 `result.md`。
+
+### 5.3 随机种子
+
+- QDPT-D768：PathVQA seed44/45/46，SLAKE seed44/45/46。
+- Full-Attention LoRA-r8：PathVQA seed44/45/46；SLAKE 至少 seed44，资源允许则补 45/46。
+- D256/D512/D1024、Static Prompt、Visual LoRA、LoRA-r4/r16、结构消融：seed44。
+- 自建数据集：最终 D768 seed44 一次。
+
+### 5.4 指标与统计
+
+主指标：
+
+- 官方归一化 exact-match Overall。
+- PathVQA：Yes/No、Free-form、问题类型。
+- SLAKE：CLOSED/OPEN、KVQA/VQA、EN/ZH。
+- 可训练参数、训练时间、TTFT、TPOT。
+
+统计要求：
+
+- 同一数据样本预测采用 exact McNemar 检验。
+- PathVQA 按 image cluster 执行 paired bootstrap 95% CI，避免把同图多问当独立样本。
+- 多 seed 报告 mean ± std，并保留每个 seed 的原始分数。
+- 可选报告 Free-form token-F1、ROUGE-L 或 BERTScore 作为补充语义指标，但绝不替代官方 exact match，也不用于训练选型。
+
+## 6. 最终实验矩阵
+
+### 6.1 已完成、直接进入论文的实验
+
+- [x] PathVQA D256/D512/D768/D1024 宽度曲线。
+- [x] PathVQA D768 与 D1024、LoRA-r8 的逐题统计对比。
+- [x] PathVQA Full-Attention LoRA-r8 seed44。
+- [x] PathVQA Visual last8/all24 Attention LoRA-r128 seed44。
+- [x] PathVQA Frozen Base 与 Static Prompt seed44。
+- [x] PathVQA 问题 Q mismatch 与视觉 K/V mismatch。
+- [x] 动态视觉写回 inference intervention，确认其可删除。
+- [x] SLAKE Static Prompt seed44 和旧 Directional/Workspace 机制实验，作为研究轨迹与辅助证据保存。
+
+### 6.2 PathVQA 必做
+
+| 优先级 | 实验 | Seed | 目的 |
+|---|---|---:|---|
+| P0 | D768 移除静态视觉插入 | 44 | 冻结最终架构 |
+| P0 | D768 learned static query | 44 | 证明 question-guided Q 的必要性 |
+| P0 | 最终 D768 复现 | 45/46 | 主方法均值与稳定性 |
+| P0 | Full-Attention LoRA-r8 复现 | 45/46 | 公平多 seed 主基线 |
+| P1 | Full-Attention LoRA-r4 | 44 | LoRA 参数-性能曲线 |
+| P1 | Full-Attention LoRA-r16 | 44 | LoRA 参数-性能曲线 |
+| P1 | 最终架构正式 Test | 44/45/46 最终 checkpoint | 冻结后仅运行一次 |
+| P2 | question-only 等容量控制 | 44 | 排除纯问题捷径 |
+| P2 | IA3 单配置 | 44 | 通用轻量 PEFT 补充对比 |
+
+### 6.3 SLAKE 必做
+
+| 优先级 | 实验 | Seed | 目的 |
+|---|---|---:|---|
+| P0 | 与 PathVQA 完全一致的最终 D768 | 44/45/46 | 跨数据集泛化 |
+| P0 | Full-Attention LoRA-r8 | 至少44，优先44/45/46 | 同骨干强基线 |
+| P1 | Static Prompt | 复用已有 seed44 | 静态 Prompt 基线 |
+| P1 | 最终 checkpoint 官方 Test | 最终 seeds | CLOSED/OPEN、KVQA/VQA、EN/ZH |
+
+### 6.4 补充数据集
+
+- [ ] 自建电气数据集：最终 D768 seed44 一次；只报告应用可行性，不进行多 seed、消融或 SOTA 声明。
+- [ ] 不新增第四个公开数据集。PathVQA + SLAKE 已足以支撑主张，自建数据集只展示跨领域应用。
+
+## 7. 论文表格与图
+
+### 7.1 主表
+
+1. **受控主性能表**：Frozen Base、Static Prompt、Visual LoRA、Full-Attention LoRA、QDPT-D512/D768；PathVQA 和 SLAKE 分开报告。
+2. **参数-容量表**：D256/D512/D768/D1024 的参数、Overall、Yes/No、Free-form、训练时间。
+3. **机制消融表**：question mismatch、visual K/V mismatch、learned static query、no-static-visual、可选 question-only。
+4. **LoRA rank 表**：r4/r8/r16 的参数与性能。
+5. **跨数据集表**：最终 D768、Static Prompt、LoRA-r8 在 PathVQA/SLAKE 的统一协议结果。
+6. **文献结果表**：同领域论文原协议结果，和受控主表严格分离。
+7. **效率表**：参数量、训练时长、峰值显存、TTFT、TPOT。
+
+### 7.2 图
+
+- 最终架构图：Question-Q -> Frozen Visual K/V -> Directional CA -> Dynamic LLM Prompt。
+- Accuracy-Parameters Pareto 图：QDPT 宽度点与 LoRA rank 点。
+- 宽度曲线：D256 到 D1024 的性能平台与容量悬崖。
+- 错配干预图：Matched、Question mismatch、Visual K/V mismatch。
+- 可选能力分布图：Yes/No 与 Free-form 的方法差异。
+
+## 8. 五天执行表
+
+### Day 1：方法冻结与文献边界（2026-09-02）
+
+- [ ] 实现并本地测试 no-static-visual D768。
+- [ ] 实现并本地测试 learned-static-query D768。
+- [ ] 准备 PathVQA/SLAKE 最终统一启动脚本，确认实验名、参数审计和只在最终 epoch 全量评估。
+- [ ] 中午前判断 IA3 是否能低风险接入；不能则从计划删除。
+- [ ] 完成 CoCoOp、MaPLe、Q-Former、LION、MASP 的碰撞矩阵。
+- [ ] 审计 PathVQA/SLAKE 同领域论文的 split 与 metric。
+- [ ] 根据 no-static-visual 结果冻结最终结构和论文主张。
+
+当日产物：最终方法配置、实验命令清单、相关工作差异表、冻结后的 Method 草稿提纲。
+
+### Day 2：PathVQA 主实验（2026-09-03）
+
+- [ ] 两张 GPU 分容器串行/并行运行 D768 seed45/46 与 LoRA-r8 seed45/46。
+- [ ] 运行 learned-static-query 和 no-static-visual seed44。
+- [ ] 运行 LoRA-r4/r16 seed44。
+- [ ] 汇总每个实验的 Validation、参数、训练时间与预测文件。
+- [ ] 立即更新两个实验账本，不做账本单独提交。
+
+当日产物：PathVQA 多 seed 主表、LoRA rank 表、定型消融结论。
+
+### Day 3：SLAKE 跨数据集验证（2026-09-04）
+
+- [ ] 原样迁移最终 D768，运行 seed44/45/46。
+- [ ] 运行 Full-Attention LoRA-r8，至少 seed44；资源允许补 45/46。
+- [ ] 复核 Static Prompt 的 checkpoint、split 和评价结果。
+- [ ] 禁止根据 SLAKE 分数修改 D、层数、Prompt 长度或训练策略。
+
+当日产物：SLAKE 主表、多 seed 稳定性、跨数据集结论。
+
+### Day 4：一次性 Test、统计与制图（2026-09-05）
+
+- [ ] 锁定 Validation 决策后，对最终 checkpoint 运行一次正式 Test。
+- [ ] 计算 multi-seed mean ± std、McNemar、image-clustered paired bootstrap CI。
+- [ ] 生成主性能表、容量表、消融表、效率表和文献独立表。
+- [ ] 生成架构图、Pareto 图、宽度曲线和 mismatch 图。
+- [ ] 若时间允许，运行一次自建电气数据集；否则取消。
+
+当日产物：全部定稿数字、图表初版、统计脚本与机器可读结果。
+
+### Day 5：论文初稿与复现包（2026-09-06）
+
+- [ ] 完成 Abstract、Introduction、Related Work、Method、Experiments、Analysis、Limitations、Conclusion。
+- [ ] 把所有数字与 `EXPERIMENT_RESULTS.md` 逐项核对，禁止手工猜测或混用 Val/Test。
+- [ ] 整理配置、启动命令、环境、seed、训练时长、硬件和 checkpoint 说明。
+- [ ] 完成方法碰撞复核、声明强度复核和泄漏/Test 调参复核。
+- [ ] 打包代码与复现说明，形成可投稿初稿。
+
+当日产物：完整论文初稿、最终图表、复现 README、实验账本和投稿前问题清单。
+
+## 9. 停止规则
+
+1. Day 1 后停止架构搜索，只允许修复明确 bug。
+2. 不再增加公开数据集，不做新宽度、层数、槽数、学习率或 Gate 搜索。
+3. 可选基线实现失败不得拖延主方法实验。
+4. 不根据 Test 结果选择 checkpoint、修改结构或调整措辞中的数值门槛。
+5. 若 D768 多 seed 不稳定，诚实报告均值和方差，并把“优于”降为“具有竞争力”。
+6. 若 LoRA-r16 明显更高，不再追赶其绝对分数；转而报告可调容量、Free-form 能力与显式条件路径。
+7. 若 no-static-visual 显著掉分，保留该支路并准确命名为静态视觉校准，不设计替代支路。
+8. 若 SLAKE 提升较弱，保留为跨数据集边界结果，不回到 SLAKE 做定制搜索。
+9. 任何新想法先进入 Future Work，不在五天窗口内实施。
+
+## 10. 论文结构
+
+1. **Abstract**：问题、QDPT 路径、D 可调容量、两数据集结果与机制证据。
+2. **Introduction**：Static Prompt 的样本不变性与 LoRA 的广泛权重改写，引出定向读取冻结视觉证据。
+3. **Related Work**：医学 VQA、MLLM PEFT、Prompt Learning、Q-Former/视觉聚合器。
+4. **Method**：问题池化、Directional CA、动态 Prompt、宽度 D、冻结与训练参数。
+5. **Experiments**：数据、协议、基线、主结果、效率。
+6. **Analysis**：宽度曲线、错配、learned query、视觉插入消融、能力类型差异。
+7. **Limitations**：两公开数据集、exact match 局限、训练加速有限、未证明所有领域都无需视觉写回。
+8. **Conclusion**：强调可配置的样本条件 Prompt 适配，而非宣称全面替代 LoRA。
+
+## 11. 最终复现检查清单
+
+- [ ] 每个结果都能定位到唯一实验名、commit、seed、checkpoint、预测文件和 output path。
+- [ ] `EXPERIMENT_RESULTS.md` 保存完整记录，`result.md` 保存简洁结论。
+- [ ] 表格明确区分 Validation/Test 与受控结果/文献原协议结果。
+- [ ] 参数量使用实际 parameter audit，不用理论估算替代。
+- [ ] 训练时长、TTFT、TPOT 标明硬件和测量条件。
+- [ ] 所有 paired 检验使用同一批样本，并保存 exclusive-correct counts。
+- [ ] 代码默认配置与论文最终方法一致。
+- [ ] 服务器只从本地仓库 fast-forward，同步前执行 network turbo。
+- [ ] 不删除负结果，不覆盖历史更正。

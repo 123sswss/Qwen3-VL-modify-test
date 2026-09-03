@@ -728,6 +728,7 @@ class DynamicPromptTuningTest(unittest.TestCase):
             static_visual_write,
             query_source,
             direct_visual_z_tokens=False,
+            unified_static_visual_prompt=False,
         ):
             return DynamicPromptTuningModel(
                 _FakeMultimodalModel(),
@@ -744,24 +745,35 @@ class DynamicPromptTuningTest(unittest.TestCase):
                 directional_concat_workspace=True,
                 directional_visual_dynamic_write=False,
                 directional_static_visual_write=static_visual_write,
+                directional_unified_static_visual_prompt=(
+                    unified_static_visual_prompt
+                ),
                 directional_direct_visual_z_tokens=direct_visual_z_tokens,
                 directional_query_source=query_source,
             )
 
-        for static_visual_write, query_source, direct_visual_z_tokens in (
-            (False, "question_attention_pooling", False),
-            (True, "learned_static", False),
-            (True, "question_attention_pooling", True),
+        for (
+            static_visual_write,
+            query_source,
+            direct_visual_z_tokens,
+            unified_static_visual_prompt,
+        ) in (
+            (False, "question_attention_pooling", False, False),
+            (True, "learned_static", False, False),
+            (True, "question_attention_pooling", True, False),
+            (True, "question_attention_pooling", False, True),
         ):
             with self.subTest(
                 static_visual_write=static_visual_write,
                 query_source=query_source,
                 direct_visual_z_tokens=direct_visual_z_tokens,
+                unified_static_visual_prompt=unified_static_visual_prompt,
             ):
                 model = build(
                     static_visual_write,
                     query_source,
                     direct_visual_z_tokens,
+                    unified_static_visual_prompt,
                 )
                 with tempfile.TemporaryDirectory() as directory:
                     output = Path(directory)
@@ -779,10 +791,15 @@ class DynamicPromptTuningTest(unittest.TestCase):
                         config["direct_visual_z_tokens"],
                         direct_visual_z_tokens,
                     )
+                    self.assertEqual(
+                        config["unified_static_visual_prompt"],
+                        unified_static_visual_prompt,
+                    )
                     restored = build(
                         static_visual_write,
                         query_source,
                         direct_visual_z_tokens,
+                        unified_static_visual_prompt,
                     )
                     restored.load_dynamic_prompt(output)
                     for key, value in model.sparse_visual.state_dict().items():

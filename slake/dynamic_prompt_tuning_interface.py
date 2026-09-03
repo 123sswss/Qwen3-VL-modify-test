@@ -98,7 +98,16 @@ class DynamicPromptTuningModelInterface:
                 else None
             ),
             sparse_visual_rep_tokens=(
-                int(sparse_visual["rep_token_count"])
+                int(
+                    (
+                        directional_workspace.get(
+                            "static_visual_prompt_tokens",
+                            sparse_visual["rep_token_count"],
+                        )
+                        if directional_workspace is not None
+                        else sparse_visual["rep_token_count"]
+                    )
+                )
                 if sparse_visual is not None
                 else 8
             ),
@@ -177,6 +186,15 @@ class DynamicPromptTuningModelInterface:
                 bool(directional_workspace.get("static_visual_write", True))
                 if directional_workspace is not None
                 else True
+            ),
+            directional_unified_static_visual_prompt=(
+                bool(
+                    directional_workspace.get(
+                        "unified_static_visual_prompt", False
+                    )
+                )
+                if directional_workspace is not None
+                else False
             ),
             directional_direct_visual_z_tokens=(
                 bool(directional_workspace.get("direct_visual_z_tokens", False))

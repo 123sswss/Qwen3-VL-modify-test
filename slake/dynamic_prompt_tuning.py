@@ -196,6 +196,7 @@ class DynamicPromptTuningModel(nn.Module):
         directional_concat_workspace: bool = False,
         directional_visual_dynamic_write: bool = True,
         directional_static_visual_write: bool = True,
+        directional_unified_static_visual_prompt: bool = False,
         directional_direct_visual_z_tokens: bool = False,
         directional_query_source: str = "question_attention_pooling",
     ) -> None:
@@ -243,6 +244,9 @@ class DynamicPromptTuningModel(nn.Module):
         self.directional_static_visual_write = bool(
             directional_static_visual_write
         )
+        self.directional_unified_static_visual_prompt = bool(
+            directional_unified_static_visual_prompt
+        )
         self.directional_direct_visual_z_tokens = bool(
             directional_direct_visual_z_tokens
         )
@@ -276,6 +280,9 @@ class DynamicPromptTuningModel(nn.Module):
                     workspace_heads=workspace_heads,
                     visual_dynamic_write=self.directional_visual_dynamic_write,
                     static_visual_write=self.directional_static_visual_write,
+                    unified_static_visual_prompt=(
+                        self.directional_unified_static_visual_prompt
+                    ),
                     direct_visual_z_tokens=(
                         self.directional_direct_visual_z_tokens
                     ),
@@ -1168,6 +1175,12 @@ class DynamicPromptTuningModel(nn.Module):
                         )
                         else 0
                     ),
+                    "unified_static_visual_prompt": (
+                        self.sparse_visual.unified_static_visual_prompt
+                    ),
+                    "static_visual_prompt_tokens": (
+                        self.sparse_visual.static_visual_prompt_tokens
+                    ),
                     "direct_visual_z_token_count": (
                         self.sparse_visual.workspace_tokens
                         if self.sparse_visual.direct_visual_z_tokens
@@ -1182,7 +1195,11 @@ class DynamicPromptTuningModel(nn.Module):
                         (
                             "static_anchor_plus_direct_z_token_concat"
                             if self.sparse_visual.direct_visual_z_tokens
-                            else "anchored_token_concat"
+                            else (
+                                "unified_static_visual_prompt_concat"
+                                if self.sparse_visual.unified_static_visual_prompt
+                                else "anchored_token_concat"
+                            )
                         )
                         if self.sparse_visual.static_visual_write
                         else "read_only_anchor_layer_hook"
@@ -1211,7 +1228,11 @@ class DynamicPromptTuningModel(nn.Module):
                 {
                     "anchor_layers": list(self.sparse_visual.anchor_layers),
                     "rep_token_count": (
-                        self.sparse_visual.private_prompt_tokens
+                        (
+                            self.sparse_visual.static_visual_prompt_tokens
+                            if self.sparse_visual.unified_static_visual_prompt
+                            else self.sparse_visual.private_prompt_tokens
+                        )
                         if (
                             self.directional_concat_workspace_enabled
                             and self.sparse_visual.static_visual_write

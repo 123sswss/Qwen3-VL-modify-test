@@ -118,6 +118,7 @@ class DirectionalConcatWorkspaceVisual(nn.Module):
         workspace_heads: int = 16,
         visual_dynamic_write: bool = True,
         static_visual_write: bool = True,
+        unified_static_visual_prompt: bool = False,
         direct_visual_z_tokens: bool = False,
         query_source: str = "question_attention_pooling",
         anchor_layers: Sequence[int] | None = None,
@@ -174,14 +175,28 @@ class DirectionalConcatWorkspaceVisual(nn.Module):
                 "Direct visual Z tokens and anchored visual dynamic write "
                 "are mutually exclusive"
             )
+        if unified_static_visual_prompt and (
+            not static_visual_write
+            or visual_dynamic_write
+            or direct_visual_z_tokens
+        ):
+            raise ValueError(
+                "Unified static visual Prompt requires static-only visual write"
+            )
 
         self.visual_dim = int(visual_dim)
         self.text_dim = int(text_dim)
         self.anchor_layers = anchors
+        self.unified_static_visual_prompt = bool(unified_static_visual_prompt)
         self.private_prompt_tokens = (
             int(private_prompt_tokens)
-            if static_visual_write and not direct_visual_z_tokens
+            if static_visual_write
+            and not direct_visual_z_tokens
+            and not self.unified_static_visual_prompt
             else 0
+        )
+        self.static_visual_prompt_tokens = (
+            int(private_prompt_tokens) if self.unified_static_visual_prompt else 0
         )
         self.workspace_tokens = int(workspace_tokens)
         self.workspace_dim = int(workspace_dim)
@@ -194,12 +209,22 @@ class DirectionalConcatWorkspaceVisual(nn.Module):
             self.visual_prompt_tokens = 0
         elif self.direct_visual_z_tokens:
             self.visual_prompt_tokens = 2 * self.workspace_tokens
+        elif self.unified_static_visual_prompt:
+            self.visual_prompt_tokens = self.static_visual_prompt_tokens
         else:
             self.visual_prompt_tokens = (
                 self.private_prompt_tokens + self.workspace_tokens
             )
 
-        if self.static_visual_write:
+        if self.unified_static_visual_prompt:
+            self.static_visual_prompt = nn.Parameter(
+                torch.empty(self.static_visual_prompt_tokens, self.visual_dim)
+            )
+            nn.init.normal_(self.static_visual_prompt, std=0.02)
+            self.register_parameter("private_visual_prompt", None)
+            self.register_parameter("workspace_visual_anchor", None)
+        elif self.static_visual_write:
+            self.register_parameter("static_visual_prompt", None)
             self.workspace_visual_anchor = nn.Parameter(
                 torch.empty(self.workspace_tokens, self.visual_dim)
             )
@@ -212,6 +237,7 @@ class DirectionalConcatWorkspaceVisual(nn.Module):
                 )
                 nn.init.normal_(self.private_visual_prompt, std=0.02)
         else:
+            self.register_parameter("static_visual_prompt", None)
             self.register_parameter("private_visual_prompt", None)
             self.register_parameter("workspace_visual_anchor", None)
 
@@ -1023,7 +1049,19 @@ class DirectionalConcatWorkspaceVisual(nn.Module):
         workspace = workspace_by_image.index_select(
             0, image_ids.to(workspace_by_image.device)
         )
-        if self.direct_visual_z_tokens:
+        if self.unified_static_visual_prompt:
+            reps = self.static_visual_prompt.to(
+                device=hidden_states.device,
+                dtype=hidden_states.dtype,
+            ).unsqueeze(0).expand(len(lengths), -1, -1)
+            zero = workspace.detach().new_tensor(0.0)
+            workspace_visual_debug = {
+                "workspace_visual_raw_delta_norm_mean": zero,
+                "workspace_visual_delta_norm_mean": zero,
+                "workspace_visual_delta_to_anchor_ratio": zero,
+                "workspace_visual_delta_scale": zero,
+            }
+        elif self.direct_visual_z_tokens:
             workspace_visual = self.workspace_visual_anchor.unsqueeze(0).expand(
                 workspace.shape[0], -1, -1
             )
@@ -1080,18 +1118,19 @@ class DirectionalConcatWorkspaceVisual(nn.Module):
                 "workspace_visual_delta_to_anchor_ratio": zero,
                 "workspace_visual_delta_scale": zero,
             }
-        workspace_visual = workspace_visual.to(
-            device=hidden_states.device,
-            dtype=hidden_states.dtype,
-        )
-        if self.direct_visual_z_tokens:
-            reps = torch.cat((workspace_visual, direct_visual_z), dim=1)
-        else:
-            private_visual = self.private_visual_prompt.to(
+        if not self.unified_static_visual_prompt:
+            workspace_visual = workspace_visual.to(
                 device=hidden_states.device,
                 dtype=hidden_states.dtype,
-            ).unsqueeze(0).expand(len(lengths), -1, -1)
-            reps = torch.cat((private_visual, workspace_visual), dim=1)
+            )
+            if self.direct_visual_z_tokens:
+                reps = torch.cat((workspace_visual, direct_visual_z), dim=1)
+            else:
+                private_visual = self.private_visual_prompt.to(
+                    device=hidden_states.device,
+                    dtype=hidden_states.dtype,
+                ).unsqueeze(0).expand(len(lengths), -1, -1)
+                reps = torch.cat((private_visual, workspace_visual), dim=1)
         expanded_args, expanded_kwargs = self._expanded_block_inputs(
             reps,
             args,
@@ -1122,9 +1161,16 @@ class DirectionalConcatWorkspaceVisual(nn.Module):
                     dim=-1
                 ).mean()
             )
-            workspace_anchor_norm = self.workspace_visual_anchor.detach().float().norm(
-                dim=-1
-            ).mean()
+            unified_static_norm = (
+                hidden_states.new_tensor(0.0)
+                if self.static_visual_prompt is None
+                else self.static_visual_prompt.detach().float().norm(dim=-1).mean()
+            )
+            workspace_anchor_norm = (
+                hidden_states.new_tensor(0.0)
+                if self.workspace_visual_anchor is None
+                else self.workspace_visual_anchor.detach().float().norm(dim=-1).mean()
+            )
             self.debug_context.update(
                 {
                     **workspace_visual_debug,
@@ -1141,6 +1187,9 @@ class DirectionalConcatWorkspaceVisual(nn.Module):
                         1.0
                     ),
                     "workspace_private_visual_prompt_norm_mean": private_norm,
+                    "workspace_unified_static_visual_prompt_norm_mean": (
+                        unified_static_norm
+                    ),
                     "workspace_visual_anchor_norm_mean": workspace_anchor_norm,
                     "workspace_visual_output_to_input_ratio": output_norm
                     / input_norm.clamp_min(1e-8),
@@ -1157,6 +1206,7 @@ class DirectionalConcatWorkspaceVisual(nn.Module):
                     "[DIRECTIONAL_CONCAT_WORKSPACE_FORWARD_AUDIT] "
                     f"layer={layer_index} units={len(lengths)} "
                     f"private_tokens={self.private_prompt_tokens} "
+                    f"unified_static_tokens={self.static_visual_prompt_tokens} "
                     f"workspace_tokens={self.workspace_tokens} "
                     f"direct_z_tokens="
                     f"{self.workspace_tokens if self.direct_visual_z_tokens else 0} "
@@ -1184,6 +1234,7 @@ class DirectionalConcatWorkspaceVisual(nn.Module):
             "mode": "directional_concat",
             "anchor_layers": list(self.anchor_layers),
             "static_visual_write": self.static_visual_write,
+            "unified_static_visual_prompt": self.unified_static_visual_prompt,
             "direct_visual_z_tokens": self.direct_visual_z_tokens,
             "query_source": self.query_source,
             "visual_delta_scale": self._visual_delta_scale,

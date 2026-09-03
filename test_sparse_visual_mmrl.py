@@ -815,6 +815,33 @@ class SparseVisualMMRLTest(unittest.TestCase):
                 )
                 self.assertEqual(compressed_total, expected_total)
 
+        unified_adapter = DirectionalConcatWorkspaceVisual(
+            visual_dim=1024,
+            text_dim=2560,
+            anchor_layer=17,
+            private_prompt_tokens=20,
+            workspace_tokens=10,
+            workspace_dim=768,
+            workspace_heads=16,
+            visual_dynamic_write=False,
+            unified_static_visual_prompt=True,
+        )
+        unified_total = (
+            sum(parameter.numel() for parameter in unified_adapter.parameters())
+            + sum(
+                parameter.numel()
+                for parameter in ZeroInitWorkspaceProjection(768, 2560).parameters()
+            )
+            + private_text_prompt.numel()
+            + workspace_text_anchor.numel()
+        )
+        self.assertEqual(unified_adapter.visual_prompt_tokens, 20)
+        self.assertEqual(tuple(unified_adapter.static_visual_prompt.shape), (20, 1024))
+        self.assertIsNone(unified_adapter.private_visual_prompt)
+        self.assertIsNone(unified_adapter.workspace_visual_anchor)
+        self.assertEqual(len(unified_adapter.private_parameters()), 0)
+        self.assertEqual(unified_total, 7_807_232)
+
     def test_directional_no_static_visual_is_read_only_single_pass(self):
         torch.manual_seed(32)
         visual = _FakeVisual()

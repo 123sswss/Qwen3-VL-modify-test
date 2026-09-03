@@ -413,6 +413,11 @@ def parse_args(dataset_name: str = "pathvqa") -> argparse.Namespace:
         default=True,
     )
     parser.add_argument(
+        "--directional-unified-static-visual-prompt",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+    )
+    parser.add_argument(
         "--directional-query-source",
         choices=("question_attention_pooling", "learned_static"),
         default="question_attention_pooling",
@@ -522,6 +527,14 @@ def parse_args(dataset_name: str = "pathvqa") -> argparse.Namespace:
         parser.error(
             "--directional-visual-dynamic-write requires "
             "--directional-static-visual-write"
+        )
+    if args.directional_unified_static_visual_prompt and (
+        not args.directional_static_visual_write
+        or args.directional_visual_dynamic_write
+        or args.directional_direct_visual_z_tokens
+    ):
+        parser.error(
+            "Unified static visual Prompt requires static-only visual write"
         )
     if (
         args.directional_direct_visual_z_tokens
@@ -660,6 +673,9 @@ def main(dataset_name: str = "pathvqa") -> int:
         directional_concat_workspace=args.directional_concat_workspace,
         directional_visual_dynamic_write=args.directional_visual_dynamic_write,
         directional_static_visual_write=args.directional_static_visual_write,
+        directional_unified_static_visual_prompt=(
+            args.directional_unified_static_visual_prompt
+        ),
         directional_direct_visual_z_tokens=(
             args.directional_direct_visual_z_tokens
         ),
@@ -712,6 +728,7 @@ def main(dataset_name: str = "pathvqa") -> int:
         f"directional_concat_workspace={args.directional_concat_workspace} "
         f"directional_visual_dynamic_write={args.directional_visual_dynamic_write if args.directional_concat_workspace else False} "
         f"directional_static_visual_write={args.directional_static_visual_write if args.directional_concat_workspace else False} "
+        f"directional_unified_static_visual_prompt={args.directional_unified_static_visual_prompt if args.directional_concat_workspace else False} "
         f"directional_direct_visual_z_tokens={args.directional_direct_visual_z_tokens if args.directional_concat_workspace else False} "
         f"directional_query_source={args.directional_query_source if args.directional_concat_workspace else 'none'} "
         f"workspace_tokens={args.workspace_tokens if args.shared_workspace else 0} "
@@ -824,7 +841,16 @@ def main(dataset_name: str = "pathvqa") -> int:
                     if (
                         args.directional_static_visual_write
                         and not args.directional_direct_visual_z_tokens
+                        and not args.directional_unified_static_visual_prompt
                     )
+                    else 0
+                ),
+                "unified_static_visual_prompt": (
+                    args.directional_unified_static_visual_prompt
+                ),
+                "static_visual_prompt_tokens": (
+                    args.sparse_visual_rep_tokens
+                    if args.directional_unified_static_visual_prompt
                     else 0
                 ),
                 "direct_visual_z_token_count": (
@@ -856,7 +882,11 @@ def main(dataset_name: str = "pathvqa") -> int:
                         else (
                             "dynamic_anchor_token_concat"
                             if args.directional_visual_dynamic_write
-                            else "static_anchor_token_concat"
+                            else (
+                                "unified_static_visual_prompt_concat"
+                                if args.directional_unified_static_visual_prompt
+                                else "static_anchor_token_concat"
+                            )
                         )
                     )
                     if args.directional_static_visual_write

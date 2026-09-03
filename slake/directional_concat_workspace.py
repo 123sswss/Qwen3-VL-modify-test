@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import math
 from contextlib import contextmanager
-from typing import Any, Dict, Iterator, Sequence
+from typing import Any, Dict, Iterator, Mapping, Sequence
 
 import torch
 from torch import nn
@@ -26,6 +26,24 @@ DIRECTIONAL_QUERY_SOURCES = (
     "question_attention_pooling",
     "learned_static",
 )
+
+
+def resolve_sparse_visual_rep_tokens(
+    sparse_visual: Mapping[str, Any] | None,
+    directional_workspace: Mapping[str, Any] | None,
+) -> int:
+    if sparse_visual is None:
+        return 8
+    if directional_workspace is None:
+        return int(sparse_visual["rep_token_count"])
+    if bool(directional_workspace.get("unified_static_visual_prompt", False)):
+        return int(directional_workspace["static_visual_prompt_tokens"])
+    return int(
+        directional_workspace.get(
+            "private_visual_prompt_tokens",
+            sparse_visual["rep_token_count"],
+        )
+    )
 
 
 class ZeroInitWorkspaceProjection(nn.Module):

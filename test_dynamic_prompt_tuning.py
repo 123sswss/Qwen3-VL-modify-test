@@ -7,13 +7,13 @@ from types import SimpleNamespace
 import torch
 import torch.nn as nn
 
-from slake.directional_concat_workspace import DirectionalConcatWorkspaceVisual
+from slake.directional_concat_workspace import (
+    DirectionalConcatWorkspaceVisual,
+    resolve_sparse_visual_rep_tokens,
+)
 from slake.dynamic_prompt_tuning import (
     DynamicPromptCrossAttention,
     DynamicPromptTuningModel,
-)
-from slake.dynamic_prompt_tuning_interface import (
-    _resolve_sparse_visual_rep_tokens,
 )
 
 
@@ -103,14 +103,14 @@ class DynamicPromptTuningTest(unittest.TestCase):
         }
 
         self.assertEqual(
-            _resolve_sparse_visual_rep_tokens(
+            resolve_sparse_visual_rep_tokens(
                 sparse_visual,
                 legacy_directional,
             ),
             8,
         )
         self.assertEqual(
-            _resolve_sparse_visual_rep_tokens(
+            resolve_sparse_visual_rep_tokens(
                 sparse_visual,
                 unified_directional,
             ),

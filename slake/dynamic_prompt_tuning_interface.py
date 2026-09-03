@@ -6,12 +6,13 @@ import json
 import math
 import sys
 from pathlib import Path
-from typing import Any, Dict, Mapping, Sequence
+from typing import Any, Dict, Sequence
 
 import torch
 from PIL import Image
 from transformers import AutoModelForImageTextToText, AutoProcessor
 
+from slake.directional_concat_workspace import resolve_sparse_visual_rep_tokens
 from slake.dynamic_prompt_tuning import (
     DYNAMIC_PROMPT_CONFIG_NAME,
     DynamicPromptTuningModel,
@@ -34,24 +35,6 @@ def _move_inputs(inputs: Dict[str, Any], device: torch.device) -> Dict[str, Any]
         else:
             moved[key] = value.to(device=device)
     return moved
-
-
-def _resolve_sparse_visual_rep_tokens(
-    sparse_visual: Mapping[str, Any] | None,
-    directional_workspace: Mapping[str, Any] | None,
-) -> int:
-    if sparse_visual is None:
-        return 8
-    if directional_workspace is None:
-        return int(sparse_visual["rep_token_count"])
-    if bool(directional_workspace.get("unified_static_visual_prompt", False)):
-        return int(directional_workspace["static_visual_prompt_tokens"])
-    return int(
-        directional_workspace.get(
-            "private_visual_prompt_tokens",
-            sparse_visual["rep_token_count"],
-        )
-    )
 
 
 class DynamicPromptTuningModelInterface:
@@ -115,7 +98,7 @@ class DynamicPromptTuningModelInterface:
                 if sparse_visual is not None
                 else None
             ),
-            sparse_visual_rep_tokens=_resolve_sparse_visual_rep_tokens(
+            sparse_visual_rep_tokens=resolve_sparse_visual_rep_tokens(
                 sparse_visual,
                 directional_workspace,
             ),

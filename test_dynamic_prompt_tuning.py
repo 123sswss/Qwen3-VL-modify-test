@@ -12,6 +12,9 @@ from slake.dynamic_prompt_tuning import (
     DynamicPromptCrossAttention,
     DynamicPromptTuningModel,
 )
+from slake.dynamic_prompt_tuning_interface import (
+    _resolve_sparse_visual_rep_tokens,
+)
 
 
 class _FakeTokenizer:
@@ -86,6 +89,34 @@ class _FakeMultimodalModel(nn.Module):
 
 
 class DynamicPromptTuningTest(unittest.TestCase):
+    def test_directional_checkpoint_resolves_visual_prompt_table_size(self):
+        sparse_visual = {"rep_token_count": 8}
+        legacy_directional = {
+            "private_visual_prompt_tokens": 8,
+            "static_visual_prompt_tokens": 0,
+            "unified_static_visual_prompt": False,
+        }
+        unified_directional = {
+            "private_visual_prompt_tokens": 0,
+            "static_visual_prompt_tokens": 20,
+            "unified_static_visual_prompt": True,
+        }
+
+        self.assertEqual(
+            _resolve_sparse_visual_rep_tokens(
+                sparse_visual,
+                legacy_directional,
+            ),
+            8,
+        )
+        self.assertEqual(
+            _resolve_sparse_visual_rep_tokens(
+                sparse_visual,
+                unified_directional,
+            ),
+            20,
+        )
+
     @staticmethod
     def _batch(answer_in_context=False, text_token=2):
         context = [1, 1, 1, 1, int(answer_in_context)]

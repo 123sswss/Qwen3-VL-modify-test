@@ -1187,6 +1187,41 @@ run_pathvqa_qdpt_d768_layer_sensitivity_seed44() {
   fi
 }
 
+run_pathvqa_qdpt_d768_layer_sensitivity_resume_eval() {
+  local failures=0
+  local experiment_stem reference_run
+  for experiment_stem in \
+    pathvqa_qdpt_d768_question_q10_l18_p20_s8_av10 \
+    pathvqa_qdpt_d768_question_q10_l17_18_19_shared_p20_s8_av10; do
+    reference_run="$(ls -dt \
+      "$PATHVQA_DYNAMIC_PROMPT_OUTPUT_ROOT"/"${experiment_stem}_seed44_"* \
+      2>/dev/null | head -1)"
+    if [ -z "$reference_run" ] \
+      || [ ! -f "$reference_run/checkpoints/epoch_3/dynamic_prompt_config.json" ] \
+      || [ ! -f "$reference_run/checkpoints/epoch_3/dynamic_prompt.pt" ]; then
+      echo "[QDPT_LAYER_SENSITIVITY_RESUME] experiment=$experiment_stem status=missing_checkpoint_continue path=$reference_run" >&2
+      failures=$((failures + 1))
+      continue
+    fi
+    if [ -f "$reference_run/eval_validation/epoch_3/pathvqa_summary.json" ]; then
+      echo "[QDPT_LAYER_SENSITIVITY_RESUME] experiment=$experiment_stem status=already_completed path=$reference_run"
+      continue
+    fi
+    echo "[QDPT_LAYER_SENSITIVITY_RESUME] experiment=$experiment_stem status=evaluating training=false checkpoint=$reference_run/checkpoints/epoch_3"
+    if run_pathvqa_dynamic_prompt_epoch3_validation \
+      "$reference_run" "${experiment_stem}_seed44" 44; then
+      echo "[QDPT_LAYER_SENSITIVITY_RESUME] experiment=$experiment_stem status=completed"
+    else
+      echo "[QDPT_LAYER_SENSITIVITY_RESUME] experiment=$experiment_stem status=failed_continue" >&2
+      failures=$((failures + 1))
+    fi
+  done
+  if [ "$failures" -ne 0 ]; then
+    echo "[ERR] QDPT layer-sensitivity resumed evaluations failed=$failures" >&2
+    return 1
+  fi
+}
+
 run_pathvqa_qdpt_d768_unified_v20_rng_control_seed44() {
   run_qdpt_d768_final_dataset \
     pathvqa unified_static_visual_rng_control 44
@@ -2356,6 +2391,9 @@ case "$RUN_TARGET" in
   pathvqa_qdpt_d768_layer_sensitivity_seed44)
     run_pathvqa_qdpt_d768_layer_sensitivity_seed44 || failures=$((failures + 1))
     ;;
+  pathvqa_qdpt_d768_layer_sensitivity_resume_eval)
+    run_pathvqa_qdpt_d768_layer_sensitivity_resume_eval || failures=$((failures + 1))
+    ;;
   pathvqa_qdpt_d768_unified_v20_rng_control_seed44)
     run_pathvqa_qdpt_d768_unified_v20_rng_control_seed44 || failures=$((failures + 1))
     ;;
@@ -2418,7 +2456,7 @@ case "$RUN_TARGET" in
     run_slake || failures=$((failures + 1))
     ;;
   *)
-    echo "[ERR] 未知目标: $RUN_TARGET；新增 QDPT 目标: pathvqa_qdpt_d768_no_static_visual_seed44、pathvqa_qdpt_d768_no_static_visual_resume_eval、pathvqa_qdpt_d768_learned_static_query_seed44、pathvqa_qdpt_d768_direct_visual_z_concat_seeds44_46、pathvqa_qdpt_d768_layer_sensitivity_seed44、electrical_qdpt_d768_seed44、qdpt_d768_final_pathvqa_slake_seed44。" >&2
+    echo "[ERR] 未知目标: $RUN_TARGET；新增 QDPT 目标: pathvqa_qdpt_d768_no_static_visual_seed44、pathvqa_qdpt_d768_no_static_visual_resume_eval、pathvqa_qdpt_d768_learned_static_query_seed44、pathvqa_qdpt_d768_direct_visual_z_concat_seeds44_46、pathvqa_qdpt_d768_layer_sensitivity_seed44、pathvqa_qdpt_d768_layer_sensitivity_resume_eval、electrical_qdpt_d768_seed44、qdpt_d768_final_pathvqa_slake_seed44。" >&2
     exit 2
     ;;
 esac

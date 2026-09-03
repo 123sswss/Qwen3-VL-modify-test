@@ -223,13 +223,8 @@ class DynamicPromptTuningModel(nn.Module):
             raise ValueError(
                 "Directional Concat Workspace does not use Shared-S text modes"
             )
-        if directional_concat_workspace and (
-            not sparse_visual_anchor_layers
-            or len(tuple(sparse_visual_anchor_layers)) != 1
-        ):
-            raise ValueError(
-                "Directional Concat Workspace requires exactly one visual anchor"
-            )
+        if directional_concat_workspace and not sparse_visual_anchor_layers:
+            raise ValueError("Directional Concat Workspace requires visual anchors")
         if workspace_text_attention_dim % workspace_text_heads != 0:
             raise ValueError(
                 "workspace_text_attention_dim must be divisible by heads"
@@ -274,7 +269,7 @@ class DynamicPromptTuningModel(nn.Module):
                 self.sparse_visual = DirectionalConcatWorkspaceVisual(
                     visual_dim=int(visual_dim),
                     text_dim=self.hidden_size,
-                    anchor_layer=int(tuple(sparse_visual_anchor_layers)[0]),
+                    anchor_layers=tuple(sparse_visual_anchor_layers),
                     private_prompt_tokens=sparse_visual_rep_tokens,
                     workspace_tokens=workspace_tokens,
                     workspace_dim=workspace_dim,
@@ -1164,6 +1159,7 @@ class DynamicPromptTuningModel(nn.Module):
                     "dim": self.sparse_visual.workspace_dim,
                     "heads": self.sparse_visual.workspace_heads,
                     "anchor_layer": self.sparse_visual.anchor_layers[0],
+                    "anchor_layers": list(self.sparse_visual.anchor_layers),
                     "private_visual_prompt_tokens": (
                         self.sparse_visual.private_prompt_tokens
                         if (
@@ -1180,7 +1176,7 @@ class DynamicPromptTuningModel(nn.Module):
                     "private_text_prompt_tokens": self.private_prompt_length,
                     "text_workspace_anchor_tokens": self.workspace_prompt_length,
                     "query": self.sparse_visual.query_source,
-                    "memory": "full_layer17_visual_tokens",
+                    "memory": "full_anchor_layer_visual_tokens",
                     "fusion": "text_query_visual_kv_cross_attention",
                     "visual_output": (
                         (
@@ -1189,7 +1185,7 @@ class DynamicPromptTuningModel(nn.Module):
                             else "anchored_token_concat"
                         )
                         if self.sparse_visual.static_visual_write
-                        else "read_only_layer17_hook"
+                        else "read_only_anchor_layer_hook"
                     ),
                     "text_output": "anchored_token_concat",
                     "visual_dynamic_write": self.sparse_visual.visual_dynamic_write,

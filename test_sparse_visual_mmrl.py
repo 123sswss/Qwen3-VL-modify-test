@@ -559,6 +559,81 @@ class SparseVisualMMRLTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "requires visual_dynamic_write"):
             adapter.configure_inference_intervention(visual_delta_scale=0.5)
 
+    def test_directional_concat_reuses_parameters_across_multiple_layers(self):
+        torch.manual_seed(35)
+        visual = _FakeVisual()
+        adapter = DirectionalConcatWorkspaceVisual(
+            visual_dim=8,
+            text_dim=12,
+            anchor_layers=(1, 2),
+            private_prompt_tokens=2,
+            workspace_tokens=3,
+            workspace_dim=8,
+            workspace_heads=2,
+            visual_dynamic_write=False,
+        )
+        parameter_count = sum(
+            parameter.numel() for parameter in adapter.parameters()
+        )
+        single_layer = DirectionalConcatWorkspaceVisual(
+            visual_dim=8,
+            text_dim=12,
+            anchor_layer=1,
+            private_prompt_tokens=2,
+            workspace_tokens=3,
+            workspace_dim=8,
+            workspace_heads=2,
+            visual_dynamic_write=False,
+        )
+        self.assertEqual(
+            parameter_count,
+            sum(parameter.numel() for parameter in single_layer.parameters()),
+        )
+        adapter.install(visual)
+        hidden = torch.randn(7, 8)
+        text_tokens = torch.randn(2, 4, 12)
+        text_mask = torch.tensor(
+            [[True, True, False, False], [True, True, True, False]]
+        )
+        cu_seqlens = torch.tensor([0, 2, 4, 7], dtype=torch.int32)
+        with adapter.activate(
+            torch.randn(2, 12),
+            torch.tensor([1, 1]),
+            text_tokens=text_tokens,
+            text_token_mask=text_mask,
+        ):
+            adapter.prepare_visual(torch.tensor([[1, 1, 4], [1, 1, 3]]))
+            output = visual.blocks[1](hidden, cu_seqlens=cu_seqlens)
+            output = visual.blocks[2](output, cu_seqlens=cu_seqlens)
+            workspace = adapter.shared_workspace_text_memory()
+            loss = output.square().mean() + workspace.square().mean()
+        self.assertEqual(adapter.anchor_layers, (1, 2))
+        self.assertEqual(visual.blocks[1].block.calls, 1)
+        self.assertEqual(visual.blocks[2].block.calls, 1)
+        self.assertEqual(tuple(output.shape), tuple(hidden.shape))
+        self.assertEqual(tuple(workspace.shape), (2, 3, 8))
+        self.assertIn("workspace_norm_mean_layer1", adapter.debug_context)
+        self.assertIn("workspace_norm_mean_layer2", adapter.debug_context)
+        self.assertEqual(
+            adapter.workspace_inference_intervention_summary()["anchor_layers"],
+            [1, 2],
+        )
+        loss.backward()
+        self.assertGreater(float(adapter.private_visual_prompt.grad.norm()), 0.0)
+        self.assertGreater(
+            float(adapter.workspace_cross_attention.in_proj_weight.grad.norm()),
+            0.0,
+        )
+        with self.assertRaisesRegex(ValueError, "unique and ascending"):
+            DirectionalConcatWorkspaceVisual(
+                visual_dim=8,
+                text_dim=12,
+                anchor_layers=(2, 1),
+                workspace_tokens=3,
+                workspace_dim=8,
+                workspace_heads=2,
+            )
+
     def test_workspace_projection_scales_only_dynamic_delta(self):
         torch.manual_seed(31)
         projection = ZeroInitWorkspaceProjection(8, 12)

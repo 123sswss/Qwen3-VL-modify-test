@@ -272,7 +272,10 @@ Day 1 结束后不再增加：
 ### Day 2：PathVQA 主实验（2026-09-03）
 
 - [ ] 两张 GPU 分容器串行/并行运行 D768 seed45/46 与 LoRA-r8 seed45/46。
-- [ ] 运行 learned-static-query 和 no-static-visual seed44。
+- [x] 完成 no-static-visual seed44：显著下降1.1184，保留18-token静态视觉校准。
+- [x] 完成 direct-visual-Z concat seeds44/45/46：三seed均值58.8007，较原D768均值-0.2023且方差增大，拒绝作为最终结构。
+- [ ] 运行最终层位敏感性 seed44：Layer18-only，以及全参数共享的Layer17+18+19连续插入。与Layer17 seed44做配对比较；除非提升至少1分且配对显著，否则保留预先选定的Layer17，不扩展为层位搜索。
+- [ ] 运行 learned-static-query seed44。
 - [ ] 运行 LoRA-r4/r16 seed44。
 - [ ] 汇总每个实验的 Validation、参数、训练时间与预测文件。
 - [ ] 立即更新两个实验账本，不做账本单独提交。
@@ -328,6 +331,7 @@ Day 1 结束后不再增加：
 4. **Method**：问题池化、Directional CA、动态 Prompt、宽度 D、冻结与训练参数。
 5. **Experiments**：数据、协议、基线、主结果、效率。
 6. **Analysis and Discussion**：宽度曲线、错配、learned query、视觉插入消融、能力类型差异，以及生成式 MLLM 与 CLIP 类对称双编码器的适配不对称性。用“视觉证据必要但视觉写回边际收益有限”概括，不称视觉编码器为附属挂件。
+   补充机理表述：冻结视觉编码器已保留广泛视觉证据，问题条件更适合在编码后做定向检索并写入LLM Prompt。静态视觉Prompt提供稳定领域校准，而动态Z写回视觉编码器未带来稳定收益且增大seed波动。该结论仅限当前冻结生成式MLLM与受控实验，不声称对所有任务普遍成立。
 7. **Limitations**：两公开数据集、exact match 局限、训练加速有限、未证明所有领域都无需视觉写回。
 8. **Conclusion**：强调可配置的样本条件 Prompt 适配，而非宣称全面替代 LoRA。
 

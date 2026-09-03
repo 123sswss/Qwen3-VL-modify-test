@@ -495,10 +495,8 @@ def parse_args(dataset_name: str = "pathvqa") -> argparse.Namespace:
         parser.error(
             "--directional-concat-workspace does not use Shared-S text modes"
         )
-    if args.directional_concat_workspace and len(args.sparse_visual_anchor_layers) != 1:
-        parser.error(
-            "--directional-concat-workspace requires exactly one visual anchor"
-        )
+    if args.directional_concat_workspace and not args.sparse_visual_anchor_layers:
+        parser.error("--directional-concat-workspace requires visual anchors")
     if not args.directional_concat_workspace and not args.directional_visual_dynamic_write:
         parser.error(
             "--no-directional-visual-dynamic-write requires "
@@ -785,6 +783,7 @@ def main(dataset_name: str = "pathvqa") -> int:
                 "dim": args.workspace_dim,
                 "heads": args.workspace_heads,
                 "anchor_layer": int(args.sparse_visual_anchor_layers[0]),
+                "anchor_layers": list(args.sparse_visual_anchor_layers),
                 "private_visual_prompt_tokens": (
                     args.sparse_visual_rep_tokens
                     if (
@@ -826,7 +825,7 @@ def main(dataset_name: str = "pathvqa") -> int:
                         )
                     )
                     if args.directional_static_visual_write
-                    else "read_only_layer17_hook"
+                    else "read_only_anchor_layer_hook"
                 ),
                 "text_output_interface": "dynamic_anchor_token_concat",
                 "text_dynamic_projection_zero_initialized": True,

@@ -111,7 +111,7 @@ class DirectionalConcatWorkspaceVisual(nn.Module):
         self,
         visual_dim: int,
         text_dim: int,
-        anchor_layer: int,
+        anchor_layer: int | None = None,
         private_prompt_tokens: int = 8,
         workspace_tokens: int = 10,
         workspace_dim: int = 1024,
@@ -120,6 +120,7 @@ class DirectionalConcatWorkspaceVisual(nn.Module):
         static_visual_write: bool = True,
         direct_visual_z_tokens: bool = False,
         query_source: str = "question_attention_pooling",
+        anchor_layers: Sequence[int] | None = None,
     ) -> None:
         super().__init__()
         if min(
@@ -139,8 +140,20 @@ class DirectionalConcatWorkspaceVisual(nn.Module):
                 "private_prompt_tokens must be positive when static visual "
                 "write is enabled, and non-negative otherwise"
             )
-        if anchor_layer < 0:
-            raise ValueError("Directional Workspace anchor must be non-negative")
+        if anchor_layers is None:
+            if anchor_layer is None:
+                raise ValueError("Directional Workspace requires visual anchors")
+            anchors = (int(anchor_layer),)
+        else:
+            if anchor_layer is not None:
+                raise ValueError("Specify anchor_layer or anchor_layers, not both")
+            anchors = tuple(int(index) for index in anchor_layers)
+        if not anchors or any(index < 0 for index in anchors):
+            raise ValueError("Directional Workspace anchors must be non-negative")
+        if len(set(anchors)) != len(anchors) or tuple(sorted(anchors)) != anchors:
+            raise ValueError(
+                "Directional Workspace anchors must be unique and ascending"
+            )
         if workspace_dim % workspace_heads != 0:
             raise ValueError("workspace_dim must be divisible by workspace_heads")
         if query_source not in DIRECTIONAL_QUERY_SOURCES:
@@ -164,7 +177,7 @@ class DirectionalConcatWorkspaceVisual(nn.Module):
 
         self.visual_dim = int(visual_dim)
         self.text_dim = int(text_dim)
-        self.anchor_layers = (int(anchor_layer),)
+        self.anchor_layers = anchors
         self.private_prompt_tokens = (
             int(private_prompt_tokens)
             if static_visual_write and not direct_visual_z_tokens
@@ -254,6 +267,7 @@ class DirectionalConcatWorkspaceVisual(nn.Module):
         self._image_lengths: torch.Tensor | None = None
         self._image_to_sample: torch.Tensor | None = None
         self._workspace_by_image: torch.Tensor | None = None
+        self._layer_debug_context: Dict[str, torch.Tensor] = {}
         self._installed = False
         self._forward_audited = False
         self._visual_delta_scale = 1.0
@@ -532,17 +546,21 @@ class DirectionalConcatWorkspaceVisual(nn.Module):
         blocks = getattr(visual_model, "blocks", None)
         if blocks is None:
             raise RuntimeError("Directional Workspace requires visual_model.blocks")
-        anchor = self.anchor_layers[0]
-        if anchor >= len(blocks):
+        invalid = [index for index in self.anchor_layers if index >= len(blocks)]
+        if invalid:
             raise ValueError(
-                f"Directional Workspace anchor {anchor} exceeds depth {len(blocks)}"
+                "Directional Workspace anchors exceed visual depth: "
+                f"anchors={invalid} depth={len(blocks)}"
             )
-        blocks[anchor] = SparseVisualInjectionBlock(blocks[anchor], self, anchor)
+        for anchor in self.anchor_layers:
+            blocks[anchor] = SparseVisualInjectionBlock(blocks[anchor], self, anchor)
         self._installed = True
         print(
             "[DIRECTIONAL_CONCAT_WORKSPACE_LAYER_AUDIT] "
-            f"vision_depth={len(blocks)} anchor_0based={anchor} "
-            f"anchor_natural={anchor + 1} private_visual_tokens="
+            f"vision_depth={len(blocks)} anchors_0based={list(self.anchor_layers)} "
+            f"anchors_natural={[index + 1 for index in self.anchor_layers]} "
+            "parameter_sharing=all_directional_and_visual_prompt_parameters "
+            f"private_visual_tokens="
             f"{self.private_prompt_tokens} workspace_tokens={self.workspace_tokens} "
             f"direct_visual_z_tokens_count="
             f"{self.workspace_tokens if self.direct_visual_z_tokens else 0} "
@@ -596,6 +614,7 @@ class DirectionalConcatWorkspaceVisual(nn.Module):
         self._image_lengths = None
         self._image_to_sample = None
         self._workspace_by_image = None
+        self._layer_debug_context = {}
         self.debug_context = {}
         try:
             yield
@@ -607,6 +626,7 @@ class DirectionalConcatWorkspaceVisual(nn.Module):
             self._image_lengths = None
             self._image_to_sample = None
             self._workspace_by_image = None
+            self._layer_debug_context = {}
 
     def prepare_visual(self, grid_thw: torch.Tensor) -> None:
         if not self.active:
@@ -988,6 +1008,7 @@ class DirectionalConcatWorkspaceVisual(nn.Module):
                         "workspace_visual_prompt_to_input_ratio": zero,
                     }
                 )
+                self._capture_layer_debug(layer_index)
                 if not self._forward_audited:
                     print(
                         "[DIRECTIONAL_CONCAT_WORKSPACE_FORWARD_AUDIT] "
@@ -1130,6 +1151,7 @@ class DirectionalConcatWorkspaceVisual(nn.Module):
                     / input_norm.clamp_min(1e-8),
                 }
             )
+            self._capture_layer_debug(layer_index)
             if not self._forward_audited:
                 print(
                     "[DIRECTIONAL_CONCAT_WORKSPACE_FORWARD_AUDIT] "
@@ -1145,6 +1167,17 @@ class DirectionalConcatWorkspaceVisual(nn.Module):
                 )
                 self._forward_audited = True
         return adapted
+
+    def _capture_layer_debug(self, layer_index: int) -> None:
+        current = dict(self.debug_context)
+        self._layer_debug_context.update(
+            {
+                f"{key}_layer{layer_index}": value
+                for key, value in current.items()
+                if not key.rsplit("_layer", 1)[-1].isdigit()
+            }
+        )
+        self.debug_context.update(self._layer_debug_context)
 
     def workspace_inference_intervention_summary(self) -> Dict[str, Any]:
         return {

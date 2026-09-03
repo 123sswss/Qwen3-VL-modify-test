@@ -1984,6 +1984,25 @@ run_pathvqa_lora_full_model_attn_r8_seed44() {
   run_pathvqa_lora_full_model_attn_r8 44
 }
 
+run_pathvqa_lora_full_model_attn_r8_seeds45_46() {
+  local suite_failures=0
+  local run_seed
+  for run_seed in 45 46; do
+    echo "[PATHVQA_LORA_R8_REPLICATION] seed=$run_seed status=starting"
+    if run_pathvqa_lora_full_model_attn_r8 "$run_seed"; then
+      echo "[PATHVQA_LORA_R8_REPLICATION] seed=$run_seed status=completed"
+    else
+      echo "[PATHVQA_LORA_R8_REPLICATION] seed=$run_seed status=failed_continue" >&2
+      suite_failures=$((suite_failures + 1))
+    fi
+  done
+  if [ "$suite_failures" -ne 0 ]; then
+    echo "[ERR] PathVQA Full-Attention LoRA-r8 replication failures=$suite_failures; both seeds were attempted." >&2
+    return 1
+  fi
+  echo "[PATHVQA_LORA_R8_REPLICATION_DONE] seeds=45,46 status=completed"
+}
+
 run_pathvqa_day2_d768_lora_r8_seeds45_46() {
   local suite_failures=0
 
@@ -2445,6 +2464,9 @@ case "$RUN_TARGET" in
   pathvqa_lora_full_model_attn_r8_seed44)
     run_pathvqa_lora_full_model_attn_r8_seed44 || failures=$((failures + 1))
     ;;
+  pathvqa_lora_full_model_attn_r8_seeds45_46)
+    run_pathvqa_lora_full_model_attn_r8_seeds45_46 || failures=$((failures + 1))
+    ;;
   pathvqa_day2_d768_lora_r8_seeds45_46)
     run_pathvqa_day2_d768_lora_r8_seeds45_46 || failures=$((failures + 1))
     ;;
@@ -2456,7 +2478,7 @@ case "$RUN_TARGET" in
     run_slake || failures=$((failures + 1))
     ;;
   *)
-    echo "[ERR] 未知目标: $RUN_TARGET；新增 QDPT 目标: pathvqa_qdpt_d768_no_static_visual_seed44、pathvqa_qdpt_d768_no_static_visual_resume_eval、pathvqa_qdpt_d768_learned_static_query_seed44、pathvqa_qdpt_d768_direct_visual_z_concat_seeds44_46、pathvqa_qdpt_d768_layer_sensitivity_seed44、pathvqa_qdpt_d768_layer_sensitivity_resume_eval、electrical_qdpt_d768_seed44、qdpt_d768_final_pathvqa_slake_seed44。" >&2
+    echo "[ERR] 未知目标: $RUN_TARGET；新增目标: pathvqa_lora_full_model_attn_r8_seeds45_46、pathvqa_qdpt_d768_no_static_visual_seed44、pathvqa_qdpt_d768_no_static_visual_resume_eval、pathvqa_qdpt_d768_learned_static_query_seed44、pathvqa_qdpt_d768_direct_visual_z_concat_seeds44_46、pathvqa_qdpt_d768_layer_sensitivity_seed44、pathvqa_qdpt_d768_layer_sensitivity_resume_eval、electrical_qdpt_d768_seed44、qdpt_d768_final_pathvqa_slake_seed44。" >&2
     exit 2
     ;;
 esac

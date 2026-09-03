@@ -1,6 +1,6 @@
 import unittest
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from loraTest.data_protocol import (
     TRAIN_EXPERT_IMAGE_DIRS,
@@ -21,10 +21,12 @@ class _NonEmptyDataset:
 class ElectricalQDPTTest(unittest.TestCase):
     def test_electrical_dataset_uses_only_private_multimodal_expert_data(self):
         args = SimpleNamespace(data_seed=42)
+        dataset_class = Mock(return_value=_NonEmptyDataset())
+        collator_class = Mock()
         with patch(
-            "pathvqa.train_dynamic_prompt.FourViewMMRLDataset",
-            return_value=_NonEmptyDataset(),
-        ) as dataset_class:
+            "pathvqa.train_dynamic_prompt._load_electrical_data_pipeline",
+            return_value=(dataset_class, collator_class),
+        ):
             dataset = _build_train_dataset("electrical", args, object())
 
         self.assertEqual(len(dataset), 7)

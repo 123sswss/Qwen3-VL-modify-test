@@ -4,8 +4,10 @@
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
 import random
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Dict, List
 
@@ -26,7 +28,8 @@ from loraTest.data_protocol import (
 )
 from slake.data_pipeline import SLAKEDataCollator, SLAKEDataset
 from slake.dynamic_prompt_tuning import DynamicPromptTuningModel
-from train.data_pipeline import FourViewMMRLDataset, MMRLDataCollator
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 MODEL_BATCH_KEYS = (
     "input_ids",
@@ -37,6 +40,20 @@ MODEL_BATCH_KEYS = (
     "mmrl_gating_mask",
 )
 SUPPORTED_DATASETS = ("pathvqa", "slake", "electrical")
+
+
+@lru_cache(maxsize=1)
+def _load_electrical_data_pipeline():
+    source = PROJECT_ROOT / "train" / "data_pipeline.py"
+    spec = importlib.util.spec_from_file_location(
+        "qdpt_private_electrical_data_pipeline",
+        source,
+    )
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"Unable to load electrical data pipeline: {source}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.FourViewMMRLDataset, module.MMRLDataCollator
 
 
 def _normalize_dataset_name(dataset_name: str) -> str:
@@ -60,11 +77,13 @@ def _dataset_display_name(dataset_name: str) -> str:
 class DynamicPromptCollator:
     def __init__(self, processor: Any, dataset_name: str = "pathvqa") -> None:
         dataset_name = _normalize_dataset_name(dataset_name)
-        collator_class = {
-            "pathvqa": PathVQADataCollator,
-            "slake": SLAKEDataCollator,
-            "electrical": MMRLDataCollator,
-        }[dataset_name]
+        if dataset_name == "electrical":
+            _, collator_class = _load_electrical_data_pipeline()
+        else:
+            collator_class = {
+                "pathvqa": PathVQADataCollator,
+                "slake": SLAKEDataCollator,
+            }[dataset_name]
         self.base = collator_class(processor)
 
     def __call__(self, features: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -598,7 +617,8 @@ def _build_train_dataset(
             deterministic_sampling=True,
             max_length=args.max_length,
         )
-    dataset = FourViewMMRLDataset(
+    dataset_class, _ = _load_electrical_data_pipeline()
+    dataset = dataset_class(
         processor=processor,
         expert_json=TRAIN_EXPERT_JSONS,
         expert_img_dir=TRAIN_EXPERT_IMAGE_DIRS,

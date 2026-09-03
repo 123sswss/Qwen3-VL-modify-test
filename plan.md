@@ -88,9 +88,9 @@
 
 目的：区分本方法与普通 Q-Former/learned-query 视觉聚合器，验证收益是否确实来自**当前问题条件化的查询**，而不是增加一组通用查询和参数。
 
-#### C. 可选 question-only 控制
+#### C. 审稿后候补 question-only 控制
 
-若 Day 1 前两项按时完成，可训练一个不读取视觉 K/V、只由问题生成动态 Prompt 的等容量控制。该实验用于排除纯问题捷径；若实现或运行会影响主实验进度，立即取消，因为现有视觉 K/V 错配已经提供了较强机制证据。
+当前不实现。只有审稿人明确质疑纯问题捷径时，才补训一个不读取视觉 K/V、只由问题生成动态 Prompt 的等容量控制。现有视觉 K/V 错配已经提供了较强机制证据。
 
 ### 3.3 架构冻结规则
 
@@ -115,14 +115,14 @@ Day 1 结束后不再增加：
 | Static Prompt Tuning | P20，51.2K 参数 | 样本无关 Prompt 基线 | PathVQA/SLAKE 已有 |
 | Full-Attention LoRA | r4/r8/r16 | 与作用于视觉+LLM Attention 的强通用 PEFT 正面对比 | r8 seed44 已有；补 r4/r16 |
 | Visual-Only LoRA | last8-r128、all24-r128 | 与只作用视觉编码器的方法比较 | PathVQA 已有 |
-| IA3 或同等级轻量 PEFT | 单一标准配置 | 增加一个非 Prompt、非 LoRA 的通用轻量基线 | 可选，Day 1 中午前未完成实现即删除 |
+| IA3 或同等级轻量 PEFT | 单一标准配置 | 增加一个非 Prompt、非 LoRA 的通用轻量基线 | 当前不实现，仅审稿人要求时补做 |
 
 公平性要求：
 
 - 冻结同一 Qwen3-VL 基座，使用相同 train/val/test split、图像预处理、最大生成长度和官方归一化 exact match。
 - 报告可训练参数、训练时间、TTFT、TPOT；不只比较准确率。
 - LoRA rank sweep 只做 r4/r8/r16，不扩展到视觉模块组合搜索。
-- IA3 不是论文成立的前置条件，禁止因实现困难拖延五天计划。
+- IA3、question-only与补充语义指标均移至审稿后候补清单，不占用当前五天收尾窗口。
 
 ### 4.2 同领域论文方法
 
@@ -160,7 +160,7 @@ Day 1 结束后不再增加：
 
 - **PathVQA：主数据集。** 用于方法选择、宽度曲线、LoRA 对比、机制控制和主要统计结论。
 - **SLAKE：跨数据集验证。** 最终架构必须原样迁移，不允许根据 SLAKE 重新搜索层数、宽度或槽数。
-- **自建电气数据集：补充应用案例。** 质量有限且不可开源，只允许最终方法单 seed 一次运行；若前四天资源紧张则取消，不影响主论文。
+- **自建电气数据集：必做的补充应用案例。** 质量有限且不可开源，只允许最终方法 seed44 一次运行；不做多seed、消融或SOTA声明。
 
 ### 5.2 划分和 Test 使用规则
 
@@ -191,7 +191,7 @@ Day 1 结束后不再增加：
 - 同一数据样本预测采用 exact McNemar 检验。
 - PathVQA 按 image cluster 执行 paired bootstrap 95% CI，避免把同图多问当独立样本。
 - 多 seed 报告 mean ± std，并保留每个 seed 的原始分数。
-- 可选报告 Free-form token-F1、ROUGE-L 或 BERTScore 作为补充语义指标，但绝不替代官方 exact match，也不用于训练选型。
+- Free-form token-F1、ROUGE-L 或 BERTScore 当前不实现；仅在审稿人明确要求语义指标时补做，且不得替代官方 exact match。
 
 ## 6. 最终实验矩阵
 
@@ -218,8 +218,8 @@ Day 1 结束后不再增加：
 | P1 | Full-Attention LoRA-r4 | 44 | LoRA 参数-性能曲线 |
 | P1 | Full-Attention LoRA-r16 | 44 | LoRA 参数-性能曲线 |
 | P1 | 最终架构正式 Test | 44/45/46 最终 checkpoint | 冻结后仅运行一次 |
-| P2 | question-only 等容量控制 | 44 | 排除纯问题捷径 |
-| P2 | IA3 单配置 | 44 | 通用轻量 PEFT 补充对比 |
+| Post-review | question-only 等容量控制 | 44 | 当前不实现；仅在审稿人明确要求排除纯问题捷径时补做 |
+| Post-review | IA3 单配置 | 44 | 当前不实现；仅在审稿人要求增加轻量PEFT时补做 |
 
 ### 6.3 SLAKE 必做
 
@@ -232,7 +232,7 @@ Day 1 结束后不再增加：
 
 ### 6.4 补充数据集
 
-- [ ] 自建电气数据集：最终 D768 seed44 一次；只报告应用可行性，不进行多 seed、消融或 SOTA 声明。
+- [ ] 自建电气数据集：**必做**。最终 D768 seed44 一次；只报告应用可行性，不进行多 seed、消融或 SOTA 声明。专用训练/评估入口已实现，等待运行。
 - [ ] 不新增第四个公开数据集。PathVQA + SLAKE 已足以支撑主张，自建数据集只展示跨领域应用。
 
 ## 7. 论文表格与图
@@ -262,7 +262,7 @@ Day 1 结束后不再增加：
 - [x] 实现 no-static-visual D768；参数审计固定为 7,786,752，已通过本地 Python 编译与脚本静态检查，PyTorch 单测由启动脚本在训练前强制执行。
 - [x] 实现 learned-static-query D768；以 10x2560 learned Query 等参数替换问题池化打分矩阵，总参数保持 7,805,184，已通过本地 Python 编译与脚本静态检查。
 - [x] 准备 PathVQA/SLAKE 最终统一启动脚本；实验名编码数据集、D、Query 来源、视觉模式与 seed，统一强制 3 epochs 且只在 epoch 3 全量评估。
-- [ ] 中午前判断 IA3 是否能低风险接入；不能则从计划删除。
+- [x] IA3、question-only和补充语义指标已移至审稿后候补，当前不实现。
 - [ ] 完成 CoCoOp、MaPLe、Q-Former、LION、MASP 的碰撞矩阵。
 - [ ] 审计 PathVQA/SLAKE 同领域论文的 split 与 metric。
 - [ ] 根据 no-static-visual 结果冻结最终结构和论文主张。
@@ -297,7 +297,7 @@ Day 1 结束后不再增加：
 - [ ] 计算 multi-seed mean ± std、McNemar、image-clustered paired bootstrap CI。
 - [ ] 生成主性能表、容量表、消融表、效率表和文献独立表。
 - [ ] 生成架构图、Pareto 图、宽度曲线和 mismatch 图。
-- [ ] 若时间允许，运行一次自建电气数据集；否则取消。
+- [ ] 运行一次自建电气数据集 D768 seed44；该项为必做，但不扩展多seed或消融。
 
 当日产物：全部定稿数字、图表初版、统计脚本与机器可读结果。
 

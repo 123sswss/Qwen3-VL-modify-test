@@ -14,13 +14,15 @@ PATHVQA_LORA_OUTPUT_ROOT="${PATHVQA_LORA_OUTPUT_ROOT:-$ROOT_DIR/pathvqa/outputs/
 PATHVQA_BASE_OUTPUT_ROOT="${PATHVQA_BASE_OUTPUT_ROOT:-$ROOT_DIR/pathvqa/outputs/base}"
 PATHVQA_PROMPT_OUTPUT_ROOT="${PATHVQA_PROMPT_OUTPUT_ROOT:-$ROOT_DIR/pathvqa/outputs/prompt_tuning}"
 PATHVQA_DYNAMIC_PROMPT_OUTPUT_ROOT="${PATHVQA_DYNAMIC_PROMPT_OUTPUT_ROOT:-$ROOT_DIR/pathvqa/outputs/dynamic_prompt}"
+ELECTRICAL_DATA_ROOT="${ELECTRICAL_DATA_ROOT:-/root/autodl-tmp/dataset}"
+ELECTRICAL_QDPT_OUTPUT_ROOT="${ELECTRICAL_QDPT_OUTPUT_ROOT:-$ROOT_DIR/electrical/outputs/qdpt}"
 ENV_RUN_TARGET="${RUN_TARGET:-}"
 RUN_TARGET="${1:-${ENV_RUN_TARGET:-${MMRL_RUN_TARGET:-all}}}"
 RUN_DATE="${MMRL_RUN_DATE:-$(date +%Y%m%d)}"
 SEED="${MMRL_FIXED_SEED:-44}"
 SHUTDOWN_ON_EXIT="${MMRL_SHUTDOWN_ON_EXIT:-1}"
 
-mkdir -p "$OUTPUT_ROOT" "$SLAKE_OUTPUT_ROOT" "$SLAKE_DYNAMIC_PROMPT_OUTPUT_ROOT" "$PATHVQA_OUTPUT_ROOT" "$PATHVQA_LORA_OUTPUT_ROOT" "$PATHVQA_BASE_OUTPUT_ROOT" "$PATHVQA_PROMPT_OUTPUT_ROOT" "$PATHVQA_DYNAMIC_PROMPT_OUTPUT_ROOT"
+mkdir -p "$OUTPUT_ROOT" "$SLAKE_OUTPUT_ROOT" "$SLAKE_DYNAMIC_PROMPT_OUTPUT_ROOT" "$PATHVQA_OUTPUT_ROOT" "$PATHVQA_LORA_OUTPUT_ROOT" "$PATHVQA_BASE_OUTPUT_ROOT" "$PATHVQA_PROMPT_OUTPUT_ROOT" "$PATHVQA_DYNAMIC_PROMPT_OUTPUT_ROOT" "$ELECTRICAL_QDPT_OUTPUT_ROOT"
 echo "[RUN_TARGET] selected=$RUN_TARGET positional=${1:-<unset>} env=${ENV_RUN_TARGET:-<unset>} mmrl_env=${MMRL_RUN_TARGET:-<unset>}"
 
 cancel_shutdown_on_interrupt() {
@@ -1167,6 +1169,72 @@ run_pathvqa_qdpt_d768_layer_sensitivity_seed44() {
   fi
 }
 
+run_electrical_qdpt_d768_seed44() {
+  local experiment_name="electrical_qdpt_d768_question_q10_l17_p20_static_visual18_seed44"
+  local output_dir
+  output_dir="$(available_output_dir \
+    "$ELECTRICAL_QDPT_OUTPUT_ROOT" \
+    "${experiment_name}_${RUN_DATE}")"
+  mkdir -p "$output_dir"
+  echo "[ELECTRICAL_QDPT_CONFIG] experiment=$experiment_name seed=44 data_seed=42 anchors=17 private_text_prompt=20 static_visual_prompt=18 workspace=10x768 query_source=question_attention_pooling visual_kv=full_layer17_tokens dynamic_visual_write=false expected_trainable=7805184 epochs=3 evaluation=private_fixed_holdout output=$output_dir"
+  (
+    cd "$ROOT_DIR" || exit 1
+    python -m unittest \
+      test_dynamic_prompt_tuning.py \
+      test_sparse_visual_mmrl.py \
+      test_electrical_qdpt.py || exit 1
+    python -m electrical.train_qdpt \
+      --model-path "$MODEL_PATH" \
+      --data-root "$ELECTRICAL_DATA_ROOT" \
+      --output-dir "$output_dir" \
+      --experiment-name "$experiment_name" \
+      --prompt-length 20 \
+      --attention-dim 256 \
+      --attention-heads 8 \
+      --sparse-visual \
+      --sparse-visual-anchor-layers 17 \
+      --sparse-visual-rep-tokens 8 \
+      --sparse-visual-attention-dim 128 \
+      --sparse-visual-heads 4 \
+      --sparse-visual-lr "${ELECTRICAL_QDPT_SPARSE_VISUAL_LR:-3e-5}" \
+      --shared-s-text-mode none \
+      --directional-concat-workspace \
+      --no-directional-visual-dynamic-write \
+      --directional-query-source question_attention_pooling \
+      --directional-static-visual-write \
+      --workspace-tokens 10 \
+      --workspace-dim 768 \
+      --workspace-heads 16 \
+      --workspace-lr "${ELECTRICAL_QDPT_WORKSPACE_LR:-1e-4}" \
+      --epochs 3 \
+      --seed 44 \
+      --data-seed 42 \
+      --prompt-lr "${ELECTRICAL_QDPT_STATIC_LR:-0.3}" \
+      --dynamic-lr 3e-4 \
+      --batch-size "${ELECTRICAL_QDPT_BATCH_SIZE:-2}" \
+      --gradient-accumulation "${ELECTRICAL_QDPT_GRAD_ACCUM:-16}" \
+      --dataloader-workers "${ELECTRICAL_QDPT_WORKERS:-2}" \
+      --max-length 1024 \
+      --expected-trainable-parameters 7805184 \
+      2>&1 | tee "$output_dir/train.log"
+  ) || return 1
+
+  local checkpoint="$output_dir/checkpoints/epoch_3"
+  python -m electrical.eval_qdpt \
+    --checkpoint "$checkpoint" \
+    --base-model "$MODEL_PATH" \
+    --output-dir "$output_dir/eval_private/epoch_3" \
+    2>&1 | tee "$output_dir/eval_private_epoch_3.log" || return 1
+  local score
+  score="$(python -c 'import json,sys;print(json.load(open(sys.argv[1],encoding="utf-8"))["score"])' "$output_dir/eval_private/epoch_3/electrical_summary.json")" || return 1
+  printf 'experiment\tseed\tepoch\tprivate_accuracy\tcheckpoint\tprotocol\n' \
+    > "$output_dir/selected_result.tsv"
+  printf '%s\t44\t3\t%s\t%s\tprivate_fixed_holdout\n' \
+    "$experiment_name" "$score" "$checkpoint" \
+    >> "$output_dir/selected_result.tsv"
+  cat "$output_dir/selected_result.tsv"
+}
+
 run_qdpt_d768_final_pathvqa_slake_seed44() {
   local variant="${QDPT_FINAL_VARIANT:-question_static_visual}"
   run_qdpt_d768_final_dataset pathvqa "$variant" 44 || return 1
@@ -2265,6 +2333,9 @@ case "$RUN_TARGET" in
   pathvqa_qdpt_d768_layer_sensitivity_seed44)
     run_pathvqa_qdpt_d768_layer_sensitivity_seed44 || failures=$((failures + 1))
     ;;
+  electrical_qdpt_d768_seed44)
+    run_electrical_qdpt_d768_seed44 || failures=$((failures + 1))
+    ;;
   qdpt_d768_final_pathvqa_slake_seed44)
     run_qdpt_d768_final_pathvqa_slake_seed44 || failures=$((failures + 1))
     ;;
@@ -2321,7 +2392,7 @@ case "$RUN_TARGET" in
     run_slake || failures=$((failures + 1))
     ;;
   *)
-    echo "[ERR] 未知目标: $RUN_TARGET；新增 QDPT 目标: pathvqa_qdpt_d768_no_static_visual_seed44、pathvqa_qdpt_d768_no_static_visual_resume_eval、pathvqa_qdpt_d768_learned_static_query_seed44、pathvqa_qdpt_d768_direct_visual_z_concat_seeds44_46、pathvqa_qdpt_d768_layer_sensitivity_seed44、qdpt_d768_final_pathvqa_slake_seed44。" >&2
+    echo "[ERR] 未知目标: $RUN_TARGET；新增 QDPT 目标: pathvqa_qdpt_d768_no_static_visual_seed44、pathvqa_qdpt_d768_no_static_visual_resume_eval、pathvqa_qdpt_d768_learned_static_query_seed44、pathvqa_qdpt_d768_direct_visual_z_concat_seeds44_46、pathvqa_qdpt_d768_layer_sensitivity_seed44、electrical_qdpt_d768_seed44、qdpt_d768_final_pathvqa_slake_seed44。" >&2
     exit 2
     ;;
 esac

@@ -20,8 +20,13 @@ from transformers import (
 )
 
 from pathvqa.data_pipeline import PathVQADataCollator, PathVQADataset
+from loraTest.data_protocol import (
+    TRAIN_EXPERT_IMAGE_DIRS,
+    TRAIN_EXPERT_JSONS,
+)
 from slake.data_pipeline import SLAKEDataCollator, SLAKEDataset
 from slake.dynamic_prompt_tuning import DynamicPromptTuningModel
+from train.data_pipeline import FourViewMMRLDataset, MMRLDataCollator
 
 MODEL_BATCH_KEYS = (
     "input_ids",
@@ -31,7 +36,7 @@ MODEL_BATCH_KEYS = (
     "labels",
     "mmrl_gating_mask",
 )
-SUPPORTED_DATASETS = ("pathvqa", "slake")
+SUPPORTED_DATASETS = ("pathvqa", "slake", "electrical")
 
 
 def _normalize_dataset_name(dataset_name: str) -> str:
@@ -45,15 +50,21 @@ def _normalize_dataset_name(dataset_name: str) -> str:
 
 
 def _dataset_display_name(dataset_name: str) -> str:
-    return "PathVQA" if dataset_name == "pathvqa" else "SLAKE"
+    return {
+        "pathvqa": "PathVQA",
+        "slake": "SLAKE",
+        "electrical": "Electrical",
+    }[dataset_name]
 
 
 class DynamicPromptCollator:
     def __init__(self, processor: Any, dataset_name: str = "pathvqa") -> None:
         dataset_name = _normalize_dataset_name(dataset_name)
-        collator_class = (
-            PathVQADataCollator if dataset_name == "pathvqa" else SLAKEDataCollator
-        )
+        collator_class = {
+            "pathvqa": PathVQADataCollator,
+            "slake": SLAKEDataCollator,
+            "electrical": MMRLDataCollator,
+        }[dataset_name]
         self.base = collator_class(processor)
 
     def __call__(self, features: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -333,11 +344,11 @@ class DynamicPromptCallback(TrainerCallback):
 def parse_args(dataset_name: str = "pathvqa") -> argparse.Namespace:
     dataset_name = _normalize_dataset_name(dataset_name)
     display_name = _dataset_display_name(dataset_name)
-    default_data_root = (
-        Path("/root/autodl-tmp/dataset/pathVQA")
-        if dataset_name == "pathvqa"
-        else Path("/root/autodl-tmp/dataset/slake")
-    )
+    default_data_root = {
+        "pathvqa": Path("/root/autodl-tmp/dataset/pathVQA"),
+        "slake": Path("/root/autodl-tmp/dataset/slake"),
+        "electrical": Path("/root/autodl-tmp/dataset"),
+    }[dataset_name]
     parser = argparse.ArgumentParser(
         description=f"Multimodal Dynamic Prompt Tuning for Qwen3-VL on {display_name}"
     )
@@ -563,16 +574,40 @@ def _build_train_dataset(
             deterministic_sampling=True,
             max_length=args.max_length,
         )
-    return SLAKEDataset(
+    if dataset_name == "slake":
+        return SLAKEDataset(
+            processor=processor,
+            questions_path=str(args.data_root / "train.json"),
+            image_root=str(args.data_root / "imgs"),
+            splits=("train",),
+            ce_enabled=True,
+            seed=args.data_seed,
+            deterministic_sampling=True,
+            max_length=args.max_length,
+        )
+    dataset = FourViewMMRLDataset(
         processor=processor,
-        questions_path=str(args.data_root / "train.json"),
-        image_root=str(args.data_root / "imgs"),
-        splits=("train",),
+        expert_json=TRAIN_EXPERT_JSONS,
+        expert_img_dir=TRAIN_EXPERT_IMAGE_DIRS,
+        general_json=(),
+        general_img_dir=(),
+        total_limit=20_000,
+        enable_views=("expert-mm",),
+        mode="peft_ce",
         ce_enabled=True,
         seed=args.data_seed,
         deterministic_sampling=True,
-        max_length=args.max_length,
+        assistant_turn_policy="joint",
     )
+    if len(dataset) == 0:
+        raise RuntimeError("Electrical QDPT training dataset is empty")
+    print(
+        "[ELECTRICAL_QDPT_DATA_AUDIT] "
+        f"expert_jsons={len(TRAIN_EXPERT_JSONS)} "
+        f"expert_image_dirs={len(TRAIN_EXPERT_IMAGE_DIRS)} "
+        f"samples={len(dataset)} views=expert-mm-only general_data=False"
+    )
+    return dataset
 
 
 def main(dataset_name: str = "pathvqa") -> int:

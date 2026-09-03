@@ -217,10 +217,19 @@ class DirectionalConcatWorkspaceVisual(nn.Module):
             )
 
         if self.unified_static_visual_prompt:
+            downstream_rng_state = torch.random.get_rng_state()
             self.static_visual_prompt = nn.Parameter(
                 torch.empty(self.static_visual_prompt_tokens, self.visual_dim)
             )
             nn.init.normal_(self.static_visual_prompt, std=0.02)
+            # Keep downstream Directional initialization identical to the
+            # historical A10-then-S8 seed44 control despite changing V length.
+            torch.random.set_rng_state(downstream_rng_state)
+            nn.init.normal_(
+                torch.empty(self.workspace_tokens, self.visual_dim),
+                std=0.02,
+            )
+            nn.init.normal_(torch.empty(8, self.visual_dim), std=0.02)
             self.register_parameter("private_visual_prompt", None)
             self.register_parameter("workspace_visual_anchor", None)
         elif self.static_visual_write:
@@ -1235,6 +1244,9 @@ class DirectionalConcatWorkspaceVisual(nn.Module):
             "anchor_layers": list(self.anchor_layers),
             "static_visual_write": self.static_visual_write,
             "unified_static_visual_prompt": self.unified_static_visual_prompt,
+            "unified_static_visual_rng_control": (
+                self.unified_static_visual_prompt
+            ),
             "direct_visual_z_tokens": self.direct_visual_z_tokens,
             "query_source": self.query_source,
             "visual_delta_scale": self._visual_delta_scale,

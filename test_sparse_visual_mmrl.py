@@ -842,6 +842,42 @@ class SparseVisualMMRLTest(unittest.TestCase):
         self.assertEqual(len(unified_adapter.private_parameters()), 0)
         self.assertEqual(unified_total, 7_807_232)
 
+        torch.manual_seed(44)
+        legacy_init = DirectionalConcatWorkspaceVisual(
+            visual_dim=1024,
+            text_dim=2560,
+            anchor_layer=17,
+            private_prompt_tokens=8,
+            workspace_tokens=10,
+            workspace_dim=768,
+            workspace_heads=16,
+            visual_dynamic_write=False,
+        )
+        torch.manual_seed(44)
+        unified_init = DirectionalConcatWorkspaceVisual(
+            visual_dim=1024,
+            text_dim=2560,
+            anchor_layer=17,
+            private_prompt_tokens=20,
+            workspace_tokens=10,
+            workspace_dim=768,
+            workspace_heads=16,
+            visual_dynamic_write=False,
+            unified_static_visual_prompt=True,
+        )
+        torch.testing.assert_close(
+            legacy_init.workspace_text_score_projection.weight,
+            unified_init.workspace_text_score_projection.weight,
+            rtol=0.0,
+            atol=0.0,
+        )
+        torch.testing.assert_close(
+            legacy_init.workspace_cross_attention.in_proj_weight,
+            unified_init.workspace_cross_attention.in_proj_weight,
+            rtol=0.0,
+            atol=0.0,
+        )
+
     def test_directional_no_static_visual_is_read_only_single_pass(self):
         torch.manual_seed(32)
         visual = _FakeVisual()

@@ -1178,6 +1178,9 @@ class DynamicPromptTuningModel(nn.Module):
                     "unified_static_visual_prompt": (
                         self.sparse_visual.unified_static_visual_prompt
                     ),
+                    "unified_static_visual_rng_control": (
+                        self.sparse_visual.unified_static_visual_prompt
+                    ),
                     "static_visual_prompt_tokens": (
                         self.sparse_visual.static_visual_prompt_tokens
                     ),

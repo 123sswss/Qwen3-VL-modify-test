@@ -932,6 +932,17 @@ These results remain useful negative evidence and should not be rerun unless a n
 
 ## Provisional Training Resource Observations
 
+### 2026-09-03 - PathVQA unified V20 Layer17 diagnostic
+
+- Exact experiment: `pathvqa_qdpt_d768_question_q10_l17_p20_unified_v20_seed44`; PathVQA official Validation, seed/data seed44/42, epoch3-only full evaluation.
+- Intended change: replace the historical two-table `[S_v8; A_v10]` static visual prefix with one `V20 x 1024` table at Layer17, using the Directional/workspace LR1e-4. Q10, D768, full Layer17 visual K/V, P20/A_t10 and the no-dynamic-visual-write policy were intended to remain fixed.
+- Result: Overall **56.4291**, image-clustered95% CI **[55.04,57.80]**; Yes/No **89.4400**, Free-form **23.5227**. Relative to the historical seed44 D768 result59.5622 this is -3.1331 Overall, -1.6000 Yes/No and -4.6522 Free-form.
+- Trainable parameters: **7,807,232** = soft/text Prompt76,800 + shared Directional/static-visual modules7,730,432. Runtime6,620.40s,1,845 steps and train loss11.29808, essentially equal to the historical train loss11.29295.
+- Visual optimization did not collapse or explode. Unified V20 mean norm changes only0.64305 ->0.64980; historical S8 changes0.64033 ->0.64080 and A_v10 changes0.64758 ->0.65534. Thus the loss is not evidence that LR1e-4 directly overtrained V20.
+- Initialization audit reveals a confound before any optimizer step: although static text-Prompt and text-anchor initial norms match exactly, question-query norm changes5.46447 ->5.15116, question-pooling entropy0.94745 ->0.95912 and workspace slot cosine0.85547 ->0.91016. The visual Prompt parameters are initialized before the question projection and Directional CA; changing18 sampled rows across two tensors into20 rows in one tensor advances the global RNG stream and changes downstream cross-modal initialization. The run therefore does **not** isolate prefix unification or token count.
+- Conclusion: do not use this score to reject a unified static visual Prompt, and do not compare Layer18/multi-layer variants against the historical Layer17 result. First decouple module initialization RNG or otherwise guarantee identical downstream initialization; then rerun the unified Layer17 control before any layer sensitivity experiment.
+- Output path: `/root/autodl-tmp/Qwen3-VL-modify-test/pathvqa/outputs/dynamic_prompt/pathvqa_qdpt_d768_question_q10_l17_p20_unified_v20_seed44_20260903_2`; checkpoint `checkpoints/epoch_3`, Validation under `eval_validation/epoch_3`, diagnostics `dynamic_prompt_diagnostics.jsonl`, report `train_report.json`.
+
 ### 2026-09-02 - pathvqa_qdpt_d768_question_q10_l17_p20_no_static_visual_seed44
 
 - Commit/config: commits `20d8ebb` and checkpoint-reload fix `6e1e745`; D768 QDPT seed44 with the entire layer17 static visual insertion removed. The controlled model has no private `S_v8`, no static visual `A_v10`, no visual token insertion/strip and no dynamic visual write. It preserves P20, text anchor A_t10, question-attention-pooled Q10, full pre-Block17 visual K/V, CA768/16, Z10 and `Z -> dynamic LLM Prompt` exactly.

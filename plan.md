@@ -274,7 +274,8 @@ Day 1 结束后不再增加：
 - [ ] 两张 GPU 分容器串行/并行运行 D768 seed45/46 与 LoRA-r8 seed45/46。
 - [x] 完成 no-static-visual seed44：显著下降1.1184，保留静态视觉校准；最终将旧18-token双表统一为单表V20。
 - [x] 完成 direct-visual-Z concat seeds44/45/46：三seed均值58.8007，较原D768均值-0.2023且方差增大，拒绝作为最终结构。
-- [ ] 运行最终层位敏感性 seed44：先建立统一V20的Layer17新基线，再串行运行Layer18-only与全参数共享的Layer17+18+19。三者参数化和学习率完全一致；除非提升至少1分且配对显著，否则保留Layer17。
+- [ ] 最终层位敏感性暂停：首次统一V20 Layer17为56.43，但改18->20行时推进全局RNG并改变了后续问题投影/Directional CA初始化，实验不满足单变量控制。先隔离模块初始化随机数并重跑Layer17；通过后才运行Layer18-only与共享Layer17+18+19。
+- [ ] 最后一次统一V20抢救：固定下游Question Projection与Directional CA为旧版seed44逐元素相同初始化，只运行Layer17。若仍明显落后，则永久保留旧8+10双速率视觉Prompt，不再为结构外观追加实验。
 - [ ] 运行 learned-static-query seed44。
 - [ ] 运行 LoRA-r4/r16 seed44。
 - [ ] 汇总每个实验的 Validation、参数、训练时间与预测文件。

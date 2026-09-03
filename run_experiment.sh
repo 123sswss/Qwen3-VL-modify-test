@@ -939,24 +939,24 @@ run_qdpt_d768_final_dataset() {
   esac
 
   local experiment_stem expected_trainable query_source static_visual_write
-  local private_visual_tokens visual_workspace_tokens visual_prompt_tokens_arg
+  local private_visual_tokens visual_workspace_tokens unified_visual_tokens
+  local visual_prompt_tokens_arg
   local direct_visual_z_tokens=false
   local -a control_flags anchor_layers
   anchor_layers=(17)
   visual_prompt_tokens_arg=8
+  unified_visual_tokens=0
   case "$variant" in
     question_static_visual)
-      experiment_stem="qdpt_d768_question_q10_l17_p20_unified_v20"
-      expected_trainable=7807232
+      experiment_stem="qdpt_d768_question_q10_l17_p20_s8_av10"
+      expected_trainable=7805184
       query_source="question_attention_pooling"
       static_visual_write=true
-      private_visual_tokens=20
-      visual_workspace_tokens=0
-      visual_prompt_tokens_arg=20
+      private_visual_tokens=8
+      visual_workspace_tokens=10
       control_flags=(
         --directional-query-source question_attention_pooling
         --directional-static-visual-write
-        --directional-unified-static-visual-prompt
       )
       ;;
     unified_static_visual_rng_control)
@@ -964,8 +964,9 @@ run_qdpt_d768_final_dataset() {
       expected_trainable=7807232
       query_source="question_attention_pooling"
       static_visual_write=true
-      private_visual_tokens=20
+      private_visual_tokens=0
       visual_workspace_tokens=0
+      unified_visual_tokens=20
       visual_prompt_tokens_arg=20
       control_flags=(
         --directional-query-source question_attention_pooling
@@ -986,17 +987,15 @@ run_qdpt_d768_final_dataset() {
       )
       ;;
     learned_static_query)
-      experiment_stem="qdpt_d768_learned_q10_l17_p20_unified_v20"
-      expected_trainable=7807232
+      experiment_stem="qdpt_d768_learned_q10_l17_p20_s8_av10"
+      expected_trainable=7805184
       query_source="learned_static"
       static_visual_write=true
-      private_visual_tokens=20
-      visual_workspace_tokens=0
-      visual_prompt_tokens_arg=20
+      private_visual_tokens=8
+      visual_workspace_tokens=10
       control_flags=(
         --directional-query-source learned_static
         --directional-static-visual-write
-        --directional-unified-static-visual-prompt
       )
       ;;
     direct_visual_z_concat)
@@ -1013,49 +1012,30 @@ run_qdpt_d768_final_dataset() {
         --directional-direct-visual-z-tokens
       )
       ;;
-    layer17_unified_static_visual)
-      experiment_stem="qdpt_d768_question_q10_l17_p20_unified_v20"
-      expected_trainable=7807232
+    layer18_static_visual)
+      experiment_stem="qdpt_d768_question_q10_l18_p20_s8_av10"
+      expected_trainable=7805184
       query_source="question_attention_pooling"
       static_visual_write=true
-      private_visual_tokens=20
-      visual_workspace_tokens=0
-      visual_prompt_tokens_arg=20
-      anchor_layers=(17)
-      control_flags=(
-        --directional-query-source question_attention_pooling
-        --directional-static-visual-write
-        --directional-unified-static-visual-prompt
-      )
-      ;;
-    layer18_unified_static_visual)
-      experiment_stem="qdpt_d768_question_q10_l18_p20_unified_v20"
-      expected_trainable=7807232
-      query_source="question_attention_pooling"
-      static_visual_write=true
-      private_visual_tokens=20
-      visual_workspace_tokens=0
-      visual_prompt_tokens_arg=20
+      private_visual_tokens=8
+      visual_workspace_tokens=10
       anchor_layers=(18)
       control_flags=(
         --directional-query-source question_attention_pooling
         --directional-static-visual-write
-        --directional-unified-static-visual-prompt
       )
       ;;
-    layers17_18_19_shared_unified_static_visual)
-      experiment_stem="qdpt_d768_question_q10_l17_18_19_shared_p20_unified_v20"
-      expected_trainable=7807232
+    layers17_18_19_shared_static_visual)
+      experiment_stem="qdpt_d768_question_q10_l17_18_19_shared_p20_s8_av10"
+      expected_trainable=7805184
       query_source="question_attention_pooling"
       static_visual_write=true
-      private_visual_tokens=20
-      visual_workspace_tokens=0
-      visual_prompt_tokens_arg=20
+      private_visual_tokens=8
+      visual_workspace_tokens=10
       anchor_layers=(17 18 19)
       control_flags=(
         --directional-query-source question_attention_pooling
         --directional-static-visual-write
-        --directional-unified-static-visual-prompt
       )
       ;;
     *)
@@ -1078,7 +1058,7 @@ run_qdpt_d768_final_dataset() {
   local output_dir
   output_dir="$(available_output_dir "$output_root" "${experiment_name}_${RUN_DATE}")"
   mkdir -p "$output_dir"
-  echo "[QDPT_D768_FINAL_CONFIG] dataset=$dataset experiment=$experiment_name seed=$run_seed data_seed=42 anchors=${anchor_layers[*]} parameter_sharing=all_directional_and_visual_prompt_parameters private_text_prompt=20 text_workspace_anchor=10 unified_static_visual_prompt=$private_visual_tokens legacy_visual_workspace_anchor=$visual_workspace_tokens workspace=10x768 query_source=$query_source visual_kv=full_current_anchor_tokens final_text_z=last_anchor static_visual_write=$static_visual_write direct_visual_z_tokens=$direct_visual_z_tokens visual_dynamic_write=false text_output=dynamic_anchor_token_concat expected_trainable=$expected_trainable epochs=3 full_evaluation=$eval_protocol intermediate_full_evaluation=disabled output=$output_dir"
+  echo "[QDPT_D768_FINAL_CONFIG] dataset=$dataset experiment=$experiment_name seed=$run_seed data_seed=42 anchors=${anchor_layers[*]} parameter_sharing=all_directional_and_visual_prompt_parameters private_text_prompt=20 text_workspace_anchor=10 private_visual_prompt=$private_visual_tokens visual_workspace_anchor=$visual_workspace_tokens unified_static_visual_prompt=$unified_visual_tokens workspace=10x768 query_source=$query_source visual_kv=full_current_anchor_tokens final_text_z=last_anchor static_visual_write=$static_visual_write direct_visual_z_tokens=$direct_visual_z_tokens visual_dynamic_write=false text_output=dynamic_anchor_token_concat expected_trainable=$expected_trainable epochs=3 full_evaluation=$eval_protocol intermediate_full_evaluation=disabled output=$output_dir"
   (
     cd "$ROOT_DIR" || exit 1
     python -m unittest \
@@ -1192,7 +1172,7 @@ run_pathvqa_qdpt_d768_direct_visual_z_concat_seeds44_46() {
 run_pathvqa_qdpt_d768_layer_sensitivity_seed44() {
   local failures=0
   local variant
-  for variant in layer17_unified_static_visual layer18_unified_static_visual layers17_18_19_shared_unified_static_visual; do
+  for variant in layer18_static_visual layers17_18_19_shared_static_visual; do
     echo "[QDPT_LAYER_SENSITIVITY] variant=$variant seed=44 status=starting"
     if run_qdpt_d768_final_dataset pathvqa "$variant" 44; then
       echo "[QDPT_LAYER_SENSITIVITY] variant=$variant seed=44 status=completed"
@@ -1213,13 +1193,13 @@ run_pathvqa_qdpt_d768_unified_v20_rng_control_seed44() {
 }
 
 run_electrical_qdpt_d768_seed44() {
-  local experiment_name="electrical_qdpt_d768_question_q10_l17_p20_unified_v20_seed44"
+  local experiment_name="electrical_qdpt_d768_question_q10_l17_p20_s8_av10_seed44"
   local output_dir
   output_dir="$(available_output_dir \
     "$ELECTRICAL_QDPT_OUTPUT_ROOT" \
     "${experiment_name}_${RUN_DATE}")"
   mkdir -p "$output_dir"
-  echo "[ELECTRICAL_QDPT_CONFIG] experiment=$experiment_name seed=44 data_seed=42 anchors=17 private_text_prompt=20 unified_static_visual_prompt=20 workspace=10x768 query_source=question_attention_pooling visual_kv=full_layer17_tokens dynamic_visual_write=false expected_trainable=7807232 epochs=3 evaluation=private_fixed_holdout output=$output_dir"
+  echo "[ELECTRICAL_QDPT_CONFIG] experiment=$experiment_name seed=44 data_seed=42 anchors=17 private_text_prompt=20 private_visual_prompt=8 visual_workspace_anchor=10 workspace=10x768 query_source=question_attention_pooling visual_kv=full_layer17_tokens dynamic_visual_write=false expected_trainable=7805184 epochs=3 evaluation=private_fixed_holdout output=$output_dir"
   (
     cd "$ROOT_DIR" || exit 1
     python -m unittest \
@@ -1236,7 +1216,7 @@ run_electrical_qdpt_d768_seed44() {
       --attention-heads 8 \
       --sparse-visual \
       --sparse-visual-anchor-layers 17 \
-      --sparse-visual-rep-tokens 20 \
+      --sparse-visual-rep-tokens 8 \
       --sparse-visual-attention-dim 128 \
       --sparse-visual-heads 4 \
       --sparse-visual-lr "${ELECTRICAL_QDPT_SPARSE_VISUAL_LR:-3e-5}" \
@@ -1245,7 +1225,6 @@ run_electrical_qdpt_d768_seed44() {
       --no-directional-visual-dynamic-write \
       --directional-query-source question_attention_pooling \
       --directional-static-visual-write \
-      --directional-unified-static-visual-prompt \
       --workspace-tokens 10 \
       --workspace-dim 768 \
       --workspace-heads 16 \
@@ -1259,7 +1238,7 @@ run_electrical_qdpt_d768_seed44() {
       --gradient-accumulation "${ELECTRICAL_QDPT_GRAD_ACCUM:-16}" \
       --dataloader-workers "${ELECTRICAL_QDPT_WORKERS:-2}" \
       --max-length 1024 \
-      --expected-trainable-parameters 7807232 \
+      --expected-trainable-parameters 7805184 \
       2>&1 | tee "$output_dir/train.log"
   ) || return 1
 

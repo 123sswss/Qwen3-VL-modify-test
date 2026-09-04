@@ -272,21 +272,22 @@ Day 1 结束后不再增加：
 ### Day 2：PathVQA 主实验（2026-09-03）
 
 - [x] 完成D768 seed45/46复现，连同seed44得到Overall 59.0030 +/- 0.4859。
-- [ ] 单卡串行运行Full-Attention LoRA-r8 seed45/46；专用目标只跑两个缺失seed，任一失败继续下一项，结束自动关机。
+- [x] 完成Full-Attention LoRA-r8 seed45/46；连同seed44得到Overall 59.2640 +/- 0.0666，QDPT均值低0.2610且开放题均值近乎相同，最终按性能持平而非胜出表述。
 - [x] 完成 no-static-visual seed44：显著下降1.1184，保留静态视觉校准。
 - [x] 完成 direct-visual-Z concat seeds44/45/46：三seed均值58.8007，较原D768均值-0.2023且方差增大，拒绝作为最终结构。
 - [x] 最终层位敏感性：Layer18-only为58.3959，共享Layer17+18+19为58.3799，均较Layer17的59.5622显著低约1.18分；多层与Layer18完全打平且进一步伤害`where`。最终固定Layer17-only，停止层数扫描。
 - [x] 最后一次统一V20抢救：严格固定下游初始化后为58.5237，仍较旧8+10同seed显著低1.0385；永久保留旧8+10双速率视觉Prompt，V20只作为负消融，不再重复运行。
-- [ ] 运行 learned-static-query seed44。
+- [x] 完成 learned-static-query seed44：57.1817，较问题引导Q10显著下降2.3806，确认当前问题条件化Query的必要性，不追加seed。
 - [ ] 运行 LoRA-r4/r16 seed44。
 - [ ] 汇总每个实验的 Validation、参数、训练时间与预测文件。
-- [ ] 立即更新两个实验账本，不做账本单独提交。
+- [x] 立即更新两个实验账本，不做账本单独提交。
 
 当日产物：PathVQA 多 seed 主表、LoRA rank 表、定型消融结论。
 
 ### Day 3：SLAKE 跨数据集验证（2026-09-04）
 
 - [ ] 原样迁移最终 D768，运行 seed44/45/46。
+- [x] 准备专用串行目标`slake_qdpt_d768_final_seeds44_46`：只运行SLAKE最终D768三seed，任一失败继续其余项，退出后自动关机，不重复PathVQA。
 - [ ] 运行 Full-Attention LoRA-r8，至少 seed44；资源允许补 45/46。
 - [ ] 复核 Static Prompt 的 checkpoint、split 和评价结果。
 - [ ] 禁止根据 SLAKE 分数修改 D、层数、Prompt 长度或训练策略。

@@ -7,6 +7,7 @@ OUTPUT_ROOT="${MMRL_OUTPUT_ROOT:-$ROOT_DIR/experiment_outputs/output}"
 SLAKE_DATA_ROOT="${SLAKE_DATA_ROOT:-/root/autodl-tmp/dataset/slake}"
 SLAKE_OUTPUT_ROOT="${SLAKE_OUTPUT_ROOT:-$ROOT_DIR/slake/outputs/mmrl}"
 SLAKE_DYNAMIC_PROMPT_OUTPUT_ROOT="${SLAKE_DYNAMIC_PROMPT_OUTPUT_ROOT:-$ROOT_DIR/slake/outputs/dynamic_prompt}"
+SLAKE_LORA_OUTPUT_ROOT="${SLAKE_LORA_OUTPUT_ROOT:-$ROOT_DIR/slake/outputs/lora}"
 PATHVQA_DATA_ROOT="${PATHVQA_DATA_ROOT:-/root/autodl-tmp/dataset/pathVQA}"
 PATHVQA_CACHE_ROOT="${PATHVQA_CACHE_ROOT:-$PATHVQA_DATA_ROOT/.hf_cache}"
 PATHVQA_OUTPUT_ROOT="${PATHVQA_OUTPUT_ROOT:-$ROOT_DIR/pathvqa/outputs/mmrl}"
@@ -22,7 +23,7 @@ RUN_DATE="${MMRL_RUN_DATE:-$(date +%Y%m%d)}"
 SEED="${MMRL_FIXED_SEED:-44}"
 SHUTDOWN_ON_EXIT="${MMRL_SHUTDOWN_ON_EXIT:-1}"
 
-mkdir -p "$OUTPUT_ROOT" "$SLAKE_OUTPUT_ROOT" "$SLAKE_DYNAMIC_PROMPT_OUTPUT_ROOT" "$PATHVQA_OUTPUT_ROOT" "$PATHVQA_LORA_OUTPUT_ROOT" "$PATHVQA_BASE_OUTPUT_ROOT" "$PATHVQA_PROMPT_OUTPUT_ROOT" "$PATHVQA_DYNAMIC_PROMPT_OUTPUT_ROOT" "$ELECTRICAL_QDPT_OUTPUT_ROOT"
+mkdir -p "$OUTPUT_ROOT" "$SLAKE_OUTPUT_ROOT" "$SLAKE_DYNAMIC_PROMPT_OUTPUT_ROOT" "$SLAKE_LORA_OUTPUT_ROOT" "$PATHVQA_OUTPUT_ROOT" "$PATHVQA_LORA_OUTPUT_ROOT" "$PATHVQA_BASE_OUTPUT_ROOT" "$PATHVQA_PROMPT_OUTPUT_ROOT" "$PATHVQA_DYNAMIC_PROMPT_OUTPUT_ROOT" "$ELECTRICAL_QDPT_OUTPUT_ROOT"
 echo "[RUN_TARGET] selected=$RUN_TARGET positional=${1:-<unset>} env=${ENV_RUN_TARGET:-<unset>} mmrl_env=${MMRL_RUN_TARGET:-<unset>}"
 
 cancel_shutdown_on_interrupt() {
@@ -2023,6 +2024,109 @@ run_pathvqa_lora_full_model_attn_r8_seeds45_46() {
   echo "[PATHVQA_LORA_R8_REPLICATION_DONE] seeds=45,46 status=completed"
 }
 
+find_completed_slake_lora_r8_summary() {
+  local run_seed="$1"
+  find \
+    "$SLAKE_LORA_OUTPUT_ROOT" \
+    "$ROOT_DIR/slake/outputs/visual_peft_comparison" \
+    -type f \
+    -path "*/slake_lora_full_model_attention_r8_seed${run_seed}_*/eval_test/epoch_3/slake_summary.json" \
+    -print -quit 2>/dev/null
+}
+
+run_slake_lora_full_model_attn_r8() {
+  local run_seed="$1"
+  local experiment_name=slake_lora_full_model_attention_r8
+  local epochs="${SLAKE_LORA_EPOCHS:-3}"
+  if [ "$epochs" -ne 3 ]; then
+    echo "[ERR] SLAKE Full-Attention LoRA-r8 protocol requires epochs=3; actual=$epochs" >&2
+    return 2
+  fi
+  if ! python -c 'import datasets, pyarrow, peft' >/dev/null 2>&1; then
+    echo "[ERR] SLAKE LoRA requires datasets, pyarrow, and peft." >&2
+    return 2
+  fi
+
+  local completed_summary
+  completed_summary="$(find_completed_slake_lora_r8_summary "$run_seed")"
+  if [ -n "$completed_summary" ]; then
+    echo "[SLAKE_LORA_R8_SKIP_COMPLETED] seed=$run_seed summary=$completed_summary"
+    return 0
+  fi
+
+  local output_dir
+  output_dir="$(available_output_dir "$SLAKE_LORA_OUTPUT_ROOT" "${experiment_name}_seed${run_seed}_${RUN_DATE}")"
+  mkdir -p "$output_dir"
+  echo "[SLAKE_LORA_FULL_MODEL] experiment=$experiment_name seed=$run_seed target=visual24_qkv_proj+language36_qkvo rank=8 alpha=16 expected_trainable=7077888 epochs=3 protocol=fixed_epoch3_test output=$output_dir"
+  (
+    cd "$ROOT_DIR" || exit 1
+    python -m slake.train_visual_peft \
+      lora_full_model_attention_r8 \
+      --epochs 3 \
+      --seed "$run_seed" \
+      --data-seed 42 \
+      --output-dir "$output_dir" \
+      2>&1 | tee "$output_dir/train.log"
+  ) || return 1
+
+  local checkpoint="$output_dir/checkpoints/epoch_3"
+  if [ ! -f "$checkpoint/adapter_config.json" ]; then
+    echo "[ERR] SLAKE LoRA epoch3 checkpoint is incomplete: $checkpoint" >&2
+    return 1
+  fi
+  mkdir -p "$output_dir/eval_test/epoch_3"
+  (
+    cd "$ROOT_DIR" || exit 1
+    python slake/slake_official_eval.py \
+      --backend lora \
+      --base-model "$MODEL_PATH" \
+      --checkpoint "$checkpoint" \
+      --questions "$SLAKE_DATA_ROOT/test.json" \
+      --image-root "$SLAKE_DATA_ROOT/imgs" \
+      --output-dir "$output_dir/eval_test/epoch_3" \
+      --language all \
+      --expected-split test \
+      --max-new-tokens 32 \
+      --temperature 0 \
+      --answer-mode raw \
+      --overwrite \
+      2>&1 | tee "$output_dir/eval_test_epoch_3.log"
+  ) || return 1
+
+  local test_score
+  test_score="$(python -c 'import json,sys;print(json.load(open(sys.argv[1],encoding="utf-8"))["overall_accuracy"])' "$output_dir/eval_test/epoch_3/slake_summary.json")" || return 1
+  printf 'experiment\tseed\tepoch\ttest_accuracy\tcheckpoint\tprotocol\n' \
+    > "$output_dir/selected_result.tsv"
+  printf '%s\t%s\t3\t%s\t%s\tfixed_epoch3_test\n' \
+    "$experiment_name" "$run_seed" "$test_score" "$checkpoint" \
+    >> "$output_dir/selected_result.tsv"
+  cat "$output_dir/selected_result.tsv"
+}
+
+run_slake_lora_full_model_attn_r8_seeds44_46() {
+  local suite_failures=0
+  local run_seed
+  (
+    cd "$ROOT_DIR" || exit 1
+    python -m unittest test_slake_lora_targets.py
+  ) || return 1
+
+  for run_seed in 44 45 46; do
+    echo "[SLAKE_LORA_R8_SUITE] seed=$run_seed status=starting"
+    if run_slake_lora_full_model_attn_r8 "$run_seed"; then
+      echo "[SLAKE_LORA_R8_SUITE] seed=$run_seed status=completed_or_already_complete"
+    else
+      echo "[SLAKE_LORA_R8_SUITE] seed=$run_seed status=failed_continue" >&2
+      suite_failures=$((suite_failures + 1))
+    fi
+  done
+  if [ "$suite_failures" -ne 0 ]; then
+    echo "[ERR] SLAKE Full-Attention LoRA-r8 failures=$suite_failures; all three seeds were attempted." >&2
+    return 1
+  fi
+  echo "[SLAKE_LORA_R8_SUITE_DONE] seeds=44,45,46 status=completed"
+}
+
 run_pathvqa_day2_d768_lora_r8_seeds45_46() {
   local suite_failures=0
 
@@ -2445,6 +2549,9 @@ case "$RUN_TARGET" in
   slake_qdpt_d768_final_seeds44_46)
     run_slake_qdpt_d768_final_seeds44_46 || failures=$((failures + 1))
     ;;
+  slake_lora_full_model_attn_r8_seeds44_46)
+    run_slake_lora_full_model_attn_r8_seeds44_46 || failures=$((failures + 1))
+    ;;
   pathvqa_directional_width_ablation_seed44)
     run_pathvqa_directional_width_ablation_seed44 || failures=$((failures + 1))
     ;;
@@ -2501,7 +2608,7 @@ case "$RUN_TARGET" in
     run_slake || failures=$((failures + 1))
     ;;
   *)
-    echo "[ERR] 未知目标: $RUN_TARGET；新增目标: pathvqa_lora_full_model_attn_r8_seeds45_46、pathvqa_qdpt_d768_no_static_visual_seed44、pathvqa_qdpt_d768_no_static_visual_resume_eval、pathvqa_qdpt_d768_learned_static_query_seed44、pathvqa_qdpt_d768_direct_visual_z_concat_seeds44_46、pathvqa_qdpt_d768_layer_sensitivity_seed44、pathvqa_qdpt_d768_layer_sensitivity_resume_eval、electrical_qdpt_d768_seed44、qdpt_d768_final_pathvqa_slake_seed44、slake_qdpt_d768_final_seeds44_46。" >&2
+    echo "[ERR] 未知目标: $RUN_TARGET；新增目标: pathvqa_lora_full_model_attn_r8_seeds45_46、pathvqa_qdpt_d768_no_static_visual_seed44、pathvqa_qdpt_d768_no_static_visual_resume_eval、pathvqa_qdpt_d768_learned_static_query_seed44、pathvqa_qdpt_d768_direct_visual_z_concat_seeds44_46、pathvqa_qdpt_d768_layer_sensitivity_seed44、pathvqa_qdpt_d768_layer_sensitivity_resume_eval、electrical_qdpt_d768_seed44、qdpt_d768_final_pathvqa_slake_seed44、slake_qdpt_d768_final_seeds44_46、slake_lora_full_model_attn_r8_seeds44_46。" >&2
     exit 2
     ;;
 esac

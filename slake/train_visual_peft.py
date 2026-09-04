@@ -106,6 +106,14 @@ EXPERIMENTS: Dict[str, Dict[str, Any]] = {
         "rank": 16,
         "use_dora": False,
     },
+    "lora_full_model_attention_r8": {
+        "method": "lora",
+        "target_scope": "full_model",
+        "last_n_layers": None,
+        "rank": 8,
+        "use_dora": False,
+        "expected_trainable_parameters": 7_077_888,
+    },
 }
 
 MODEL_BATCH_KEYS = (
@@ -162,20 +170,22 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("experiment", choices=tuple(EXPERIMENTS))
     parser.add_argument("--epochs", type=int, default=DEFAULT_EPOCHS)
     parser.add_argument("--output-dir", type=Path)
+    parser.add_argument("--seed", type=int, default=SEED)
+    parser.add_argument("--data-seed", type=int, default=DATA_SEED)
     args = parser.parse_args()
     if args.epochs < 1:
         parser.error("--epochs must be positive")
     return args
 
 
-def seed_everything(seed: int) -> None:
+def seed_everything(seed: int, data_seed: int) -> None:
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
     torch.backends.cudnn.benchmark = False
     torch.backends.cudnn.deterministic = True
-    print(f"[SLAKE_PEFT_REPRODUCIBILITY] seed={seed} data_seed={DATA_SEED}")
+    print(f"[SLAKE_PEFT_REPRODUCIBILITY] seed={seed} data_seed={data_seed}")
 
 
 def load_model_and_processor() -> tuple[nn.Module, Any]:
@@ -353,7 +363,7 @@ def find_language_attention_targets(
     return targets, layer_indexes
 
 
-def build_dataset(processor: Any) -> SLAKEDataset:
+def build_dataset(processor: Any, data_seed: int) -> SLAKEDataset:
     dataset = SLAKEDataset(
         processor=processor,
         questions_path=str(TRAIN_QUESTIONS),
@@ -363,7 +373,7 @@ def build_dataset(processor: Any) -> SLAKEDataset:
         base_types=None,
         splits=("train",),
         ce_enabled=True,
-        seed=DATA_SEED,
+        seed=data_seed,
         deterministic_sampling=True,
         max_length=MAX_LENGTH,
     )
@@ -389,13 +399,28 @@ def count_parameters(model: nn.Module) -> Dict[str, int | float]:
     }
 
 
+def expected_lora_parameter_count(
+    model: nn.Module,
+    target_modules: List[str],
+    rank: int,
+) -> int:
+    modules = dict(model.named_modules())
+    total = 0
+    for name in target_modules:
+        module = modules.get(name)
+        if not isinstance(module, nn.Linear):
+            raise RuntimeError(f"LoRA target is not a Linear module: {name}")
+        total += rank * (module.in_features + module.out_features)
+    return total
+
+
 def main() -> int:
     args = parse_args()
     experiment = EXPERIMENTS[args.experiment]
     output_dir = (
         args.output_dir.expanduser().resolve()
         if args.output_dir is not None
-        else OUTPUT_ROOT / args.experiment
+        else OUTPUT_ROOT / f"{args.experiment}_seed{args.seed}"
     )
     trainer_dir = output_dir / "trainer"
     final_dir = output_dir / "final"
@@ -405,7 +430,7 @@ def main() -> int:
         if not required_path.exists():
             raise FileNotFoundError(f"Required path does not exist: {required_path}")
 
-    seed_everything(SEED)
+    seed_everything(args.seed, args.data_seed)
     model, processor = load_model_and_processor()
     visual_targets, selected_vision_layers = find_visual_attention_targets(
         model,
@@ -434,10 +459,21 @@ def main() -> int:
         f"scope={experiment['target_scope']} visual={len(visual_targets)} "
         f"language={len(language_targets)} total={len(target_modules)}"
     )
-    dataset = build_dataset(processor)
-
     rank = int(experiment["rank"])
     lora_alpha = rank * 2
+    predicted_trainable = expected_lora_parameter_count(
+        model,
+        target_modules,
+        rank,
+    )
+    expected_trainable = experiment.get("expected_trainable_parameters")
+    if expected_trainable is not None and predicted_trainable != expected_trainable:
+        raise RuntimeError(
+            "SLAKE LoRA parameter prediction audit failed: "
+            f"expected={expected_trainable} predicted={predicted_trainable}"
+        )
+    dataset = build_dataset(processor, args.data_seed)
+
     for parameter in model.parameters():
         parameter.requires_grad = False
     model.config.use_cache = False
@@ -453,6 +489,15 @@ def main() -> int:
     model = get_peft_model(model, peft_config)
 
     parameter_counts = count_parameters(model)
+    if (
+        not experiment["use_dora"]
+        and parameter_counts["trainable"] != predicted_trainable
+    ):
+        raise RuntimeError(
+            "SLAKE LoRA trainable-parameter audit failed: "
+            f"predicted={predicted_trainable} "
+            f"actual={parameter_counts['trainable']}"
+        )
     print(
         "[SLAKE_PEFT_CONFIG] "
         f"experiment={args.experiment} method={experiment['method']} "
@@ -462,6 +507,7 @@ def main() -> int:
         "gradient_checkpointing=False "
         f"rank={rank} alpha={lora_alpha} dropout={LORA_DROPOUT} "
         f"use_dora={experiment['use_dora']} trainable={parameter_counts['trainable']} "
+        f"predicted_trainable={predicted_trainable} "
         f"total={parameter_counts['total']} "
         f"ratio={parameter_counts['trainable_ratio']:.6%}"
     )
@@ -485,8 +531,8 @@ def main() -> int:
         dataloader_num_workers=2,
         remove_unused_columns=False,
         report_to="none",
-        seed=SEED,
-        data_seed=DATA_SEED,
+        seed=args.seed,
+        data_seed=args.data_seed,
     )
     trainer = Trainer(
         model=model,
@@ -515,6 +561,8 @@ def main() -> int:
         "rank": rank,
         "alpha": lora_alpha,
         "dropout": LORA_DROPOUT,
+        "seed": args.seed,
+        "data_seed": args.data_seed,
         "epochs": args.epochs,
         "per_device_train_batch_size": MICRO_BATCH_SIZE,
         "gradient_accumulation_steps": GRADIENT_ACCUMULATION_STEPS,
@@ -523,6 +571,7 @@ def main() -> int:
         "selected_language_layers_0based": selected_language_layers,
         "target_modules": target_modules,
         "parameter_counts": parameter_counts,
+        "predicted_trainable_parameters": predicted_trainable,
         "dataset_samples": len(dataset),
         "train_metrics": train_result.metrics,
         "model_path": str(MODEL_PATH),

@@ -286,8 +286,9 @@ Day 1 结束后不再增加：
 
 ### Day 3：SLAKE 跨数据集验证（2026-09-04）
 
-- [ ] 原样迁移最终 D768，运行 seed44/45/46。
+- [x] 原样迁移最终D768并完成seed44/45/46：Overall 77.65/76.70/76.74，三seed 77.03 +/- 0.54；架构冻结，不按SLAKE结果调参。
 - [x] 准备专用串行目标`slake_qdpt_d768_final_seeds44_46`：只运行SLAKE最终D768三seed，任一失败继续其余项，退出后自动关机，不重复PathVQA。
+- [x] 准备`slake_lora_full_model_attn_r8_seeds44_46`：三个seed串行、失败继续、仅epoch3官方Test，并在启动前跳过已有完整结果。
 - [ ] 运行 Full-Attention LoRA-r8，至少 seed44；资源允许补 45/46。
 - [ ] 复核 Static Prompt 的 checkpoint、split 和评价结果。
 - [ ] 禁止根据 SLAKE 分数修改 D、层数、Prompt 长度或训练策略。

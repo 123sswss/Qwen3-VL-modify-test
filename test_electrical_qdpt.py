@@ -1,3 +1,4 @@
+import importlib.util
 import json
 import tempfile
 import unittest
@@ -10,11 +11,24 @@ from loraTest.data_protocol import (
     TRAIN_EXPERT_JSONS,
 )
 from pathvqa.train_dynamic_prompt import (
+    PROJECT_ROOT,
     _build_train_dataset,
     _dataset_display_name,
     _normalize_dataset_name,
 )
-from train.data_pipeline import load_jsons, normalize_json_paths
+
+
+def _load_data_pipeline_module():
+    source = PROJECT_ROOT / "train" / "data_pipeline.py"
+    spec = importlib.util.spec_from_file_location(
+        "test_electrical_data_pipeline",
+        source,
+    )
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"Unable to load data pipeline: {source}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 class _NonEmptyDataset:
@@ -24,6 +38,7 @@ class _NonEmptyDataset:
 
 class ElectricalQDPTTest(unittest.TestCase):
     def test_tuple_json_inputs_are_loaded_as_multiple_sources(self):
+        data_pipeline = _load_data_pipeline_module()
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             first = root / "first.json"
@@ -33,10 +48,10 @@ class ElectricalQDPTTest(unittest.TestCase):
 
             paths = (first, second)
             self.assertEqual(
-                normalize_json_paths(paths),
+                data_pipeline.normalize_json_paths(paths),
                 [str(first), str(second)],
             )
-            loaded = load_jsons(paths)
+            loaded = data_pipeline.load_jsons(paths)
 
         self.assertEqual([item["id"] for item in loaded], [1, 2])
         self.assertEqual(

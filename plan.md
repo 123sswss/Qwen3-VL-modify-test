@@ -357,7 +357,7 @@ CoTBox-TTT可以计入“同方向Related Work”的文献数量，但**不计�
 - [x] 最后一次统一V20抢救：严格固定下游初始化后为58.5237，仍较旧8+10同seed显著低1.0385；永久保留旧8+10双速率视觉Prompt，V20只作为负消融，不再重复运行。
 - [x] 完成 learned-static-query seed44：57.1817，较问题引导Q10显著下降2.3806，确认当前问题条件化Query的必要性，不追加seed。
 - [x] 取消LoRA-r4/r16 seed44；已有r8足以作为附录中的跨范式强参考，不再用rank扫描消耗收尾时间。
-- [ ] 检索GRASP作者正式仓库；若无可用实现，按论文公式完成Qwen3-VL独立移植和CPU单测，禁止先简化其问题编码路径。
+- [x] 未发现GRASP作者正式仓库；已按论文公式完成Qwen3-VL近似复现、PathVQA/SLAKE/现有电气数据接口连接和CPU单测。保留冻结LLM的额外question-only前向，并明确标注为独立复现。
 - [ ] 完成PathVQA GRASP seed44统一协议实验，报告Overall、Yes/No、Free-form、参数、训练时间、TTFT和TPOT；不扫描`N/h/alpha`。
 - [ ] 汇总每个实验的 Validation、参数、训练时间与预测文件。
 - [x] 立即更新两个实验账本，不做账本单独提交。

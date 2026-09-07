@@ -32,6 +32,10 @@ BACKEND_SPECS = {
         "slake/dynamic_prompt_tuning_interface.py",
         "DynamicPromptTuningModelInterface",
     ),
+    "grasp": (
+        "slake/grasp_prompt_tuning_interface.py",
+        "GRASPModelInterface",
+    ),
 }
 
 

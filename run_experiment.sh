@@ -7,6 +7,7 @@ OUTPUT_ROOT="${MMRL_OUTPUT_ROOT:-$ROOT_DIR/experiment_outputs/output}"
 SLAKE_DATA_ROOT="${SLAKE_DATA_ROOT:-/root/autodl-tmp/dataset/slake}"
 SLAKE_OUTPUT_ROOT="${SLAKE_OUTPUT_ROOT:-$ROOT_DIR/slake/outputs/mmrl}"
 SLAKE_DYNAMIC_PROMPT_OUTPUT_ROOT="${SLAKE_DYNAMIC_PROMPT_OUTPUT_ROOT:-$ROOT_DIR/slake/outputs/dynamic_prompt}"
+SLAKE_GRASP_OUTPUT_ROOT="${SLAKE_GRASP_OUTPUT_ROOT:-$ROOT_DIR/slake/outputs/grasp}"
 SLAKE_LORA_OUTPUT_ROOT="${SLAKE_LORA_OUTPUT_ROOT:-$ROOT_DIR/slake/outputs/lora}"
 PATHVQA_DATA_ROOT="${PATHVQA_DATA_ROOT:-/root/autodl-tmp/dataset/pathVQA}"
 PATHVQA_CACHE_ROOT="${PATHVQA_CACHE_ROOT:-$PATHVQA_DATA_ROOT/.hf_cache}"
@@ -15,15 +16,17 @@ PATHVQA_LORA_OUTPUT_ROOT="${PATHVQA_LORA_OUTPUT_ROOT:-$ROOT_DIR/pathvqa/outputs/
 PATHVQA_BASE_OUTPUT_ROOT="${PATHVQA_BASE_OUTPUT_ROOT:-$ROOT_DIR/pathvqa/outputs/base}"
 PATHVQA_PROMPT_OUTPUT_ROOT="${PATHVQA_PROMPT_OUTPUT_ROOT:-$ROOT_DIR/pathvqa/outputs/prompt_tuning}"
 PATHVQA_DYNAMIC_PROMPT_OUTPUT_ROOT="${PATHVQA_DYNAMIC_PROMPT_OUTPUT_ROOT:-$ROOT_DIR/pathvqa/outputs/dynamic_prompt}"
+PATHVQA_GRASP_OUTPUT_ROOT="${PATHVQA_GRASP_OUTPUT_ROOT:-$ROOT_DIR/pathvqa/outputs/grasp}"
 ELECTRICAL_DATA_ROOT="${ELECTRICAL_DATA_ROOT:-/root/autodl-tmp/dataset}"
 ELECTRICAL_QDPT_OUTPUT_ROOT="${ELECTRICAL_QDPT_OUTPUT_ROOT:-$ROOT_DIR/electrical/outputs/qdpt}"
+ELECTRICAL_GRASP_OUTPUT_ROOT="${ELECTRICAL_GRASP_OUTPUT_ROOT:-$ROOT_DIR/electrical/outputs/grasp}"
 ENV_RUN_TARGET="${RUN_TARGET:-}"
 RUN_TARGET="${1:-${ENV_RUN_TARGET:-${MMRL_RUN_TARGET:-all}}}"
 RUN_DATE="${MMRL_RUN_DATE:-$(date +%Y%m%d)}"
 SEED="${MMRL_FIXED_SEED:-44}"
 SHUTDOWN_ON_EXIT="${MMRL_SHUTDOWN_ON_EXIT:-1}"
 
-mkdir -p "$OUTPUT_ROOT" "$SLAKE_OUTPUT_ROOT" "$SLAKE_DYNAMIC_PROMPT_OUTPUT_ROOT" "$SLAKE_LORA_OUTPUT_ROOT" "$PATHVQA_OUTPUT_ROOT" "$PATHVQA_LORA_OUTPUT_ROOT" "$PATHVQA_BASE_OUTPUT_ROOT" "$PATHVQA_PROMPT_OUTPUT_ROOT" "$PATHVQA_DYNAMIC_PROMPT_OUTPUT_ROOT" "$ELECTRICAL_QDPT_OUTPUT_ROOT"
+mkdir -p "$OUTPUT_ROOT" "$SLAKE_OUTPUT_ROOT" "$SLAKE_DYNAMIC_PROMPT_OUTPUT_ROOT" "$SLAKE_GRASP_OUTPUT_ROOT" "$SLAKE_LORA_OUTPUT_ROOT" "$PATHVQA_OUTPUT_ROOT" "$PATHVQA_LORA_OUTPUT_ROOT" "$PATHVQA_BASE_OUTPUT_ROOT" "$PATHVQA_PROMPT_OUTPUT_ROOT" "$PATHVQA_DYNAMIC_PROMPT_OUTPUT_ROOT" "$PATHVQA_GRASP_OUTPUT_ROOT" "$ELECTRICAL_QDPT_OUTPUT_ROOT" "$ELECTRICAL_GRASP_OUTPUT_ROOT"
 echo "[RUN_TARGET] selected=$RUN_TARGET positional=${1:-<unset>} env=${ENV_RUN_TARGET:-<unset>} mmrl_env=${MMRL_RUN_TARGET:-<unset>}"
 
 cancel_shutdown_on_interrupt() {
@@ -1320,6 +1323,140 @@ run_qdpt_d768_final_pathvqa_slake_seed44() {
   run_qdpt_d768_final_dataset slake "$variant" 44
 }
 
+run_pathvqa_grasp_seed44() {
+  local experiment_name="pathvqa_grasp_reimpl_n4_h512_seed44"
+  local output_dir
+  output_dir="$(available_output_dir "$PATHVQA_GRASP_OUTPUT_ROOT" "${experiment_name}_${RUN_DATE}")"
+  mkdir -p "$output_dir"
+  echo "[PATHVQA_GRASP_CONFIG] experiment=$experiment_name seed=44 data_seed=42 blocks=4 bottleneck=512 alpha=1.5 prompt_tokens=1 question=frozen_llm_last_hidden_mean visual=post_merger_grid expected_trainable=2632704 epochs=3 split=validation output=$output_dir"
+  (
+    cd "$ROOT_DIR" || exit 1
+    python -m unittest test_grasp_prompt_tuning.py || exit 1
+    python -m pathvqa.train_grasp \
+      --model-path "$MODEL_PATH" \
+      --data-root "$PATHVQA_DATA_ROOT" \
+      --cache-dir "$PATHVQA_CACHE_ROOT" \
+      --output-dir "$output_dir" \
+      --experiment-name "$experiment_name" \
+      --blocks 4 \
+      --bottleneck-dim 512 \
+      --prompt-init-std 0.02 \
+      --learning-rate 1e-4 \
+      --epochs 3 \
+      --seed 44 \
+      --data-seed 42 \
+      --batch-size "${PATHVQA_GRASP_BATCH_SIZE:-2}" \
+      --gradient-accumulation "${PATHVQA_GRASP_GRAD_ACCUM:-16}" \
+      --dataloader-workers "${PATHVQA_GRASP_WORKERS:-2}" \
+      --expected-trainable-parameters 2632704 \
+      2>&1 | tee "$output_dir/train.log"
+  ) || return 1
+  local checkpoint="$output_dir/checkpoints/epoch_3"
+  mkdir -p "$output_dir/eval_validation/epoch_3"
+  python pathvqa/pathvqa_official_eval.py \
+    --backend grasp \
+    --base-model "$MODEL_PATH" \
+    --checkpoint "$checkpoint" \
+    --data-root "$PATHVQA_DATA_ROOT" \
+    --cache-dir "$PATHVQA_CACHE_ROOT" \
+    --split validation \
+    --output-dir "$output_dir/eval_validation/epoch_3" \
+    --overwrite \
+    2>&1 | tee "$output_dir/eval_validation_epoch_3.log" || return 1
+  local score
+  score="$(python -c 'import json,sys;print(json.load(open(sys.argv[1],encoding="utf-8"))["overall_accuracy"])' "$output_dir/eval_validation/epoch_3/pathvqa_summary.json")" || return 1
+  printf 'experiment\tseed\tprotocol\tvalidation_epoch\tvalidation_accuracy\tcheckpoint\n' > "$output_dir/selected_result.tsv"
+  printf '%s\t44\tfixed_epoch3_validation\t3\t%s\t%s\n' "$experiment_name" "$score" "$checkpoint" >> "$output_dir/selected_result.tsv"
+  cat "$output_dir/selected_result.tsv"
+}
+
+run_slake_grasp_seed44() {
+  local experiment_name="slake_grasp_reimpl_n4_h512_seed44"
+  local output_dir
+  output_dir="$(available_output_dir "$SLAKE_GRASP_OUTPUT_ROOT" "${experiment_name}_${RUN_DATE}")"
+  mkdir -p "$output_dir"
+  echo "[SLAKE_GRASP_CONFIG] experiment=$experiment_name seed=44 data_seed=42 blocks=4 bottleneck=512 alpha=1.5 prompt_tokens=1 question=frozen_llm_last_hidden_mean visual=post_merger_grid expected_trainable=2632704 epochs=3 split=test output=$output_dir"
+  (
+    cd "$ROOT_DIR" || exit 1
+    python -m unittest test_grasp_prompt_tuning.py || exit 1
+    python -m slake.train_grasp \
+      --model-path "$MODEL_PATH" \
+      --data-root "$SLAKE_DATA_ROOT" \
+      --output-dir "$output_dir" \
+      --experiment-name "$experiment_name" \
+      --blocks 4 \
+      --bottleneck-dim 512 \
+      --prompt-init-std 0.02 \
+      --learning-rate 1e-4 \
+      --epochs 3 \
+      --seed 44 \
+      --data-seed 42 \
+      --batch-size "${SLAKE_GRASP_BATCH_SIZE:-2}" \
+      --gradient-accumulation "${SLAKE_GRASP_GRAD_ACCUM:-16}" \
+      --dataloader-workers "${SLAKE_GRASP_WORKERS:-2}" \
+      --expected-trainable-parameters 2632704 \
+      2>&1 | tee "$output_dir/train.log"
+  ) || return 1
+  local checkpoint="$output_dir/checkpoints/epoch_3"
+  mkdir -p "$output_dir/eval_test/epoch_3"
+  python slake/slake_official_eval.py \
+    --backend grasp \
+    --base-model "$MODEL_PATH" \
+    --checkpoint "$checkpoint" \
+    --questions "$SLAKE_DATA_ROOT/test.json" \
+    --image-root "$SLAKE_DATA_ROOT/imgs" \
+    --output-dir "$output_dir/eval_test/epoch_3" \
+    --language all \
+    --overwrite \
+    2>&1 | tee "$output_dir/eval_test_epoch_3.log" || return 1
+  local score
+  score="$(python -c 'import json,sys;print(json.load(open(sys.argv[1],encoding="utf-8"))["overall_accuracy"])' "$output_dir/eval_test/epoch_3/slake_summary.json")" || return 1
+  printf 'experiment\tseed\tprotocol\ttest_epoch\ttest_accuracy\tcheckpoint\n' > "$output_dir/selected_result.tsv"
+  printf '%s\t44\tfixed_epoch3_test\t3\t%s\t%s\n' "$experiment_name" "$score" "$checkpoint" >> "$output_dir/selected_result.tsv"
+  cat "$output_dir/selected_result.tsv"
+}
+
+run_electrical_grasp_seed44() {
+  local experiment_name="electrical_grasp_reimpl_n4_h512_seed44"
+  local output_dir
+  output_dir="$(available_output_dir "$ELECTRICAL_GRASP_OUTPUT_ROOT" "${experiment_name}_${RUN_DATE}")"
+  mkdir -p "$output_dir"
+  echo "[ELECTRICAL_GRASP_CONFIG] experiment=$experiment_name seed=44 data_seed=42 blocks=4 bottleneck=512 alpha=1.5 prompt_tokens=1 expected_trainable=2632704 epochs=3 data_protocol=unchanged_existing_electrical output=$output_dir"
+  (
+    cd "$ROOT_DIR" || exit 1
+    python -m unittest test_grasp_prompt_tuning.py test_electrical_qdpt.py || exit 1
+    python -m electrical.train_grasp \
+      --model-path "$MODEL_PATH" \
+      --data-root "$ELECTRICAL_DATA_ROOT" \
+      --output-dir "$output_dir" \
+      --experiment-name "$experiment_name" \
+      --blocks 4 \
+      --bottleneck-dim 512 \
+      --prompt-init-std 0.02 \
+      --learning-rate 1e-4 \
+      --epochs 3 \
+      --seed 44 \
+      --data-seed 42 \
+      --batch-size "${ELECTRICAL_GRASP_BATCH_SIZE:-2}" \
+      --gradient-accumulation "${ELECTRICAL_GRASP_GRAD_ACCUM:-16}" \
+      --dataloader-workers "${ELECTRICAL_GRASP_WORKERS:-2}" \
+      --max-length 1024 \
+      --expected-trainable-parameters 2632704 \
+      2>&1 | tee "$output_dir/train.log"
+  ) || return 1
+  local checkpoint="$output_dir/checkpoints/epoch_3"
+  python -m electrical.eval_grasp \
+    --checkpoint "$checkpoint" \
+    --base-model "$MODEL_PATH" \
+    --output-dir "$output_dir/eval_private/epoch_3" \
+    2>&1 | tee "$output_dir/eval_private_epoch_3.log" || return 1
+  local score
+  score="$(python -c 'import json,sys;print(json.load(open(sys.argv[1],encoding="utf-8"))["score"])' "$output_dir/eval_private/epoch_3/electrical_summary.json")" || return 1
+  printf 'experiment\tseed\tepoch\tprivate_accuracy\tcheckpoint\tprotocol\n' > "$output_dir/selected_result.tsv"
+  printf '%s\t44\t3\t%s\t%s\tprivate_fixed_holdout\n' "$experiment_name" "$score" "$checkpoint" >> "$output_dir/selected_result.tsv"
+  cat "$output_dir/selected_result.tsv"
+}
+
 run_slake_qdpt_d768_final_seeds44_46() {
   local suite_failures=0
   local run_seed
@@ -2565,6 +2702,15 @@ case "$RUN_TARGET" in
     ;;
   electrical_qdpt_d768_seed44)
     run_electrical_qdpt_d768_seed44 || failures=$((failures + 1))
+    ;;
+  pathvqa_grasp_seed44)
+    run_pathvqa_grasp_seed44 || failures=$((failures + 1))
+    ;;
+  slake_grasp_seed44)
+    run_slake_grasp_seed44 || failures=$((failures + 1))
+    ;;
+  electrical_grasp_seed44)
+    run_electrical_grasp_seed44 || failures=$((failures + 1))
     ;;
   qdpt_d768_final_pathvqa_slake_seed44)
     run_qdpt_d768_final_pathvqa_slake_seed44 || failures=$((failures + 1))

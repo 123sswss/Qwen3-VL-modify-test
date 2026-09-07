@@ -43,7 +43,7 @@ def is_semantic_collapsed(text: str, min_len: int = 4) -> bool:
 
 def load_jsons(json_input):
     data = []
-    if isinstance(json_input, list):
+    if isinstance(json_input, (list, tuple)):
         for path in json_input:
             with open(path, "r", encoding="utf-8") as f:
                 items = json.load(f)
@@ -66,7 +66,7 @@ def load_jsons(json_input):
 def normalize_json_paths(json_input):
     if not json_input:
         return []
-    if isinstance(json_input, list):
+    if isinstance(json_input, (list, tuple)):
         return [os.fspath(path) for path in json_input]
     return [os.fspath(json_input)]
 

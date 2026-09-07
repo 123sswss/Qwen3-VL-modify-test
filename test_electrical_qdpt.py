@@ -1,4 +1,7 @@
+import json
+import tempfile
 import unittest
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
@@ -11,6 +14,7 @@ from pathvqa.train_dynamic_prompt import (
     _dataset_display_name,
     _normalize_dataset_name,
 )
+from train.data_pipeline import load_jsons, normalize_json_paths
 
 
 class _NonEmptyDataset:
@@ -19,6 +23,27 @@ class _NonEmptyDataset:
 
 
 class ElectricalQDPTTest(unittest.TestCase):
+    def test_tuple_json_inputs_are_loaded_as_multiple_sources(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            first = root / "first.json"
+            second = root / "second.json"
+            first.write_text(json.dumps([{"id": 1}]), encoding="utf-8")
+            second.write_text(json.dumps([{"id": 2}]), encoding="utf-8")
+
+            paths = (first, second)
+            self.assertEqual(
+                normalize_json_paths(paths),
+                [str(first), str(second)],
+            )
+            loaded = load_jsons(paths)
+
+        self.assertEqual([item["id"] for item in loaded], [1, 2])
+        self.assertEqual(
+            [item["__source_json_path"] for item in loaded],
+            [first, second],
+        )
+
     def test_electrical_dataset_uses_only_private_multimodal_expert_data(self):
         args = SimpleNamespace(data_seed=42)
         dataset_class = Mock(return_value=_NonEmptyDataset())

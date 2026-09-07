@@ -309,7 +309,7 @@ def infer_task_type_from_source(source_json_path: Optional[str]) -> str:
 
 
 def build_image_mapping(img_input):
-    if isinstance(img_input, list):
+    if isinstance(img_input, (list, tuple)):
         mapping = {}
         for d in img_input:
             if not os.path.exists(d):

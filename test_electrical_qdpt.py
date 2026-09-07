@@ -37,6 +37,29 @@ class _NonEmptyDataset:
 
 
 class ElectricalQDPTTest(unittest.TestCase):
+    def test_tuple_image_roots_are_combined_into_one_mapping(self):
+        data_pipeline = _load_data_pipeline_module()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            first = root / "first"
+            second = root / "second"
+            first.mkdir()
+            second.mkdir()
+            first_image = first / "one.png"
+            second_image = second / "two.png"
+            first_image.write_bytes(b"one")
+            second_image.write_bytes(b"two")
+
+            mapping, single_root = data_pipeline.build_image_mapping(
+                (first, second)
+            )
+
+        self.assertIsNone(single_root)
+        self.assertEqual(
+            mapping,
+            {"one.png": str(first_image), "two.png": str(second_image)},
+        )
+
     def test_tuple_json_inputs_are_loaded_as_multiple_sources(self):
         data_pipeline = _load_data_pipeline_module()
         with tempfile.TemporaryDirectory() as directory:

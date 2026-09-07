@@ -13,6 +13,7 @@
 5. **宽度搜索结束**：不再追加 D128、D384、D640、D896 等中间配置，也不再扫描槽数、层数、Gate 或新融合模块。
 6. **五天内完成投稿版本**：Day 1 后冻结架构；若多随机种子结果削弱现有结论，则降低论文措辞，不再用救火实验延长项目。
 7. **DRAPE 作为首要 Related Work**：将其视为当前最接近、完成度最高的动态跨模态 Prompt 工作。正文先充分肯定其在多模态持续指令微调中的贡献，再明确 QDPT 聚焦完全冻结 MLLM 的单领域 VQA 适配。不得宣称首次提出“文本 Query + 视觉 K/V + 动态 LLM Prompt”。
+8. **CoTBox-TTT 作为首要同领域证据选择工作**：该方法同样冻结生成式医学VLM并在PathVQA、SLAKE和VQA-RAD上使用连续Soft Prompt，直接支持“领域VQA的关键问题之一是选择问题相关视觉证据”的叙事。但它属于逐测试样本优化20轮的无标签Test-Time Training，依赖额外VisCoT定位器、裁剪重编码和EMA Teacher，且开放题使用Recall、SLAKE采用英文设置，因此只能做定性方法比较和原协议文献背景，不能把其分数与QDPT直接排名。
 
 ## 2. 论文定位与核心叙事
 
@@ -157,6 +158,7 @@ Full-Attention LoRA和Visual-Only LoRA保留为不同适配范式的强参考，
 必须重点核对以下路线，目标不是继续改模型，而是划清贡献边界：
 
 - **DRAPE**：当前最强且最接近的 Related Work。默认 `H=512`、`Lp=10`，由指令分段池化和文本注意力产生 Query，再对视觉 K/V 做 Cross-Attention并生成实例 LLM Prompt；同时面向持续学习加入任务专属生成器、共享 projector 的 null-space 梯度保护和 CLIP prototype 路由。
+- **CoTBox-TTT**（arXiv:2511.12446v1）：当前最贴近医学VQA任务与数据集的证据选择工作。其24-token Evidence Prompt驱动冻结VisCoT进行两次框定位，32-token Answer Prompt在原图/裁剪图和EMA Teacher之间逐测试样本优化20轮；覆盖VQA-RAD、SLAKE和PathVQA，但不是一次前向的条件Prompt生成器。
 - CoCoOp：条件 Prompt 的经典范式。
 - MaPLe：多模态/深层 Prompt 学习。
 - BLIP-2 Q-Former：learned query 读取冻结视觉特征。
@@ -174,6 +176,17 @@ DRAPE 与 QDPT 的正式边界：
 - **机制证据不同**：DRAPE 提供去除 Cross-Attention、宽度/Prompt数敏感性和可视化；QDPT 提供 learned-query、图文错配、视觉写回关闭、静态视觉移除和层位敏感性。
 
 论文写法采用“肯定后区分”：先肯定 DRAPE 证明了实例级跨模态 Prompt 在持续学习中的有效性，再指出完全冻结领域适配仍缺少对内部视觉证据位置、静态领域先验与动态样本证据分工、视觉写回必要性的系统研究。DRAPE 是 Related Work 中的首要技术近邻，但其原论文分数不进入 PathVQA/SLAKE 同协议主表。
+
+CoTBox-TTT与QDPT的正式关系：
+
+- **共同问题意识**：两者都认为医学VQA错误可能来自未选择问题相关视觉证据，而不只是骨干缺少领域知识。
+- **适应时机不同**：CoTBox-TTT在每个测试样本上执行20轮前向/反向更新；QDPT在训练阶段学习共享适配器，测试时直接条件生成Prompt，不做反向传播。
+- **证据选择形式不同**：CoTBox-TTT调用独立VisCoT预测框、裁剪图像并重新编码；QDPT用问题Q从冻结Layer17视觉K/V中检索潜在证据，不需要额外定位模型或裁剪路径。
+- **比较协议不同**：其骨干不是Qwen3-VL，开放题报告关键词Recall而非QDPT官方归一化准确率，SLAKE设置也与当前全语言评估不同；论文不得用其PathVQA/SLAKE数字宣称QDPT胜负。
+- **可复用叙事**：把QDPT描述为无需逐样本优化、无需外部定位器、单次常规推理的latent evidence-selection adapter，并在效率表中增加“测试时反向传播、额外模型、重复视觉编码、每样本适应步数”四列。
+- **可信度边界**：截至v1未见公开代码、正式录用信息、多seed或显著性；其所谓cross-view loss在公式中表现为两个同视图Teacher-Student损失之和，不能未经复现直接沿用其因果解释。
+
+CoTBox-TTT可以计入“同方向Related Work”的文献数量，但**不计入可直接进行公平分数对比的同协议基线数量**。若制作文献原协议表，必须与Qwen3-VL受控主表分离，并标注Test-Time Training、Open Recall及SLAKE子集差异。
 
 ### 4.5 从 DRAPE 迁移的实验设计
 
@@ -194,7 +207,11 @@ DRAPE 与 QDPT 的正式边界：
 | 遗忘、BWT、null-space分析 | QDPT 非持续学习 | 不适用，不照搬 |
 | 效率表 | 参数、训练时间、TTFT、TPOT已有 | 采用其完整报告思路，但保留硬件和实现口径限制 |
 
-若资源允许，只增加一个用于划清方法边界的高价值对照：**DRAPE-style late-feature generator**。它使用问题来源 Query 读取 `visual.merger` 后视觉 Token，并直接生成 LLM Prompt，不引入持续学习路由和 null-space 模块。该实验用于检验 QDPT 的 Layer17 内部读取是否优于标准晚期视觉特征读取；它属于改造后的同机制基线，不得称为对原始 DRAPE 的正式复现。
+**可选：DRAPE 的近似复现。** 实现一个 DRAPE-style late-feature generator：根据论文公开公式，由问题/指令生成 Query，读取 `visual.merger` 后视觉 Token，并直接生成 LLM Prompt；不引入持续学习专属的任务生成器池、CLIP 路由和 null-space 模块。由于官方项目代码尚未公开、原任务协议也不同，该实验必须标注为“根据论文描述实现的单任务近似版本”，不得称为官方 DRAPE 复现。
+
+该可选项具有强制触发条件：先尽力检索并整理 **3至4个真正同方向的冻结生成式 MLLM Prompt 方法/可复现基线**。Full-Attention LoRA、Visual LoRA以及仅共享“参数高效适配用途”但不属于Prompt生成路线的方法，不计入这个数量。若最终无法凑齐至少3个可信的同方向正式对比，DRAPE近似复现自动升级为必做，用于避免主表只能依赖自建消融或与LoRA进行跨范式正面对比。
+
+执行DRAPE近似复现时固定以下公平边界：使用相同Qwen3-VL骨干、PathVQA划分、三epoch和epoch3全量评估；明确报告与原文的所有偏差；主表名称使用`DRAPE-style (reimplemented)`或`DRAPE-inspired single-task baseline`。若选择冻结`visual.merger`以匹配QDPT冻结协议，应同时说明这不是原论文中可训练projector的完整设置；不得把近似版本的成绩归因给DRAPE作者。
 
 ## 5. 数据集与统一实验协议
 
@@ -263,6 +280,7 @@ DRAPE 与 QDPT 的正式边界：
 | Cancelled | Full-Attention LoRA-r4/r16 | 44 | 不再运行；不扩展跨范式容量扫描 |
 | P1 | 最终架构正式 Test | 44/45/46 最终 checkpoint | 冻结后仅运行一次 |
 | P0 | question-only / w/o visual CA | 44 | 代码与启动目标已就绪，待运行；保留Q10、全部初始参数和文本写入接口，仅令视觉CA残差为0 |
+| Conditional P0 | DRAPE-style近似复现 | 44 | 当前搁置；若最终不足3个可信同方向Prompt对比则自动升级为必做 |
 | Post-review | IA3 单配置 | 44 | 当前不实现；仅在审稿人要求增加轻量PEFT时补做 |
 
 ### 6.3 SLAKE 必做

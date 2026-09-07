@@ -14,6 +14,7 @@
 6. **五天内完成投稿版本**：Day 1 后冻结架构；若多随机种子结果削弱现有结论，则降低论文措辞，不再用救火实验延长项目。
 7. **DRAPE 作为首要 Related Work**：将其视为当前最接近、完成度最高的动态跨模态 Prompt 工作。正文先充分肯定其在多模态持续指令微调中的贡献，再明确 QDPT 聚焦完全冻结 MLLM 的单领域 VQA 适配。不得宣称首次提出“文本 Query + 视觉 K/V + 动态 LLM Prompt”。
 8. **CoTBox-TTT 作为首要同领域证据选择工作**：该方法同样冻结生成式医学VLM并在PathVQA、SLAKE和VQA-RAD上使用连续Soft Prompt，直接支持“领域VQA的关键问题之一是选择问题相关视觉证据”的叙事。但它属于逐测试样本优化20轮的无标签Test-Time Training，依赖额外VisCoT定位器、裁剪重编码和EMA Teacher，且开放题使用Recall、SLAKE采用英文设置，因此只能做定性方法比较和原协议文献背景，不能把其分数与QDPT直接排名。
+9. **GRASP 升级为必做直接基线，但不取代 DRAPE**：GRASP（arXiv:2601.17089v1）与QDPT同属冻结生成式MLLM中的问题引导动态Soft Prompt，并已在Qwen2.5-VL-7B的生成式遥感VQA上与Prompt Tuning、VPT、Adapter、LoRA和DoRA比较。DRAPE继续承担动态跨模态Prompt技术先例与创新边界审计；GRASP则必须移植到当前Qwen3-VL、PathVQA/SLAKE和统一评价协议下进入主表。
 
 ## 2. 论文定位与核心叙事
 
@@ -112,7 +113,7 @@ Day 1 结束后不再增加：
 
 ### 4.1 主文：同一骨干、同一数据与评价协议的 Prompt 基线
 
-主表围绕冻结生成式MLLM的Prompt适配问题组织，不再围绕能否战胜权重微调展开。保留以下同范式基线，其中最多新增三个单seed实验，不做额外超参数搜索：
+主表围绕冻结生成式MLLM的Prompt适配问题组织，不再围绕能否战胜权重微调展开。保留以下同范式基线；除新增的GRASP直接竞争方法外，其余待补受控基线合计最多新增三个单seed实验，不做额外超参数搜索：
 
 | 家族 | 配置 | 作用 | 状态 |
 |---|---|---|---|
@@ -122,6 +123,7 @@ Day 1 结束后不再增加：
 | Dual Static Prompt | 静态视觉Prompt + 静态LLM Prompt | 排除收益仅来自双侧增加Prompt | 待补PathVQA seed44 |
 | Image-conditioned Prompt | 图像池化后生成LLM Prompt，不使用问题Query | 样本条件但非问题引导的动态Prompt | 待补PathVQA seed44 |
 | Learned-query Prompt | 静态Q10读取视觉K/V后生成LLM Prompt | Q-Former式通用Query对照 | PathVQA已有 |
+| GRASP | 问题语义对固定空间块打分，以Entmax稀疏加权空间Prompt原型并生成1个全局Prompt | 同范式直接竞争方法 | **必做PathVQA/SLAKE统一协议复现** |
 | QDPT-D512/D768 | 问题Q读取视觉K/V并写入LLM Prompt | 本文效率点与主模型 | PathVQA/SLAKE已有 |
 
 公平性要求：
@@ -130,6 +132,8 @@ Day 1 结束后不再增加：
 - 报告可训练参数、训练时间、TTFT、TPOT；不只比较准确率。
 - 新增Prompt基线固定seed44和三epoch，不根据结果继续扫描长度、层数、学习率或宽度。
 - question-only / w/o visual CA 提升为当前必做机制消融；IA3与补充语义指标仍保留在审稿后候补清单。
+- GRASP优先使用作者正式开源仓库；若无代码，则严格按论文公式独立实现并标注为`GRASP reimplementation under our unified protocol`。固定`h=512`、`alpha=1.5`和低分辨率主配置`N=4`，先做seed44，不替对手进行额外超参数搜索。
+- GRASP论文明确通过冻结LLM前向并mean-pool隐藏状态得到问题向量`q`。统一复现不得悄然替换为Token Embedding pooling；必须如实保留额外text-only LLM前向，并在TTFT与训练时间中单独报告其成本。
 
 ### 4.2 附录：不同适配范式参考
 
@@ -158,6 +162,7 @@ Full-Attention LoRA和Visual-Only LoRA保留为不同适配范式的强参考，
 必须重点核对以下路线，目标不是继续改模型，而是划清贡献边界：
 
 - **DRAPE**：当前最强且最接近的 Related Work。默认 `H=512`、`Lp=10`，由指令分段池化和文本注意力产生 Query，再对视觉 K/V 做 Cross-Attention并生成实例 LLM Prompt；同时面向持续学习加入任务专属生成器、共享 projector 的 null-space 梯度保护和 CLIP prototype 路由。
+- **GRASP**（arXiv:2601.17089v1）：当前最接近且可做统一协议数值比较的直接竞争方法。它将冻结视觉Token网格划分为固定空间块，用冻结LLM提取问题向量，在`h=512`空间计算问题-区域相关性，经`Entmax(alpha=1.5)`得到稀疏权重，再对各空间块绑定的静态Prompt原型加权，生成单个全局Prompt Token写入视觉-语言接口。原文未给出正式代码地址，优先继续检索作者仓库；无仓库时按公式独立复现。
 - **CoTBox-TTT**（arXiv:2511.12446v1）：当前最贴近医学VQA任务与数据集的证据选择工作。其24-token Evidence Prompt驱动冻结VisCoT进行两次框定位，32-token Answer Prompt在原图/裁剪图和EMA Teacher之间逐测试样本优化20轮；覆盖VQA-RAD、SLAKE和PathVQA，但不是一次前向的条件Prompt生成器。
 - CoCoOp：条件 Prompt 的经典范式。
 - MaPLe：多模态/深层 Prompt 学习。
@@ -176,6 +181,15 @@ DRAPE 与 QDPT 的正式边界：
 - **机制证据不同**：DRAPE 提供去除 Cross-Attention、宽度/Prompt数敏感性和可视化；QDPT 提供 learned-query、图文错配、视觉写回关闭、静态视觉移除和层位敏感性。
 
 论文写法采用“肯定后区分”：先肯定 DRAPE 证明了实例级跨模态 Prompt 在持续学习中的有效性，再指出完全冻结领域适配仍缺少对内部视觉证据位置、静态领域先验与动态样本证据分工、视觉写回必要性的系统研究。DRAPE 是 Related Work 中的首要技术近邻，但其原论文分数不进入 PathVQA/SLAKE 同协议主表。
+
+GRASP 与 QDPT 的正式边界：
+
+- **共同范式**：两者都冻结视觉与语言骨干，根据当前问题选择当前图像证据，并通过训练期CE学习动态Soft Prompt；因此QDPT不得宣称首次提出问题引导视觉Prompt或冻结MLLM动态Prompt。
+- **动态内容来源不同**：GRASP的视觉块只生成标量路由权重，Value是样本无关的空间Prompt原型`p_i`，最终`p_global`受限于这些原型的稀疏加权组合；QDPT以Layer17真实视觉特征作为Cross-Attention的Value，直接生成携带样本视觉内容的`Z10`。
+- **结构先验不同**：GRASP依赖固定二维网格和空间块绑定，适合稀疏遥感目标；QDPT不预设病变位置，通过由完整问题形成的10个方向查询对完整内部视觉Token做细粒度语义检索。
+- **输出容量不同**：GRASP只写入1个全局Prompt Token；QDPT生成10个动态证据Token，并与`P20`静态领域锚点拼接，显式区分领域先验与样本证据。
+- **计算路径不同**：GRASP按论文描述需要额外的text-only冻结LLM前向提取问题隐藏状态；QDPT在视觉编码前由问题Embedding完成attention pooling，不额外执行完整LLM编码。效率比较必须包含该差异。
+- **正式比较规则**：GRASP的遥感原论文数字只进入原协议文献表；移植到同一Qwen3-VL、PathVQA/SLAKE、三epoch和官方评价脚本后的结果进入主表。若使用独立实现，方法名旁必须标注reimplementation。
 
 CoTBox-TTT与QDPT的正式关系：
 
@@ -327,7 +341,7 @@ CoTBox-TTT可以计入“同方向Related Work”的文献数量，但**不计�
 - [x] 实现 learned-static-query D768；已随最终`S8+A_v10`参数化恢复为7,805,184参数。
 - [x] 准备 PathVQA/SLAKE 最终统一启动脚本；实验名编码数据集、D、Query 来源、视觉模式与 seed，统一强制 3 epochs 且只在 epoch 3 全量评估。
 - [x] IA3和补充语义指标已移至审稿后候补；question-only因DRAPE碰撞审计提升为当前必做。
-- [ ] 完成 CoCoOp、MaPLe、Q-Former、LION、MASP 的碰撞矩阵。
+- [ ] 完成 CoCoOp、MaPLe、Q-Former、LION、MASP、DRAPE与GRASP的碰撞矩阵。
 - [ ] 审计 PathVQA/SLAKE 同领域论文的 split 与 metric。
 - [x] 根据 no-static-visual与RNG-controlled V20结果冻结最终`S8+A_v10`结构和论文主张。
 
@@ -343,6 +357,8 @@ CoTBox-TTT可以计入“同方向Related Work”的文献数量，但**不计�
 - [x] 最后一次统一V20抢救：严格固定下游初始化后为58.5237，仍较旧8+10同seed显著低1.0385；永久保留旧8+10双速率视觉Prompt，V20只作为负消融，不再重复运行。
 - [x] 完成 learned-static-query seed44：57.1817，较问题引导Q10显著下降2.3806，确认当前问题条件化Query的必要性，不追加seed。
 - [x] 取消LoRA-r4/r16 seed44；已有r8足以作为附录中的跨范式强参考，不再用rank扫描消耗收尾时间。
+- [ ] 检索GRASP作者正式仓库；若无可用实现，按论文公式完成Qwen3-VL独立移植和CPU单测，禁止先简化其问题编码路径。
+- [ ] 完成PathVQA GRASP seed44统一协议实验，报告Overall、Yes/No、Free-form、参数、训练时间、TTFT和TPOT；不扫描`N/h/alpha`。
 - [ ] 汇总每个实验的 Validation、参数、训练时间与预测文件。
 - [x] 立即更新两个实验账本，不做账本单独提交。
 
@@ -354,6 +370,7 @@ CoTBox-TTT可以计入“同方向Related Work”的文献数量，但**不计�
 - [x] 准备专用串行目标`slake_qdpt_d768_final_seeds44_46`：只运行SLAKE最终D768三seed，任一失败继续其余项，退出后自动关机，不重复PathVQA。
 - [x] 准备`slake_lora_full_model_attn_r8_seeds44_46`：三个seed串行、失败继续、仅epoch3官方Test，并在启动前跳过已有完整结果。
 - [x] 完成Full-Attention LoRA-r8 seed44/45/46：Overall 81.95/81.57/81.95，均值81.82 +/- 0.22；QDPT均值低4.79且三个同seed配对均极显著，停止跨数据集LoRA性能持平叙事。
+- [ ] 完成SLAKE GRASP seed44统一协议迁移；沿用PathVQA固定实现与超参数，不因结果修改空间块数或融合方式。
 - [ ] 复核 Static Prompt 的 checkpoint、split 和评价结果。
 - [ ] 禁止根据 SLAKE 分数修改 D、层数、Prompt 长度或训练策略。
 

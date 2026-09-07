@@ -199,6 +199,7 @@ class DynamicPromptTuningModel(nn.Module):
         directional_unified_static_visual_prompt: bool = False,
         directional_direct_visual_z_tokens: bool = False,
         directional_query_source: str = "question_attention_pooling",
+        directional_visual_conditioning: str = "cross_attention",
     ) -> None:
         super().__init__()
         if prompt_length < 1:
@@ -251,6 +252,9 @@ class DynamicPromptTuningModel(nn.Module):
             directional_direct_visual_z_tokens
         )
         self.directional_query_source = str(directional_query_source)
+        self.directional_visual_conditioning = str(
+            directional_visual_conditioning
+        )
         for parameter in self.base_model.parameters():
             parameter.requires_grad = False
 
@@ -287,6 +291,7 @@ class DynamicPromptTuningModel(nn.Module):
                         self.directional_direct_visual_z_tokens
                     ),
                     query_source=self.directional_query_source,
+                    visual_conditioning=self.directional_visual_conditioning,
                 ).to(device=visual_device)
             else:
                 self.sparse_visual = SparseVisualMMRL(
@@ -1110,7 +1115,11 @@ class DynamicPromptTuningModel(nn.Module):
             "num_heads": self.num_heads,
             "init_seed": self.init_seed,
             "memory": (
-                f"{self.directional_query_source}_queries_plus_full_visual_kv"
+                (
+                    f"{self.directional_query_source}_queries_plus_full_visual_kv"
+                    if self.directional_visual_conditioning == "cross_attention"
+                    else f"{self.directional_query_source}_queries_only"
+                )
                 if self.directional_concat_workspace_enabled
                 else "mean_visual_plus_mean_question"
             ),
@@ -1192,8 +1201,21 @@ class DynamicPromptTuningModel(nn.Module):
                     "private_text_prompt_tokens": self.private_prompt_length,
                     "text_workspace_anchor_tokens": self.workspace_prompt_length,
                     "query": self.sparse_visual.query_source,
-                    "memory": "full_anchor_layer_visual_tokens",
-                    "fusion": "text_query_visual_kv_cross_attention",
+                    "visual_conditioning": (
+                        self.sparse_visual.visual_conditioning
+                    ),
+                    "memory": (
+                        "full_anchor_layer_visual_tokens"
+                        if self.sparse_visual.visual_conditioning
+                        == "cross_attention"
+                        else "question_tokens_only"
+                    ),
+                    "fusion": (
+                        "text_query_visual_kv_cross_attention"
+                        if self.sparse_visual.visual_conditioning
+                        == "cross_attention"
+                        else "question_query_identity"
+                    ),
                     "visual_output": (
                         (
                             "static_anchor_plus_direct_z_token_concat"

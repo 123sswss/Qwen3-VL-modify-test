@@ -612,6 +612,47 @@ class DynamicPromptTuningTest(unittest.TestCase):
                     value,
                 )
 
+    def test_directional_question_only_checkpoint_records_conditioning(self):
+        kwargs = dict(
+            tokenizer=_FakeTokenizer(),
+            prompt_length=2,
+            init_seed=5,
+            attention_dim=4,
+            num_heads=2,
+            sparse_visual_anchor_layers=(1,),
+            sparse_visual_rep_tokens=2,
+            sparse_visual_attention_dim=4,
+            sparse_visual_heads=2,
+            workspace_tokens=3,
+            workspace_dim=8,
+            workspace_heads=2,
+            directional_concat_workspace=True,
+            directional_visual_dynamic_write=False,
+            directional_visual_conditioning="question_only",
+        )
+        model = DynamicPromptTuningModel(_FakeMultimodalModel(), **kwargs)
+        with tempfile.TemporaryDirectory() as directory:
+            checkpoint = Path(directory)
+            model.save_dynamic_prompt(checkpoint)
+            with (checkpoint / "dynamic_prompt_config.json").open(
+                "r", encoding="utf-8"
+            ) as handle:
+                config = json.load(handle)
+            directional = config["directional_concat_workspace"]
+            self.assertEqual(
+                directional["visual_conditioning"],
+                "question_only",
+            )
+            self.assertEqual(directional["memory"], "question_tokens_only")
+            self.assertEqual(directional["fusion"], "question_query_identity")
+            restored = DynamicPromptTuningModel(_FakeMultimodalModel(), **kwargs)
+            restored.load_dynamic_prompt(checkpoint)
+            for key, value in model.sparse_visual.state_dict().items():
+                torch.testing.assert_close(
+                    restored.sparse_visual.state_dict()[key],
+                    value,
+                )
+
     def test_directional_concat_scales_text_delta_without_changing_positions(self):
         kwargs = dict(
             tokenizer=_FakeTokenizer(),

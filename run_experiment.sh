@@ -940,6 +940,7 @@ run_qdpt_d768_final_dataset() {
   esac
 
   local experiment_stem expected_trainable query_source static_visual_write
+  local visual_conditioning
   local private_visual_tokens visual_workspace_tokens unified_visual_tokens
   local visual_prompt_tokens_arg
   local direct_visual_z_tokens=false
@@ -947,6 +948,7 @@ run_qdpt_d768_final_dataset() {
   anchor_layers=(17)
   visual_prompt_tokens_arg=8
   unified_visual_tokens=0
+  visual_conditioning="cross_attention"
   case "$variant" in
     question_static_visual)
       experiment_stem="qdpt_d768_question_q10_l17_p20_s8_av10"
@@ -996,6 +998,20 @@ run_qdpt_d768_final_dataset() {
       visual_workspace_tokens=10
       control_flags=(
         --directional-query-source learned_static
+        --directional-static-visual-write
+      )
+      ;;
+    question_only)
+      experiment_stem="qdpt_d768_question_only_q10_l17_p20_s8_av10"
+      expected_trainable=7805184
+      query_source="question_attention_pooling"
+      visual_conditioning="question_only"
+      static_visual_write=true
+      private_visual_tokens=8
+      visual_workspace_tokens=10
+      control_flags=(
+        --directional-query-source question_attention_pooling
+        --directional-visual-conditioning question_only
         --directional-static-visual-write
       )
       ;;
@@ -1059,7 +1075,7 @@ run_qdpt_d768_final_dataset() {
   local output_dir
   output_dir="$(available_output_dir "$output_root" "${experiment_name}_${RUN_DATE}")"
   mkdir -p "$output_dir"
-  echo "[QDPT_D768_FINAL_CONFIG] dataset=$dataset experiment=$experiment_name seed=$run_seed data_seed=42 anchors=${anchor_layers[*]} parameter_sharing=all_directional_and_visual_prompt_parameters private_text_prompt=20 text_workspace_anchor=10 private_visual_prompt=$private_visual_tokens visual_workspace_anchor=$visual_workspace_tokens unified_static_visual_prompt=$unified_visual_tokens workspace=10x768 query_source=$query_source visual_kv=full_current_anchor_tokens final_text_z=last_anchor static_visual_write=$static_visual_write direct_visual_z_tokens=$direct_visual_z_tokens visual_dynamic_write=false text_output=dynamic_anchor_token_concat expected_trainable=$expected_trainable epochs=3 full_evaluation=$eval_protocol intermediate_full_evaluation=disabled output=$output_dir"
+  echo "[QDPT_D768_FINAL_CONFIG] dataset=$dataset experiment=$experiment_name seed=$run_seed data_seed=42 anchors=${anchor_layers[*]} parameter_sharing=all_directional_and_visual_prompt_parameters private_text_prompt=20 text_workspace_anchor=10 private_visual_prompt=$private_visual_tokens visual_workspace_anchor=$visual_workspace_tokens unified_static_visual_prompt=$unified_visual_tokens workspace=10x768 query_source=$query_source visual_conditioning=$visual_conditioning visual_kv=$([ "$visual_conditioning" = "cross_attention" ] && printf 'full_current_anchor_tokens' || printf 'disabled') final_text_z=last_anchor static_visual_write=$static_visual_write direct_visual_z_tokens=$direct_visual_z_tokens visual_dynamic_write=false text_output=dynamic_anchor_token_concat expected_trainable=$expected_trainable epochs=3 full_evaluation=$eval_protocol intermediate_full_evaluation=disabled output=$output_dir"
   (
     cd "$ROOT_DIR" || exit 1
     python -m unittest \
@@ -1149,6 +1165,10 @@ run_pathvqa_qdpt_d768_no_static_visual_resume_eval() {
 
 run_pathvqa_qdpt_d768_learned_static_query_seed44() {
   run_qdpt_d768_final_dataset pathvqa learned_static_query 44
+}
+
+run_pathvqa_qdpt_d768_question_only_seed44() {
+  run_qdpt_d768_final_dataset pathvqa question_only 44
 }
 
 run_pathvqa_qdpt_d768_direct_visual_z_concat_seeds44_46() {
@@ -2528,6 +2548,9 @@ case "$RUN_TARGET" in
   pathvqa_qdpt_d768_learned_static_query_seed44)
     run_pathvqa_qdpt_d768_learned_static_query_seed44 || failures=$((failures + 1))
     ;;
+  pathvqa_qdpt_d768_question_only_seed44)
+    run_pathvqa_qdpt_d768_question_only_seed44 || failures=$((failures + 1))
+    ;;
   pathvqa_qdpt_d768_direct_visual_z_concat_seeds44_46)
     run_pathvqa_qdpt_d768_direct_visual_z_concat_seeds44_46 || failures=$((failures + 1))
     ;;
@@ -2608,7 +2631,7 @@ case "$RUN_TARGET" in
     run_slake || failures=$((failures + 1))
     ;;
   *)
-    echo "[ERR] 未知目标: $RUN_TARGET；新增目标: pathvqa_lora_full_model_attn_r8_seeds45_46、pathvqa_qdpt_d768_no_static_visual_seed44、pathvqa_qdpt_d768_no_static_visual_resume_eval、pathvqa_qdpt_d768_learned_static_query_seed44、pathvqa_qdpt_d768_direct_visual_z_concat_seeds44_46、pathvqa_qdpt_d768_layer_sensitivity_seed44、pathvqa_qdpt_d768_layer_sensitivity_resume_eval、electrical_qdpt_d768_seed44、qdpt_d768_final_pathvqa_slake_seed44、slake_qdpt_d768_final_seeds44_46、slake_lora_full_model_attn_r8_seeds44_46。" >&2
+    echo "[ERR] 未知目标: $RUN_TARGET；新增目标: pathvqa_lora_full_model_attn_r8_seeds45_46、pathvqa_qdpt_d768_no_static_visual_seed44、pathvqa_qdpt_d768_no_static_visual_resume_eval、pathvqa_qdpt_d768_learned_static_query_seed44、pathvqa_qdpt_d768_question_only_seed44、pathvqa_qdpt_d768_direct_visual_z_concat_seeds44_46、pathvqa_qdpt_d768_layer_sensitivity_seed44、pathvqa_qdpt_d768_layer_sensitivity_resume_eval、electrical_qdpt_d768_seed44、qdpt_d768_final_pathvqa_slake_seed44、slake_qdpt_d768_final_seeds44_46、slake_lora_full_model_attn_r8_seeds44_46。" >&2
     exit 2
     ;;
 esac

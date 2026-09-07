@@ -1,6 +1,6 @@
 # Experiment Result Summary
 
-Last updated: 2026-08-31
+Last updated: 2026-09-06
 
 This file is the concise experiment memory shared by the user and Codex. The complete append-only record remains in `EXPERIMENT_RESULTS.md`.
 
@@ -10,6 +10,10 @@ This file is the concise experiment memory shared by the user and Codex. The com
 - Keep exact experiment names, full breakdowns, diagnostics, and output paths in `EXPERIMENT_RESULTS.md`.
 - Do not silently remove historical conclusions. Add an explicit correction when later evidence changes an interpretation.
 - Experiment scheduling and additions belong in `plan.md`; completed outcomes belong here and in `EXPERIMENT_RESULTS.md`.
+
+## Publication Scope Decision
+
+- 2026-09-06：论文主问题固定为**冻结生成式MLLM中的问题引导动态Prompt适配**，主文用Static LLM Prompt、Static Visual Prompt、Dual Static Prompt、Image-conditioned Prompt和Learned-query Prompt等同范式方法建立对比，不再反复以LoRA为叙事中心。LoRA属于不同适配范式的强参考：正文只简要说明一次并指向附录，附录完整保留PathVQA/SLAKE多seed结果与效率数据；不得删除或模糊SLAKE上的明显差距。取消未运行的LoRA-r4/r16，有限算力优先补同范式Prompt基线和同领域文献表。
 
 ## SLAKE Snapshot
 
@@ -135,3 +139,7 @@ This file is the concise experiment memory shared by the user and Codex. The com
 - 2026-09-04 PathVQA Full-Attention LoRA-r8多seed复现：seed45为**59.2427/91.4560/27.1219**，seed46为**59.2107/91.5200/26.9943**；连同seed44后，LoRA三seed Overall为**59.2640 +/- 0.0666**，Yes/No为91.7227+/-0.4077，Free-form为26.8986+/-0.2836。QDPT-D768对应均值为59.0030/91.2107/26.8879，因此QDPT减LoRA仅为**-0.2610/-0.5120/-0.0107**，应表述为性能持平而非胜出；LoRA更稳定且参数少10.27%，QDPT则在已有同seed运行中训练约快2.29倍，并保留显式问题引导视觉证据路径。seed44的QDPT开放题优势没有稳定复现为多seed均值优势。
 - 2026-09-04 PathVQA D768 learned-static-query控制：把当前问题生成的Q10替换为等量可学习静态Query后，Validation降至**57.1817/89.6000/24.8564**，相对同seed问题引导版Overall **-2.3806**（205/354，McNemar `p=3.05e-10`，图像簇配对CI[-3.1377,-1.6077]），Free-form -3.3184、where -12.2249。分支梯度和CA更新均正常，但末段槽余弦升至0.9336，表明静态Query学成强但同质的通用视觉摘要。结论：当前问题条件化Q是QDPT不可替代的核心机制，不是普通learned-query增加参数即可复现；该消融无需追加seed。
 - 2026-09-04 SLAKE最终QDPT-D768三seed：seed44/45/46 Overall为**77.65/76.70/76.74**，三seed **77.03 +/- 0.54**；CLOSED 83.53+/-0.80、OPEN 72.71+/-0.36、KVQA 61.30+/-2.49、VQA 79.33+/-0.28。固定PathVQA架构与超参数直接迁移，三次均完整训练并只在epoch3评估官方Test，证明约77分的跨数据集泛化成立；波动主要来自KVQA。相对Static Prompt seed44高3.25，较76.90M Full Workspace seed44低0.72，但仅用7.805M参数。2026-09-05误启动的同配置seed44副本已人工中止，无有效结果且禁止续跑。
+- 2026-09-05 SLAKE Full-Attention LoRA-r8三seed：seed44/45/46 Overall为**81.95/81.57/81.95**，均值**81.82 +/- 0.22**，以7.078M参数稳定超过QDPT-D768的77.03+/-0.54。QDPT同seed低4.30/4.87/5.21分，逐题McNemar均`p<2e-10`；均值差在CLOSED/OPEN/KVQA/VQA分别为-3.47/-5.67/-9.11/-4.16，最大短板是知识型与开放生成，不是单纯二分类校准。SLAKE明确否定“QDPT跨数据集打平LoRA”：QDPT参数还多10.27%，仅保留训练约快1.53x、TTFT较低和TPOT约快1.51x的实现效率优势，论文必须改写为机制与准确率-效率权衡，不能宣称普遍替代LoRA。
+- 2026-09-07 DRAPE文献碰撞结论：DRAPE（arXiv:2605.10765）是当前最接近且完成度最高的Related Work。其“指令来源Query -> 当前视觉K/V -> Cross-Attention -> 实例级LLM Soft Prompt”与QDPT核心生成器高度重合，因此QDPT不得宣称首次提出跨模态动态Prompt、文本Query/视觉K-V或模态不对称思想。两者仍有实质边界：DRAPE面向多模态持续指令微调，训练共享视觉projector、每任务保存生成器并依赖CLIP路由和null-space保护；QDPT面向单领域医学VQA，冻结视觉编码器、visual merger/projector和LLM，读取Layer17内部视觉证据，以静态领域锚点和动态样本证据共同适配，并提供逐样本错配与视觉写回干预。正文将DRAPE作为首要技术近邻先肯定后区分，不把其CoIN/UCIT分数与PathVQA/SLAKE直接排名。
+- DRAPE带来的实验修正：视觉K/V错配只能证明错误证据有害，不能严格证明视觉Cross-Attention优于纯问题条件Prompt，因此`question-only / w/o visual CA`由审稿后候补提升为必做重训。现有Static Prompt、learned static query、D256-D1024宽度曲线可直接对应DRAPE的核心消融；另使用现有checkpoint补充Prompt t-SNE、同图不同问题的Prompt-to-image注意力图和成功/失败案例。路由、null-space、BWT和持续学习数据集不适用于QDPT，不照搬。
+- QDPT用途的最终表述：方法不是通过修改骨干补充新的医学知识，而是在完全冻结MLLM已编码的视觉信息中，根据当前问题检索相关证据，并把证据转换成LLM可消费的动态Prompt。Static Prompt只表达领域级先验，QDPT增加样本级证据；其价值由相对Static Prompt的增益、learned-query退化、图文错配、未来question-only控制和视觉写回关闭共同支撑，而不是由是否普遍击败LoRA定义。

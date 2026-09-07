@@ -27,6 +27,11 @@ DIRECTIONAL_QUERY_SOURCES = (
     "learned_static",
 )
 
+DIRECTIONAL_VISUAL_CONDITIONING_MODES = (
+    "cross_attention",
+    "question_only",
+)
+
 
 def resolve_sparse_visual_rep_tokens(
     sparse_visual: Mapping[str, Any] | None,
@@ -139,6 +144,7 @@ class DirectionalConcatWorkspaceVisual(nn.Module):
         unified_static_visual_prompt: bool = False,
         direct_visual_z_tokens: bool = False,
         query_source: str = "question_attention_pooling",
+        visual_conditioning: str = "cross_attention",
         anchor_layers: Sequence[int] | None = None,
     ) -> None:
         super().__init__()
@@ -179,6 +185,12 @@ class DirectionalConcatWorkspaceVisual(nn.Module):
             raise ValueError(
                 f"Unsupported Directional query_source={query_source!r}; "
                 f"choices={DIRECTIONAL_QUERY_SOURCES}"
+            )
+        if visual_conditioning not in DIRECTIONAL_VISUAL_CONDITIONING_MODES:
+            raise ValueError(
+                "Unsupported Directional visual_conditioning="
+                f"{visual_conditioning!r}; "
+                f"choices={DIRECTIONAL_VISUAL_CONDITIONING_MODES}"
             )
         if visual_dynamic_write and not static_visual_write:
             raise ValueError(
@@ -223,6 +235,7 @@ class DirectionalConcatWorkspaceVisual(nn.Module):
         self.static_visual_write = bool(static_visual_write)
         self.direct_visual_z_tokens = bool(direct_visual_z_tokens)
         self.query_source = str(query_source)
+        self.visual_conditioning = str(visual_conditioning)
         if not self.static_visual_write:
             self.visual_prompt_tokens = 0
         elif self.direct_visual_z_tokens:
@@ -411,6 +424,10 @@ class DirectionalConcatWorkspaceVisual(nn.Module):
         if self.query_source == "learned_static" and query_mode != "normal":
             raise ValueError(
                 "Question-query mismatch requires question_attention_pooling"
+            )
+        if self.visual_conditioning == "question_only" and mode != "normal":
+            raise ValueError(
+                "Visual-memory mismatch requires cross_attention conditioning"
             )
         self._visual_delta_scale = scale
         self._visual_memory_mode = mode
@@ -621,7 +638,10 @@ class DirectionalConcatWorkspaceVisual(nn.Module):
             f"visual_dynamic_write={self.visual_dynamic_write} "
             f"direct_visual_z_tokens={self.direct_visual_z_tokens} "
             f"static_visual_write={self.static_visual_write} "
-            f"query_source={self.query_source} text_query_visual_kv=True "
+            f"query_source={self.query_source} "
+            f"visual_conditioning={self.visual_conditioning} "
+            f"text_query_visual_kv="
+            f"{self.visual_conditioning == 'cross_attention'} "
             f"token_concat={self.static_visual_write} block_execution=single_pass"
         )
 
@@ -803,20 +823,31 @@ class DirectionalConcatWorkspaceVisual(nn.Module):
             pooling = None
         queries = self._apply_question_query_intervention(natural_queries)
 
-        attention_visual_tokens, attention_visual_mask = (
-            self._apply_visual_memory_intervention(visual_tokens, visual_mask)
-        )
-        normalized_visual = self.workspace_visual_memory_projection(
-            self.workspace_visual_memory_norm(attention_visual_tokens)
-        )
-        cross, cross_weights = self.workspace_cross_attention(
-            self.workspace_query_norm(queries),
-            normalized_visual,
-            normalized_visual,
-            key_padding_mask=~attention_visual_mask,
-            need_weights=True,
-            average_attn_weights=False,
-        )
+        if self.visual_conditioning == "cross_attention":
+            attention_visual_tokens, attention_visual_mask = (
+                self._apply_visual_memory_intervention(visual_tokens, visual_mask)
+            )
+            normalized_visual = self.workspace_visual_memory_projection(
+                self.workspace_visual_memory_norm(attention_visual_tokens)
+            )
+            cross, cross_weights = self.workspace_cross_attention(
+                self.workspace_query_norm(queries),
+                normalized_visual,
+                normalized_visual,
+                key_padding_mask=~attention_visual_mask,
+                need_weights=True,
+                average_attn_weights=False,
+            )
+        else:
+            if self._visual_memory_mode != "normal":
+                raise RuntimeError(
+                    "Question-only conditioning cannot use visual-memory "
+                    "interventions"
+                )
+            attention_visual_mask = visual_mask
+            normalized_visual = None
+            cross = torch.zeros_like(queries)
+            cross_weights = None
         workspace = queries + cross
         self._workspace_by_image = workspace
 
@@ -838,18 +869,29 @@ class DirectionalConcatWorkspaceVisual(nn.Module):
             else:
                 text_entropy = queries.new_zeros(queries.shape[:2], dtype=torch.float32)
                 text_tokens_used = queries.new_tensor(0.0)
-            cross_f = cross_weights.detach().float()
-            visual_mask_f = attention_visual_mask[:, None, None, :]
-            cross_safe = torch.where(
-                visual_mask_f,
-                cross_f.clamp_min(1e-8),
-                torch.ones_like(cross_f),
-            )
-            visual_counts = attention_visual_mask.sum(dim=-1).clamp_min(2).float()
-            visual_entropy = -(
-                cross_f * cross_safe.log() * visual_mask_f
-            ).sum(dim=-1)
-            visual_entropy = visual_entropy / visual_counts.log()[:, None, None]
+            if cross_weights is not None:
+                cross_f = cross_weights.detach().float()
+                visual_mask_f = attention_visual_mask[:, None, None, :]
+                cross_safe = torch.where(
+                    visual_mask_f,
+                    cross_f.clamp_min(1e-8),
+                    torch.ones_like(cross_f),
+                )
+                visual_counts = (
+                    attention_visual_mask.sum(dim=-1).clamp_min(2).float()
+                )
+                visual_entropy = -(
+                    cross_f * cross_safe.log() * visual_mask_f
+                ).sum(dim=-1)
+                visual_entropy = visual_entropy / visual_counts.log()[:, None, None]
+                visual_tokens_used = attention_visual_mask.sum(dim=-1).float().mean()
+                visual_projected_norm = (
+                    normalized_visual.detach().float().norm(dim=-1).mean()
+                )
+            else:
+                visual_entropy = queries.new_zeros((), dtype=torch.float32)
+                visual_tokens_used = queries.new_tensor(0.0)
+                visual_projected_norm = queries.new_tensor(0.0)
             query_norm = queries.detach().float().norm(dim=-1).mean()
             cross_norm = cross.detach().float().norm(dim=-1).mean()
             normalized_slots = torch.nn.functional.normalize(
@@ -885,15 +927,16 @@ class DirectionalConcatWorkspaceVisual(nn.Module):
                 "workspace_slot_pairwise_cosine_mean": pairwise[
                     :, off_diagonal
                 ].mean(),
-                "workspace_visual_tokens_mean": attention_visual_mask.sum(dim=-1)
-                .float()
-                .mean(),
-                "workspace_visual_projected_norm_mean": normalized_visual.detach()
-                .float()
-                .norm(dim=-1)
-                .mean(),
+                "workspace_visual_tokens_mean": visual_tokens_used,
+                "workspace_visual_projected_norm_mean": visual_projected_norm,
                 "workspace_visual_projection_enabled": workspace.new_tensor(
-                    float(self.workspace_dim != self.visual_dim)
+                    float(
+                        self.visual_conditioning == "cross_attention"
+                        and self.workspace_dim != self.visual_dim
+                    )
+                ),
+                "workspace_visual_conditioning_enabled": workspace.new_tensor(
+                    float(self.visual_conditioning == "cross_attention")
                 ),
                 "workspace_query_is_static": workspace.new_tensor(
                     float(self.query_source == "learned_static")
@@ -1267,6 +1310,7 @@ class DirectionalConcatWorkspaceVisual(nn.Module):
             ),
             "direct_visual_z_tokens": self.direct_visual_z_tokens,
             "query_source": self.query_source,
+            "visual_conditioning": self.visual_conditioning,
             "visual_delta_scale": self._visual_delta_scale,
             "visual_dynamic_write": self.visual_dynamic_write,
             "visual_memory_mode": self._visual_memory_mode,

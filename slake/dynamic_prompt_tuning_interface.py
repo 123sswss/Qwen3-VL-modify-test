@@ -84,6 +84,11 @@ class DynamicPromptTuningModelInterface:
         )
         if directional_query_source == "attention_pool_full_question_tokens":
             directional_query_source = "question_attention_pooling"
+        directional_visual_conditioning = (
+            directional_workspace.get("visual_conditioning", "cross_attention")
+            if directional_workspace is not None
+            else "cross_attention"
+        )
         self.model = DynamicPromptTuningModel(
             base_model,
             tokenizer=self.processor.tokenizer,
@@ -195,6 +200,9 @@ class DynamicPromptTuningModelInterface:
             directional_query_source=(
                 str(directional_query_source)
             ),
+            directional_visual_conditioning=str(
+                directional_visual_conditioning
+            ),
         )
         self.model.load_dynamic_prompt(checkpoint)
         self.model.eval()
@@ -230,6 +238,8 @@ class DynamicPromptTuningModelInterface:
             f"directional_static_visual_write={self.model.directional_static_visual_write} "
             f"directional_direct_visual_z_tokens={self.model.directional_direct_visual_z_tokens} "
             f"directional_query_source={self.model.directional_query_source} "
+            f"directional_visual_conditioning="
+            f"{self.model.directional_visual_conditioning} "
             f"train_soft_prompt={self.model.soft_prompt is not None} "
             f"intervention={intervention} memory_lag={memory_lag} "
             f"workspace_visual_write_disabled={list(workspace_visual_write_disabled_layers)} "

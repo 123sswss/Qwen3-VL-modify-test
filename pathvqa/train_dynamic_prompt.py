@@ -442,6 +442,11 @@ def parse_args(dataset_name: str = "pathvqa") -> argparse.Namespace:
         default="question_attention_pooling",
     )
     parser.add_argument(
+        "--directional-visual-conditioning",
+        choices=("cross_attention", "question_only"),
+        default="cross_attention",
+    )
+    parser.add_argument(
         "--directional-direct-visual-z-tokens",
         action=argparse.BooleanOptionalAction,
         default=False,
@@ -700,6 +705,7 @@ def main(dataset_name: str = "pathvqa") -> int:
             args.directional_direct_visual_z_tokens
         ),
         directional_query_source=args.directional_query_source,
+        directional_visual_conditioning=args.directional_visual_conditioning,
     )
     dataset = _build_train_dataset(dataset_name, args, processor)
     groups = model.trainable_parameter_groups()
@@ -751,6 +757,7 @@ def main(dataset_name: str = "pathvqa") -> int:
         f"directional_unified_static_visual_prompt={args.directional_unified_static_visual_prompt if args.directional_concat_workspace else False} "
         f"directional_direct_visual_z_tokens={args.directional_direct_visual_z_tokens if args.directional_concat_workspace else False} "
         f"directional_query_source={args.directional_query_source if args.directional_concat_workspace else 'none'} "
+        f"directional_visual_conditioning={args.directional_visual_conditioning if args.directional_concat_workspace else 'none'} "
         f"workspace_tokens={args.workspace_tokens if args.shared_workspace else 0} "
         f"directional_workspace_tokens={args.workspace_tokens if args.directional_concat_workspace else 0} "
         f"workspace_dim={args.workspace_dim if (args.shared_workspace or args.directional_concat_workspace) else 0} "
@@ -881,8 +888,17 @@ def main(dataset_name: str = "pathvqa") -> int:
                 "private_text_prompt_tokens": args.prompt_length,
                 "text_workspace_anchor_tokens": args.workspace_tokens,
                 "query": args.directional_query_source,
-                "memory": "full_visual_tokens",
-                "fusion": "text_query_visual_kv_cross_attention",
+                "visual_conditioning": args.directional_visual_conditioning,
+                "memory": (
+                    "full_visual_tokens"
+                    if args.directional_visual_conditioning == "cross_attention"
+                    else "question_tokens_only"
+                ),
+                "fusion": (
+                    "text_query_visual_kv_cross_attention"
+                    if args.directional_visual_conditioning == "cross_attention"
+                    else "question_query_identity"
+                ),
                 "output_interface": (
                     (
                         "static_anchor_plus_direct_z_token_concat"

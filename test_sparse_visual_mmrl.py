@@ -962,6 +962,90 @@ class SparseVisualMMRLTest(unittest.TestCase):
                 question_query_mode="previous-distinct-question"
             )
 
+    def test_directional_question_only_workspace_ignores_visual_content(self):
+        torch.manual_seed(38)
+        adapter = DirectionalConcatWorkspaceVisual(
+            visual_dim=8,
+            text_dim=12,
+            anchor_layer=1,
+            private_prompt_tokens=2,
+            workspace_tokens=3,
+            workspace_dim=8,
+            workspace_heads=2,
+            visual_dynamic_write=False,
+            visual_conditioning="question_only",
+        )
+        text_tokens = torch.randn(2, 4, 12)
+        text_mask = torch.tensor(
+            [[True, True, False, False], [True, True, True, False]]
+        )
+
+        def build(hidden_states):
+            adapter._text_tokens = text_tokens
+            adapter._text_token_mask = text_mask
+            adapter._image_to_sample = torch.tensor([0, 0, 1])
+            adapter._image_lengths = torch.tensor([2, 2, 3])
+            return adapter._build_workspace(hidden_states)
+
+        first = build(torch.randn(7, 8))
+        second = build(torch.randn(7, 8) + 100.0)
+        torch.testing.assert_close(first, second, rtol=0.0, atol=0.0)
+        self.assertEqual(
+            float(
+                adapter.debug_context[
+                    "workspace_visual_conditioning_enabled"
+                ]
+            ),
+            0.0,
+        )
+        self.assertEqual(
+            float(adapter.debug_context["workspace_cross_delta_norm_mean"]),
+            0.0,
+        )
+        self.assertEqual(
+            adapter.workspace_inference_intervention_summary()[
+                "visual_conditioning"
+            ],
+            "question_only",
+        )
+        first.square().mean().backward()
+        self.assertGreater(
+            float(adapter.workspace_text_value_projection.weight.grad.norm()),
+            0.0,
+        )
+        self.assertIsNone(adapter.workspace_cross_attention.in_proj_weight.grad)
+        with self.assertRaisesRegex(ValueError, "requires cross_attention"):
+            adapter.eval().configure_inference_intervention(
+                visual_memory_mode="previous-distinct-image"
+            )
+
+    def test_directional_question_only_preserves_full_model_initialization(self):
+        kwargs = dict(
+            visual_dim=8,
+            text_dim=12,
+            anchor_layer=1,
+            private_prompt_tokens=2,
+            workspace_tokens=3,
+            workspace_dim=8,
+            workspace_heads=2,
+            visual_dynamic_write=False,
+        )
+        torch.manual_seed(39)
+        full = DirectionalConcatWorkspaceVisual(**kwargs)
+        torch.manual_seed(39)
+        question_only = DirectionalConcatWorkspaceVisual(
+            **kwargs,
+            visual_conditioning="question_only",
+        )
+        self.assertEqual(full.state_dict().keys(), question_only.state_dict().keys())
+        for key, value in full.state_dict().items():
+            torch.testing.assert_close(
+                value,
+                question_only.state_dict()[key],
+                rtol=0.0,
+                atol=0.0,
+            )
+
     def test_directional_d768_control_parameter_counts(self):
         text_projection = ZeroInitWorkspaceProjection(768, 2560)
         private_text_prompt = nn.Parameter(torch.empty(20, 2560))

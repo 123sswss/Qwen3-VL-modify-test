@@ -279,7 +279,7 @@ CoTBox-TTT可以计入“同方向Related Work”的文献数量，但**不计�
 | Appendix-complete | Full-Attention LoRA-r8复现 | 44/45/46 | 已完成，仅作为附录跨范式参考 |
 | Cancelled | Full-Attention LoRA-r4/r16 | 44 | 不再运行；不扩展跨范式容量扫描 |
 | P1 | 最终架构正式 Test | 44/45/46 最终 checkpoint | 冻结后仅运行一次 |
-| P0 | question-only / w/o visual CA | 44 | 代码与启动目标已就绪，待运行；保留Q10、全部初始参数和文本写入接口，仅令视觉CA残差为0 |
+| Completed | question-only / w/o visual CA | 44 | 已完成：57.6290，相对完整QDPT显著下降1.9332；证明正确视觉K/V读取有独立增益，不追加seed |
 | Conditional P0 | DRAPE-style近似复现 | 44 | 当前搁置；若最终不足3个可信同方向Prompt对比则自动升级为必做 |
 | Post-review | IA3 单配置 | 44 | 当前不实现；仅在审稿人要求增加轻量PEFT时补做 |
 

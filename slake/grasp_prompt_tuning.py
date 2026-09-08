@@ -307,7 +307,7 @@ class GRASPPromptTuningModel(nn.Module):
             if self._encoding_question:
                 return args, kwargs
             embeddings = kwargs.get("inputs_embeds")
-            if embeddings is None or embeddings.shape[1] != context.shape[1]:
+            if embeddings is None or embeddings.shape[1] != ids.shape[1]:
                 return args, kwargs
             visual_mask = kwargs.get("visual_pos_masks")
             if visual_mask is None:

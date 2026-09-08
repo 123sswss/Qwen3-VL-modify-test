@@ -37,6 +37,13 @@ class GRASPModelInterface:
         checkpoint = Path(checkpoint_path).resolve()
         with (checkpoint / GRASP_CONFIG_NAME).open("r", encoding="utf-8") as handle:
             config = json.load(handle)
+        if config.get("question_source") != "raw_question_only" or config.get(
+            "prompt_placement"
+        ) != "after_visual_segment":
+            raise ValueError(
+                "This checkpoint uses the superseded GRASP approximation; "
+                "retrain with raw-question encoding and visual-adjacent Prompt placement"
+            )
         self.processor = AutoProcessor.from_pretrained(
             base_model_path, trust_remote_code=True
         )
@@ -62,7 +69,8 @@ class GRASPModelInterface:
             "[grasp] "
             f"loaded={checkpoint} blocks={self.model.block_count} "
             f"bottleneck={self.model.bottleneck_dim} alpha=1.5 "
-            "question=frozen_llm_last_hidden_mean visual=post_merger_grid"
+            "question=raw_question_only_frozen_llm_last_hidden_mean "
+            "visual=post_merger_grid prompt_placement=after_visual_segment"
         )
 
     def reset_inference_state(self) -> None:
@@ -91,6 +99,17 @@ class GRASPModelInterface:
             dict(self.processor(images=image, text=text, return_tensors="pt")),
             self.device,
         )
+        question_inputs = self.processor.tokenizer(
+            prompt,
+            add_special_tokens=False,
+            return_tensors="pt",
+        )
+        inputs["grasp_question_input_ids"] = question_inputs["input_ids"].to(
+            self.device
+        )
+        inputs["grasp_question_attention_mask"] = question_inputs[
+            "attention_mask"
+        ].to(self.device)
         original_length = int(inputs["input_ids"].shape[-1])
         generate_kwargs = {
             "max_new_tokens": max_new_tokens,

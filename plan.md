@@ -359,7 +359,7 @@ CoTBox-TTT可以计入“同方向Related Work”的文献数量，但**不计�
 - [x] 完成 learned-static-query seed44：57.1817，较问题引导Q10显著下降2.3806，确认当前问题条件化Query的必要性，不追加seed。
 - [x] 取消LoRA-r4/r16 seed44；已有r8足以作为附录中的跨范式强参考，不再用rank扫描消耗收尾时间。
 - [x] 未发现GRASP作者正式仓库；已按论文公式完成Qwen3-VL近似复现、PathVQA/SLAKE/现有电气数据接口连接和CPU单测。保留冻结LLM的额外question-only前向，并明确标注为独立复现。
-- [ ] 修正GRASP全局Prompt的视觉段注入位置与纯问题Token编码后，重做PathVQA seed44；初版45.0871因两项实现偏差仅作为失败记录，不进入主表，也不扫描`N/h/alpha`。
+- [ ] GRASP修正版代码已完成：全局Prompt改为插在视觉段之后，冻结LLM查询改为独立分词的纯问题Token；待容器先通过CPU单测后重做PathVQA seed44。初版45.0871只作为失败记录，不进入主表，也不扫描`N/h/alpha`。
 - [ ] 汇总每个实验的 Validation、参数、训练时间与预测文件。
 - [x] 完成QDPT-D768 seed44十轮收敛马拉松：epoch3-10逐轮完整Validation，不跑Test。epoch6峰值58.7794、epoch10为57.1657，均未超过原3-epoch seed44的59.5622；终止QDPT长程训练与学习率扫参，保留原3-epoch协议。
 - [x] 立即更新两个实验账本，不做账本单独提交。

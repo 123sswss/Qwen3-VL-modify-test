@@ -10,6 +10,8 @@ from pathlib import Path
 
 import numpy as np
 import torch
+from torch.nn.utils.rnn import pad_sequence
+from torch.utils.data import Dataset
 from transformers import AutoModelForImageTextToText, AutoProcessor, Trainer, TrainerCallback, TrainingArguments
 
 from pathvqa.train_dynamic_prompt import (
@@ -19,6 +21,63 @@ from pathvqa.train_dynamic_prompt import (
     _normalize_dataset_name,
 )
 from slake.grasp_prompt_tuning import GRASPPromptTuningModel
+
+
+class GRASPQuestionDataset(Dataset):
+    """Attach a separately tokenized raw question without changing the base dataset."""
+
+    def __init__(self, dataset: Dataset, tokenizer) -> None:
+        self.dataset = dataset
+        self.tokenizer = tokenizer
+
+    def __len__(self) -> int:
+        return len(self.dataset)
+
+    def _question_text(self, index: int) -> str:
+        sample = self.dataset.data[index]
+        question = str(sample.get("question", "")).strip()
+        if question:
+            return question
+        for turn in reversed(sample.get("conversations", ())):
+            role = str(turn.get("from", turn.get("role", ""))).lower()
+            if role in {"human", "user"}:
+                question = str(turn.get("value", turn.get("content", "")))
+                question = question.replace("<image>", "").strip()
+                if question:
+                    return question
+        raise RuntimeError("GRASP could not resolve the raw question text")
+
+    def __getitem__(self, index: int):
+        feature = dict(self.dataset[index])
+        question_ids = self.tokenizer.encode(
+            self._question_text(index), add_special_tokens=False
+        )
+        if not question_ids:
+            raise RuntimeError("GRASP raw-question tokenization returned no tokens")
+        feature["grasp_question_input_ids"] = torch.tensor(
+            question_ids, dtype=torch.long
+        )
+        return feature
+
+
+class GRASPCollator:
+    def __init__(self, processor, dataset_name: str) -> None:
+        self.base = DynamicPromptCollator(processor, dataset_name=dataset_name)
+        self.pad_token_id = int(processor.tokenizer.pad_token_id)
+
+    def __call__(self, features):
+        features = [dict(feature) for feature in features]
+        questions = [feature.pop("grasp_question_input_ids") for feature in features]
+        batch = self.base(features)
+        batch["grasp_question_input_ids"] = pad_sequence(
+            questions, batch_first=True, padding_value=self.pad_token_id
+        )
+        batch["grasp_question_attention_mask"] = pad_sequence(
+            [torch.ones_like(question) for question in questions],
+            batch_first=True,
+            padding_value=0,
+        )
+        return batch
 
 
 class GRASPTrainer(Trainer):
@@ -151,7 +210,9 @@ def main(dataset_name: str = "pathvqa") -> int:
         prompt_init_std=args.prompt_init_std,
         init_seed=args.seed,
     )
-    dataset = _build_train_dataset(dataset_name, args, processor)
+    dataset = GRASPQuestionDataset(
+        _build_train_dataset(dataset_name, args, processor), processor.tokenizer
+    )
     groups = model.trainable_parameter_groups()
     counts = {name: sum(p.numel() for p in parameters) for name, parameters in groups.items()}
     trainable = sum(counts.values())
@@ -166,7 +227,8 @@ def main(dataset_name: str = "pathvqa") -> int:
     print(
         f"[{display_name.upper()}_GRASP_CONFIG] experiment={args.experiment_name} "
         f"blocks={args.blocks} bottleneck={args.bottleneck_dim} alpha=1.5 "
-        f"question=frozen_llm_last_hidden_mean visual=post_merger_grid "
+        f"question=raw_question_only_frozen_llm_last_hidden_mean "
+        f"visual=post_merger_grid prompt_placement=after_visual_segment "
         f"prompt_tokens=1 parameters={counts} total={trainable} "
         f"lr={args.learning_rate} weight_decay=0.01 warmup=0.1 "
         f"epochs={args.epochs} seed={args.seed} data_seed={args.data_seed}"
@@ -195,7 +257,7 @@ def main(dataset_name: str = "pathvqa") -> int:
             data_seed=args.data_seed,
         ),
         train_dataset=dataset,
-        data_collator=DynamicPromptCollator(processor, dataset_name=dataset_name),
+        data_collator=GRASPCollator(processor, dataset_name=dataset_name),
         processing_class=processor,
         callbacks=[GRASPCallback(processor, args.output_dir, dataset_name)],
     )
@@ -211,8 +273,9 @@ def main(dataset_name: str = "pathvqa") -> int:
         "blocks": args.blocks,
         "bottleneck_dim": args.bottleneck_dim,
         "entmax_alpha": 1.5,
-        "question_encoder": "frozen_llm_last_hidden_mean",
+        "question_encoder": "raw_question_only_frozen_llm_last_hidden_mean",
         "visual_source": "post_merger_grid",
+        "prompt_placement": "after_visual_segment",
         "trainable_parameters": counts,
         "total_trainable_parameters": trainable,
         "learning_rate": args.learning_rate,

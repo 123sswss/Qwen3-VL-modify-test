@@ -28,10 +28,12 @@ class FakeLanguageModel(nn.Module):
         super().__init__()
         self.calls = 0
         self.last_inputs = None
+        self.input_history = []
 
     def forward(self, inputs_embeds, **kwargs):
         self.calls += 1
         self.last_inputs = inputs_embeds
+        self.input_history.append(inputs_embeds.detach().clone())
         return SimpleNamespace(last_hidden_state=inputs_embeds * 1.25)
 
 
@@ -97,7 +99,7 @@ class GRASPTest(unittest.TestCase):
         self.assertTrue(model.prompt_prototypes.requires_grad)
         self.assertIn("prompt_prototypes", dict(model.named_parameters()))
 
-    def test_forward_uses_two_llm_passes_and_only_grasp_gets_gradients(self):
+    def test_forward_uses_raw_question_and_visual_adjacent_prompt(self):
         base = FakeBaseModel()
         model = GRASPPromptTuningModel(
             base, FakeTokenizer(), block_count=4, bottleneck_dim=4, init_seed=44
@@ -109,6 +111,8 @@ class GRASPTest(unittest.TestCase):
             attention_mask=torch.ones_like(input_ids),
             labels=labels,
             mmrl_gating_mask=labels.eq(-100),
+            grasp_question_input_ids=torch.tensor([[31, 32]]),
+            grasp_question_attention_mask=torch.ones(1, 2, dtype=torch.long),
             image_grid_thw=torch.tensor([[1, 4, 4]]),
             pixel_values=torch.zeros(1, 2),
         )
@@ -118,18 +122,46 @@ class GRASPTest(unittest.TestCase):
         for parameters in model.trainable_parameter_groups().values():
             self.assertTrue(all(parameter.grad is not None for parameter in parameters))
         self.assertEqual(tuple(base.model.language_model.last_inputs.shape), (1, 10, 8))
+        expected_question = base.embedding(torch.tensor([[31, 32]]))
+        torch.testing.assert_close(
+            base.model.language_model.input_history[0], expected_question
+        )
+        original = base.embedding(input_ids)
+        main_inputs = base.model.language_model.input_history[1]
+        torch.testing.assert_close(main_inputs[:, :6], original[:, :6])
+        torch.testing.assert_close(main_inputs[:, 7:], original[:, 6:])
+        self.assertFalse(torch.equal(main_inputs[:, 6], base.embedding(torch.tensor([[0]]))[:, 0]))
         self.assertIn("grasp_zero_weight_fraction", model.debug_context)
 
-    def test_answer_overlap_is_rejected(self):
+    def test_prompt_slot_is_unsupervised_and_labels_shift_with_content(self):
         model = GRASPPromptTuningModel(
             FakeBaseModel(), FakeTokenizer(), block_count=4, bottleneck_dim=4
         )
-        with self.assertRaisesRegex(RuntimeError, "overlaps answer"):
+        labels = torch.tensor([[-100, -100, -100, -100, -100, -100, -100, 21]])
+        expanded, _, positions, _, _, _ = model._expand_inputs(
+            {
+                "input_ids": torch.tensor([[11, 10, 10, 10, 10, 12, 20, 21]]),
+                "attention_mask": torch.ones(1, 8, dtype=torch.long),
+                "labels": labels,
+                "mmrl_gating_mask": labels.eq(-100),
+                "grasp_question_input_ids": torch.tensor([[20]]),
+                "grasp_question_attention_mask": torch.ones(1, 1, dtype=torch.long),
+                "image_grid_thw": torch.tensor([[1, 4, 4]]),
+            }
+        )
+        self.assertEqual(positions.tolist(), [6])
+        self.assertEqual(expanded["labels"].tolist()[0], [-100] * 8 + [21])
+        self.assertEqual(expanded["attention_mask"].tolist()[0], [1] * 9)
+
+    def test_missing_separate_question_inputs_is_rejected(self):
+        model = GRASPPromptTuningModel(
+            FakeBaseModel(), FakeTokenizer(), block_count=4, bottleneck_dim=4
+        )
+        with self.assertRaisesRegex(RuntimeError, "separately tokenized"):
             model(
-                input_ids=torch.tensor([[10, 10, 10, 10, 20]]),
-                attention_mask=torch.ones(1, 5, dtype=torch.long),
-                labels=torch.tensor([[-100, -100, -100, -100, 20]]),
-                mmrl_gating_mask=torch.ones(1, 5, dtype=torch.bool),
+                input_ids=torch.tensor([[11, 10, 10, 10, 10, 12, 20]]),
+                attention_mask=torch.ones(1, 7, dtype=torch.long),
+                labels=torch.full((1, 7), -100, dtype=torch.long),
                 image_grid_thw=torch.tensor([[1, 4, 4]]),
             )
 

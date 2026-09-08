@@ -172,32 +172,71 @@ class GRASPPromptTuningModel(nn.Module):
         attention_mask = batch.pop("attention_mask")
         labels = batch.get("labels")
         context = batch.pop("mmrl_gating_mask", None)
-        if context is None:
-            context = (labels == -100) & attention_mask.bool() if labels is not None else attention_mask.bool()
-        if context.shape != input_ids.shape:
+        question_ids = batch.pop("grasp_question_input_ids", None)
+        question_mask = batch.pop("grasp_question_attention_mask", None)
+        if question_ids is None or question_mask is None:
+            raise RuntimeError("GRASP requires separately tokenized raw-question inputs")
+        if question_ids.shape != question_mask.shape:
+            raise ValueError("GRASP question ids and attention mask must share shape")
+        if not bool(question_mask.bool().any(dim=1).all()):
+            raise RuntimeError("GRASP found a sample without raw-question tokens")
+        if context is not None and context.shape != input_ids.shape:
             raise ValueError("mmrl_gating_mask must match input_ids")
-        if labels is not None and bool((context & (labels != -100)).any()):
-            raise RuntimeError("GRASP question encoding overlaps answer supervision")
         batch_size = input_ids.shape[0]
         pad_id = int(getattr(self.config, "pad_token_id", 0) or 0)
-        prefix_ids = torch.full((batch_size, 1), pad_id, dtype=input_ids.dtype, device=input_ids.device)
-        prefix_attention = torch.ones((batch_size, 1), dtype=attention_mask.dtype, device=attention_mask.device)
-        expanded_ids = torch.cat((prefix_ids, input_ids), dim=1)
-        expanded_context = torch.cat(
-            (torch.zeros((batch_size, 1), dtype=torch.bool, device=context.device), context.bool()), dim=1
+        vision_end_id = self.visual_token_ids[2]
+        prompt_positions = []
+        expanded_ids = torch.full(
+            (batch_size, input_ids.shape[1] + 1),
+            pad_id,
+            dtype=input_ids.dtype,
+            device=input_ids.device,
         )
+        expanded_attention = torch.zeros(
+            expanded_ids.shape,
+            dtype=attention_mask.dtype,
+            device=attention_mask.device,
+        )
+        expanded_labels = None
+        if labels is not None:
+            expanded_labels = torch.full(
+                expanded_ids.shape, -100, dtype=labels.dtype, device=labels.device
+            )
+        for index in range(batch_size):
+            vision_ends = torch.nonzero(
+                input_ids[index].eq(vision_end_id) & attention_mask[index].bool(),
+                as_tuple=False,
+            ).flatten()
+            if vision_ends.numel() != 1:
+                raise RuntimeError("GRASP requires exactly one visual segment per sample")
+            position = int(vision_ends.item()) + 1
+            prompt_positions.append(position)
+            expanded_ids[index, :position] = input_ids[index, :position]
+            expanded_ids[index, position + 1 :] = input_ids[index, position:]
+            expanded_attention[index, :position] = attention_mask[index, :position]
+            expanded_attention[index, position] = 1
+            expanded_attention[index, position + 1 :] = attention_mask[index, position:]
+            if expanded_labels is not None:
+                expanded_labels[index, :position] = labels[index, :position]
+                expanded_labels[index, position + 1 :] = labels[index, position:]
         expanded = {
             **batch,
             "input_ids": expanded_ids,
-            "attention_mask": torch.cat((prefix_attention, attention_mask), dim=1),
+            "attention_mask": expanded_attention,
         }
-        if labels is not None:
-            ignored = torch.full((batch_size, 1), -100, dtype=labels.dtype, device=labels.device)
-            expanded["labels"] = torch.cat((ignored, labels), dim=1)
+        if expanded_labels is not None:
+            expanded["labels"] = expanded_labels
         grid_thw = expanded.get("image_grid_thw")
         if grid_thw is None:
             raise RuntimeError("GRASP requires image_grid_thw")
-        return expanded, expanded_ids, expanded_context, grid_thw
+        return (
+            expanded,
+            expanded_ids,
+            torch.tensor(prompt_positions, dtype=torch.long, device=input_ids.device),
+            question_ids,
+            question_mask,
+            grid_thw,
+        )
 
     @staticmethod
     def _pack_tokens(embeddings: torch.Tensor, mask: torch.Tensor):
@@ -212,8 +251,11 @@ class GRASPPromptTuningModel(nn.Module):
             packed_mask[index, :length] = 1
         return packed, packed_mask
 
-    def _encode_question(self, language_model, embeddings, mask):
-        packed, packed_mask = self._pack_tokens(embeddings, mask)
+    def _encode_question(self, language_model, question_ids, question_mask):
+        question_embeddings = self.get_input_embeddings()(question_ids)
+        packed, packed_mask = self._pack_tokens(
+            question_embeddings, question_mask.bool()
+        )
         self._encoding_question = True
         try:
             with torch.no_grad():
@@ -254,7 +296,9 @@ class GRASPPromptTuningModel(nn.Module):
         return blocks + self.block_position_encoding.to(blocks).unsqueeze(0)
 
     @contextmanager
-    def _inject_prompt(self, ids, context, grid_thw) -> Iterator[None]:
+    def _inject_prompt(
+        self, ids, prompt_positions, question_ids, question_mask, grid_thw
+    ) -> Iterator[None]:
         language_model = getattr(getattr(self.base_model, "model", None), "language_model", None)
         if language_model is None:
             raise RuntimeError("GRASP requires base_model.model.language_model")
@@ -269,19 +313,23 @@ class GRASPPromptTuningModel(nn.Module):
             if visual_mask is None:
                 visual_mask = ids.eq(self.visual_token_ids[0])
             visual_mask = visual_mask.to(device=embeddings.device, dtype=torch.bool)
-            local_ids = ids.to(embeddings.device)
-            question_mask = context.to(embeddings.device) & ~visual_mask
-            for token_id in self.visual_token_ids:
-                question_mask &= local_ids.ne(token_id)
-            question_mask[:, 0] = False
-            question = self._encode_question(language_model, embeddings, question_mask)
+            question = self._encode_question(
+                language_model,
+                question_ids.to(embeddings.device),
+                question_mask.to(embeddings.device),
+            )
             blocks = self._pool_visual(embeddings, visual_mask, grid_thw)
             keys = self.visual_key_projection(blocks.float())
             query = self.text_query_projection(question.float())
             scores = torch.einsum("bnh,bh->bn", keys, query) / math.sqrt(self.bottleneck_dim)
             weights = entmax15(scores)
             prompt = torch.einsum("bn,nd->bd", weights, self.prompt_prototypes).to(embeddings)
-            kwargs["inputs_embeds"] = torch.cat((prompt.unsqueeze(1), embeddings[:, 1:]), dim=1)
+            updated_embeddings = embeddings.clone()
+            batch_indices = torch.arange(embeddings.shape[0], device=embeddings.device)
+            updated_embeddings[
+                batch_indices, prompt_positions.to(embeddings.device)
+            ] = prompt
+            kwargs["inputs_embeds"] = updated_embeddings
             entropy = -(weights.clamp_min(1e-12) * weights.clamp_min(1e-12).log()).sum(1)
             self.debug_context = {
                 "grasp_zero_weight_fraction": weights.eq(0).float().mean().detach(),
@@ -294,7 +342,9 @@ class GRASPPromptTuningModel(nn.Module):
             if not self._forward_audited:
                 print(
                     "[GRASP_FORWARD_AUDIT] blocks=%d bottleneck=%d alpha=1.5 "
-                    "question=frozen_llm_last_hidden_mean visual=post_merger prompt_tokens=1 pass=True"
+                    "question=raw_question_only_frozen_llm_last_hidden_mean "
+                    "visual=post_merger prompt_placement=after_visual_segment "
+                    "prompt_tokens=1 pass=True"
                     % (self.block_count, self.bottleneck_dim)
                 )
                 self._forward_audited = True
@@ -307,13 +357,13 @@ class GRASPPromptTuningModel(nn.Module):
             handle.remove()
 
     def forward(self, **kwargs):
-        expanded, ids, context, grid = self._expand_inputs(kwargs)
-        with self._inject_prompt(ids, context, grid):
+        expanded, ids, positions, question_ids, question_mask, grid = self._expand_inputs(kwargs)
+        with self._inject_prompt(ids, positions, question_ids, question_mask, grid):
             return self.base_model(**expanded)
 
     def generate(self, **kwargs):
-        expanded, ids, context, grid = self._expand_inputs(kwargs)
-        with self._inject_prompt(ids, context, grid):
+        expanded, ids, positions, question_ids, question_mask, grid = self._expand_inputs(kwargs)
+        with self._inject_prompt(ids, positions, question_ids, question_mask, grid):
             return self.base_model.generate(**expanded)
 
     def save_grasp(self, output_dir: str | Path) -> None:
@@ -328,8 +378,10 @@ class GRASPPromptTuningModel(nn.Module):
             "prompt_init_std": self.prompt_init_std,
             "init_seed": self.init_seed,
             "hidden_size": self.hidden_size,
+            "question_source": "raw_question_only",
+            "prompt_placement": "after_visual_segment",
             "prompt_length": 1,
-            "question_encoder": "frozen_llm_last_hidden_mean",
+            "question_encoder": "raw_question_only_frozen_llm_last_hidden_mean",
             "visual_source": "post_merger_grid",
             "position_encoding": "fixed_2d_sincos",
             "approximation_notes": [

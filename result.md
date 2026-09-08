@@ -148,3 +148,6 @@ This file is the concise experiment memory shared by the user and Codex. The com
 - 2026-09-07 PathVQA question-only / w/o visual CA seed44：保持同初始化、Q10、P20/A_t10、Layer17静态视觉Prompt和文本写入头，只将`Z=Q+CA(Q,V,V)`改为`Z=Q`；Validation为**57.6290/89.7280/25.6222**。相对完整QDPT-D768 seed44显著下降**1.9332 Overall**（237/358，McNemar `p=7.98e-7`，图像簇配对95% CI[-2.7582,-1.1009]），Yes/No -1.3120、Free-form -2.5526，`where`-9.7800。剩余问题Prompt支路训练健康，视觉CA相关诊断严格为0。结论：问题条件Prompt本身有效，但正确视觉K/V读取额外提供稳定且尤其重要的空间证据；结合视觉K/V错配-7.03，现有证据形成“关闭会降、错配大降、正确对齐最佳”的机制闭环，保留Directional Visual CA且不追加该消融seed。
 - 2026-09-07 Electrical QDPT-D768首次启动失败：CPU测试通过后，私有训练数据的8个JSON路径以tuple传给只识别list的公共数据管线，`normalize_json_paths()`在首个batch前报`os.fspath(tuple)`类型错误；无训练、checkpoint或分数，不能解释为模型失败。修复同时令`normalize_json_paths()`和`load_jsons()`支持list/tuple多路径输入并增加双JSON来源回归测试；保持原实验名与配置原样重跑。
 - Electrical QDPT第二次启动仍在训练前失败：JSON tuple修复后，4个图片根目录tuple进入同样只识别list的`build_image_mapping()`，最终触发`os.path.join(tuple, image_file)`。仍无训练或有效结果。完整修复将图片根目录也统一支持list/tuple，并要求在再次启动前使用真实8个JSON和4个目录完成无模型路径解析预检。
+## GRASP Reproduction Audit
+
+- 2026-09-08：初版PathVQA GRASP近似复现为**45.0871 Overall /82.9120 Yes-No /7.3708 Free-form**，2.633M参数。分支有梯度但Entmax末段零权重率为0、归一化熵0.9798，退化为近均匀区域平均；3轮后损失仍下降且Prompt范数仅2.03增至2.08。事后代码审计确认Prompt被放在完整chat开头而非视觉Token段，查询也混入chat模板而非纯问题Token，因此该结果只记录为初版实现失败，不能作为GRASP公平基线或架构否定。当前容器没有SLAKE GRASP结果产物，不得误记为已完成。

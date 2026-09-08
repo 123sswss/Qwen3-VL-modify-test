@@ -1251,6 +1251,62 @@ run_pathvqa_qdpt_d768_unified_v20_rng_control_seed44() {
     pathvqa unified_static_visual_rng_control 44
 }
 
+run_pathvqa_qdpt_d768_marathon_seed44() {
+  local experiment_name="pathvqa_qdpt_d768_question_q10_l17_p20_s8_av10_marathon10_seed44"
+  local output_dir
+  output_dir="$(available_output_dir \
+    "$PATHVQA_DYNAMIC_PROMPT_OUTPUT_ROOT" \
+    "${experiment_name}_${RUN_DATE}")"
+  mkdir -p "$output_dir"
+  echo "[QDPT_D768_MARATHON_CONFIG] dataset=pathvqa experiment=$experiment_name seed=44 data_seed=42 anchors=17 private_text_prompt=20 text_workspace_anchor=10 private_visual_prompt=8 visual_workspace_anchor=10 workspace=10x768 query_source=question_attention_pooling visual_conditioning=cross_attention visual_kv=full_current_anchor_tokens static_visual_write=true visual_dynamic_write=false expected_trainable=7805184 epochs=10 scheduler=linear scheduler_horizon_epochs=10 epoch3_not_bitwise_replication_of_three_epoch_schedule=true full_validation_epochs=3,4,5,6,7,8,9,10 compact_progress=$output_dir/marathon_progress.tsv output=$output_dir"
+  (
+    cd "$ROOT_DIR" || exit 1
+    python -m unittest \
+      test_dynamic_prompt_tuning.py \
+      test_sparse_visual_mmrl.py \
+      test_pathvqa_directional_interventions.py \
+      test_pathvqa_marathon_validation.py || exit 1
+    python -m pathvqa.train_dynamic_prompt \
+      --model-path "$MODEL_PATH" \
+      --data-root "$PATHVQA_DATA_ROOT" \
+      --cache-dir "$PATHVQA_CACHE_ROOT" \
+      --output-dir "$output_dir" \
+      --experiment-name "$experiment_name" \
+      --prompt-length 20 \
+      --attention-dim 256 \
+      --attention-heads 8 \
+      --sparse-visual \
+      --sparse-visual-anchor-layers 17 \
+      --sparse-visual-rep-tokens 8 \
+      --sparse-visual-attention-dim 128 \
+      --sparse-visual-heads 4 \
+      --sparse-visual-lr 3e-5 \
+      --shared-s-text-mode none \
+      --directional-concat-workspace \
+      --no-directional-visual-dynamic-write \
+      --directional-query-source question_attention_pooling \
+      --directional-static-visual-write \
+      --workspace-tokens 10 \
+      --workspace-dim 768 \
+      --workspace-heads 16 \
+      --workspace-lr 1e-4 \
+      --epochs 10 \
+      --seed 44 \
+      --data-seed 42 \
+      --prompt-lr 0.3 \
+      --dynamic-lr 3e-4 \
+      --batch-size 2 \
+      --gradient-accumulation 16 \
+      --dataloader-workers 2 \
+      --expected-trainable-parameters 7805184 \
+      --marathon-validation \
+      --marathon-validation-start-epoch 3 \
+      2>&1 | tee "$output_dir/train.log"
+  ) || return 1
+
+  python -c 'import csv,pathlib,sys; root=pathlib.Path(sys.argv[1]); rows=list(csv.DictReader((root/"marathon_progress.tsv").open(encoding="utf-8"),delimiter="\t")); expected=list(range(3,11)); actual=[int(row["epoch"]) for row in rows if row["status"]=="complete"]; assert actual==expected,(actual,expected); assert all((root/"eval_validation"/f"epoch_{epoch}"/"pathvqa_summary.json").is_file() for epoch in expected); print("[QDPT_D768_MARATHON_PASS] epochs=3-10 progress="+str(root/"marathon_progress.tsv"))' "$output_dir" || return 1
+}
+
 run_electrical_qdpt_d768_seed44() {
   local experiment_name="electrical_qdpt_d768_question_q10_l17_p20_s8_av10_seed44"
   local output_dir
@@ -2699,6 +2755,9 @@ case "$RUN_TARGET" in
     ;;
   pathvqa_qdpt_d768_unified_v20_rng_control_seed44)
     run_pathvqa_qdpt_d768_unified_v20_rng_control_seed44 || failures=$((failures + 1))
+    ;;
+  pathvqa_qdpt_d768_marathon_seed44)
+    run_pathvqa_qdpt_d768_marathon_seed44 || failures=$((failures + 1))
     ;;
   electrical_qdpt_d768_seed44)
     run_electrical_qdpt_d768_seed44 || failures=$((failures + 1))

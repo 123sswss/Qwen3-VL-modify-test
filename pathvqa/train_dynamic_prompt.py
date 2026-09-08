@@ -22,6 +22,7 @@ from transformers import (
 )
 
 from pathvqa.data_pipeline import PathVQADataCollator, PathVQADataset
+from pathvqa.marathon_validation import PathVQAMarathonValidator
 from loraTest.data_protocol import (
     TRAIN_EXPERT_IMAGE_DIRS,
     TRAIN_EXPERT_JSONS,
@@ -202,6 +203,7 @@ class DynamicPromptCallback(TrainerCallback):
         output_dir: Path,
         dataset_name: str = "pathvqa",
         logging_steps: int = 20,
+        marathon_validator: PathVQAMarathonValidator | None = None,
     ) -> None:
         self.processor = processor
         self.output_dir = output_dir
@@ -211,6 +213,7 @@ class DynamicPromptCallback(TrainerCallback):
         self.logging_steps = int(logging_steps)
         self.completed_epochs = set()
         self.diagnostics_path = output_dir / "dynamic_prompt_diagnostics.jsonl"
+        self.marathon_validator = marathon_validator
 
     def on_pre_optimizer_step(self, args, state, control, **kwargs):
         if not state.is_world_process_zero:
@@ -357,6 +360,25 @@ class DynamicPromptCallback(TrainerCallback):
             f"[{self.log_prefix}_DYNAMIC_PROMPT_EPOCH_CHECKPOINT] epoch={epoch_id} "
             f"global_step={int(state.global_step)} saved={checkpoint_dir}"
         )
+        if (
+            self.marathon_validator is not None
+            and self.marathon_validator.should_validate(epoch_id)
+        ):
+            latest_loss = next(
+                (
+                    float(row["loss"])
+                    for row in reversed(state.log_history)
+                    if "loss" in row
+                ),
+                None,
+            )
+            self.marathon_validator.evaluate(
+                kwargs["model"],
+                epoch=epoch_id,
+                global_step=int(state.global_step),
+                checkpoint=checkpoint_dir,
+                latest_train_loss=latest_loss,
+            )
         return control
 
 
@@ -465,6 +487,16 @@ def parse_args(dataset_name: str = "pathvqa") -> argparse.Namespace:
     parser.add_argument("--dataloader-workers", type=int, default=2)
     parser.add_argument("--max-length", type=int, default=2048)
     parser.add_argument("--expected-trainable-parameters", type=int)
+    parser.add_argument(
+        "--marathon-validation",
+        action="store_true",
+        help="Run full PathVQA Validation after each scheduled late epoch.",
+    )
+    parser.add_argument(
+        "--marathon-validation-start-epoch",
+        type=int,
+        default=3,
+    )
     args = parser.parse_args()
     if (
         min(
@@ -519,6 +551,14 @@ def parse_args(dataset_name: str = "pathvqa") -> argparse.Namespace:
         parser.error("Learning rates must be positive")
     if args.dataloader_workers < 0:
         parser.error("--dataloader-workers must be non-negative")
+    if args.marathon_validation and dataset_name != "pathvqa":
+        parser.error("--marathon-validation is supported only for PathVQA")
+    if args.marathon_validation and not (
+        1 <= args.marathon_validation_start_epoch <= args.epochs
+    ):
+        parser.error(
+            "--marathon-validation-start-epoch must be within --epochs"
+        )
     if args.shared_s_text_mode != "none" and not args.sparse_visual:
         parser.error("Shared-S text modes require --sparse-visual")
     if args.shared_workspace and not args.sparse_visual:
@@ -769,13 +809,28 @@ def main(dataset_name: str = "pathvqa") -> int:
         f"workspace_lr={args.workspace_lr} "
         f"train_soft_prompt={model.soft_prompt is not None} "
         f"text_workspace_anchor_tokens={model.workspace_prompt_length} "
+        f"marathon_validation={args.marathon_validation} "
+        f"marathon_validation_start_epoch={args.marathon_validation_start_epoch if args.marathon_validation else 0} "
         "pretrained_prompt_checkpoint=False stage1=False"
     )
 
+    marathon_validator = (
+        PathVQAMarathonValidator(
+            processor=processor,
+            data_root=args.data_root,
+            cache_dir=args.cache_dir,
+            output_dir=args.output_dir,
+            start_epoch=args.marathon_validation_start_epoch,
+            total_epochs=args.epochs,
+        )
+        if args.marathon_validation
+        else None
+    )
     callback = DynamicPromptCallback(
         processor,
         args.output_dir,
         dataset_name=dataset_name,
+        marathon_validator=marathon_validator,
     )
     trainer = DynamicPromptTrainer(
         model=model,
@@ -996,6 +1051,17 @@ def main(dataset_name: str = "pathvqa") -> int:
         ),
         "seed": args.seed,
         "data_seed": args.data_seed,
+        "marathon_validation": (
+            {
+                "split": "validation",
+                "start_epoch": args.marathon_validation_start_epoch,
+                "end_epoch": args.epochs,
+                "progress_log": str(args.output_dir / "marathon_progress.tsv"),
+                "scheduler_horizon_epochs": args.epochs,
+            }
+            if args.marathon_validation
+            else None
+        ),
         "train_metrics": result.metrics,
     }
     with (args.output_dir / "train_report.json").open("w", encoding="utf-8") as handle:

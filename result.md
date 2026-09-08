@@ -151,3 +151,8 @@ This file is the concise experiment memory shared by the user and Codex. The com
 ## GRASP Reproduction Audit
 
 - 2026-09-08：初版PathVQA GRASP近似复现为**45.0871 Overall /82.9120 Yes-No /7.3708 Free-form**，2.633M参数。分支有梯度但Entmax末段零权重率为0、归一化熵0.9798，退化为近均匀区域平均；3轮后损失仍下降且Prompt范数仅2.03增至2.08。事后代码审计确认Prompt被放在完整chat开头而非视觉Token段，查询也混入chat模板而非纯问题Token，因此该结果只记录为初版实现失败，不能作为GRASP公平基线或架构否定。当前容器没有SLAKE GRASP结果产物，不得误记为已完成。
+## 2026-09-08 PathVQA QDPT-D768 10-epoch marathon
+
+- 10-epoch线性调度下，epoch3-10 Overall依次为56.4467、57.2456、58.6675、58.7794、57.4852、57.1817、57.3894、57.1657；峰值出现在epoch6。
+- epoch6峰值58.7794仍比原3-epoch seed44的59.5622低0.7828，epoch10低2.3965。训练loss继续下降而Validation不再改善，说明追加训练预算没有转化为泛化收益。
+- 结论：保留原3-epoch线性调度，不继续QDPT长程训练，也不在当前收尾阶段做学习率扫参。曲线见`figures/qdpt_d768_marathon_curve.svg`。

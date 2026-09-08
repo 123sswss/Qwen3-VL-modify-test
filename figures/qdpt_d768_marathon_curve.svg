@@ -1,0 +1,188 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1400" height="900" viewBox="0 0 1400 900">
+<defs>
+  <filter id="shadow" x="-10%" y="-10%" width="120%" height="130%"><feDropShadow dx="0" dy="5" stdDeviation="9" flood-color="#173B3A" flood-opacity="0.08"/></filter>
+</defs>
+<style>
+  .background { fill: #F4F1E8; }
+  .panel rect { fill: #FFFEFA; stroke: #D8D3C6; stroke-width: 1.2; filter: url(#shadow); }
+  .title { font: 700 34px Georgia, serif; fill: #183C3A; letter-spacing: -0.4px; }
+  .kicker { font: 700 13px "Trebuchet MS", sans-serif; fill: #B6532D; letter-spacing: 2.2px; }
+  .note { font: 15px "Trebuchet MS", sans-serif; fill: #5E655F; }
+  .panel-title { font: 700 21px Georgia, serif; fill: #243D3B; }
+  .panel-subtitle { font: 13px "Trebuchet MS", sans-serif; fill: #7A7F78; }
+  .tick { font: 12px "Trebuchet MS", sans-serif; fill: #737A74; }
+  .axis-label { font: 12px "Trebuchet MS", sans-serif; fill: #515A55; }
+  .grid { stroke: #E5E1D8; stroke-width: 1; }
+  .series { fill: none; stroke-width: 3.4; stroke-linecap: round; stroke-linejoin: round; }
+  .point { stroke: #FFFEFA; stroke-width: 2; }
+  .peak-point { stroke: #F1B24A; stroke-width: 4; }
+  .value { font: 700 11px "Trebuchet MS", sans-serif; fill: #3F4B46; }
+  .baseline { stroke: #C64B3C; stroke-width: 2; stroke-dasharray: 8 7; }
+  .baseline-label { font: 700 12px "Trebuchet MS", sans-serif; fill: #B23E31; }
+  .footer { font: 13px "Trebuchet MS", sans-serif; fill: #68706A; }
+</style>
+<rect class="background" width="1400" height="900"/>
+<text class="kicker" x="55" y="48">QDPT CONVERGENCE DIAGNOSTIC</text>
+<text class="title" x="55" y="91">Validation peaks early while training fit keeps improving</text>
+<text class="note" x="55" y="120">QDPT-D768 · seed 44 · 10-epoch linear schedule · complete Validation at epochs 3–10</text>
+<g class="panel"><rect x="55" y="145" width="630" height="310" rx="20"/>
+<text class="panel-title" x="83" y="181">Overall accuracy</text>
+<text class="panel-subtitle" x="83" y="204">Full PathVQA Validation</text>
+<line class="grid" x1="127" y1="403.00" x2="657" y2="403.00"/>
+<text class="tick" x="114" y="408.00" text-anchor="end">56</text>
+<line class="grid" x1="127" y1="360.14" x2="657" y2="360.14"/>
+<text class="tick" x="114" y="365.14" text-anchor="end">57</text>
+<line class="grid" x1="127" y1="317.29" x2="657" y2="317.29"/>
+<text class="tick" x="114" y="322.29" text-anchor="end">58</text>
+<line class="grid" x1="127" y1="274.43" x2="657" y2="274.43"/>
+<text class="tick" x="114" y="279.43" text-anchor="end">59</text>
+<line class="grid" x1="127" y1="231.57" x2="657" y2="231.57"/>
+<text class="tick" x="114" y="236.57" text-anchor="end">60</text>
+<text class="tick" x="127.00" y="432" text-anchor="middle">3</text>
+<text class="tick" x="202.71" y="432" text-anchor="middle">4</text>
+<text class="tick" x="278.43" y="432" text-anchor="middle">5</text>
+<text class="tick" x="354.14" y="432" text-anchor="middle">6</text>
+<text class="tick" x="429.86" y="432" text-anchor="middle">7</text>
+<text class="tick" x="505.57" y="432" text-anchor="middle">8</text>
+<text class="tick" x="581.29" y="432" text-anchor="middle">9</text>
+<text class="tick" x="657.00" y="432" text-anchor="middle">10</text>
+<text class="axis-label" x="392.00" y="451" text-anchor="middle">Epoch</text>
+<line class="baseline" x1="127" y1="250.33" x2="657" y2="250.33"/>
+<text class="baseline-label" x="653" y="241.33" text-anchor="end">Original 3-epoch: 59.56</text>
+<polyline class="series" stroke="#167D77" points="127.00,383.86 202.71,349.62 278.43,288.68 354.14,283.88 429.86,339.35 505.57,352.36 581.29,343.45 657.00,353.04"/>
+<circle class="point" cx="127.00" cy="383.86" r="4.5" fill="#167D77"/>
+<text class="value" x="127.00" y="371.86" text-anchor="middle">56.45</text>
+<circle class="point" cx="202.71" cy="349.62" r="4.5" fill="#167D77"/>
+<text class="value" x="202.71" y="337.62" text-anchor="middle">57.25</text>
+<circle class="point" cx="278.43" cy="288.68" r="4.5" fill="#167D77"/>
+<text class="value" x="278.43" y="276.68" text-anchor="middle">58.67</text>
+<circle class="peak-point" cx="354.14" cy="283.88" r="6" fill="#167D77"/>
+<text class="value" x="354.14" y="271.88" text-anchor="middle">58.78</text>
+<circle class="point" cx="429.86" cy="339.35" r="4.5" fill="#167D77"/>
+<text class="value" x="429.86" y="327.35" text-anchor="middle">57.49</text>
+<circle class="point" cx="505.57" cy="352.36" r="4.5" fill="#167D77"/>
+<text class="value" x="505.57" y="340.36" text-anchor="middle">57.18</text>
+<circle class="point" cx="581.29" cy="343.45" r="4.5" fill="#167D77"/>
+<text class="value" x="581.29" y="331.45" text-anchor="middle">57.39</text>
+<circle class="point" cx="657.00" cy="353.04" r="4.5" fill="#167D77"/>
+<text class="value" x="657.00" y="341.04" text-anchor="middle">57.17</text>
+</g><g class="panel"><rect x="715" y="145" width="630" height="310" rx="20"/>
+<text class="panel-title" x="743" y="181">Yes / No accuracy</text>
+<text class="panel-subtitle" x="743" y="204">Binary-answer behavior</text>
+<line class="grid" x1="787" y1="403.00" x2="1317" y2="403.00"/>
+<text class="tick" x="774" y="408.00" text-anchor="end">89</text>
+<line class="grid" x1="787" y1="343.00" x2="1317" y2="343.00"/>
+<text class="tick" x="774" y="348.00" text-anchor="end">90</text>
+<line class="grid" x1="787" y1="283.00" x2="1317" y2="283.00"/>
+<text class="tick" x="774" y="288.00" text-anchor="end">91</text>
+<line class="grid" x1="787" y1="223.00" x2="1317" y2="223.00"/>
+<text class="tick" x="774" y="228.00" text-anchor="end">92</text>
+<text class="tick" x="787.00" y="432" text-anchor="middle">3</text>
+<text class="tick" x="862.71" y="432" text-anchor="middle">4</text>
+<text class="tick" x="938.43" y="432" text-anchor="middle">5</text>
+<text class="tick" x="1014.14" y="432" text-anchor="middle">6</text>
+<text class="tick" x="1089.86" y="432" text-anchor="middle">7</text>
+<text class="tick" x="1165.57" y="432" text-anchor="middle">8</text>
+<text class="tick" x="1241.29" y="432" text-anchor="middle">9</text>
+<text class="tick" x="1317.00" y="432" text-anchor="middle">10</text>
+<text class="axis-label" x="1052.00" y="451" text-anchor="middle">Epoch</text>
+<polyline class="series" stroke="#D56A3A" points="787.00,343.96 862.71,367.00 938.43,307.48 1014.14,269.08 1089.86,320.92 1165.57,297.88 1241.29,319.00 1317.00,299.80"/>
+<circle class="point" cx="787.00" cy="343.96" r="4.5" fill="#D56A3A"/>
+<text class="value" x="787.00" y="331.96" text-anchor="middle">89.98</text>
+<circle class="point" cx="862.71" cy="367.00" r="4.5" fill="#D56A3A"/>
+<text class="value" x="862.71" y="355.00" text-anchor="middle">89.60</text>
+<circle class="point" cx="938.43" cy="307.48" r="4.5" fill="#D56A3A"/>
+<text class="value" x="938.43" y="295.48" text-anchor="middle">90.59</text>
+<circle class="peak-point" cx="1014.14" cy="269.08" r="6" fill="#D56A3A"/>
+<text class="value" x="1014.14" y="257.08" text-anchor="middle">91.23</text>
+<circle class="point" cx="1089.86" cy="320.92" r="4.5" fill="#D56A3A"/>
+<text class="value" x="1089.86" y="308.92" text-anchor="middle">90.37</text>
+<circle class="point" cx="1165.57" cy="297.88" r="4.5" fill="#D56A3A"/>
+<text class="value" x="1165.57" y="285.88" text-anchor="middle">90.75</text>
+<circle class="point" cx="1241.29" cy="319.00" r="4.5" fill="#D56A3A"/>
+<text class="value" x="1241.29" y="307.00" text-anchor="middle">90.40</text>
+<circle class="point" cx="1317.00" cy="299.80" r="4.5" fill="#D56A3A"/>
+<text class="value" x="1317.00" y="287.80" text-anchor="middle">90.72</text>
+</g><g class="panel"><rect x="55" y="485" width="630" height="310" rx="20"/>
+<text class="panel-title" x="83" y="521">Free-form accuracy</text>
+<text class="panel-subtitle" x="83" y="544">Open-answer behavior</text>
+<line class="grid" x1="127" y1="729.15" x2="657" y2="729.15"/>
+<text class="tick" x="114" y="734.15" text-anchor="end">23</text>
+<line class="grid" x1="127" y1="673.77" x2="657" y2="673.77"/>
+<text class="tick" x="114" y="678.77" text-anchor="end">25</text>
+<line class="grid" x1="127" y1="618.38" x2="657" y2="618.38"/>
+<text class="tick" x="114" y="623.38" text-anchor="end">27</text>
+<line class="grid" x1="127" y1="563.00" x2="657" y2="563.00"/>
+<text class="tick" x="114" y="568.00" text-anchor="end">29</text>
+<text class="tick" x="127.00" y="772" text-anchor="middle">3</text>
+<text class="tick" x="202.71" y="772" text-anchor="middle">4</text>
+<text class="tick" x="278.43" y="772" text-anchor="middle">5</text>
+<text class="tick" x="354.14" y="772" text-anchor="middle">6</text>
+<text class="tick" x="429.86" y="772" text-anchor="middle">7</text>
+<text class="tick" x="505.57" y="772" text-anchor="middle">8</text>
+<text class="tick" x="581.29" y="772" text-anchor="middle">9</text>
+<text class="tick" x="657.00" y="772" text-anchor="middle">10</text>
+<text class="axis-label" x="392.00" y="791" text-anchor="middle">Epoch</text>
+<polyline class="series" stroke="#3366A3" points="127.00,729.00 202.71,674.21 278.43,622.96 354.14,634.45 429.86,682.16 505.57,709.56 581.29,688.35 657.00,709.56"/>
+<circle class="point" cx="127.00" cy="729.00" r="4.5" fill="#3366A3"/>
+<text class="value" x="127.00" y="717.00" text-anchor="middle">23.01</text>
+<circle class="point" cx="202.71" cy="674.21" r="4.5" fill="#3366A3"/>
+<text class="value" x="202.71" y="662.21" text-anchor="middle">24.98</text>
+<circle class="peak-point" cx="278.43" cy="622.96" r="6" fill="#3366A3"/>
+<text class="value" x="278.43" y="610.96" text-anchor="middle">26.83</text>
+<circle class="point" cx="354.14" cy="634.45" r="4.5" fill="#3366A3"/>
+<text class="value" x="354.14" y="622.45" text-anchor="middle">26.42</text>
+<circle class="point" cx="429.86" cy="682.16" r="4.5" fill="#3366A3"/>
+<text class="value" x="429.86" y="670.16" text-anchor="middle">24.70</text>
+<circle class="point" cx="505.57" cy="709.56" r="4.5" fill="#3366A3"/>
+<text class="value" x="505.57" y="697.56" text-anchor="middle">23.71</text>
+<circle class="point" cx="581.29" cy="688.35" r="4.5" fill="#3366A3"/>
+<text class="value" x="581.29" y="676.35" text-anchor="middle">24.47</text>
+<circle class="point" cx="657.00" cy="709.56" r="4.5" fill="#3366A3"/>
+<text class="value" x="657.00" y="697.56" text-anchor="middle">23.71</text>
+</g><g class="panel"><rect x="715" y="485" width="630" height="310" rx="20"/>
+<text class="panel-title" x="743" y="521">Latest logged train loss</text>
+<text class="panel-subtitle" x="743" y="544">Training fit continues after validation peaks</text>
+<line class="grid" x1="787" y1="743.00" x2="1317" y2="743.00"/>
+<text class="tick" x="774" y="748.00" text-anchor="end">5</text>
+<line class="grid" x1="787" y1="707.00" x2="1317" y2="707.00"/>
+<text class="tick" x="774" y="712.00" text-anchor="end">6</text>
+<line class="grid" x1="787" y1="671.00" x2="1317" y2="671.00"/>
+<text class="tick" x="774" y="676.00" text-anchor="end">7</text>
+<line class="grid" x1="787" y1="635.00" x2="1317" y2="635.00"/>
+<text class="tick" x="774" y="640.00" text-anchor="end">8</text>
+<line class="grid" x1="787" y1="599.00" x2="1317" y2="599.00"/>
+<text class="tick" x="774" y="604.00" text-anchor="end">9</text>
+<line class="grid" x1="787" y1="563.00" x2="1317" y2="563.00"/>
+<text class="tick" x="774" y="568.00" text-anchor="end">10</text>
+<text class="tick" x="787.00" y="772" text-anchor="middle">3</text>
+<text class="tick" x="862.71" y="772" text-anchor="middle">4</text>
+<text class="tick" x="938.43" y="772" text-anchor="middle">5</text>
+<text class="tick" x="1014.14" y="772" text-anchor="middle">6</text>
+<text class="tick" x="1089.86" y="772" text-anchor="middle">7</text>
+<text class="tick" x="1165.57" y="772" text-anchor="middle">8</text>
+<text class="tick" x="1241.29" y="772" text-anchor="middle">9</text>
+<text class="tick" x="1317.00" y="772" text-anchor="middle">10</text>
+<text class="axis-label" x="1052.00" y="791" text-anchor="middle">Epoch</text>
+<polyline class="series" stroke="#8B5E3C" points="787.00,575.79 862.71,598.67 938.43,611.23 1014.14,633.20 1089.86,608.58 1165.57,665.10 1241.29,710.83 1317.00,728.72"/>
+<circle class="peak-point" cx="787.00" cy="575.79" r="6" fill="#8B5E3C"/>
+<text class="value" x="787.00" y="563.79" text-anchor="middle">9.64</text>
+<circle class="point" cx="862.71" cy="598.67" r="4.5" fill="#8B5E3C"/>
+<text class="value" x="862.71" y="586.67" text-anchor="middle">9.01</text>
+<circle class="point" cx="938.43" cy="611.23" r="4.5" fill="#8B5E3C"/>
+<text class="value" x="938.43" y="599.23" text-anchor="middle">8.66</text>
+<circle class="point" cx="1014.14" cy="633.20" r="4.5" fill="#8B5E3C"/>
+<text class="value" x="1014.14" y="621.20" text-anchor="middle">8.05</text>
+<circle class="point" cx="1089.86" cy="608.58" r="4.5" fill="#8B5E3C"/>
+<text class="value" x="1089.86" y="596.58" text-anchor="middle">8.73</text>
+<circle class="point" cx="1165.57" cy="665.10" r="4.5" fill="#8B5E3C"/>
+<text class="value" x="1165.57" y="653.10" text-anchor="middle">7.16</text>
+<circle class="point" cx="1241.29" cy="710.83" r="4.5" fill="#8B5E3C"/>
+<text class="value" x="1241.29" y="698.83" text-anchor="middle">5.89</text>
+<circle class="point" cx="1317.00" cy="728.72" r="4.5" fill="#8B5E3C"/>
+<text class="value" x="1317.00" y="716.72" text-anchor="middle">5.40</text>
+</g>
+<line x1="55" y1="835" x2="1345" y2="835" stroke="#D1CCC0"/>
+<text class="footer" x="55" y="866">Peak marathon Overall: 58.78 at epoch 6. The original 3-epoch schedule remains higher at 59.56.</text>
+<text class="footer" x="1345" y="866" text-anchor="end">Different scheduler horizons; baseline shown for reference, not as an earlier point on the same curve.</text>
+</svg>

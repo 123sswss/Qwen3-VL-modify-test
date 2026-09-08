@@ -10,7 +10,7 @@
 - 骨干策略：冻结视觉编码器、视觉 Merger 和 LLM，仅训练 Prompt 与 Directional 模块。
 - 当前最佳已完成单次结果：PathVQA Validation seed44，3 epochs，Overall **59.5622**。
 - 当前可靠多 seed 结果：PathVQA Validation seeds44/45/46，Overall **59.0030 +/- 0.4859**。
-- 当前 marathon 不是已替代的最佳配置，只用于判断10-epoch预算下的收敛曲线。
+- 10-epoch marathon已完成：最佳为epoch6的58.7794，未超过原3-epoch配置，因此不替代当前最佳配置。
 
 ## 2. 核心源代码位置
 
@@ -153,7 +153,7 @@ RUN_TARGET=pathvqa_directional_concat_workspace_text_dynamic_only_d768_seed44 ba
 RUN_TARGET=pathvqa_qdpt_d768_marathon_seed44 bash run_experiment.sh
 ```
 
-Marathon在epoch3-10逐轮评测完整Validation，实时精简表位于对应输出目录的`marathon_progress.tsv`。它采用10-epoch线性调度，故其中epoch3不是原3-epoch线性调度终点的逐位复现。
+Marathon在epoch3-10逐轮评测完整Validation，实时精简表位于对应输出目录的`marathon_progress.tsv`。它采用10-epoch线性调度，故其中epoch3不是原3-epoch线性调度终点的逐位复现。该实验已于2026-09-08完成，epoch6峰值58.7794，epoch10为57.1657；保留原3-epoch配置。
 
 ## 7. 整理与写作时的事实边界
 
@@ -162,5 +162,5 @@ Marathon在epoch3-10逐轮评测完整Validation，实时精简表位于对应�
 3. 不得把LLM入口描述成只有20个Prompt Token；当前实现是20个私有Token加10个条件锚点，共30个。
 4. 不得声称动态`Z`写回视觉编码器；当前最佳配置只把`Z`写入LLM Prompt。
 5. `dynamic_lr=3e-4`是通用训练器遗留配置，当前Directional模式没有对应参数，论文超参数表不应把它写成有效QDPT学习率。
-6. Marathon完成前不得用其中任何中途分数替换当前最佳配置或三seed主结果。
+6. Marathon峰值低于原3-epoch结果，不得用其中任何分数替换当前最佳配置或三seed主结果。
 7. 当前问题池化不是严格的raw-question-only编码；源码使用`mmrl_gating_mask`选取回答前上下文，再排除视觉模板Token。论文可称question-guided，但若写“only raw question tokens”则与实现不符。

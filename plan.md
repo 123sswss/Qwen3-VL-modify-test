@@ -130,7 +130,7 @@ Sandwich取得明确收益后，仅追加两个同seed、同参数、同初始�
 | Static Prompt Tuning | P20，51.2K 参数 | 样本无关 Prompt 基线 | PathVQA/SLAKE 已有 |
 | Static Visual Prompt | 固定视觉Prompt，不生成LLM动态Prompt | 视觉侧Prompt基线 | 待补PathVQA seed44 |
 | Dual Static Prompt | 静态视觉Prompt + 静态LLM Prompt | 排除收益仅来自双侧增加Prompt | 待补PathVQA seed44 |
-| CoCoOp-style Conditional Prompt | 当前图像特征经轻量Meta-Net生成实例级LLM Prompt，不使用问题Query | 经典图像条件动态Prompt的统一协议近似复现 | **已实现，待补PathVQA seed44** |
+| CoCoOp-style Conditional Prompt | 当前图像特征经轻量Meta-Net生成实例级LLM Prompt，不使用问题Query | 经典图像条件动态Prompt的统一协议近似复现 | **已完成PathVQA seed44：57.4053，873,120参数** |
 | BLIP-2 Q-Former-style Prompt | 可学习静态Q10读取冻结视觉K/V，再映射为LLM Prompt | 经典learned-query视觉桥接的统一协议近似复现 | **优先审计现有learned-query结果，必要时补实现** |
 | GRASP | 问题语义对固定空间块打分，以Entmax稀疏加权空间Prompt原型并生成1个全局Prompt | 同范式直接竞争方法 | **PathVQA已完成39.7508；停止SLAKE与调参** |
 | QDPT-D512/D768 | 问题Q读取视觉K/V并写入LLM Prompt | 本文效率点与主模型 | PathVQA/SLAKE已有 |
@@ -303,9 +303,9 @@ CoTBox-TTT可以计入“同方向Related Work”的文献数量，但**不计�
 | P0 | D768 learned static query | 44 | 证明 question-guided Q 的必要性 |
 | P0 | D768视觉前缀改为`A_v10 + Proj(Z10)`硬拼接 | 44/45/46 | 单卡串行三seed；检验独立动态Z视觉Token能否替代重复的`S_v8+A_v10`静态前缀，并直接得到稳定性结论 |
 | P0 | 最终 D768 复现 | 45/46 | 主方法均值与稳定性 |
-| P0 | Static Visual Prompt | 44 | 新增同范式视觉侧Prompt基线 |
-| P0 | Dual Static Prompt | 44 | 新增双侧静态Prompt基线 |
-| P0 | Image-conditioned Prompt | 44 | 新增不使用问题Query的动态Prompt基线 |
+| P0 | Static Visual Prompt | 44 | 代码已完成，待运行；Layer17插入V20，仅训练20,480个视觉Prompt参数 |
+| P0 | Dual Static Prompt | 44 | 代码已完成，待运行；Layer17 V20 + LLM P20，共训练71,680参数 |
+| Completed | Image-conditioned Prompt | 44 | 已由CoCoOp-style P20/H160覆盖：仅使用post-merger图像均值，不读取问题 |
 | Appendix-complete | Full-Attention LoRA-r8复现 | 44/45/46 | 已完成，仅作为附录跨范式参考 |
 | Cancelled | Full-Attention LoRA-r4/r16 | 44 | 不再运行；不扩展跨范式容量扫描 |
 | P1 | 最终架构正式 Test | 44/45/46 最终 checkpoint | 冻结后仅运行一次 |
@@ -358,7 +358,7 @@ CoTBox-TTT可以计入“同方向Related Work”的文献数量，但**不计�
 - [x] 准备 PathVQA/SLAKE 最终统一启动脚本；实验名编码数据集、D、Query 来源、视觉模式与 seed，统一强制 3 epochs 且只在 epoch 3 全量评估。
 - [x] IA3和补充语义指标已移至审稿后候补；question-only因DRAPE碰撞审计提升为当前必做。
 - [ ] 完成 CoCoOp、MaPLe、Q-Former、LION、MASP、DRAPE与GRASP的碰撞矩阵。
-- [ ] CoCoOp-style Conditional Prompt已实现并通过本地CPU审计，待运行PathVQA seed44：冻结的post-merger视觉Token均值经`2560→160→2560` Meta-Net生成共享图像偏置，加到embedding-row初始化的P20；不读取问题、不插入视觉Prompt，双学习率为0.3/3e-4，共873,120参数，统一三epoch且仅epoch3完整Validation。
+- [x] CoCoOp-style Conditional Prompt已完成PathVQA seed44：冻结的post-merger视觉Token均值经`2560→160→2560` Meta-Net生成共享图像偏置，加到embedding-row初始化的P20；不读取问题、不插入视觉Prompt，双学习率0.3/3e-4，共873,120参数。固定epoch3 Validation为57.4053/89.8560/25.0479，保留为轻量经典动态Prompt主基线。
 - [ ] 审计现有learned-static-query是否足以作为BLIP-2 Q-Former-style近似复现；满足则复用57.1817结果，不满足才补最小查询块并重跑。
 - [ ] 审计 PathVQA/SLAKE 同领域论文的 split 与 metric。
 - [x] 根据 no-static-visual与RNG-controlled V20结果冻结最终`S8+A_v10`结构和论文主张。

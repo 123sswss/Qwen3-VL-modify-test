@@ -511,6 +511,78 @@ run_pathvqa_prompt_tuning_seed44() {
   cat "$output_dir/selected_result.tsv"
 }
 
+run_pathvqa_static_prompt_baseline_variant_seed44() {
+  local variant="$1"
+  local experiment_name text_prompt_tokens expected_trainable
+  case "$variant" in
+    static_visual)
+      experiment_name="pathvqa_static_visual_prompt_l17_v20_seed44"
+      text_prompt_tokens=0
+      expected_trainable=20480
+      ;;
+    dual_static)
+      experiment_name="pathvqa_dual_static_prompt_l17_v20_p20_seed44"
+      text_prompt_tokens=20
+      expected_trainable=71680
+      ;;
+    *)
+      echo "[ERR] Unknown static Prompt baseline variant: $variant" >&2
+      return 2
+      ;;
+  esac
+  if ! python -c 'import datasets, pyarrow' >/dev/null 2>&1; then
+    echo "[ERR] PathVQA static Prompt baselines require datasets and pyarrow." >&2
+    return 2
+  fi
+
+  local output_dir
+  output_dir="$(available_output_dir "$PATHVQA_PROMPT_OUTPUT_ROOT" "${experiment_name}_${RUN_DATE}")"
+  mkdir -p "$output_dir"
+  echo "[PATHVQA_STATIC_PROMPT_BASELINE] variant=$variant experiment=$experiment_name seed=44 data_seed=42 text_prompt_tokens=$text_prompt_tokens visual_prompt_tokens=20 visual_anchor_0based=17 visual_anchor_natural=18 text_lr=0.3 visual_lr=1e-4 expected_trainable=$expected_trainable epochs=3 full_evaluation=epoch3_validation_only output=$output_dir"
+  (
+    cd "$ROOT_DIR" || exit 1
+    python -m unittest test_prompt_tuning.py || exit 1
+    python -m pathvqa.train_prompt_tuning \
+      --model-path "$MODEL_PATH" \
+      --data-root "$PATHVQA_DATA_ROOT" \
+      --cache-dir "$PATHVQA_CACHE_ROOT" \
+      --output-dir "$output_dir" \
+      --experiment-name "$experiment_name" \
+      --prompt-length "$text_prompt_tokens" \
+      --visual-prompt-length 20 \
+      --visual-anchor-layer 17 \
+      --epochs 3 \
+      --seed 44 \
+      --data-seed 42 \
+      --learning-rate 0.3 \
+      --visual-learning-rate 1e-4 \
+      --expected-trainable-parameters "$expected_trainable" \
+      --batch-size "${PATHVQA_PROMPT_BATCH_SIZE:-2}" \
+      --gradient-accumulation "${PATHVQA_PROMPT_GRAD_ACCUM:-16}" \
+      --dataloader-workers "${PATHVQA_PROMPT_WORKERS:-2}" \
+      2>&1 | tee "$output_dir/train.log"
+  ) || return 1
+
+  run_pathvqa_prompt_eval \
+    "$output_dir/checkpoints/epoch_3" \
+    validation \
+    "$output_dir/eval_validation/epoch_3" \
+    "$output_dir/eval_validation_epoch_3.log"
+}
+
+run_pathvqa_static_prompt_baselines_seed44() {
+  local suite_failures=0
+  run_pathvqa_static_prompt_baseline_variant_seed44 static_visual \
+    || suite_failures=$((suite_failures + 1))
+  run_pathvqa_static_prompt_baseline_variant_seed44 dual_static \
+    || suite_failures=$((suite_failures + 1))
+  if [ "$suite_failures" -ne 0 ]; then
+    echo "[ERR] PathVQA static Prompt baseline failures=$suite_failures; both variants were attempted." >&2
+    return 1
+  fi
+  echo "[PATHVQA_STATIC_PROMPT_BASELINES_DONE] variants=static_visual,dual_static seed=44"
+}
+
 run_pathvqa_dynamic_prompt_eval() {
   local checkpoint="$1"
   local split="$2"
@@ -2846,6 +2918,15 @@ case "$RUN_TARGET" in
     ;;
   pathvqa_prompt_tuning_seed44)
     run_pathvqa_prompt_tuning_seed44 || failures=$((failures + 1))
+    ;;
+  pathvqa_static_visual_prompt_seed44)
+    run_pathvqa_static_prompt_baseline_variant_seed44 static_visual || failures=$((failures + 1))
+    ;;
+  pathvqa_dual_static_prompt_seed44)
+    run_pathvqa_static_prompt_baseline_variant_seed44 dual_static || failures=$((failures + 1))
+    ;;
+  pathvqa_static_prompt_baselines_seed44)
+    run_pathvqa_static_prompt_baselines_seed44 || failures=$((failures + 1))
     ;;
   pathvqa_dynamic_prompt_seed44)
     run_pathvqa_dynamic_prompt_seed44 || failures=$((failures + 1))

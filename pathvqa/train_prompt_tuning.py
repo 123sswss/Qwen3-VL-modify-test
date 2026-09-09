@@ -68,6 +68,46 @@ class EpochPromptCheckpointCallback(TrainerCallback):
         return control
 
 
+class DualRatePromptTrainer(Trainer):
+    def __init__(self, *args, text_prompt_lr: float, visual_prompt_lr: float, **kwargs):
+        self.text_prompt_lr = float(text_prompt_lr)
+        self.visual_prompt_lr = float(visual_prompt_lr)
+        super().__init__(*args, **kwargs)
+
+    def create_optimizer(self):
+        if self.optimizer is not None:
+            return self.optimizer
+        groups = self.model.trainable_parameter_groups()
+        optimizer_groups = []
+        if groups["text_prompt"]:
+            optimizer_groups.append({
+                "params": groups["text_prompt"],
+                "lr": self.text_prompt_lr,
+                "weight_decay": 0.0,
+                "group_name": "text_prompt",
+            })
+        if groups["visual_prompt"]:
+            optimizer_groups.append({
+                "params": groups["visual_prompt"],
+                "lr": self.visual_prompt_lr,
+                "weight_decay": 0.0,
+                "group_name": "visual_prompt",
+            })
+        grouped = [parameter for group in optimizer_groups for parameter in group["params"]]
+        active = [parameter for parameter in self.model.parameters() if parameter.requires_grad]
+        if {id(parameter) for parameter in grouped} != {id(parameter) for parameter in active}:
+            raise RuntimeError("Static Prompt parameters must belong to one optimizer group")
+        self.optimizer = torch.optim.AdamW(
+            optimizer_groups, betas=(0.9, 0.999), eps=1e-8
+        )
+        print(
+            "[STATIC_PROMPT_OPTIMIZER] "
+            f"text_lr={self.text_prompt_lr} text_tensors={len(groups['text_prompt'])} "
+            f"visual_lr={self.visual_prompt_lr} visual_tensors={len(groups['visual_prompt'])}"
+        )
+        return self.optimizer
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Static Prompt Tuning for Qwen3-VL on PathVQA"
@@ -86,19 +126,27 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--experiment-name", default="pathvqa_prompt_tuning_len20")
     parser.add_argument("--prompt-length", type=int, default=20)
+    parser.add_argument("--visual-prompt-length", type=int, default=0)
+    parser.add_argument("--visual-anchor-layer", type=int, default=17)
     parser.add_argument("--epochs", type=int, default=3)
     parser.add_argument("--seed", type=int, default=44)
     parser.add_argument("--data-seed", type=int, default=42)
     parser.add_argument("--learning-rate", type=float, default=0.3)
+    parser.add_argument("--visual-learning-rate", type=float, default=1e-4)
+    parser.add_argument("--expected-trainable-parameters", type=int)
     parser.add_argument("--batch-size", type=int, default=2)
     parser.add_argument("--gradient-accumulation", type=int, default=16)
     parser.add_argument("--dataloader-workers", type=int, default=2)
     parser.add_argument("--max-length", type=int, default=2048)
     args = parser.parse_args()
-    if args.prompt_length < 1 or args.epochs < 1:
-        parser.error("--prompt-length and --epochs must be positive")
-    if args.learning_rate <= 0.0:
-        parser.error("--learning-rate must be positive")
+    if args.prompt_length < 0 or args.visual_prompt_length < 0 or args.epochs < 1:
+        parser.error("Prompt lengths must be non-negative and --epochs positive")
+    if args.prompt_length == 0 and args.visual_prompt_length == 0:
+        parser.error("At least one text or visual Prompt is required")
+    if args.visual_anchor_layer < 0:
+        parser.error("--visual-anchor-layer must be non-negative")
+    if args.learning_rate <= 0.0 or args.visual_learning_rate <= 0.0:
+        parser.error("Prompt learning rates must be positive")
     if args.batch_size < 1 or args.gradient_accumulation < 1:
         parser.error("batch size and gradient accumulation must be positive")
     if args.dataloader_workers < 0:
@@ -124,7 +172,13 @@ def main() -> int:
         trust_remote_code=True,
     )
     base_model.config.use_cache = False
-    model = StaticPromptTuningModel(base_model, args.prompt_length, args.seed)
+    model = StaticPromptTuningModel(
+        base_model,
+        args.prompt_length,
+        args.seed,
+        visual_prompt_length=args.visual_prompt_length,
+        visual_anchor_layers=(args.visual_anchor_layer,),
+    )
     dataset = PathVQADataset(
         processor=processor,
         data_root=args.data_root,
@@ -136,7 +190,17 @@ def main() -> int:
         max_length=args.max_length,
     )
     trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    expected = args.prompt_length * model.soft_prompt.shape[-1]
+    expected = (
+        args.prompt_length * model.get_input_embeddings().weight.shape[-1]
+        + args.visual_prompt_length
+        * (
+            model.static_visual_prompt.visual_dim
+            if model.static_visual_prompt is not None
+            else 0
+        )
+    )
+    if args.expected_trainable_parameters is not None:
+        expected = args.expected_trainable_parameters
     if trainable != expected:
         raise RuntimeError(
             f"Trainable parameter audit failed: expected={expected} actual={trainable}"
@@ -144,13 +208,16 @@ def main() -> int:
     print(
         "[PATHVQA_PROMPT_TUNING_CONFIG] "
         f"prompt_length={args.prompt_length} "
-        f"hidden_size={model.soft_prompt.shape[-1]} trainable={trainable} "
-        f"epochs={args.epochs} lr={args.learning_rate} "
+        f"hidden_size={model.get_input_embeddings().weight.shape[-1]} "
+        f"visual_prompt_length={args.visual_prompt_length} "
+        f"visual_anchor_layer={args.visual_anchor_layer} trainable={trainable} "
+        f"epochs={args.epochs} text_lr={args.learning_rate} "
+        f"visual_lr={args.visual_learning_rate} "
         f"seed={args.seed} data_seed={args.data_seed}"
     )
 
     callback = EpochPromptCheckpointCallback(processor, args.output_dir)
-    trainer = Trainer(
+    trainer = DualRatePromptTrainer(
         model=model,
         args=TrainingArguments(
             output_dir=str(args.output_dir / "trainer"),
@@ -176,6 +243,8 @@ def main() -> int:
         data_collator=PromptTuningCollator(processor),
         processing_class=processor,
         callbacks=[callback],
+        text_prompt_lr=args.learning_rate,
+        visual_prompt_lr=args.visual_learning_rate,
     )
     result = trainer.train()
     final_dir = args.output_dir / "final"
@@ -186,6 +255,8 @@ def main() -> int:
         "experiment": args.experiment_name,
         "dataset": "PathVQA",
         "prompt_length": args.prompt_length,
+        "visual_prompt_length": args.visual_prompt_length,
+        "visual_anchor_layer": args.visual_anchor_layer,
         "trainable_parameters": trainable,
         "seed": args.seed,
         "data_seed": args.data_seed,

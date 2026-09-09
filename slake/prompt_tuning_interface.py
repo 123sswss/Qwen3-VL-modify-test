@@ -49,6 +49,12 @@ class PromptTuningModelInterface:
         self.model = StaticPromptTuningModel(
             base_model,
             prompt_length=int(config["prompt_length"]),
+            visual_prompt_length=int(
+                (config.get("static_visual_prompt") or {}).get("prompt_length", 0)
+            ),
+            visual_anchor_layers=tuple(
+                (config.get("static_visual_prompt") or {}).get("anchor_layers", (17,))
+            ),
         )
         self.model.load_prompt(checkpoint)
         self.model.eval()
@@ -56,7 +62,9 @@ class PromptTuningModelInterface:
         self.last_generation_timing = None
         print(
             "[prompt-tuning] "
-            f"loaded={checkpoint} prompt_length={self.model.prompt_length}"
+            f"loaded={checkpoint} prompt_length={self.model.prompt_length} "
+            f"visual_prompt_length="
+            f"{self.model.static_visual_prompt.prompt_length if self.model.static_visual_prompt is not None else 0}"
         )
 
     def infer(
@@ -95,4 +103,3 @@ class PromptTuningModelInterface:
         return self.processor.batch_decode(
             generated, skip_special_tokens=True
         )[0].strip()
-

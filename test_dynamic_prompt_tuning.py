@@ -507,6 +507,83 @@ class DynamicPromptTuningTest(unittest.TestCase):
             },
         )
 
+    def test_directional_sandwich_places_prompts_around_visual_segment(self):
+        model = DynamicPromptTuningModel(
+            _FakeMultimodalModel(),
+            tokenizer=_FakeTokenizer(),
+            prompt_length=2,
+            init_seed=5,
+            attention_dim=4,
+            num_heads=2,
+            sparse_visual_anchor_layers=(1,),
+            sparse_visual_rep_tokens=2,
+            sparse_visual_attention_dim=4,
+            sparse_visual_heads=2,
+            workspace_tokens=3,
+            workspace_dim=8,
+            workspace_heads=2,
+            directional_concat_workspace=True,
+            directional_sandwich_text_prompt=True,
+        )
+        batch = {
+            "input_ids": torch.tensor([[7, 8, 9, 10, 2, 3]]),
+            "attention_mask": torch.ones(1, 6, dtype=torch.long),
+            "labels": torch.tensor([[-100, -100, -100, -100, -100, 3]]),
+            "mmrl_gating_mask": torch.tensor(
+                [[True, False, False, False, True, False]], dtype=torch.bool
+            ),
+        }
+        expanded, expanded_ids, expanded_context = model._expand_inputs(batch)
+        torch.testing.assert_close(
+            expanded_ids,
+            torch.tensor([[7, 0, 0, 8, 9, 10, 0, 0, 0, 2, 3]]),
+        )
+        torch.testing.assert_close(
+            expanded["labels"],
+            torch.tensor(
+                [[-100, -100, -100, -100, -100, -100, -100, -100, -100, -100, 3]]
+            ),
+        )
+        torch.testing.assert_close(
+            expanded_context,
+            torch.tensor(
+                [[True, False, False, False, False, False, False, False, False, True, False]]
+            ),
+        )
+        self.assertTrue(bool(expanded["attention_mask"].all()))
+
+        workspace = torch.randn(1, 3, 8)
+        model.sparse_visual.shared_workspace_text_memory = lambda: workspace
+        output = model(**batch)
+        embeddings = model.base_model.model.language_model.last_embeddings
+        expected_original = model.get_input_embeddings()(
+            torch.tensor([[7, 8, 9, 10, 2, 3]])
+        )
+        torch.testing.assert_close(embeddings[:, 0], expected_original[:, 0])
+        torch.testing.assert_close(embeddings[:, 3:6], expected_original[:, 1:4])
+        torch.testing.assert_close(embeddings[:, 9:], expected_original[:, 4:])
+        torch.testing.assert_close(
+            embeddings[:, 1:3].float(), model.soft_prompt.unsqueeze(0)
+        )
+        torch.testing.assert_close(
+            embeddings[:, 6:9].float(), model.workspace_text_anchor.unsqueeze(0)
+        )
+        output.loss.backward()
+        self.assertGreater(float(model.soft_prompt.grad.norm()), 0.0)
+        self.assertGreater(float(model.workspace_text_anchor.grad.norm()), 0.0)
+
+        with tempfile.TemporaryDirectory() as directory:
+            model.save_dynamic_prompt(Path(directory))
+            config = json.loads(
+                (Path(directory) / "dynamic_prompt_config.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            self.assertEqual(
+                config["directional_concat_workspace"]["text_prompt_placement"],
+                "static_before_visual_dynamic_after_visual",
+            )
+
     def test_directional_concat_workspace_checkpoint_round_trip(self):
         kwargs = dict(
             tokenizer=_FakeTokenizer(),

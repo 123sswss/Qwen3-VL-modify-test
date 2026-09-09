@@ -444,6 +444,11 @@ def parse_args(dataset_name: str = "pathvqa") -> argparse.Namespace:
     parser.add_argument("--shared-workspace", action="store_true")
     parser.add_argument("--directional-concat-workspace", action="store_true")
     parser.add_argument(
+        "--directional-sandwich-text-prompt",
+        action="store_true",
+        help="Place P before the visual segment and dynamic Prompt after it.",
+    )
+    parser.add_argument(
         "--directional-visual-dynamic-write",
         action=argparse.BooleanOptionalAction,
         default=True,
@@ -577,6 +582,11 @@ def parse_args(dataset_name: str = "pathvqa") -> argparse.Namespace:
         )
     if args.directional_concat_workspace and not args.sparse_visual_anchor_layers:
         parser.error("--directional-concat-workspace requires visual anchors")
+    if args.directional_sandwich_text_prompt and not args.directional_concat_workspace:
+        parser.error(
+            "--directional-sandwich-text-prompt requires "
+            "--directional-concat-workspace"
+        )
     if not args.directional_concat_workspace and not args.directional_visual_dynamic_write:
         parser.error(
             "--no-directional-visual-dynamic-write requires "
@@ -746,6 +756,7 @@ def main(dataset_name: str = "pathvqa") -> int:
         ),
         directional_query_source=args.directional_query_source,
         directional_visual_conditioning=args.directional_visual_conditioning,
+        directional_sandwich_text_prompt=args.directional_sandwich_text_prompt,
     )
     dataset = _build_train_dataset(dataset_name, args, processor)
     groups = model.trainable_parameter_groups()
@@ -798,6 +809,7 @@ def main(dataset_name: str = "pathvqa") -> int:
         f"directional_direct_visual_z_tokens={args.directional_direct_visual_z_tokens if args.directional_concat_workspace else False} "
         f"directional_query_source={args.directional_query_source if args.directional_concat_workspace else 'none'} "
         f"directional_visual_conditioning={args.directional_visual_conditioning if args.directional_concat_workspace else 'none'} "
+        f"directional_text_prompt_placement={'static_before_visual_dynamic_after_visual' if args.directional_sandwich_text_prompt else 'all_prompts_before_chat'} "
         f"workspace_tokens={args.workspace_tokens if args.shared_workspace else 0} "
         f"directional_workspace_tokens={args.workspace_tokens if args.directional_concat_workspace else 0} "
         f"workspace_dim={args.workspace_dim if (args.shared_workspace or args.directional_concat_workspace) else 0} "

@@ -99,9 +99,15 @@ DRAPE 已在多模态持续指令微调中证明：任务级静态 Prompt 难以
 
 重新训练一个不读取视觉 K/V 的受控版本，保持问题 `Q10`、静态锚点、文本写入头、训练协议和输出 Prompt 接口不变，令 `Z=Q`，而不是 `Z=Q+CA(Q,V,V)`。视觉 K/V 错配只能证明错误证据具有破坏性，不能替代“完全不使用视觉 CA”的正交消融。该实验直接借鉴 DRAPE 的 `w/o Cross-Modal Attention` 设计，用来回答 QDPT 的动态收益是否确实包含问题引导的视觉检索，而非仅由问题侧条件 Prompt 产生。
 
+#### D. 最后一个高优先级位置控制：Sandwich Prompt
+
+固定最终 D768、seed44、`Q10/Z10`、Layer17 `S8+A_v10`、全部初始化和学习率，只把 LLM 输入从 `[P20; A_t10+DeltaP10; Visual; Question]` 改为 `[P20; Visual; A_t10+DeltaP10; Question]`。其中 `P20` 紧邻 `<|vision_start|>` 之前，动态10个 Prompt 紧邻 `<|vision_end|>` 之后，不进入视觉包装内部。该实验检验因果 LLM 中 Prompt 位置是否限制视觉 Token 对任务先验的可见性，以及将问题条件化证据放在问题之前、视觉之后是否更符合功能分工。实验名为 `pathvqa_qdpt_d768_question_q10_l17_p20_s8_av10_sandwich_seed44`，只跑 PathVQA 三轮固定协议。
+
+`P20 + Dynamic20` 槽数实验降为低优先级：现有结构本来就是20个静态领域 Prompt 加10个动态证据 Prompt，当前先隔离位置效应，不把槽数和位置同时改变。除非 Sandwich 获得明确收益或审稿阶段要求 Prompt 数量敏感性，否则不运行20+20。
+
 ### 3.3 架构冻结规则
 
-Day 1 结束后不再增加：
+完成上述已批准的 Sandwich 位置控制后不再增加：
 
 - 新的 CA、Q-Former、Workspace Block、共享 S、Gate、分类器或 MoE。
 - 新的视觉插入层、Prompt 槽数、注意力头数、MLP 深度或残差缩放扫描。

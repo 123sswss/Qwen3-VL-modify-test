@@ -203,6 +203,12 @@ class DynamicPromptTuningModelInterface:
             directional_visual_conditioning=str(
                 directional_visual_conditioning
             ),
+            directional_sandwich_text_prompt=(
+                directional_workspace.get("text_prompt_placement")
+                == "static_before_visual_dynamic_after_visual"
+                if directional_workspace is not None
+                else False
+            ),
         )
         self.model.load_dynamic_prompt(checkpoint)
         self.model.eval()

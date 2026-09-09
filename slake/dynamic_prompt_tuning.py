@@ -200,6 +200,7 @@ class DynamicPromptTuningModel(nn.Module):
         directional_direct_visual_z_tokens: bool = False,
         directional_query_source: str = "question_attention_pooling",
         directional_visual_conditioning: str = "cross_attention",
+        directional_sandwich_text_prompt: bool = False,
     ) -> None:
         super().__init__()
         if prompt_length < 1:
@@ -227,6 +228,10 @@ class DynamicPromptTuningModel(nn.Module):
             )
         if directional_concat_workspace and not sparse_visual_anchor_layers:
             raise ValueError("Directional Concat Workspace requires visual anchors")
+        if directional_sandwich_text_prompt and not directional_concat_workspace:
+            raise ValueError(
+                "Sandwich text Prompt placement requires Directional Concat Workspace"
+            )
         if workspace_text_attention_dim % workspace_text_heads != 0:
             raise ValueError(
                 "workspace_text_attention_dim must be divisible by heads"
@@ -254,6 +259,9 @@ class DynamicPromptTuningModel(nn.Module):
         self.directional_query_source = str(directional_query_source)
         self.directional_visual_conditioning = str(
             directional_visual_conditioning
+        )
+        self.directional_sandwich_text_prompt = bool(
+            directional_sandwich_text_prompt
         )
         for parameter in self.base_model.parameters():
             parameter.requires_grad = False
@@ -700,26 +708,146 @@ class DynamicPromptTuningModel(nn.Module):
             dtype=torch.bool,
             device=context_mask.device,
         )
-        expanded_ids = torch.cat((prompt_ids, input_ids), dim=1)
-        expanded_attention = torch.cat((prompt_attention, attention_mask), dim=1)
-        expanded_context = torch.cat((prompt_context, context_mask.bool()), dim=1)
+        if self.directional_sandwich_text_prompt:
+            vision_start_id = self.visual_template_token_ids[1]
+            vision_end_id = self.visual_template_token_ids[2]
+            expanded_ids_rows = []
+            expanded_attention_rows = []
+            expanded_context_rows = []
+            expanded_label_rows = []
+            for batch_index in range(batch_size):
+                start_positions = input_ids[batch_index].eq(vision_start_id).nonzero(
+                    as_tuple=True
+                )[0]
+                end_positions = input_ids[batch_index].eq(vision_end_id).nonzero(
+                    as_tuple=True
+                )[0]
+                if start_positions.numel() != 1 or end_positions.numel() != 1:
+                    raise RuntimeError(
+                        "Sandwich text Prompt placement requires exactly one visual "
+                        f"segment per sample; sample={batch_index} "
+                        f"vision_start={start_positions.numel()} "
+                        f"vision_end={end_positions.numel()}"
+                    )
+                start = int(start_positions.item())
+                end = int(end_positions.item())
+                if end <= start:
+                    raise RuntimeError(
+                        "Sandwich text Prompt placement found invalid visual boundaries"
+                    )
+
+                def insert_slots(
+                    row: torch.Tensor,
+                    static_slots: torch.Tensor,
+                    dynamic_slots: torch.Tensor,
+                ) -> torch.Tensor:
+                    return torch.cat(
+                        (
+                            row[:start],
+                            static_slots,
+                            row[start : end + 1],
+                            dynamic_slots,
+                            row[end + 1 :],
+                        ),
+                        dim=0,
+                    )
+
+                expanded_ids_rows.append(
+                    insert_slots(
+                        input_ids[batch_index],
+                        prompt_ids[batch_index, : self.private_prompt_length],
+                        prompt_ids[batch_index, self.private_prompt_length :],
+                    )
+                )
+                expanded_attention_rows.append(
+                    insert_slots(
+                        attention_mask[batch_index],
+                        prompt_attention[
+                            batch_index, : self.private_prompt_length
+                        ],
+                        prompt_attention[
+                            batch_index, self.private_prompt_length :
+                        ],
+                    )
+                )
+                expanded_context_rows.append(
+                    insert_slots(
+                        context_mask[batch_index].bool(),
+                        prompt_context[batch_index, : self.private_prompt_length],
+                        prompt_context[batch_index, self.private_prompt_length :],
+                    )
+                )
+                if labels is not None:
+                    ignored = torch.full(
+                        (self.prompt_length,),
+                        -100,
+                        dtype=labels.dtype,
+                        device=labels.device,
+                    )
+                    expanded_label_rows.append(
+                        insert_slots(
+                            labels[batch_index],
+                            ignored[: self.private_prompt_length],
+                            ignored[self.private_prompt_length :],
+                        )
+                    )
+            expanded_ids = torch.stack(expanded_ids_rows)
+            expanded_attention = torch.stack(expanded_attention_rows)
+            expanded_context = torch.stack(expanded_context_rows)
+        else:
+            expanded_ids = torch.cat((prompt_ids, input_ids), dim=1)
+            expanded_attention = torch.cat((prompt_attention, attention_mask), dim=1)
+            expanded_context = torch.cat((prompt_context, context_mask.bool()), dim=1)
         expanded = {
             **batch,
             "input_ids": expanded_ids,
             "attention_mask": expanded_attention,
         }
         if labels is not None:
-            ignored = torch.full(
-                (batch_size, self.prompt_length),
-                -100,
-                dtype=labels.dtype,
-                device=labels.device,
-            )
-            expanded["labels"] = torch.cat((ignored, labels), dim=1)
+            if self.directional_sandwich_text_prompt:
+                expanded["labels"] = torch.stack(expanded_label_rows)
+            else:
+                ignored = torch.full(
+                    (batch_size, self.prompt_length),
+                    -100,
+                    dtype=labels.dtype,
+                    device=labels.device,
+                )
+                expanded["labels"] = torch.cat((ignored, labels), dim=1)
         return expanded, expanded_ids, expanded_context
 
+    def _sandwich_prompt_masks(
+        self,
+        expanded_ids: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        static_mask = torch.zeros_like(expanded_ids, dtype=torch.bool)
+        dynamic_mask = torch.zeros_like(expanded_ids, dtype=torch.bool)
+        vision_start_id = self.visual_template_token_ids[1]
+        vision_end_id = self.visual_template_token_ids[2]
+        for batch_index in range(expanded_ids.shape[0]):
+            start_positions = expanded_ids[batch_index].eq(vision_start_id).nonzero(
+                as_tuple=True
+            )[0]
+            end_positions = expanded_ids[batch_index].eq(vision_end_id).nonzero(
+                as_tuple=True
+            )[0]
+            if start_positions.numel() != 1 or end_positions.numel() != 1:
+                raise RuntimeError("Expanded Sandwich input lost its visual boundaries")
+            start = int(start_positions.item())
+            end = int(end_positions.item())
+            static_start = start - self.private_prompt_length
+            dynamic_end = end + 1 + self.workspace_prompt_length
+            if static_start < 0 or dynamic_end > expanded_ids.shape[1]:
+                raise RuntimeError("Expanded Sandwich Prompt slots are out of bounds")
+            static_mask[batch_index, static_start:start] = True
+            dynamic_mask[batch_index, end + 1 : dynamic_end] = True
+        return static_mask, dynamic_mask
+
     @contextmanager
-    def _inject_prompt_embeddings(self) -> Iterator[None]:
+    def _inject_prompt_embeddings(
+        self,
+        expanded_ids: torch.Tensor,
+    ) -> Iterator[None]:
         embeddings = self.get_input_embeddings()
 
         def replace_prompt(_module: nn.Module, _inputs: Any, output: torch.Tensor):
@@ -750,6 +878,18 @@ class DynamicPromptTuningModel(nn.Module):
                     prompt = torch.cat((private_prompt, workspace_anchor), dim=1)
                 else:
                     prompt = private_prompt
+            if self.directional_sandwich_text_prompt:
+                static_mask, dynamic_mask = self._sandwich_prompt_masks(
+                    expanded_ids.to(output.device)
+                )
+                replaced = output.clone()
+                replaced[static_mask] = prompt[
+                    :, : self.private_prompt_length
+                ].reshape(-1, output.shape[-1])
+                replaced[dynamic_mask] = prompt[
+                    :, self.private_prompt_length :
+                ].reshape(-1, output.shape[-1])
+                return replaced
             return torch.cat((prompt, output[:, self.prompt_length :]), dim=1)
 
         handle = embeddings.register_forward_hook(replace_prompt)
@@ -811,15 +951,30 @@ class DynamicPromptTuningModel(nn.Module):
                     self.workspace_text_anchor,
                     delta_scale=self._directional_text_delta_scale,
                 ).to(device=inputs_embeds.device, dtype=inputs_embeds.dtype)
-                private_prompt = inputs_embeds[:, : self.private_prompt_length]
-                dynamic_prompt = torch.cat(
-                    (private_prompt, workspace_prompt),
-                    dim=1,
-                )
-                kwargs["inputs_embeds"] = torch.cat(
-                    (dynamic_prompt, inputs_embeds[:, self.prompt_length :]),
-                    dim=1,
-                )
+                if self.directional_sandwich_text_prompt:
+                    static_mask, dynamic_mask = self._sandwich_prompt_masks(
+                        expanded_ids.to(inputs_embeds.device)
+                    )
+                    private_prompt = inputs_embeds[static_mask].view(
+                        inputs_embeds.shape[0],
+                        self.private_prompt_length,
+                        inputs_embeds.shape[-1],
+                    )
+                    replaced = inputs_embeds.clone()
+                    replaced[dynamic_mask] = workspace_prompt.reshape(
+                        -1, inputs_embeds.shape[-1]
+                    )
+                    kwargs["inputs_embeds"] = replaced
+                else:
+                    private_prompt = inputs_embeds[:, : self.private_prompt_length]
+                    dynamic_prompt = torch.cat(
+                        (private_prompt, workspace_prompt),
+                        dim=1,
+                    )
+                    kwargs["inputs_embeds"] = torch.cat(
+                        (dynamic_prompt, inputs_embeds[:, self.prompt_length :]),
+                        dim=1,
+                    )
                 self.debug_context = {
                     **{
                         f"workspace_text_{key}": value
@@ -865,7 +1020,8 @@ class DynamicPromptTuningModel(nn.Module):
             ids = expanded_ids.to(inputs_embeds.device)
             for token_id in self.visual_template_token_ids:
                 text_mask = text_mask & ids.ne(token_id)
-            text_mask[:, : self.prompt_length] = False
+            if not self.directional_sandwich_text_prompt:
+                text_mask[:, : self.prompt_length] = False
 
             visual_memory = _masked_mean(inputs_embeds, visual_mask, "visual")
             text_memory = _masked_mean(inputs_embeds, text_mask, "text")
@@ -1012,7 +1168,8 @@ class DynamicPromptTuningModel(nn.Module):
         text_mask = expanded_context.to(device=ids.device, dtype=torch.bool)
         for token_id in self.visual_template_token_ids:
             text_mask = text_mask & ids.ne(token_id)
-        text_mask[:, : self.prompt_length] = False
+        if not self.directional_sandwich_text_prompt:
+            text_mask[:, : self.prompt_length] = False
         token_embeddings = self.get_input_embeddings()(ids)
         text_memory = _masked_mean(token_embeddings, text_mask, "sparse visual text")
         vision_end_id = self.visual_template_token_ids[2]
@@ -1073,7 +1230,7 @@ class DynamicPromptTuningModel(nn.Module):
         expanded_ids: torch.Tensor,
         expanded_context: torch.Tensor,
     ) -> Iterator[None]:
-        with self._inject_prompt_embeddings():
+        with self._inject_prompt_embeddings(expanded_ids):
             with self._inject_sparse_visual(expanded_ids, expanded_context):
                 with self._inject_dynamic_prompt(expanded_ids, expanded_context):
                     yield
@@ -1200,6 +1357,11 @@ class DynamicPromptTuningModel(nn.Module):
                     ),
                     "private_text_prompt_tokens": self.private_prompt_length,
                     "text_workspace_anchor_tokens": self.workspace_prompt_length,
+                    "text_prompt_placement": (
+                        "static_before_visual_dynamic_after_visual"
+                        if self.directional_sandwich_text_prompt
+                        else "all_prompts_before_chat"
+                    ),
                     "query": self.sparse_visual.query_source,
                     "visual_conditioning": (
                         self.sparse_visual.visual_conditioning

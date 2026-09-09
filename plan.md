@@ -128,8 +128,8 @@ DRAPE 已在多模态持续指令微调中证明：任务级静态 Prompt 难以
 | Static Prompt Tuning | P20，51.2K 参数 | 样本无关 Prompt 基线 | PathVQA/SLAKE 已有 |
 | Static Visual Prompt | 固定视觉Prompt，不生成LLM动态Prompt | 视觉侧Prompt基线 | 待补PathVQA seed44 |
 | Dual Static Prompt | 静态视觉Prompt + 静态LLM Prompt | 排除收益仅来自双侧增加Prompt | 待补PathVQA seed44 |
-| Image-conditioned Prompt | 图像池化后生成LLM Prompt，不使用问题Query | 样本条件但非问题引导的动态Prompt | 待补PathVQA seed44 |
-| Learned-query Prompt | 静态Q10读取视觉K/V后生成LLM Prompt | Q-Former式通用Query对照 | PathVQA已有 |
+| CoCoOp-style Conditional Prompt | 当前图像特征经轻量Meta-Net生成实例级LLM Prompt，不使用问题Query | 经典图像条件动态Prompt的统一协议近似复现 | **待实现并补PathVQA seed44** |
+| BLIP-2 Q-Former-style Prompt | 可学习静态Q10读取冻结视觉K/V，再映射为LLM Prompt | 经典learned-query视觉桥接的统一协议近似复现 | **优先审计现有learned-query结果，必要时补实现** |
 | GRASP | 问题语义对固定空间块打分，以Entmax稀疏加权空间Prompt原型并生成1个全局Prompt | 同范式直接竞争方法 | **必做PathVQA/SLAKE统一协议复现** |
 | QDPT-D512/D768 | 问题Q读取视觉K/V并写入LLM Prompt | 本文效率点与主模型 | PathVQA/SLAKE已有 |
 
@@ -141,6 +141,13 @@ DRAPE 已在多模态持续指令微调中证明：任务级静态 Prompt 难以
 - question-only / w/o visual CA 提升为当前必做机制消融；IA3与补充语义指标仍保留在审稿后候补清单。
 - GRASP优先使用作者正式开源仓库；若无代码，则严格按论文公式独立实现并标注为`GRASP reimplementation under our unified protocol`。固定`h=512`、`alpha=1.5`和低分辨率主配置`N=4`，先做seed44，不替对手进行额外超参数搜索。
 - GRASP论文明确通过冻结LLM前向并mean-pool隐藏状态得到问题向量`q`。统一复现不得悄然替换为Token Embedding pooling；必须如实保留额外text-only LLM前向，并在TTFT与训练时间中单独报告其成本。
+
+#### 经典动态 Prompt 近似复现计划
+
+1. **CoCoOp-style Conditional Prompt**：保留冻结Qwen3-VL、相同PathVQA划分、seed44、三epoch和最终epoch全量评估。由当前图像的冻结视觉特征产生实例条件向量，经轻量Meta-Net生成动态LLM Prompt；不得读取问题Token。输出槽数和静态`P20`接口尽量与QDPT对齐，使比较只回答“图像条件化是否足够”，而不是比较完全不同的Prompt容量。由于原CoCoOp面向CLIP分类，本实验只能命名为`CoCoOp-style`或`CoCoOp-inspired under our generative MLLM protocol`，不得称为官方CoCoOp复现。
+2. **BLIP-2 Q-Former-style Prompt**：使用可学习静态Query读取当前图像的冻结视觉K/V，再将输出映射为动态LLM Prompt，不输入当前问题。先审计已完成的`learned-static-query Q10`是否已满足“learned Query + visual Cross-Attention + LLM Prompt projection”的最小近似边界；若满足，直接复用其PathVQA seed44结果并改用准确名称，不重复训练。若缺少关键Q-Former行为，则只补最小Self-Attention/Cross-Attention查询块，不复制BLIP-2的预训练阶段和全部训练目标。正式名称必须带`Q-Former-style`，不得称为完整BLIP-2复现。
+3. 两项方法均属于**生成式MLLM统一协议下的迁移近似**，目的不是声称忠实复现原始CLIP/BLIP-2成绩，而是检验经典视觉Prompt逻辑能否直接迁移：`Static Prompt -> image-conditioned Prompt -> learned-query visual Prompt -> question-guided QDPT`。
+4. 两项均先只做PathVQA seed44，不扫Prompt长度、Meta-Net宽度、Query数量、层数或学习率。只有实现审计通过且PathVQA结果有效，才考虑迁移SLAKE；失败结果同样进入实验账本。
 
 ### 4.2 附录：不同适配范式参考
 
@@ -171,9 +178,9 @@ Full-Attention LoRA和Visual-Only LoRA保留为不同适配范式的强参考，
 - **DRAPE**：当前最强且最接近的 Related Work。默认 `H=512`、`Lp=10`，由指令分段池化和文本注意力产生 Query，再对视觉 K/V 做 Cross-Attention并生成实例 LLM Prompt；同时面向持续学习加入任务专属生成器、共享 projector 的 null-space 梯度保护和 CLIP prototype 路由。
 - **GRASP**（arXiv:2601.17089v1）：当前最接近且可做统一协议数值比较的直接竞争方法。它将冻结视觉Token网格划分为固定空间块，用冻结LLM提取问题向量，在`h=512`空间计算问题-区域相关性，经`Entmax(alpha=1.5)`得到稀疏权重，再对各空间块绑定的静态Prompt原型加权，生成单个全局Prompt Token写入视觉-语言接口。原文未给出正式代码地址，优先继续检索作者仓库；无仓库时按公式独立复现。
 - **CoTBox-TTT**（arXiv:2511.12446v1）：当前最贴近医学VQA任务与数据集的证据选择工作。其24-token Evidence Prompt驱动冻结VisCoT进行两次框定位，32-token Answer Prompt在原图/裁剪图和EMA Teacher之间逐测试样本优化20轮；覆盖VQA-RAD、SLAKE和PathVQA，但不是一次前向的条件Prompt生成器。
-- CoCoOp：条件 Prompt 的经典范式。
+- CoCoOp：条件 Prompt 的经典范式；按上述CoCoOp-style统一协议近似复现进入主表。
 - MaPLe：多模态/深层 Prompt 学习。
-- BLIP-2 Q-Former：learned query 读取冻结视觉特征。
+- BLIP-2 Q-Former：learned query读取冻结视觉特征；按上述Q-Former-style近似复现进入主表，并与现有learned-static-query实现做一致性审计。
 - LION：双层视觉知识与 soft prompting。
 - MASP：多方面视觉 Query 模块与静态 soft prompt。
 
@@ -349,6 +356,8 @@ CoTBox-TTT可以计入“同方向Related Work”的文献数量，但**不计�
 - [x] 准备 PathVQA/SLAKE 最终统一启动脚本；实验名编码数据集、D、Query 来源、视觉模式与 seed，统一强制 3 epochs 且只在 epoch 3 全量评估。
 - [x] IA3和补充语义指标已移至审稿后候补；question-only因DRAPE碰撞审计提升为当前必做。
 - [ ] 完成 CoCoOp、MaPLe、Q-Former、LION、MASP、DRAPE与GRASP的碰撞矩阵。
+- [ ] 实现并运行PathVQA seed44 CoCoOp-style Conditional Prompt：图像条件化、问题不可见、统一三epoch协议。
+- [ ] 审计现有learned-static-query是否足以作为BLIP-2 Q-Former-style近似复现；满足则复用57.1817结果，不满足才补最小查询块并重跑。
 - [ ] 审计 PathVQA/SLAKE 同领域论文的 split 与 metric。
 - [x] 根据 no-static-visual与RNG-controlled V20结果冻结最终`S8+A_v10`结构和论文主张。
 

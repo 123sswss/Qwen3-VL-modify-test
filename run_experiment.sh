@@ -1380,11 +1380,11 @@ run_qdpt_d768_final_pathvqa_slake_seed44() {
 }
 
 run_pathvqa_grasp_seed44() {
-  local experiment_name="pathvqa_grasp_reimpl_corrected_n4_h512_seed44"
+  local experiment_name="pathvqa_grasp_reimpl_paper_order_n4_h512_seed44"
   local output_dir
   output_dir="$(available_output_dir "$PATHVQA_GRASP_OUTPUT_ROOT" "${experiment_name}_${RUN_DATE}")"
   mkdir -p "$output_dir"
-  echo "[PATHVQA_GRASP_CONFIG] experiment=$experiment_name seed=44 data_seed=42 blocks=4 bottleneck=512 alpha=1.5 prompt_tokens=1 question=raw_question_only_frozen_llm_last_hidden_mean visual=post_merger_grid prompt_placement=after_visual_segment expected_trainable=2632704 epochs=3 split=validation output=$output_dir"
+  echo "[PATHVQA_GRASP_CONFIG] experiment=$experiment_name seed=44 data_seed=42 blocks=4 bottleneck=512 alpha=1.5 prompt_tokens=1 question=raw_question_only_frozen_llm_last_hidden_mean visual=post_merger_grid prompt_placement=before_visual_segment expected_trainable=2632704 epochs=3 split=validation output=$output_dir"
   (
     cd "$ROOT_DIR" || exit 1
     python -m unittest test_grasp_prompt_tuning.py || exit 1

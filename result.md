@@ -156,3 +156,7 @@ This file is the concise experiment memory shared by the user and Codex. The com
 - 10-epoch线性调度下，epoch3-10 Overall依次为56.4467、57.2456、58.6675、58.7794、57.4852、57.1817、57.3894、57.1657；峰值出现在epoch6。
 - epoch6峰值58.7794仍比原3-epoch seed44的59.5622低0.7828，epoch10低2.3965。训练loss继续下降而Validation不再改善，说明追加训练预算没有转化为泛化收益。
 - 结论：保留原3-epoch线性调度，不继续QDPT长程训练，也不在当前收尾阶段做学习率扫参。曲线见`figures/qdpt_d768_marathon_curve.svg`。
+
+## 2026-09-09 GRASP Prompt顺序错误记录
+
+- 修正版查询但错误Prompt顺序的PathVQA GRASP为**40.7254 Overall /74.91 Yes-No /6.64 Free-form**。纯问题Token编码符合论文，但实现成了`[Visual, Prompt, Question]`；论文Eq.(6-7)明确要求`[Prompt, Visual, Question]`。因果LLM中两者不等价，本结果只作为工程负记录，不进入主表，也不能否定GRASP。下一次只修正Prompt到视觉段之前，其余配置不动。

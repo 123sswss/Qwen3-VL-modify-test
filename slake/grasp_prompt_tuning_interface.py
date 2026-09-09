@@ -39,10 +39,10 @@ class GRASPModelInterface:
             config = json.load(handle)
         if config.get("question_source") != "raw_question_only" or config.get(
             "prompt_placement"
-        ) != "after_visual_segment":
+        ) != "before_visual_segment":
             raise ValueError(
                 "This checkpoint uses the superseded GRASP approximation; "
-                "retrain with raw-question encoding and visual-adjacent Prompt placement"
+                "retrain with raw-question encoding and paper-ordered Prompt placement"
             )
         self.processor = AutoProcessor.from_pretrained(
             base_model_path, trust_remote_code=True
@@ -70,7 +70,7 @@ class GRASPModelInterface:
             f"loaded={checkpoint} blocks={self.model.block_count} "
             f"bottleneck={self.model.bottleneck_dim} alpha=1.5 "
             "question=raw_question_only_frozen_llm_last_hidden_mean "
-            "visual=post_merger_grid prompt_placement=after_visual_segment"
+            "visual=post_merger_grid prompt_placement=before_visual_segment"
         )
 
     def reset_inference_state(self) -> None:

@@ -184,7 +184,7 @@ class GRASPPromptTuningModel(nn.Module):
             raise ValueError("mmrl_gating_mask must match input_ids")
         batch_size = input_ids.shape[0]
         pad_id = int(getattr(self.config, "pad_token_id", 0) or 0)
-        vision_end_id = self.visual_token_ids[2]
+        vision_start_id = self.visual_token_ids[1]
         prompt_positions = []
         expanded_ids = torch.full(
             (batch_size, input_ids.shape[1] + 1),
@@ -203,13 +203,13 @@ class GRASPPromptTuningModel(nn.Module):
                 expanded_ids.shape, -100, dtype=labels.dtype, device=labels.device
             )
         for index in range(batch_size):
-            vision_ends = torch.nonzero(
-                input_ids[index].eq(vision_end_id) & attention_mask[index].bool(),
+            vision_starts = torch.nonzero(
+                input_ids[index].eq(vision_start_id) & attention_mask[index].bool(),
                 as_tuple=False,
             ).flatten()
-            if vision_ends.numel() != 1:
+            if vision_starts.numel() != 1:
                 raise RuntimeError("GRASP requires exactly one visual segment per sample")
-            position = int(vision_ends.item()) + 1
+            position = int(vision_starts.item())
             prompt_positions.append(position)
             expanded_ids[index, :position] = input_ids[index, :position]
             expanded_ids[index, position + 1 :] = input_ids[index, position:]
@@ -343,7 +343,7 @@ class GRASPPromptTuningModel(nn.Module):
                 print(
                     "[GRASP_FORWARD_AUDIT] blocks=%d bottleneck=%d alpha=1.5 "
                     "question=raw_question_only_frozen_llm_last_hidden_mean "
-                    "visual=post_merger prompt_placement=after_visual_segment "
+                    "visual=post_merger prompt_placement=before_visual_segment "
                     "prompt_tokens=1 pass=True"
                     % (self.block_count, self.bottleneck_dim)
                 )
@@ -379,7 +379,7 @@ class GRASPPromptTuningModel(nn.Module):
             "init_seed": self.init_seed,
             "hidden_size": self.hidden_size,
             "question_source": "raw_question_only",
-            "prompt_placement": "after_visual_segment",
+            "prompt_placement": "before_visual_segment",
             "prompt_length": 1,
             "question_encoder": "raw_question_only_frozen_llm_last_hidden_mean",
             "visual_source": "post_merger_grid",

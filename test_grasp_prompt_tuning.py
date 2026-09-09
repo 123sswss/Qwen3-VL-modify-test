@@ -104,8 +104,10 @@ class GRASPTest(unittest.TestCase):
         model = GRASPPromptTuningModel(
             base, FakeTokenizer(), block_count=4, bottleneck_dim=4, init_seed=44
         )
-        input_ids = torch.tensor([[11, 10, 10, 10, 10, 12, 20, 21, 22]])
-        labels = torch.tensor([[-100, -100, -100, -100, -100, -100, -100, -100, 22]])
+        input_ids = torch.tensor([[30, 11, 10, 10, 10, 10, 12, 20, 21, 22]])
+        labels = torch.tensor(
+            [[-100, -100, -100, -100, -100, -100, -100, -100, -100, 22]]
+        )
         output = model(
             input_ids=input_ids,
             attention_mask=torch.ones_like(input_ids),
@@ -121,27 +123,29 @@ class GRASPTest(unittest.TestCase):
         self.assertTrue(all(parameter.grad is None for parameter in base.parameters()))
         for parameters in model.trainable_parameter_groups().values():
             self.assertTrue(all(parameter.grad is not None for parameter in parameters))
-        self.assertEqual(tuple(base.model.language_model.last_inputs.shape), (1, 10, 8))
+        self.assertEqual(tuple(base.model.language_model.last_inputs.shape), (1, 11, 8))
         expected_question = base.embedding(torch.tensor([[31, 32]]))
         torch.testing.assert_close(
             base.model.language_model.input_history[0], expected_question
         )
         original = base.embedding(input_ids)
         main_inputs = base.model.language_model.input_history[1]
-        torch.testing.assert_close(main_inputs[:, :6], original[:, :6])
-        torch.testing.assert_close(main_inputs[:, 7:], original[:, 6:])
-        self.assertFalse(torch.equal(main_inputs[:, 6], base.embedding(torch.tensor([[0]]))[:, 0]))
+        torch.testing.assert_close(main_inputs[:, :1], original[:, :1])
+        torch.testing.assert_close(main_inputs[:, 2:], original[:, 1:])
+        self.assertFalse(torch.equal(main_inputs[:, 1], base.embedding(torch.tensor([[0]]))[:, 0]))
         self.assertIn("grasp_zero_weight_fraction", model.debug_context)
 
     def test_prompt_slot_is_unsupervised_and_labels_shift_with_content(self):
         model = GRASPPromptTuningModel(
             FakeBaseModel(), FakeTokenizer(), block_count=4, bottleneck_dim=4
         )
-        labels = torch.tensor([[-100, -100, -100, -100, -100, -100, -100, 21]])
+        labels = torch.tensor(
+            [[-100, -100, -100, -100, -100, -100, -100, -100, 21]]
+        )
         expanded, _, positions, _, _, _ = model._expand_inputs(
             {
-                "input_ids": torch.tensor([[11, 10, 10, 10, 10, 12, 20, 21]]),
-                "attention_mask": torch.ones(1, 8, dtype=torch.long),
+                "input_ids": torch.tensor([[30, 11, 10, 10, 10, 10, 12, 20, 21]]),
+                "attention_mask": torch.ones(1, 9, dtype=torch.long),
                 "labels": labels,
                 "mmrl_gating_mask": labels.eq(-100),
                 "grasp_question_input_ids": torch.tensor([[20]]),
@@ -149,9 +153,9 @@ class GRASPTest(unittest.TestCase):
                 "image_grid_thw": torch.tensor([[1, 4, 4]]),
             }
         )
-        self.assertEqual(positions.tolist(), [6])
-        self.assertEqual(expanded["labels"].tolist()[0], [-100] * 8 + [21])
-        self.assertEqual(expanded["attention_mask"].tolist()[0], [1] * 9)
+        self.assertEqual(positions.tolist(), [1])
+        self.assertEqual(expanded["labels"].tolist()[0], [-100] * 9 + [21])
+        self.assertEqual(expanded["attention_mask"].tolist()[0], [1] * 10)
 
     def test_missing_separate_question_inputs_is_rejected(self):
         model = GRASPPromptTuningModel(

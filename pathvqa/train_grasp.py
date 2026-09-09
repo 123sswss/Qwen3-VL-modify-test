@@ -228,7 +228,7 @@ def main(dataset_name: str = "pathvqa") -> int:
         f"[{display_name.upper()}_GRASP_CONFIG] experiment={args.experiment_name} "
         f"blocks={args.blocks} bottleneck={args.bottleneck_dim} alpha=1.5 "
         f"question=raw_question_only_frozen_llm_last_hidden_mean "
-        f"visual=post_merger_grid prompt_placement=after_visual_segment "
+        f"visual=post_merger_grid prompt_placement=before_visual_segment "
         f"prompt_tokens=1 parameters={counts} total={trainable} "
         f"lr={args.learning_rate} weight_decay=0.01 warmup=0.1 "
         f"epochs={args.epochs} seed={args.seed} data_seed={args.data_seed}"
@@ -275,7 +275,7 @@ def main(dataset_name: str = "pathvqa") -> int:
         "entmax_alpha": 1.5,
         "question_encoder": "raw_question_only_frozen_llm_last_hidden_mean",
         "visual_source": "post_merger_grid",
-        "prompt_placement": "after_visual_segment",
+        "prompt_placement": "before_visual_segment",
         "trainable_parameters": counts,
         "total_trainable_parameters": trainable,
         "learning_rate": args.learning_rate,

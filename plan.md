@@ -103,11 +103,13 @@ DRAPE 已在多模态持续指令微调中证明：任务级静态 Prompt 难以
 
 固定最终 D768、seed44、`Q10/Z10`、Layer17 `S8+A_v10`、全部初始化和学习率，只把 LLM 输入从 `[P20; A_t10+DeltaP10; Visual; Question]` 改为 `[P20; Visual; A_t10+DeltaP10; Question]`。其中 `P20` 紧邻 `<|vision_start|>` 之前，动态10个 Prompt 紧邻 `<|vision_end|>` 之后，不进入视觉包装内部。该实验检验因果 LLM 中 Prompt 位置是否限制视觉 Token 对任务先验的可见性，以及将问题条件化证据放在问题之前、视觉之后是否更符合功能分工。实验名为 `pathvqa_qdpt_d768_question_q10_l17_p20_s8_av10_sandwich_seed44`，只跑 PathVQA 三轮固定协议。
 
+Sandwich取得明确收益后，仅追加两个同seed、同参数、同初始化的位置控制：`[Visual; P20; Dynamic10; Question]`检验静态P是否必须引导视觉Token，`[Dynamic10; Visual; P20; Question]`将20/10两组Prompt的位置完全对调。两项只改变因果顺序，串行目标为`pathvqa_qdpt_d768_prompt_placement_controls_seed44`；任一失败仍继续另一项，默认不自动关机。
+
 `P20 + Dynamic20` 槽数实验降为低优先级：现有结构本来就是20个静态领域 Prompt 加10个动态证据 Prompt，当前先隔离位置效应，不把槽数和位置同时改变。除非 Sandwich 获得明确收益或审稿阶段要求 Prompt 数量敏感性，否则不运行20+20。
 
 ### 3.3 架构冻结规则
 
-完成上述已批准的 Sandwich 位置控制后不再增加：
+完成 Sandwich 及上述两个位置控制后不再增加：
 
 - 新的 CA、Q-Former、Workspace Block、共享 S、Gate、分类器或 MoE。
 - 新的视觉插入层、Prompt 槽数、注意力头数、MLP 深度或残差缩放扫描。

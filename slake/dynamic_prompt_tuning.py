@@ -32,6 +32,12 @@ SHARED_S_TEXT_MODES = (
     "direct_prompt",
     "text_owned_visual_readonly",
 )
+TEXT_PROMPT_PLACEMENTS = (
+    "all_prompts_before_chat",
+    "static_before_visual_dynamic_after_visual",
+    "all_prompts_after_visual",
+    "dynamic_before_visual_static_after_visual",
+)
 
 
 def _masked_mean(
@@ -201,6 +207,7 @@ class DynamicPromptTuningModel(nn.Module):
         directional_query_source: str = "question_attention_pooling",
         directional_visual_conditioning: str = "cross_attention",
         directional_sandwich_text_prompt: bool = False,
+        directional_text_prompt_placement: str | None = None,
     ) -> None:
         super().__init__()
         if prompt_length < 1:
@@ -228,9 +235,32 @@ class DynamicPromptTuningModel(nn.Module):
             )
         if directional_concat_workspace and not sparse_visual_anchor_layers:
             raise ValueError("Directional Concat Workspace requires visual anchors")
-        if directional_sandwich_text_prompt and not directional_concat_workspace:
+        if directional_text_prompt_placement is None:
+            directional_text_prompt_placement = (
+                "static_before_visual_dynamic_after_visual"
+                if directional_sandwich_text_prompt
+                else "all_prompts_before_chat"
+            )
+        elif (
+            directional_sandwich_text_prompt
+            and directional_text_prompt_placement
+            != "static_before_visual_dynamic_after_visual"
+        ):
             raise ValueError(
-                "Sandwich text Prompt placement requires Directional Concat Workspace"
+                "Legacy Sandwich flag conflicts with text Prompt placement"
+            )
+        if directional_text_prompt_placement not in TEXT_PROMPT_PLACEMENTS:
+            raise ValueError(
+                "Unsupported text Prompt placement="
+                f"{directional_text_prompt_placement!r}; "
+                f"choices={TEXT_PROMPT_PLACEMENTS}"
+            )
+        if (
+            directional_text_prompt_placement != "all_prompts_before_chat"
+            and not directional_concat_workspace
+        ):
+            raise ValueError(
+                "Positioned text Prompts require Directional Concat Workspace"
             )
         if workspace_text_attention_dim % workspace_text_heads != 0:
             raise ValueError(
@@ -260,8 +290,13 @@ class DynamicPromptTuningModel(nn.Module):
         self.directional_visual_conditioning = str(
             directional_visual_conditioning
         )
-        self.directional_sandwich_text_prompt = bool(
-            directional_sandwich_text_prompt
+        self.directional_text_prompt_placement = str(
+            directional_text_prompt_placement
+        )
+        # Backward-compatible alias for old checkpoints and callers.
+        self.directional_sandwich_text_prompt = (
+            self.directional_text_prompt_placement
+            != "all_prompts_before_chat"
         )
         for parameter in self.base_model.parameters():
             parameter.requires_grad = False
@@ -708,7 +743,7 @@ class DynamicPromptTuningModel(nn.Module):
             dtype=torch.bool,
             device=context_mask.device,
         )
-        if self.directional_sandwich_text_prompt:
+        if self.directional_text_prompt_placement != "all_prompts_before_chat":
             vision_start_id = self.visual_template_token_ids[1]
             vision_end_id = self.visual_template_token_ids[2]
             expanded_ids_rows = []
@@ -724,7 +759,7 @@ class DynamicPromptTuningModel(nn.Module):
                 )[0]
                 if start_positions.numel() != 1 or end_positions.numel() != 1:
                     raise RuntimeError(
-                        "Sandwich text Prompt placement requires exactly one visual "
+                        "Positioned text Prompts require exactly one visual "
                         f"segment per sample; sample={batch_index} "
                         f"vision_start={start_positions.numel()} "
                         f"vision_end={end_positions.numel()}"
@@ -733,7 +768,7 @@ class DynamicPromptTuningModel(nn.Module):
                 end = int(end_positions.item())
                 if end <= start:
                     raise RuntimeError(
-                        "Sandwich text Prompt placement found invalid visual boundaries"
+                        "Positioned text Prompts found invalid visual boundaries"
                     )
 
                 def insert_slots(
@@ -741,16 +776,35 @@ class DynamicPromptTuningModel(nn.Module):
                     static_slots: torch.Tensor,
                     dynamic_slots: torch.Tensor,
                 ) -> torch.Tensor:
-                    return torch.cat(
-                        (
+                    placement = self.directional_text_prompt_placement
+                    if placement == "static_before_visual_dynamic_after_visual":
+                        parts = (
                             row[:start],
                             static_slots,
                             row[start : end + 1],
                             dynamic_slots,
                             row[end + 1 :],
-                        ),
-                        dim=0,
-                    )
+                        )
+                    elif placement == "all_prompts_after_visual":
+                        parts = (
+                            row[: end + 1],
+                            static_slots,
+                            dynamic_slots,
+                            row[end + 1 :],
+                        )
+                    elif placement == "dynamic_before_visual_static_after_visual":
+                        parts = (
+                            row[:start],
+                            dynamic_slots,
+                            row[start : end + 1],
+                            static_slots,
+                            row[end + 1 :],
+                        )
+                    else:
+                        raise RuntimeError(
+                            f"Unexpected text Prompt placement: {placement}"
+                        )
+                    return torch.cat(parts, dim=0)
 
                 expanded_ids_rows.append(
                     insert_slots(
@@ -804,7 +858,7 @@ class DynamicPromptTuningModel(nn.Module):
             "attention_mask": expanded_attention,
         }
         if labels is not None:
-            if self.directional_sandwich_text_prompt:
+            if self.directional_text_prompt_placement != "all_prompts_before_chat":
                 expanded["labels"] = torch.stack(expanded_label_rows)
             else:
                 ignored = torch.full(
@@ -816,7 +870,7 @@ class DynamicPromptTuningModel(nn.Module):
                 expanded["labels"] = torch.cat((ignored, labels), dim=1)
         return expanded, expanded_ids, expanded_context
 
-    def _sandwich_prompt_masks(
+    def _positioned_prompt_masks(
         self,
         expanded_ids: torch.Tensor,
     ) -> tuple[torch.Tensor, torch.Tensor]:
@@ -832,15 +886,33 @@ class DynamicPromptTuningModel(nn.Module):
                 as_tuple=True
             )[0]
             if start_positions.numel() != 1 or end_positions.numel() != 1:
-                raise RuntimeError("Expanded Sandwich input lost its visual boundaries")
+                raise RuntimeError("Positioned Prompt input lost its visual boundaries")
             start = int(start_positions.item())
             end = int(end_positions.item())
-            static_start = start - self.private_prompt_length
-            dynamic_end = end + 1 + self.workspace_prompt_length
-            if static_start < 0 or dynamic_end > expanded_ids.shape[1]:
-                raise RuntimeError("Expanded Sandwich Prompt slots are out of bounds")
-            static_mask[batch_index, static_start:start] = True
-            dynamic_mask[batch_index, end + 1 : dynamic_end] = True
+            placement = self.directional_text_prompt_placement
+            if placement == "static_before_visual_dynamic_after_visual":
+                static_slice = slice(start - self.private_prompt_length, start)
+                dynamic_slice = slice(end + 1, end + 1 + self.workspace_prompt_length)
+            elif placement == "all_prompts_after_visual":
+                static_slice = slice(end + 1, end + 1 + self.private_prompt_length)
+                dynamic_slice = slice(
+                    end + 1 + self.private_prompt_length,
+                    end + 1 + self.prompt_length,
+                )
+            elif placement == "dynamic_before_visual_static_after_visual":
+                dynamic_slice = slice(start - self.workspace_prompt_length, start)
+                static_slice = slice(end + 1, end + 1 + self.private_prompt_length)
+            else:
+                raise RuntimeError(f"Unexpected text Prompt placement: {placement}")
+            if (
+                static_slice.start < 0
+                or dynamic_slice.start < 0
+                or static_slice.stop > expanded_ids.shape[1]
+                or dynamic_slice.stop > expanded_ids.shape[1]
+            ):
+                raise RuntimeError("Positioned Prompt slots are out of bounds")
+            static_mask[batch_index, static_slice] = True
+            dynamic_mask[batch_index, dynamic_slice] = True
         return static_mask, dynamic_mask
 
     @contextmanager
@@ -878,8 +950,8 @@ class DynamicPromptTuningModel(nn.Module):
                     prompt = torch.cat((private_prompt, workspace_anchor), dim=1)
                 else:
                     prompt = private_prompt
-            if self.directional_sandwich_text_prompt:
-                static_mask, dynamic_mask = self._sandwich_prompt_masks(
+            if self.directional_text_prompt_placement != "all_prompts_before_chat":
+                static_mask, dynamic_mask = self._positioned_prompt_masks(
                     expanded_ids.to(output.device)
                 )
                 replaced = output.clone()
@@ -951,8 +1023,8 @@ class DynamicPromptTuningModel(nn.Module):
                     self.workspace_text_anchor,
                     delta_scale=self._directional_text_delta_scale,
                 ).to(device=inputs_embeds.device, dtype=inputs_embeds.dtype)
-                if self.directional_sandwich_text_prompt:
-                    static_mask, dynamic_mask = self._sandwich_prompt_masks(
+                if self.directional_text_prompt_placement != "all_prompts_before_chat":
+                    static_mask, dynamic_mask = self._positioned_prompt_masks(
                         expanded_ids.to(inputs_embeds.device)
                     )
                     private_prompt = inputs_embeds[static_mask].view(
@@ -1020,7 +1092,7 @@ class DynamicPromptTuningModel(nn.Module):
             ids = expanded_ids.to(inputs_embeds.device)
             for token_id in self.visual_template_token_ids:
                 text_mask = text_mask & ids.ne(token_id)
-            if not self.directional_sandwich_text_prompt:
+            if self.directional_text_prompt_placement == "all_prompts_before_chat":
                 text_mask[:, : self.prompt_length] = False
 
             visual_memory = _masked_mean(inputs_embeds, visual_mask, "visual")
@@ -1168,7 +1240,7 @@ class DynamicPromptTuningModel(nn.Module):
         text_mask = expanded_context.to(device=ids.device, dtype=torch.bool)
         for token_id in self.visual_template_token_ids:
             text_mask = text_mask & ids.ne(token_id)
-        if not self.directional_sandwich_text_prompt:
+        if self.directional_text_prompt_placement == "all_prompts_before_chat":
             text_mask[:, : self.prompt_length] = False
         token_embeddings = self.get_input_embeddings()(ids)
         text_memory = _masked_mean(token_embeddings, text_mask, "sparse visual text")
@@ -1357,11 +1429,7 @@ class DynamicPromptTuningModel(nn.Module):
                     ),
                     "private_text_prompt_tokens": self.private_prompt_length,
                     "text_workspace_anchor_tokens": self.workspace_prompt_length,
-                    "text_prompt_placement": (
-                        "static_before_visual_dynamic_after_visual"
-                        if self.directional_sandwich_text_prompt
-                        else "all_prompts_before_chat"
-                    ),
+                    "text_prompt_placement": self.directional_text_prompt_placement,
                     "query": self.sparse_visual.query_source,
                     "visual_conditioning": (
                         self.sparse_visual.visual_conditioning

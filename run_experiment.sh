@@ -981,6 +981,34 @@ run_qdpt_d768_final_dataset() {
         --directional-sandwich-text-prompt
       )
       ;;
+    question_static_visual_all_after)
+      experiment_stem="qdpt_d768_question_q10_l17_p20_s8_av10_all_after_visual"
+      expected_trainable=7805184
+      query_source="question_attention_pooling"
+      static_visual_write=true
+      private_visual_tokens=8
+      visual_workspace_tokens=10
+      text_prompt_placement="all_prompts_after_visual"
+      control_flags=(
+        --directional-query-source question_attention_pooling
+        --directional-static-visual-write
+        --directional-text-prompt-placement all_prompts_after_visual
+      )
+      ;;
+    question_static_visual_reversed_sandwich)
+      experiment_stem="qdpt_d768_question_q10_l17_p20_s8_av10_reversed_sandwich"
+      expected_trainable=7805184
+      query_source="question_attention_pooling"
+      static_visual_write=true
+      private_visual_tokens=8
+      visual_workspace_tokens=10
+      text_prompt_placement="dynamic_before_visual_static_after_visual"
+      control_flags=(
+        --directional-query-source question_attention_pooling
+        --directional-static-visual-write
+        --directional-text-prompt-placement dynamic_before_visual_static_after_visual
+      )
+      ;;
     unified_static_visual_rng_control)
       experiment_stem="qdpt_d768_question_q10_l17_p20_unified_v20_rng_control"
       expected_trainable=7807232
@@ -1270,6 +1298,29 @@ run_pathvqa_qdpt_d768_unified_v20_rng_control_seed44() {
 run_pathvqa_qdpt_d768_sandwich_seed44() {
   run_qdpt_d768_final_dataset \
     pathvqa question_static_visual_sandwich 44
+}
+
+run_pathvqa_qdpt_d768_all_after_visual_seed44() {
+  run_qdpt_d768_final_dataset \
+    pathvqa question_static_visual_all_after 44
+}
+
+run_pathvqa_qdpt_d768_reversed_sandwich_seed44() {
+  run_qdpt_d768_final_dataset \
+    pathvqa question_static_visual_reversed_sandwich 44
+}
+
+run_pathvqa_qdpt_d768_prompt_placement_controls_seed44() {
+  local suite_failures=0
+  run_pathvqa_qdpt_d768_all_after_visual_seed44 \
+    || suite_failures=$((suite_failures + 1))
+  run_pathvqa_qdpt_d768_reversed_sandwich_seed44 \
+    || suite_failures=$((suite_failures + 1))
+  if [ "$suite_failures" -ne 0 ]; then
+    echo "[ERR] PathVQA Prompt placement control failures=$suite_failures; both variants were attempted." >&2
+    return 1
+  fi
+  echo "[PATHVQA_PROMPT_PLACEMENT_CONTROLS_DONE] variants=all_after_visual,reversed_sandwich seed=44"
 }
 
 run_pathvqa_qdpt_d768_marathon_seed44() {
@@ -2837,6 +2888,15 @@ case "$RUN_TARGET" in
     ;;
   pathvqa_qdpt_d768_sandwich_seed44)
     run_pathvqa_qdpt_d768_sandwich_seed44 || failures=$((failures + 1))
+    ;;
+  pathvqa_qdpt_d768_all_after_visual_seed44)
+    run_pathvqa_qdpt_d768_all_after_visual_seed44 || failures=$((failures + 1))
+    ;;
+  pathvqa_qdpt_d768_reversed_sandwich_seed44)
+    run_pathvqa_qdpt_d768_reversed_sandwich_seed44 || failures=$((failures + 1))
+    ;;
+  pathvqa_qdpt_d768_prompt_placement_controls_seed44)
+    run_pathvqa_qdpt_d768_prompt_placement_controls_seed44 || failures=$((failures + 1))
     ;;
   pathvqa_qdpt_d768_marathon_seed44)
     run_pathvqa_qdpt_d768_marathon_seed44 || failures=$((failures + 1))

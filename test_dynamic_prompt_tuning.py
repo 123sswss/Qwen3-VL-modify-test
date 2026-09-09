@@ -584,6 +584,79 @@ class DynamicPromptTuningTest(unittest.TestCase):
                 "static_before_visual_dynamic_after_visual",
             )
 
+    def _assert_directional_prompt_placement(
+        self,
+        placement,
+        expected_ids,
+        static_slice,
+        dynamic_slice,
+    ):
+        model = DynamicPromptTuningModel(
+            _FakeMultimodalModel(),
+            tokenizer=_FakeTokenizer(),
+            prompt_length=2,
+            init_seed=5,
+            attention_dim=4,
+            num_heads=2,
+            sparse_visual_anchor_layers=(1,),
+            sparse_visual_rep_tokens=2,
+            sparse_visual_attention_dim=4,
+            sparse_visual_heads=2,
+            workspace_tokens=3,
+            workspace_dim=8,
+            workspace_heads=2,
+            directional_concat_workspace=True,
+            directional_text_prompt_placement=placement,
+        )
+        batch = {
+            "input_ids": torch.tensor([[7, 8, 9, 10, 2, 3]]),
+            "attention_mask": torch.ones(1, 6, dtype=torch.long),
+            "labels": torch.tensor([[-100, -100, -100, -100, -100, 3]]),
+            "mmrl_gating_mask": torch.tensor(
+                [[True, False, False, False, True, False]], dtype=torch.bool
+            ),
+        }
+        _, expanded_ids, _ = model._expand_inputs(batch)
+        torch.testing.assert_close(expanded_ids, torch.tensor([expected_ids]))
+        workspace = torch.randn(1, 3, 8)
+        model.sparse_visual.shared_workspace_text_memory = lambda: workspace
+        model(**batch)
+        embeddings = model.base_model.model.language_model.last_embeddings
+        torch.testing.assert_close(
+            embeddings[:, static_slice].float(), model.soft_prompt.unsqueeze(0)
+        )
+        torch.testing.assert_close(
+            embeddings[:, dynamic_slice].float(),
+            model.workspace_text_anchor.unsqueeze(0),
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            model.save_dynamic_prompt(Path(directory))
+            config = json.loads(
+                (Path(directory) / "dynamic_prompt_config.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            self.assertEqual(
+                config["directional_concat_workspace"]["text_prompt_placement"],
+                placement,
+            )
+
+    def test_directional_all_prompts_after_visual(self):
+        self._assert_directional_prompt_placement(
+            "all_prompts_after_visual",
+            [7, 8, 9, 10, 0, 0, 0, 0, 0, 2, 3],
+            slice(4, 6),
+            slice(6, 9),
+        )
+
+    def test_directional_reversed_sandwich_swaps_static_and_dynamic(self):
+        self._assert_directional_prompt_placement(
+            "dynamic_before_visual_static_after_visual",
+            [7, 0, 0, 0, 8, 9, 10, 0, 0, 2, 3],
+            slice(7, 9),
+            slice(1, 4),
+        )
+
     def test_directional_concat_workspace_checkpoint_round_trip(self):
         kwargs = dict(
             tokenizer=_FakeTokenizer(),

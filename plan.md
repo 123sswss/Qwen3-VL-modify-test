@@ -14,7 +14,7 @@
 6. **五天内完成投稿版本**：Day 1 后冻结架构；若多随机种子结果削弱现有结论，则降低论文措辞，不再用救火实验延长项目。
 7. **DRAPE 作为首要 Related Work**：将其视为当前最接近、完成度最高的动态跨模态 Prompt 工作。正文先充分肯定其在多模态持续指令微调中的贡献，再明确 QDPT 聚焦完全冻结 MLLM 的单领域 VQA 适配。不得宣称首次提出“文本 Query + 视觉 K/V + 动态 LLM Prompt”。
 8. **CoTBox-TTT 作为首要同领域证据选择工作**：该方法同样冻结生成式医学VLM并在PathVQA、SLAKE和VQA-RAD上使用连续Soft Prompt，直接支持“领域VQA的关键问题之一是选择问题相关视觉证据”的叙事。但它属于逐测试样本优化20轮的无标签Test-Time Training，依赖额外VisCoT定位器、裁剪重编码和EMA Teacher，且开放题使用Recall、SLAKE采用英文设置，因此只能做定性方法比较和原协议文献背景，不能把其分数与QDPT直接排名。
-9. **GRASP 升级为必做直接基线，但不取代 DRAPE**：GRASP（arXiv:2601.17089v1）与QDPT同属冻结生成式MLLM中的问题引导动态Soft Prompt，并已在Qwen2.5-VL-7B的生成式遥感VQA上与Prompt Tuning、VPT、Adapter、LoRA和DoRA比较。DRAPE继续承担动态跨模态Prompt技术先例与创新边界审计；GRASP则必须移植到当前Qwen3-VL、PathVQA/SLAKE和统一评价协议下进入主表。
+9. **GRASP 的统一协议迁移已经闭环**：GRASP（arXiv:2601.17089v1）与QDPT同属冻结生成式MLLM中的问题引导动态Soft Prompt。纠正纯问题输入和论文因果顺序后的PathVQA独立复现仅得39.7508，训练分支与稀疏路由均正常。保留这一有效负基线，但不再迁移SLAKE或扫描其20-epoch原协议；主表补充转向CoCoOp-style与Q-Former-style经典动态Prompt。
 10. **先做QDPT收敛马拉松，再决定GRASP预算**：当前QDPT只训练3 epochs，而GRASP原文采用batch6、最多20 epochs并按Validation patience5早停。为避免只给竞争方法更多优化步，先固定最终QDPT-D768 seed44从头训练10 epochs，并从epoch3起每轮跑完整PathVQA Validation。逐轮结果实时写入`marathon_progress.tsv`；观察QDPT自身的收敛上限后，再确定GRASP的公平长程协议。线性调度器的总步数随之扩展到10 epochs，因此马拉松的epoch3代表长程日程的中段，不是旧3-epoch日程末端的逐位复现，两者不得混称同seed复现。
 
 ## 2. 论文定位与核心叙事
@@ -128,9 +128,9 @@ DRAPE 已在多模态持续指令微调中证明：任务级静态 Prompt 难以
 | Static Prompt Tuning | P20，51.2K 参数 | 样本无关 Prompt 基线 | PathVQA/SLAKE 已有 |
 | Static Visual Prompt | 固定视觉Prompt，不生成LLM动态Prompt | 视觉侧Prompt基线 | 待补PathVQA seed44 |
 | Dual Static Prompt | 静态视觉Prompt + 静态LLM Prompt | 排除收益仅来自双侧增加Prompt | 待补PathVQA seed44 |
-| CoCoOp-style Conditional Prompt | 当前图像特征经轻量Meta-Net生成实例级LLM Prompt，不使用问题Query | 经典图像条件动态Prompt的统一协议近似复现 | **待实现并补PathVQA seed44** |
+| CoCoOp-style Conditional Prompt | 当前图像特征经轻量Meta-Net生成实例级LLM Prompt，不使用问题Query | 经典图像条件动态Prompt的统一协议近似复现 | **已实现，待补PathVQA seed44** |
 | BLIP-2 Q-Former-style Prompt | 可学习静态Q10读取冻结视觉K/V，再映射为LLM Prompt | 经典learned-query视觉桥接的统一协议近似复现 | **优先审计现有learned-query结果，必要时补实现** |
-| GRASP | 问题语义对固定空间块打分，以Entmax稀疏加权空间Prompt原型并生成1个全局Prompt | 同范式直接竞争方法 | **必做PathVQA/SLAKE统一协议复现** |
+| GRASP | 问题语义对固定空间块打分，以Entmax稀疏加权空间Prompt原型并生成1个全局Prompt | 同范式直接竞争方法 | **PathVQA已完成39.7508；停止SLAKE与调参** |
 | QDPT-D512/D768 | 问题Q读取视觉K/V并写入LLM Prompt | 本文效率点与主模型 | PathVQA/SLAKE已有 |
 
 公平性要求：
@@ -356,7 +356,7 @@ CoTBox-TTT可以计入“同方向Related Work”的文献数量，但**不计�
 - [x] 准备 PathVQA/SLAKE 最终统一启动脚本；实验名编码数据集、D、Query 来源、视觉模式与 seed，统一强制 3 epochs 且只在 epoch 3 全量评估。
 - [x] IA3和补充语义指标已移至审稿后候补；question-only因DRAPE碰撞审计提升为当前必做。
 - [ ] 完成 CoCoOp、MaPLe、Q-Former、LION、MASP、DRAPE与GRASP的碰撞矩阵。
-- [ ] 实现并运行PathVQA seed44 CoCoOp-style Conditional Prompt：图像条件化、问题不可见、统一三epoch协议。
+- [ ] CoCoOp-style Conditional Prompt已实现并通过本地CPU审计，待运行PathVQA seed44：冻结的post-merger视觉Token均值经`2560→160→2560` Meta-Net生成共享图像偏置，加到embedding-row初始化的P20；不读取问题、不插入视觉Prompt，双学习率为0.3/3e-4，共873,120参数，统一三epoch且仅epoch3完整Validation。
 - [ ] 审计现有learned-static-query是否足以作为BLIP-2 Q-Former-style近似复现；满足则复用57.1817结果，不满足才补最小查询块并重跑。
 - [ ] 审计 PathVQA/SLAKE 同领域论文的 split 与 metric。
 - [x] 根据 no-static-visual与RNG-controlled V20结果冻结最终`S8+A_v10`结构和论文主张。
@@ -374,7 +374,7 @@ CoTBox-TTT可以计入“同方向Related Work”的文献数量，但**不计�
 - [x] 完成 learned-static-query seed44：57.1817，较问题引导Q10显著下降2.3806，确认当前问题条件化Query的必要性，不追加seed。
 - [x] 取消LoRA-r4/r16 seed44；已有r8足以作为附录中的跨范式强参考，不再用rank扫描消耗收尾时间。
 - [x] 未发现GRASP作者正式仓库；已按论文公式完成Qwen3-VL近似复现、PathVQA/SLAKE/现有电气数据接口连接和CPU单测。保留冻结LLM的额外question-only前向，并明确标注为独立复现。
-- [ ] GRASP纯问题查询版已跑出40.7254，但Prompt误放在视觉段之后，违背论文Eq.(6-7)，因此不得进入主表。论文顺序修正版现已实现并通过8项CPU单测：Prompt插在Qwen`<|vision_start|>`之前，形成`[Prompt, Visual, Question]`；待按纯问题Token、N=4、h=512、seed44和三轮协议完成最后一次PathVQA复现，不扫描`N/h/alpha`。
+- [x] 完成GRASP正式顺序近似复现：`[Prompt, Visual, Question]`、纯问题冻结LLM编码、N4/h512/seed44三轮得到39.7508/75.36/4.2438；稀疏路由与梯度正常但开放题近乎失效。保留为统一协议负基线，不再扫描或迁移SLAKE。
 - [ ] 汇总每个实验的 Validation、参数、训练时间与预测文件。
 - [x] 完成QDPT-D768 seed44十轮收敛马拉松：epoch3-10逐轮完整Validation，不跑Test。epoch6峰值58.7794、epoch10为57.1657，均未超过原3-epoch seed44的59.5622；终止QDPT长程训练与学习率扫参，保留原3-epoch协议。
 - [x] 立即更新两个实验账本，不做账本单独提交。
@@ -387,7 +387,7 @@ CoTBox-TTT可以计入“同方向Related Work”的文献数量，但**不计�
 - [x] 准备专用串行目标`slake_qdpt_d768_final_seeds44_46`：只运行SLAKE最终D768三seed，任一失败继续其余项，退出后自动关机，不重复PathVQA。
 - [x] 准备`slake_lora_full_model_attn_r8_seeds44_46`：三个seed串行、失败继续、仅epoch3官方Test，并在启动前跳过已有完整结果。
 - [x] 完成Full-Attention LoRA-r8 seed44/45/46：Overall 81.95/81.57/81.95，均值81.82 +/- 0.22；QDPT均值低4.79且三个同seed配对均极显著，停止跨数据集LoRA性能持平叙事。
-- [ ] PathVQA修正版通过实现审计后再完成SLAKE GRASP seed44迁移；当前shell history中的启动命令没有生成实验目录或结果，不算已完成。
+- [x] 取消SLAKE GRASP迁移：PathVQA正式顺序实现已确认有效但仅39.7508，继续跨数据集运行不具备当前收尾价值。
 - [ ] 复核 Static Prompt 的 checkpoint、split 和评价结果。
 - [ ] 禁止根据 SLAKE 分数修改 D、层数、Prompt 长度或训练策略。
 

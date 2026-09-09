@@ -15,6 +15,7 @@ PATHVQA_OUTPUT_ROOT="${PATHVQA_OUTPUT_ROOT:-$ROOT_DIR/pathvqa/outputs/mmrl}"
 PATHVQA_LORA_OUTPUT_ROOT="${PATHVQA_LORA_OUTPUT_ROOT:-$ROOT_DIR/pathvqa/outputs/lora}"
 PATHVQA_BASE_OUTPUT_ROOT="${PATHVQA_BASE_OUTPUT_ROOT:-$ROOT_DIR/pathvqa/outputs/base}"
 PATHVQA_PROMPT_OUTPUT_ROOT="${PATHVQA_PROMPT_OUTPUT_ROOT:-$ROOT_DIR/pathvqa/outputs/prompt_tuning}"
+PATHVQA_COCOOP_OUTPUT_ROOT="${PATHVQA_COCOOP_OUTPUT_ROOT:-$ROOT_DIR/pathvqa/outputs/cocoop}"
 PATHVQA_DYNAMIC_PROMPT_OUTPUT_ROOT="${PATHVQA_DYNAMIC_PROMPT_OUTPUT_ROOT:-$ROOT_DIR/pathvqa/outputs/dynamic_prompt}"
 PATHVQA_GRASP_OUTPUT_ROOT="${PATHVQA_GRASP_OUTPUT_ROOT:-$ROOT_DIR/pathvqa/outputs/grasp}"
 ELECTRICAL_DATA_ROOT="${ELECTRICAL_DATA_ROOT:-/root/autodl-tmp/dataset}"
@@ -26,7 +27,7 @@ RUN_DATE="${MMRL_RUN_DATE:-$(date +%Y%m%d)}"
 SEED="${MMRL_FIXED_SEED:-44}"
 SHUTDOWN_ON_EXIT="${MMRL_SHUTDOWN_ON_EXIT:-1}"
 
-mkdir -p "$OUTPUT_ROOT" "$SLAKE_OUTPUT_ROOT" "$SLAKE_DYNAMIC_PROMPT_OUTPUT_ROOT" "$SLAKE_GRASP_OUTPUT_ROOT" "$SLAKE_LORA_OUTPUT_ROOT" "$PATHVQA_OUTPUT_ROOT" "$PATHVQA_LORA_OUTPUT_ROOT" "$PATHVQA_BASE_OUTPUT_ROOT" "$PATHVQA_PROMPT_OUTPUT_ROOT" "$PATHVQA_DYNAMIC_PROMPT_OUTPUT_ROOT" "$PATHVQA_GRASP_OUTPUT_ROOT" "$ELECTRICAL_QDPT_OUTPUT_ROOT" "$ELECTRICAL_GRASP_OUTPUT_ROOT"
+mkdir -p "$OUTPUT_ROOT" "$SLAKE_OUTPUT_ROOT" "$SLAKE_DYNAMIC_PROMPT_OUTPUT_ROOT" "$SLAKE_GRASP_OUTPUT_ROOT" "$SLAKE_LORA_OUTPUT_ROOT" "$PATHVQA_OUTPUT_ROOT" "$PATHVQA_LORA_OUTPUT_ROOT" "$PATHVQA_BASE_OUTPUT_ROOT" "$PATHVQA_PROMPT_OUTPUT_ROOT" "$PATHVQA_COCOOP_OUTPUT_ROOT" "$PATHVQA_DYNAMIC_PROMPT_OUTPUT_ROOT" "$PATHVQA_GRASP_OUTPUT_ROOT" "$ELECTRICAL_QDPT_OUTPUT_ROOT" "$ELECTRICAL_GRASP_OUTPUT_ROOT"
 echo "[RUN_TARGET] selected=$RUN_TARGET positional=${1:-<unset>} env=${ENV_RUN_TARGET:-<unset>} mmrl_env=${MMRL_RUN_TARGET:-<unset>}"
 
 cancel_shutdown_on_interrupt() {
@@ -1397,6 +1398,64 @@ run_qdpt_d768_final_pathvqa_slake_seed44() {
   local variant="${QDPT_FINAL_VARIANT:-question_static_visual}"
   run_qdpt_d768_final_dataset pathvqa "$variant" 44 || return 1
   run_qdpt_d768_final_dataset slake "$variant" 44
+}
+
+run_pathvqa_cocoop_style_seed44() {
+  local experiment_name="pathvqa_cocoop_style_p20_h160_seed44"
+  local output_dir
+  output_dir="$(available_output_dir "$PATHVQA_COCOOP_OUTPUT_ROOT" "${experiment_name}_${RUN_DATE}")"
+  mkdir -p "$output_dir"
+  echo "[PATHVQA_COCOOP_STYLE_CONFIG] experiment=$experiment_name seed=44 data_seed=42 prompt_tokens=20 bottleneck=160 prompt_lr=0.3 meta_net_lr=3e-4 visual=post_merger_llm_token_mean question_access=false prompt_placement=before_full_chat expected_trainable=873120 epochs=3 split=validation output=$output_dir"
+  (
+    cd "$ROOT_DIR" || exit 1
+    python -m unittest test_cocoop_prompt_tuning.py || exit 1
+    python -m pathvqa.train_cocoop \
+      --model-path "$MODEL_PATH" \
+      --data-root "$PATHVQA_DATA_ROOT" \
+      --cache-dir "$PATHVQA_CACHE_ROOT" \
+      --output-dir "$output_dir" \
+      --experiment-name "$experiment_name" \
+      --prompt-length 20 \
+      --bottleneck-dim 160 \
+      --prompt-learning-rate 0.3 \
+      --meta-net-learning-rate 3e-4 \
+      --epochs 3 \
+      --seed 44 \
+      --data-seed 42 \
+      --batch-size "${PATHVQA_COCOOP_BATCH_SIZE:-2}" \
+      --gradient-accumulation "${PATHVQA_COCOOP_GRAD_ACCUM:-16}" \
+      --dataloader-workers "${PATHVQA_COCOOP_WORKERS:-2}" \
+      --expected-trainable-parameters 873120 \
+      2>&1 | tee "$output_dir/train.log"
+  ) || return 1
+  local checkpoint="$output_dir/checkpoints/epoch_3"
+  if [ ! -f "$checkpoint/cocoop_prompt_config.json" ] \
+    || [ ! -f "$checkpoint/cocoop_prompt.pt" ]; then
+    echo "[ERR] CoCoOp-style epoch3 checkpoint is incomplete: $checkpoint" >&2
+    return 1
+  fi
+  mkdir -p "$output_dir/eval_validation/epoch_3"
+  (
+    cd "$ROOT_DIR" || exit 1
+    python pathvqa/pathvqa_official_eval.py \
+      --backend cocoop-style \
+      --base-model "$MODEL_PATH" \
+      --checkpoint "$checkpoint" \
+      --data-root "$PATHVQA_DATA_ROOT" \
+      --cache-dir "$PATHVQA_CACHE_ROOT" \
+      --split validation \
+      --output-dir "$output_dir/eval_validation/epoch_3" \
+      --overwrite \
+      2>&1 | tee "$output_dir/eval_validation_epoch_3.log"
+  ) || return 1
+  local score
+  score="$(python -c 'import json,sys;print(json.load(open(sys.argv[1],encoding="utf-8"))["overall_accuracy"])' "$output_dir/eval_validation/epoch_3/pathvqa_summary.json")" || return 1
+  printf 'experiment\tseed\tprotocol\tvalidation_epoch\tvalidation_accuracy\tcheckpoint\n' \
+    > "$output_dir/selected_result.tsv"
+  printf '%s\t44\tfixed_epoch3_validation\t3\t%s\t%s\n' \
+    "$experiment_name" "$score" "$checkpoint" \
+    >> "$output_dir/selected_result.tsv"
+  cat "$output_dir/selected_result.tsv"
 }
 
 run_pathvqa_grasp_seed44() {
@@ -2788,6 +2847,9 @@ case "$RUN_TARGET" in
   pathvqa_grasp_seed44)
     run_pathvqa_grasp_seed44 || failures=$((failures + 1))
     ;;
+  pathvqa_cocoop_style_p20_h160_seed44)
+    run_pathvqa_cocoop_style_seed44 || failures=$((failures + 1))
+    ;;
   slake_grasp_seed44)
     run_slake_grasp_seed44 || failures=$((failures + 1))
     ;;
@@ -2859,7 +2921,7 @@ case "$RUN_TARGET" in
     run_slake || failures=$((failures + 1))
     ;;
   *)
-    echo "[ERR] 未知目标: $RUN_TARGET；新增目标: pathvqa_lora_full_model_attn_r8_seeds45_46、pathvqa_qdpt_d768_no_static_visual_seed44、pathvqa_qdpt_d768_no_static_visual_resume_eval、pathvqa_qdpt_d768_learned_static_query_seed44、pathvqa_qdpt_d768_question_only_seed44、pathvqa_qdpt_d768_direct_visual_z_concat_seeds44_46、pathvqa_qdpt_d768_layer_sensitivity_seed44、pathvqa_qdpt_d768_layer_sensitivity_resume_eval、electrical_qdpt_d768_seed44、qdpt_d768_final_pathvqa_slake_seed44、slake_qdpt_d768_final_seeds44_46、slake_lora_full_model_attn_r8_seeds44_46。" >&2
+    echo "[ERR] 未知目标: $RUN_TARGET；新增目标: pathvqa_cocoop_style_p20_h160_seed44、pathvqa_lora_full_model_attn_r8_seeds45_46、pathvqa_qdpt_d768_no_static_visual_seed44、pathvqa_qdpt_d768_no_static_visual_resume_eval、pathvqa_qdpt_d768_learned_static_query_seed44、pathvqa_qdpt_d768_question_only_seed44、pathvqa_qdpt_d768_direct_visual_z_concat_seeds44_46、pathvqa_qdpt_d768_layer_sensitivity_seed44、pathvqa_qdpt_d768_layer_sensitivity_resume_eval、electrical_qdpt_d768_seed44、qdpt_d768_final_pathvqa_slake_seed44、slake_qdpt_d768_final_seeds44_46、slake_lora_full_model_attn_r8_seeds44_46。" >&2
     exit 2
     ;;
 esac

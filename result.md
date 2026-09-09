@@ -160,3 +160,7 @@ This file is the concise experiment memory shared by the user and Codex. The com
 ## 2026-09-09 GRASP Prompt顺序错误记录
 
 - 修正版查询但错误Prompt顺序的PathVQA GRASP为**40.7254 Overall /74.91 Yes-No /6.64 Free-form**。纯问题Token编码符合论文，但实现成了`[Visual, Prompt, Question]`；论文Eq.(6-7)明确要求`[Prompt, Visual, Question]`。因果LLM中两者不等价，本结果只作为工程负记录，不进入主表，也不能否定GRASP。下一次只修正Prompt到视觉段之前，其余配置不动。
+
+## 2026-09-09 GRASP正式顺序近似复现
+
+- `pathvqa_grasp_reimpl_paper_order_n4_h512_seed44`按论文顺序实现`[Prompt, Visual, Question]`后，PathVQA Validation为**39.7508 Overall /75.3600 Yes-No /4.2438 Free-form**，图像簇95% CI[38.5286,40.9129]。Entmax已经形成稀疏区域选择且原型/投影梯度正常，因此低分不是分支死亡或残留位置错误；单个空间原型混合Prompt在当前生成式医学VQA协议下表达能力不足，尤其无法支持开放回答。该结果可作为明确标注的独立统一协议复现，但不能外推否定原论文20-epoch遥感设置。当前项目停止GRASP调参和SLAKE迁移，转向CoCoOp-style与Q-Former-style经典动态Prompt基线。

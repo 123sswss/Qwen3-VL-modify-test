@@ -36,6 +36,10 @@ BACKEND_SPECS = {
         "slake/grasp_prompt_tuning_interface.py",
         "GRASPModelInterface",
     ),
+    "cocoop-style": (
+        "slake/cocoop_prompt_tuning_interface.py",
+        "CoCoOpStyleModelInterface",
+    ),
 }
 
 

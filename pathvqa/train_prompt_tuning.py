@@ -129,6 +129,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--visual-prompt-length", type=int, default=0)
     parser.add_argument("--visual-anchor-layer", type=int, default=17)
     parser.add_argument("--epochs", type=int, default=3)
+    parser.add_argument(
+        "--max-steps",
+        type=int,
+        default=-1,
+        help="Optional short-run override for smoke tests; -1 keeps epoch training.",
+    )
     parser.add_argument("--seed", type=int, default=44)
     parser.add_argument("--data-seed", type=int, default=42)
     parser.add_argument("--learning-rate", type=float, default=0.3)
@@ -141,6 +147,8 @@ def parse_args() -> argparse.Namespace:
     args = parser.parse_args()
     if args.prompt_length < 0 or args.visual_prompt_length < 0 or args.epochs < 1:
         parser.error("Prompt lengths must be non-negative and --epochs positive")
+    if args.max_steps == 0 or args.max_steps < -1:
+        parser.error("--max-steps must be -1 or positive")
     if args.prompt_length == 0 and args.visual_prompt_length == 0:
         parser.error("At least one text or visual Prompt is required")
     if args.visual_anchor_layer < 0:
@@ -222,6 +230,7 @@ def main() -> int:
         args=TrainingArguments(
             output_dir=str(args.output_dir / "trainer"),
             num_train_epochs=args.epochs,
+            max_steps=args.max_steps,
             per_device_train_batch_size=args.batch_size,
             gradient_accumulation_steps=args.gradient_accumulation,
             learning_rate=args.learning_rate,

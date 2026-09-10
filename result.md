@@ -168,3 +168,8 @@ This file is the concise experiment memory shared by the user and Codex. The com
 ## 2026-09-09 CoCoOp-style经典动态Prompt基线
 
 - `pathvqa_cocoop_style_p20_h160_seed44_20260909`以冻结post-merger视觉Token均值、`2560->160->2560` Meta-Net和P20实现图像条件Prompt，共873,120参数。PathVQA Validation为**57.4053 Overall /89.8560 Yes-No /25.0479 Free-form**，图像簇95% CI[55.9473,58.7765]。它比Static Prompt epoch3约高2.54分，但比同seed QDPT-D768低2.16、比Sandwich低3.37；`where`仅57.70，对应QDPT72.62和Sandwich76.04。Meta-Net末段梯度稳定约0.999，动态偏置达到静态Prompt范数的18%-23%，排除分支死亡或被P20压制。结论是图像条件化本身有效且极具参数效率，但全局图像均值无法替代问题Q对视觉K/V的定向证据检索。
+
+## 2026-09-10 QDPT因果位置与静态视觉基线
+
+- Sandwich `[P20; Visual; Z10; Question]`为**60.7765**，显著优于全放视觉后`[Visual; P20; Z10; Question]`的**59.2587**和反向Sandwich `[Z10; Visual; P20; Question]`的**58.1243**。最有效的分工是静态领域先验在视觉前、问题条件化证据在视觉后且靠近问题；收益不是把任意Prompt放到视觉后即可获得。
+- Static Visual Layer17 V20仅得**35.9482/68.7040/3.2865**，20,480参数；Dual Static V20+P20为**54.6253/88.3840/20.9636**，71,680参数，与Static LLM Prompt约54.87基本持平。视觉Prompt单独几乎不能完成生成式任务，双侧静态Prompt也不能复现QDPT增益，进一步确认关键贡献来自问题引导的视觉证据检索和动态LLM Prompt，而不是额外Prompt容量。

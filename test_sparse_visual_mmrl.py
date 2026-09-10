@@ -815,6 +815,41 @@ class SparseVisualMMRLTest(unittest.TestCase):
                 )
                 self.assertEqual(compressed_total, expected_total)
 
+        rank256_text_projection = ZeroInitWorkspaceProjection(
+            768,
+            2560,
+            hidden_dim=256,
+        )
+        rank256_adapter = DirectionalConcatWorkspaceVisual(
+            visual_dim=1024,
+            text_dim=2560,
+            anchor_layer=17,
+            private_prompt_tokens=8,
+            workspace_tokens=10,
+            workspace_dim=768,
+            workspace_heads=16,
+            visual_dynamic_write=False,
+        )
+        rank256_total = (
+            sum(parameter.numel() for parameter in rank256_adapter.parameters())
+            + sum(
+                parameter.numel()
+                for parameter in rank256_text_projection.parameters()
+            )
+            + private_text_prompt.numel()
+            + workspace_text_anchor.numel()
+        )
+        self.assertEqual(rank256_text_projection.hidden_dim, 256)
+        self.assertEqual(
+            tuple(rank256_text_projection.input_projection.weight.shape),
+            (256, 768),
+        )
+        self.assertEqual(
+            tuple(rank256_text_projection.output_projection.weight.shape),
+            (2560, 256),
+        )
+        self.assertEqual(rank256_total, 6_100_736)
+
         unified_adapter = DirectionalConcatWorkspaceVisual(
             visual_dim=1024,
             text_dim=2560,

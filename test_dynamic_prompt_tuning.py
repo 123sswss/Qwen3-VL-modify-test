@@ -584,6 +584,54 @@ class DynamicPromptTuningTest(unittest.TestCase):
                 "static_before_visual_dynamic_after_visual",
             )
 
+    def test_directional_rank256_text_head_round_trip(self):
+        kwargs = dict(
+            tokenizer=_FakeTokenizer(),
+            prompt_length=2,
+            init_seed=5,
+            attention_dim=4,
+            num_heads=2,
+            sparse_visual_anchor_layers=(1,),
+            sparse_visual_rep_tokens=2,
+            workspace_tokens=3,
+            workspace_dim=8,
+            workspace_heads=2,
+            directional_concat_workspace=True,
+            directional_sandwich_text_prompt=True,
+            directional_text_projection_hidden_dim=4,
+        )
+        model = DynamicPromptTuningModel(_FakeMultimodalModel(), **kwargs)
+        self.assertEqual(model.workspace_text_projection.hidden_dim, 4)
+        workspace = torch.randn(1, 3, 8)
+        model.sparse_visual.shared_workspace_text_memory = lambda: workspace
+        output = model(**self._batch())
+        output.loss.backward()
+        self.assertGreater(
+            float(model.workspace_text_projection.output_projection.weight.grad.norm()),
+            0.0,
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            checkpoint = Path(directory)
+            model.save_dynamic_prompt(checkpoint)
+            config = json.loads(
+                (checkpoint / "dynamic_prompt_config.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            self.assertEqual(
+                config["directional_concat_workspace"][
+                    "text_projection_hidden_dim"
+                ],
+                4,
+            )
+            restored = DynamicPromptTuningModel(_FakeMultimodalModel(), **kwargs)
+            restored.load_dynamic_prompt(checkpoint)
+            for key, value in model.workspace_text_projection.state_dict().items():
+                torch.testing.assert_close(
+                    restored.workspace_text_projection.state_dict()[key],
+                    value,
+                )
+
     def _assert_directional_prompt_placement(
         self,
         placement,

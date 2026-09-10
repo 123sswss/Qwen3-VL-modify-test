@@ -459,6 +459,14 @@ def parse_args(dataset_name: str = "pathvqa") -> argparse.Namespace:
         help="Explicit causal placement for static and dynamic text Prompts.",
     )
     parser.add_argument(
+        "--directional-text-projection-hidden-dim",
+        type=int,
+        help=(
+            "Optional hidden rank for the Directional Z-to-LLM Prompt head; "
+            "defaults to workspace-dim."
+        ),
+    )
+    parser.add_argument(
         "--directional-visual-dynamic-write",
         action=argparse.BooleanOptionalAction,
         default=True,
@@ -566,6 +574,19 @@ def parse_args(dataset_name: str = "pathvqa") -> argparse.Namespace:
         parser.error("Learning rates must be positive")
     if args.dataloader_workers < 0:
         parser.error("--dataloader-workers must be non-negative")
+    if (
+        args.directional_text_projection_hidden_dim is not None
+        and args.directional_text_projection_hidden_dim < 1
+    ):
+        parser.error("--directional-text-projection-hidden-dim must be positive")
+    if (
+        args.directional_text_projection_hidden_dim is not None
+        and not args.directional_concat_workspace
+    ):
+        parser.error(
+            "--directional-text-projection-hidden-dim requires "
+            "--directional-concat-workspace"
+        )
     if args.marathon_validation and dataset_name != "pathvqa":
         parser.error("--marathon-validation is supported only for PathVQA")
     if args.marathon_validation and not (
@@ -784,6 +805,9 @@ def main(dataset_name: str = "pathvqa") -> int:
         directional_visual_conditioning=args.directional_visual_conditioning,
         directional_sandwich_text_prompt=args.directional_sandwich_text_prompt,
         directional_text_prompt_placement=args.directional_text_prompt_placement,
+        directional_text_projection_hidden_dim=(
+            args.directional_text_projection_hidden_dim
+        ),
     )
     dataset = _build_train_dataset(dataset_name, args, processor)
     groups = model.trainable_parameter_groups()
@@ -837,6 +861,8 @@ def main(dataset_name: str = "pathvqa") -> int:
         f"directional_query_source={args.directional_query_source if args.directional_concat_workspace else 'none'} "
         f"directional_visual_conditioning={args.directional_visual_conditioning if args.directional_concat_workspace else 'none'} "
         f"directional_text_prompt_placement={model.directional_text_prompt_placement} "
+        f"directional_text_projection_hidden_dim="
+        f"{model.directional_text_projection_hidden_dim if args.directional_concat_workspace else 0} "
         f"workspace_tokens={args.workspace_tokens if args.shared_workspace else 0} "
         f"directional_workspace_tokens={args.workspace_tokens if args.directional_concat_workspace else 0} "
         f"workspace_dim={args.workspace_dim if (args.shared_workspace or args.directional_concat_workspace) else 0} "
@@ -1023,6 +1049,9 @@ def main(dataset_name: str = "pathvqa") -> int:
                     else "read_only_anchor_layer_hook"
                 ),
                 "text_output_interface": "dynamic_anchor_token_concat",
+                "text_projection_hidden_dim": (
+                    model.workspace_text_projection.hidden_dim
+                ),
                 "text_dynamic_projection_zero_initialized": True,
                 "visual_dynamic_projection_zero_initialized": (
                     args.directional_visual_dynamic_write

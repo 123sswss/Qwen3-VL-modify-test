@@ -103,9 +103,11 @@ DRAPE 已在多模态持续指令微调中证明：任务级静态 Prompt 难以
 
 固定最终 D768、seed44、`Q10/Z10`、Layer17 `S8+A_v10`、全部初始化和学习率，只把 LLM 输入从 `[P20; A_t10+DeltaP10; Visual; Question]` 改为 `[P20; Visual; A_t10+DeltaP10; Question]`。其中 `P20` 紧邻 `<|vision_start|>` 之前，动态10个 Prompt 紧邻 `<|vision_end|>` 之后，不进入视觉包装内部。该实验检验因果 LLM 中 Prompt 位置是否限制视觉 Token 对任务先验的可见性，以及将问题条件化证据放在问题之前、视觉之后是否更符合功能分工。实验名为 `pathvqa_qdpt_d768_question_q10_l17_p20_s8_av10_sandwich_seed44`，只跑 PathVQA 三轮固定协议。
 
-Sandwich取得明确收益后，仅追加两个同seed、同参数、同初始化的位置控制：`[Visual; P20; Dynamic10; Question]`检验静态P是否必须引导视觉Token，`[Dynamic10; Visual; P20; Question]`将20/10两组Prompt的位置完全对调。两项只改变因果顺序，串行目标为`pathvqa_qdpt_d768_prompt_placement_controls_seed44`；任一失败仍继续另一项，默认不自动关机。
+Sandwich取得明确收益后追加的两个同seed位置控制均已完成：`[Visual; P20; Dynamic10; Question]`为59.2587，`[Dynamic10; Visual; P20; Question]`为58.1243，均低于Sandwich `[P20; Visual; Dynamic10; Question]`的60.7765。位置机制已经闭环：静态P应在视觉前提供领域先验，动态证据应在视觉后靠近问题；停止追加Prompt顺序搜索。
 
 `P20 + Dynamic20` 槽数实验降为低优先级：现有结构本来就是20个静态领域 Prompt 加10个动态证据 Prompt，当前先隔离位置效应，不把槽数和位置同时改变。除非 Sandwich 获得明确收益或审稿阶段要求 Prompt 数量敏感性，否则不运行20+20。
+
+Sandwich 60.7765永久保留为不可移动的Dense D768主基线。新增一次独立效率端点`QDPT-Lite R256`：只将文本动态输出头由`768->768->2560`改为`768->256->2560`，保留D768问题引导视觉检索、Q10、Layer17、S8+A_v10、P20/Z10位置和全部学习率。预计参数由7,805,184降至6,100,736；只跑PathVQA seed44。若相对60.7765下降不超过1分，则作为Lite效率版本，不替换Dense主模型；超过1分则记为负容量控制并停止。
 
 ### 3.3 架构冻结规则
 
@@ -128,8 +130,8 @@ Sandwich取得明确收益后，仅追加两个同seed、同参数、同初始�
 |---|---|---|---|
 | Frozen Base | 不训练参数 | 适配增益下界 | PathVQA 已有 |
 | Static Prompt Tuning | P20，51.2K 参数 | 样本无关 Prompt 基线 | PathVQA/SLAKE 已有 |
-| Static Visual Prompt | 固定视觉Prompt，不生成LLM动态Prompt | 视觉侧Prompt基线 | 待补PathVQA seed44 |
-| Dual Static Prompt | 静态视觉Prompt + 静态LLM Prompt | 排除收益仅来自双侧增加Prompt | 待补PathVQA seed44 |
+| Static Visual Prompt | 固定视觉Prompt，不生成LLM动态Prompt | 视觉侧Prompt基线 | 已完成：35.9482，视觉侧单独近乎无效 |
+| Dual Static Prompt | 静态视觉Prompt + 静态LLM Prompt | 排除收益仅来自双侧增加Prompt | 已完成：54.6253，与Static LLM Prompt基本持平 |
 | CoCoOp-style Conditional Prompt | 当前图像特征经轻量Meta-Net生成实例级LLM Prompt，不使用问题Query | 经典图像条件动态Prompt的统一协议近似复现 | **已完成PathVQA seed44：57.4053，873,120参数** |
 | BLIP-2 Q-Former-style Prompt | 可学习静态Q10读取冻结视觉K/V，再映射为LLM Prompt | 经典learned-query视觉桥接的统一协议近似复现 | **优先审计现有learned-query结果，必要时补实现** |
 | GRASP | 问题语义对固定空间块打分，以Entmax稀疏加权空间Prompt原型并生成1个全局Prompt | 同范式直接竞争方法 | **PathVQA已完成39.7508；停止SLAKE与调参** |
@@ -303,8 +305,8 @@ CoTBox-TTT可以计入“同方向Related Work”的文献数量，但**不计�
 | P0 | D768 learned static query | 44 | 证明 question-guided Q 的必要性 |
 | P0 | D768视觉前缀改为`A_v10 + Proj(Z10)`硬拼接 | 44/45/46 | 单卡串行三seed；检验独立动态Z视觉Token能否替代重复的`S_v8+A_v10`静态前缀，并直接得到稳定性结论 |
 | P0 | 最终 D768 复现 | 45/46 | 主方法均值与稳定性 |
-| P0 | Static Visual Prompt | 44 | 代码已完成，待运行；Layer17插入V20，仅训练20,480个视觉Prompt参数 |
-| P0 | Dual Static Prompt | 44 | 代码已完成，待运行；Layer17 V20 + LLM P20，共训练71,680参数 |
+| P0 | Static Visual Prompt | 44 | 已完成：35.9482/68.7040/3.2865；Layer17 V20，仅20,480参数 |
+| P0 | Dual Static Prompt | 44 | 已完成：54.6253/88.3840/20.9636；Layer17 V20 + LLM P20，共71,680参数 |
 | Completed | Image-conditioned Prompt | 44 | 已由CoCoOp-style P20/H160覆盖：仅使用post-merger图像均值，不读取问题 |
 | Appendix-complete | Full-Attention LoRA-r8复现 | 44/45/46 | 已完成，仅作为附录跨范式参考 |
 | Cancelled | Full-Attention LoRA-r4/r16 | 44 | 不再运行；不扩展跨范式容量扫描 |

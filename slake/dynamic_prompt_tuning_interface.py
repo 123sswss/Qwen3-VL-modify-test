@@ -210,6 +210,16 @@ class DynamicPromptTuningModelInterface:
                 if directional_workspace is not None
                 else None
             ),
+            directional_text_projection_hidden_dim=(
+                int(
+                    directional_workspace.get(
+                        "text_projection_hidden_dim",
+                        workspace_config["dim"],
+                    )
+                )
+                if directional_workspace is not None
+                else None
+            ),
         )
         self.model.load_dynamic_prompt(checkpoint)
         self.model.eval()
@@ -247,6 +257,8 @@ class DynamicPromptTuningModelInterface:
             f"directional_query_source={self.model.directional_query_source} "
             f"directional_visual_conditioning="
             f"{self.model.directional_visual_conditioning} "
+            f"directional_text_projection_hidden_dim="
+            f"{self.model.directional_text_projection_hidden_dim} "
             f"train_soft_prompt={self.model.soft_prompt is not None} "
             f"intervention={intervention} memory_lag={memory_lag} "
             f"workspace_visual_write_disabled={list(workspace_visual_write_disabled_layers)} "

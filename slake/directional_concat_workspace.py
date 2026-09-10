@@ -54,15 +54,23 @@ def resolve_sparse_visual_rep_tokens(
 class ZeroInitWorkspaceProjection(nn.Module):
     """Map workspace slots to anchored prompt tokens with a zero initial delta."""
 
-    def __init__(self, workspace_dim: int, output_dim: int) -> None:
+    def __init__(
+        self,
+        workspace_dim: int,
+        output_dim: int,
+        hidden_dim: int | None = None,
+    ) -> None:
         super().__init__()
-        if workspace_dim < 1 or output_dim < 1:
+        if hidden_dim is None:
+            hidden_dim = workspace_dim
+        if workspace_dim < 1 or output_dim < 1 or hidden_dim < 1:
             raise ValueError("Workspace projection dimensions must be positive")
         self.workspace_dim = int(workspace_dim)
         self.output_dim = int(output_dim)
+        self.hidden_dim = int(hidden_dim)
         self.norm = nn.LayerNorm(self.workspace_dim)
-        self.input_projection = nn.Linear(self.workspace_dim, self.workspace_dim)
-        self.output_projection = nn.Linear(self.workspace_dim, self.output_dim)
+        self.input_projection = nn.Linear(self.workspace_dim, self.hidden_dim)
+        self.output_projection = nn.Linear(self.hidden_dim, self.output_dim)
         nn.init.zeros_(self.output_projection.weight)
         nn.init.zeros_(self.output_projection.bias)
         self.debug_context: Dict[str, torch.Tensor] = {}
@@ -121,6 +129,7 @@ class ZeroInitWorkspaceProjection(nn.Module):
                 print(
                     "[DIRECTIONAL_WORKSPACE_TEXT_ZERO_INIT_AUDIT] "
                     f"workspace_shape={tuple(workspace.shape)} "
+                    f"hidden_dim={self.hidden_dim} "
                     f"anchor_shape={tuple(anchor.shape)} max_abs_delta=0.0 pass=True"
                 )
                 self._forward_audited = True

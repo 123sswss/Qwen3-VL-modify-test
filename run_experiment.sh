@@ -1016,7 +1016,7 @@ run_qdpt_d768_final_dataset() {
   esac
 
   local experiment_stem expected_trainable query_source static_visual_write
-  local visual_conditioning text_prompt_placement
+  local visual_conditioning text_prompt_placement text_projection_hidden_dim
   local private_visual_tokens visual_workspace_tokens unified_visual_tokens
   local visual_prompt_tokens_arg
   local direct_visual_z_tokens=false
@@ -1026,6 +1026,7 @@ run_qdpt_d768_final_dataset() {
   unified_visual_tokens=0
   visual_conditioning="cross_attention"
   text_prompt_placement="all_prompts_before_chat"
+  text_projection_hidden_dim=768
   case "$variant" in
     question_static_visual)
       experiment_stem="qdpt_d768_question_q10_l17_p20_s8_av10"
@@ -1051,6 +1052,22 @@ run_qdpt_d768_final_dataset() {
         --directional-query-source question_attention_pooling
         --directional-static-visual-write
         --directional-sandwich-text-prompt
+      )
+      ;;
+    question_static_visual_sandwich_r256)
+      experiment_stem="qdpt_lite_d768_r256_question_q10_l17_p20_s8_av10_sandwich"
+      expected_trainable=6100736
+      query_source="question_attention_pooling"
+      static_visual_write=true
+      private_visual_tokens=8
+      visual_workspace_tokens=10
+      text_prompt_placement="static_before_visual_dynamic_after_visual"
+      text_projection_hidden_dim=256
+      control_flags=(
+        --directional-query-source question_attention_pooling
+        --directional-static-visual-write
+        --directional-sandwich-text-prompt
+        --directional-text-projection-hidden-dim 256
       )
       ;;
     question_static_visual_all_after)
@@ -1194,7 +1211,7 @@ run_qdpt_d768_final_dataset() {
   local output_dir
   output_dir="$(available_output_dir "$output_root" "${experiment_name}_${RUN_DATE}")"
   mkdir -p "$output_dir"
-  echo "[QDPT_D768_FINAL_CONFIG] dataset=$dataset experiment=$experiment_name seed=$run_seed data_seed=42 anchors=${anchor_layers[*]} parameter_sharing=all_directional_and_visual_prompt_parameters private_text_prompt=20 text_workspace_anchor=10 private_visual_prompt=$private_visual_tokens visual_workspace_anchor=$visual_workspace_tokens unified_static_visual_prompt=$unified_visual_tokens workspace=10x768 query_source=$query_source visual_conditioning=$visual_conditioning visual_kv=$([ "$visual_conditioning" = "cross_attention" ] && printf 'full_current_anchor_tokens' || printf 'disabled') final_text_z=last_anchor static_visual_write=$static_visual_write direct_visual_z_tokens=$direct_visual_z_tokens visual_dynamic_write=false text_output=dynamic_anchor_token_concat text_prompt_placement=$text_prompt_placement expected_trainable=$expected_trainable epochs=3 full_evaluation=$eval_protocol intermediate_full_evaluation=disabled output=$output_dir"
+  echo "[QDPT_D768_FINAL_CONFIG] dataset=$dataset experiment=$experiment_name seed=$run_seed data_seed=42 anchors=${anchor_layers[*]} parameter_sharing=all_directional_and_visual_prompt_parameters private_text_prompt=20 text_workspace_anchor=10 private_visual_prompt=$private_visual_tokens visual_workspace_anchor=$visual_workspace_tokens unified_static_visual_prompt=$unified_visual_tokens workspace=10x768 query_source=$query_source visual_conditioning=$visual_conditioning visual_kv=$([ "$visual_conditioning" = "cross_attention" ] && printf 'full_current_anchor_tokens' || printf 'disabled') final_text_z=last_anchor static_visual_write=$static_visual_write direct_visual_z_tokens=$direct_visual_z_tokens visual_dynamic_write=false text_output=dynamic_anchor_token_concat text_projection_hidden_dim=$text_projection_hidden_dim text_prompt_placement=$text_prompt_placement expected_trainable=$expected_trainable epochs=3 full_evaluation=$eval_protocol intermediate_full_evaluation=disabled output=$output_dir"
   (
     cd "$ROOT_DIR" || exit 1
     python -m unittest \
@@ -1370,6 +1387,11 @@ run_pathvqa_qdpt_d768_unified_v20_rng_control_seed44() {
 run_pathvqa_qdpt_d768_sandwich_seed44() {
   run_qdpt_d768_final_dataset \
     pathvqa question_static_visual_sandwich 44
+}
+
+run_pathvqa_qdpt_lite_d768_r256_sandwich_seed44() {
+  run_qdpt_d768_final_dataset \
+    pathvqa question_static_visual_sandwich_r256 44
 }
 
 run_pathvqa_qdpt_d768_all_after_visual_seed44() {
@@ -2969,6 +2991,9 @@ case "$RUN_TARGET" in
     ;;
   pathvqa_qdpt_d768_sandwich_seed44)
     run_pathvqa_qdpt_d768_sandwich_seed44 || failures=$((failures + 1))
+    ;;
+  pathvqa_qdpt_lite_d768_r256_sandwich_seed44)
+    run_pathvqa_qdpt_lite_d768_r256_sandwich_seed44 || failures=$((failures + 1))
     ;;
   pathvqa_qdpt_d768_all_after_visual_seed44)
     run_pathvqa_qdpt_d768_all_after_visual_seed44 || failures=$((failures + 1))

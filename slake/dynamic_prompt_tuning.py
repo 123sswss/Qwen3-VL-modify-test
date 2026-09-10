@@ -208,6 +208,7 @@ class DynamicPromptTuningModel(nn.Module):
         directional_visual_conditioning: str = "cross_attention",
         directional_sandwich_text_prompt: bool = False,
         directional_text_prompt_placement: str | None = None,
+        directional_text_projection_hidden_dim: int | None = None,
     ) -> None:
         super().__init__()
         if prompt_length < 1:
@@ -292,6 +293,18 @@ class DynamicPromptTuningModel(nn.Module):
         )
         self.directional_text_prompt_placement = str(
             directional_text_prompt_placement
+        )
+        if (
+            directional_text_projection_hidden_dim is not None
+            and directional_text_projection_hidden_dim < 1
+        ):
+            raise ValueError(
+                "directional_text_projection_hidden_dim must be positive"
+            )
+        self.directional_text_projection_hidden_dim = (
+            int(directional_text_projection_hidden_dim)
+            if directional_text_projection_hidden_dim is not None
+            else int(workspace_dim)
         )
         # Backward-compatible alias for old checkpoints and callers.
         self.directional_sandwich_text_prompt = (
@@ -397,6 +410,7 @@ class DynamicPromptTuningModel(nn.Module):
                 self.workspace_text_projection = ZeroInitWorkspaceProjection(
                     int(workspace_dim),
                     self.hidden_size,
+                    hidden_dim=self.directional_text_projection_hidden_dim,
                 ).to(device=embeddings.device)
             else:
                 self.register_parameter("workspace_text_anchor", None)
@@ -1430,6 +1444,9 @@ class DynamicPromptTuningModel(nn.Module):
                     "private_text_prompt_tokens": self.private_prompt_length,
                     "text_workspace_anchor_tokens": self.workspace_prompt_length,
                     "text_prompt_placement": self.directional_text_prompt_placement,
+                    "text_projection_hidden_dim": (
+                        self.workspace_text_projection.hidden_dim
+                    ),
                     "query": self.sparse_visual.query_source,
                     "visual_conditioning": (
                         self.sparse_visual.visual_conditioning

@@ -401,7 +401,10 @@ CoTBox-TTT可以计入“同方向Related Work”的文献数量，但**不计�
 
 ### Day 4：一次性 Test、统计与制图（2026-09-05）
 
-- [ ] 锁定 Validation 决策后，对最终 checkpoint 运行一次正式 Test。
+- [x] 完成最终 Dense D768 Sandwich 的 PathVQA seed46 Validation；seed44/45/46为60.7765/57.2935/59.3865，三seed为59.1522 +/- 1.7528，确认明显初始化敏感性。
+- [x] 锁定 Validation 决策后，对最终三个 checkpoint 各运行一次正式 Test；三seed Test为60.4554/56.8983/59.2945，均值58.8827 +/- 1.8141，未根据Test重新选择模型。
+- [x] 完成SLAKE最终Sandwich seed44/45/46：76.74/76.65/77.46，三seed76.95 +/- 0.44；相对旧非Sandwich均值77.03无增益，不再修改架构或追加训练。
+- [ ] 仅补PathVQA最终Dense Sandwich seed47 Validation，用于降低三seed估计对单个坏初始化的权重并进一步量化软Prompt方差；预注册为唯一新增seed，无论结果高低均与44/45/46汇总为四seed结果。不运行seed48、SLAKE seed47或任何新增Test。
 - [ ] 计算 multi-seed mean ± std、McNemar、image-clustered paired bootstrap CI。
 - [ ] 生成主性能表、容量表、消融表、效率表和文献独立表。
 - [ ] 生成架构图、Pareto 图、宽度曲线和 mismatch 图。
@@ -426,6 +429,8 @@ CoTBox-TTT可以计入“同方向Related Work”的文献数量，但**不计�
 3. 可选基线实现失败不得拖延主方法实验。
 4. 不根据 Test 结果选择 checkpoint、修改结构或调整措辞中的数值门槛。
 5. 若 D768 多 seed 不稳定，诚实报告均值和方差，并把“优于”降为“具有竞争力”。
+   最终 Sandwich 已在 seed44/45 间出现3.4830分差距。主表和摘要结论必须以三 seed mean +/- std 为准；60.7765只能明确标注为 best seed。Analysis/Limitations需报告软Prompt初始化敏感性，并用P20/文本锚点/Workspace范数、视觉注意力熵和视觉梯度轨迹说明这是早期优化分岔，而非配置漂移、断图或评估错误。
+   正文将该现象放回软Prompt优化对初始化与学习率敏感的既有问题中讨论，并补对应文献引用；不得把单个实验观察写成普遍定律，也不得用该问题为只报告最佳seed辩护。
 6. 不再追加权重空间PEFT容量扫描；已有强参考只用于界定方法边界，不为追赶其绝对分数修改QDPT。
 7. no-static-visual已显著掉分；保留旧`S8@3e-5+A_v10@1e-4`静态视觉校准。统一V20受控复跑仍显著低1.04分，不再为结构外观设计替代支路。
 8. 若 SLAKE 提升较弱，保留为跨数据集边界结果，不回到 SLAKE 做定制搜索。

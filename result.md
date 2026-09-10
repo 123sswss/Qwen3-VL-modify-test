@@ -177,3 +177,14 @@ This file is the concise experiment memory shared by the user and Codex. The com
 ## 2026-09-10 QDPT-Lite R256输出头负结果
 
 - `pathvqa_qdpt_lite_d768_r256_question_q10_l17_p20_s8_av10_sandwich_seed44_20260910`只把Dense Sandwich的文本输出头从`768->768->2560`压缩为`768->256->2560`，参数由7.805M降至6.101M（-21.84%），但Validation降至**57.4213/90.7840/24.1544**，较60.7765 Dense基线下降3.3552，远超1分止损线；`where`下降17.36。CA和动态残差保持活跃，失败是LLM空间表达瓶颈而非分支死亡。拒绝R256，不跑R160或更多seed，永久保留Dense D768 Sandwich为最终方法。
+## 2026-09-10 Final Dense Sandwich seed sensitivity
+
+- PathVQA Dense D768 Sandwich seed45 Validation is **57.2935/90.6880/23.9949**, versus seed44 **60.7765/92.7360/28.9087**, despite identical architecture,7,805,184 parameters, data seed42 and training protocol.
+- The3.4830-point Overall gap is accompanied by an early and persistent lower-scale optimization path: final P20, text-anchor and Workspace norms are574.94/471.84/35.50 for seed45 versus767.82/544.87/46.51 for seed44. Seed45 also has more diffuse final visual attention entropy0.6467 versus0.5179 and roughly4.2x the final sparse-visual gradient, while mismatch audits remain zero.
+- Treat this as initialization sensitivity of the soft-Prompt/Workspace optimization, not configuration drift or a dead branch. Use the completed three-seed mean +/- standard deviation as the primary paper result; label60.7765 only as the best seed and discuss sensitivity explicitly in Analysis/Limitations. Seed46 is pending in the final suite.
+
+## 2026-09-10 Final Dense Sandwich suite complete
+
+- PathVQA已全部完成。Validation seeds44/45/46为60.7765/57.2935/59.3865，三seed **59.1522 +/- 1.7528**；Test为60.4554/56.8983/59.2945，三seed **58.8827 +/- 1.8141**。Test与Validation保持相同seed排序，初始化敏感性主要体现在Free-form和`where`。
+- SLAKE最终Sandwich seeds44/45/46 Test为**76.74/76.65/77.46**，三seed **76.95 +/- 0.44**；CLOSED/OPEN均值84.01/72.26，KVQA/VQA均值62.17/79.11，EN/ZH均值77.51/76.38。相对旧非Sandwich均值77.03几乎不变(-0.08)，说明因果位置收益集中在PathVQA，未迁移为SLAKE准确率增益。
+- 最终套件8/8全部完成。PathVQA mean Validation与LoRA-r8约持平，但SLAKE仍低LoRA-r8均值4.87分且参数更多；论文必须表述为任务相关的准确率-适配范式权衡，不宣称普遍击败LoRA。

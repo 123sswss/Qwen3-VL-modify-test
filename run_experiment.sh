@@ -1389,6 +1389,10 @@ run_pathvqa_qdpt_d768_sandwich_seed44() {
     pathvqa question_static_visual_sandwich 44
 }
 
+run_pathvqa_qdpt_d768_sandwich_seed47() {
+  ensure_qdpt_sandwich_run pathvqa 47
+}
+
 run_pathvqa_qdpt_lite_d768_r256_sandwich_seed44() {
   run_qdpt_d768_final_dataset \
     pathvqa question_static_visual_sandwich_r256 44
@@ -3099,6 +3103,9 @@ case "$RUN_TARGET" in
     ;;
   pathvqa_qdpt_d768_sandwich_seed44)
     run_pathvqa_qdpt_d768_sandwich_seed44 || failures=$((failures + 1))
+    ;;
+  pathvqa_qdpt_d768_sandwich_seed47)
+    run_pathvqa_qdpt_d768_sandwich_seed47 || failures=$((failures + 1))
     ;;
   pathvqa_qdpt_lite_d768_r256_sandwich_seed44)
     run_pathvqa_qdpt_lite_d768_r256_sandwich_seed44 || failures=$((failures + 1))

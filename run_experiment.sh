@@ -1394,6 +1394,114 @@ run_pathvqa_qdpt_lite_d768_r256_sandwich_seed44() {
     pathvqa question_static_visual_sandwich_r256 44
 }
 
+find_completed_qdpt_sandwich_run() {
+  local dataset="$1"
+  local run_seed="$2"
+  local output_root required_summary candidate
+  case "$dataset" in
+    pathvqa)
+      output_root="$PATHVQA_DYNAMIC_PROMPT_OUTPUT_ROOT"
+      required_summary="eval_validation/epoch_3/pathvqa_summary.json"
+      ;;
+    slake)
+      output_root="$SLAKE_DYNAMIC_PROMPT_OUTPUT_ROOT"
+      required_summary="eval_test/epoch_3/slake_summary.json"
+      ;;
+    *)
+      echo "[ERR] Unsupported completed Sandwich lookup dataset: $dataset" >&2
+      return 2
+      ;;
+  esac
+  while IFS= read -r candidate; do
+    if [ -f "$candidate/checkpoints/epoch_3/dynamic_prompt_config.json" ] \
+      && [ -f "$candidate/checkpoints/epoch_3/dynamic_prompt.pt" ] \
+      && [ -f "$candidate/$required_summary" ]; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done < <(
+    find "$output_root" -mindepth 1 -maxdepth 1 -type d \
+      -name "${dataset}_qdpt_d768_question_q10_l17_p20_s8_av10_sandwich_seed${run_seed}_*" \
+      -printf '%T@\t%p\n' 2>/dev/null \
+      | sort -nr \
+      | cut -f2-
+  )
+  return 1
+}
+
+ensure_qdpt_sandwich_run() {
+  local dataset="$1"
+  local run_seed="$2"
+  local completed_run
+  completed_run="$(find_completed_qdpt_sandwich_run "$dataset" "$run_seed")" \
+    || completed_run=""
+  if [ -n "$completed_run" ]; then
+    echo "[QDPT_SANDWICH_SKIP_COMPLETE] dataset=$dataset seed=$run_seed run=$completed_run"
+    return 0
+  fi
+  echo "[QDPT_SANDWICH_TRAIN] dataset=$dataset seed=$run_seed status=starting"
+  run_qdpt_d768_final_dataset \
+    "$dataset" question_static_visual_sandwich "$run_seed"
+}
+
+run_pathvqa_qdpt_sandwich_final_test() {
+  local run_seed="$1"
+  local source_run checkpoint summary test_score
+  source_run="$(find_completed_qdpt_sandwich_run pathvqa "$run_seed")" \
+    || source_run=""
+  if [ -z "$source_run" ]; then
+    echo "[ERR] No completed PathVQA Dense Sandwich run for seed=$run_seed" >&2
+    return 1
+  fi
+  checkpoint="$source_run/checkpoints/epoch_3"
+  summary="$source_run/eval_test/epoch_3/pathvqa_summary.json"
+  if [ -f "$summary" ]; then
+    echo "[PATHVQA_QDPT_SANDWICH_TEST_SKIP_COMPLETE] seed=$run_seed summary=$summary"
+  else
+    echo "[PATHVQA_QDPT_SANDWICH_FINAL_TEST] seed=$run_seed checkpoint=$checkpoint"
+    run_pathvqa_dynamic_prompt_eval \
+      "$checkpoint" \
+      test \
+      "$source_run/eval_test/epoch_3" \
+      "$source_run/eval_test_epoch_3.log" || return 1
+  fi
+  test_score="$(python -c 'import json,sys;print(json.load(open(sys.argv[1],encoding="utf-8"))["overall_accuracy"])' "$summary")" \
+    || return 1
+  printf 'experiment\tseed\tprotocol\ttest_epoch\ttest_accuracy\tcheckpoint\n' \
+    > "$source_run/final_test_result.tsv"
+  printf '%s\t%s\tfixed_epoch3_test\t3\t%s\t%s\n' \
+    "pathvqa_qdpt_d768_question_q10_l17_p20_s8_av10_sandwich_seed${run_seed}" \
+    "$run_seed" "$test_score" "$checkpoint" \
+    >> "$source_run/final_test_result.tsv"
+  cat "$source_run/final_test_result.tsv"
+}
+
+run_qdpt_dense_sandwich_final_suite() {
+  local suite_failures=0
+  local run_seed
+
+  for run_seed in 45 46; do
+    ensure_qdpt_sandwich_run pathvqa "$run_seed" \
+      || suite_failures=$((suite_failures + 1))
+  done
+
+  for run_seed in 44 45 46; do
+    run_pathvqa_qdpt_sandwich_final_test "$run_seed" \
+      || suite_failures=$((suite_failures + 1))
+  done
+
+  for run_seed in 44 45 46; do
+    ensure_qdpt_sandwich_run slake "$run_seed" \
+      || suite_failures=$((suite_failures + 1))
+  done
+
+  if [ "$suite_failures" -ne 0 ]; then
+    echo "[ERR] QDPT Dense Sandwich final suite failures=$suite_failures; all remaining items were attempted." >&2
+    return 1
+  fi
+  echo "[QDPT_DENSE_SANDWICH_FINAL_SUITE_DONE] pathvqa_seeds=44,45,46 pathvqa_test=true slake_seeds=44,45,46 slake_test=true status=completed"
+}
+
 run_pathvqa_qdpt_d768_all_after_visual_seed44() {
   run_qdpt_d768_final_dataset \
     pathvqa question_static_visual_all_after 44
@@ -2994,6 +3102,9 @@ case "$RUN_TARGET" in
     ;;
   pathvqa_qdpt_lite_d768_r256_sandwich_seed44)
     run_pathvqa_qdpt_lite_d768_r256_sandwich_seed44 || failures=$((failures + 1))
+    ;;
+  qdpt_dense_sandwich_final_suite)
+    run_qdpt_dense_sandwich_final_suite || failures=$((failures + 1))
     ;;
   pathvqa_qdpt_d768_all_after_visual_seed44)
     run_pathvqa_qdpt_d768_all_after_visual_seed44 || failures=$((failures + 1))

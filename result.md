@@ -173,3 +173,7 @@ This file is the concise experiment memory shared by the user and Codex. The com
 
 - Sandwich `[P20; Visual; Z10; Question]`为**60.7765**，显著优于全放视觉后`[Visual; P20; Z10; Question]`的**59.2587**和反向Sandwich `[Z10; Visual; P20; Question]`的**58.1243**。最有效的分工是静态领域先验在视觉前、问题条件化证据在视觉后且靠近问题；收益不是把任意Prompt放到视觉后即可获得。
 - Static Visual Layer17 V20仅得**35.9482/68.7040/3.2865**，20,480参数；Dual Static V20+P20为**54.6253/88.3840/20.9636**，71,680参数，与Static LLM Prompt约54.87基本持平。视觉Prompt单独几乎不能完成生成式任务，双侧静态Prompt也不能复现QDPT增益，进一步确认关键贡献来自问题引导的视觉证据检索和动态LLM Prompt，而不是额外Prompt容量。
+
+## 2026-09-10 QDPT-Lite R256输出头负结果
+
+- `pathvqa_qdpt_lite_d768_r256_question_q10_l17_p20_s8_av10_sandwich_seed44_20260910`只把Dense Sandwich的文本输出头从`768->768->2560`压缩为`768->256->2560`，参数由7.805M降至6.101M（-21.84%），但Validation降至**57.4213/90.7840/24.1544**，较60.7765 Dense基线下降3.3552，远超1分止损线；`where`下降17.36。CA和动态残差保持活跃，失败是LLM空间表达瓶颈而非分支死亡。拒绝R256，不跑R160或更多seed，永久保留Dense D768 Sandwich为最终方法。

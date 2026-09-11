@@ -1389,10 +1389,6 @@ run_pathvqa_qdpt_d768_sandwich_seed44() {
     pathvqa question_static_visual_sandwich 44
 }
 
-run_pathvqa_qdpt_d768_sandwich_seed47() {
-  ensure_qdpt_sandwich_run pathvqa 47
-}
-
 run_pathvqa_qdpt_lite_d768_r256_sandwich_seed44() {
   run_qdpt_d768_final_dataset \
     pathvqa question_static_visual_sandwich_r256 44
@@ -1585,14 +1581,14 @@ run_pathvqa_qdpt_d768_marathon_seed44() {
   python -c 'import csv,pathlib,sys; root=pathlib.Path(sys.argv[1]); rows=list(csv.DictReader((root/"marathon_progress.tsv").open(encoding="utf-8"),delimiter="\t")); expected=list(range(3,11)); actual=[int(row["epoch"]) for row in rows if row["status"]=="complete"]; assert actual==expected,(actual,expected); assert all((root/"eval_validation"/f"epoch_{epoch}"/"pathvqa_summary.json").is_file() for epoch in expected); print("[QDPT_D768_MARATHON_PASS] epochs=3-10 progress="+str(root/"marathon_progress.tsv"))' "$output_dir" || return 1
 }
 
-run_electrical_qdpt_d768_seed44() {
-  local experiment_name="electrical_qdpt_d768_question_q10_l17_p20_s8_av10_seed44"
+run_electrical_qdpt_d768_sandwich_seed47() {
+  local experiment_name="electrical_qdpt_d768_question_q10_l17_p20_s8_av10_sandwich_seed47"
   local output_dir
   output_dir="$(available_output_dir \
     "$ELECTRICAL_QDPT_OUTPUT_ROOT" \
     "${experiment_name}_${RUN_DATE}")"
   mkdir -p "$output_dir"
-  echo "[ELECTRICAL_QDPT_CONFIG] experiment=$experiment_name seed=44 data_seed=42 anchors=17 private_text_prompt=20 private_visual_prompt=8 visual_workspace_anchor=10 workspace=10x768 query_source=question_attention_pooling visual_kv=full_layer17_tokens dynamic_visual_write=false expected_trainable=7805184 epochs=3 evaluation=private_fixed_holdout output=$output_dir"
+  echo "[ELECTRICAL_QDPT_CONFIG] experiment=$experiment_name seed=47 data_seed=42 anchors=17 private_text_prompt=20 private_visual_prompt=8 visual_workspace_anchor=10 workspace=10x768 query_source=question_attention_pooling visual_kv=full_layer17_tokens prompt_placement=sandwich dynamic_visual_write=false expected_trainable=7805184 epochs=3 evaluation=private_fixed_holdout output=$output_dir"
   (
     cd "$ROOT_DIR" || exit 1
     python -m unittest \
@@ -1618,12 +1614,13 @@ run_electrical_qdpt_d768_seed44() {
       --no-directional-visual-dynamic-write \
       --directional-query-source question_attention_pooling \
       --directional-static-visual-write \
+      --directional-sandwich-text-prompt \
       --workspace-tokens 10 \
       --workspace-dim 768 \
       --workspace-heads 16 \
       --workspace-lr "${ELECTRICAL_QDPT_WORKSPACE_LR:-1e-4}" \
       --epochs 3 \
-      --seed 44 \
+      --seed 47 \
       --data-seed 42 \
       --prompt-lr "${ELECTRICAL_QDPT_STATIC_LR:-0.3}" \
       --dynamic-lr 3e-4 \
@@ -1645,7 +1642,7 @@ run_electrical_qdpt_d768_seed44() {
   score="$(python -c 'import json,sys;print(json.load(open(sys.argv[1],encoding="utf-8"))["score"])' "$output_dir/eval_private/epoch_3/electrical_summary.json")" || return 1
   printf 'experiment\tseed\tepoch\tprivate_accuracy\tcheckpoint\tprotocol\n' \
     > "$output_dir/selected_result.tsv"
-  printf '%s\t44\t3\t%s\t%s\tprivate_fixed_holdout\n' \
+  printf '%s\t47\t3\t%s\t%s\tprivate_fixed_holdout\n' \
     "$experiment_name" "$score" "$checkpoint" \
     >> "$output_dir/selected_result.tsv"
   cat "$output_dir/selected_result.tsv"
@@ -3104,9 +3101,6 @@ case "$RUN_TARGET" in
   pathvqa_qdpt_d768_sandwich_seed44)
     run_pathvqa_qdpt_d768_sandwich_seed44 || failures=$((failures + 1))
     ;;
-  pathvqa_qdpt_d768_sandwich_seed47)
-    run_pathvqa_qdpt_d768_sandwich_seed47 || failures=$((failures + 1))
-    ;;
   pathvqa_qdpt_lite_d768_r256_sandwich_seed44)
     run_pathvqa_qdpt_lite_d768_r256_sandwich_seed44 || failures=$((failures + 1))
     ;;
@@ -3125,8 +3119,8 @@ case "$RUN_TARGET" in
   pathvqa_qdpt_d768_marathon_seed44)
     run_pathvqa_qdpt_d768_marathon_seed44 || failures=$((failures + 1))
     ;;
-  electrical_qdpt_d768_seed44)
-    run_electrical_qdpt_d768_seed44 || failures=$((failures + 1))
+  electrical_qdpt_d768_sandwich_seed47)
+    run_electrical_qdpt_d768_sandwich_seed47 || failures=$((failures + 1))
     ;;
   pathvqa_grasp_seed44)
     run_pathvqa_grasp_seed44 || failures=$((failures + 1))
@@ -3205,7 +3199,7 @@ case "$RUN_TARGET" in
     run_slake || failures=$((failures + 1))
     ;;
   *)
-    echo "[ERR] 未知目标: $RUN_TARGET；新增目标: pathvqa_cocoop_style_p20_h160_seed44、pathvqa_lora_full_model_attn_r8_seeds45_46、pathvqa_qdpt_d768_no_static_visual_seed44、pathvqa_qdpt_d768_no_static_visual_resume_eval、pathvqa_qdpt_d768_learned_static_query_seed44、pathvqa_qdpt_d768_question_only_seed44、pathvqa_qdpt_d768_direct_visual_z_concat_seeds44_46、pathvqa_qdpt_d768_layer_sensitivity_seed44、pathvqa_qdpt_d768_layer_sensitivity_resume_eval、electrical_qdpt_d768_seed44、qdpt_d768_final_pathvqa_slake_seed44、slake_qdpt_d768_final_seeds44_46、slake_lora_full_model_attn_r8_seeds44_46。" >&2
+    echo "[ERR] 未知目标: $RUN_TARGET；新增目标: pathvqa_cocoop_style_p20_h160_seed44、pathvqa_lora_full_model_attn_r8_seeds45_46、pathvqa_qdpt_d768_no_static_visual_seed44、pathvqa_qdpt_d768_no_static_visual_resume_eval、pathvqa_qdpt_d768_learned_static_query_seed44、pathvqa_qdpt_d768_question_only_seed44、pathvqa_qdpt_d768_direct_visual_z_concat_seeds44_46、pathvqa_qdpt_d768_layer_sensitivity_seed44、pathvqa_qdpt_d768_layer_sensitivity_resume_eval、electrical_qdpt_d768_sandwich_seed47、qdpt_d768_final_pathvqa_slake_seed44、slake_qdpt_d768_final_seeds44_46、slake_lora_full_model_attn_r8_seeds44_46。" >&2
     exit 2
     ;;
 esac

@@ -253,7 +253,7 @@ CoTBox-TTT可以计入“同方向Related Work”的文献数量，但**不计�
 
 - **PathVQA：主数据集。** 用于方法选择、宽度曲线、同范式Prompt对比、机制控制和主要统计结论。
 - **SLAKE：跨数据集验证。** 最终架构必须原样迁移，不允许根据 SLAKE 重新搜索层数、宽度或槽数。
-- **自建电气数据集：必做的补充应用案例。** 质量有限且不可开源，只允许最终方法 seed44 一次运行；不做多seed、消融或SOTA声明。
+- **自建电气数据集：必做的补充应用案例。** 质量有限且不可开源，只允许最终Dense Sandwich方法 seed47 一次运行；不做多seed、消融或SOTA声明。
 
 ### 5.2 划分和 Test 使用规则
 
@@ -328,7 +328,7 @@ CoTBox-TTT可以计入“同方向Related Work”的文献数量，但**不计�
 
 ### 6.4 补充数据集
 
-- [ ] 自建电气数据集：**必做**。最终 D768 seed44 一次；只报告应用可行性，不进行多 seed、消融或 SOTA 声明。专用训练/评估入口已实现，等待运行。
+- [ ] 自建电气数据集：**必做**。最终Dense D768 Sandwich seed47一次；只报告应用可行性，不进行多seed、消融或SOTA声明。专用训练/私有固定holdout评估入口已实现，等待运行。
 - [ ] 不新增第四个公开数据集。PathVQA + SLAKE 已足以支撑主张，自建数据集只展示跨领域应用。
 
 ## 7. 论文表格与图
@@ -404,11 +404,10 @@ CoTBox-TTT可以计入“同方向Related Work”的文献数量，但**不计�
 - [x] 完成最终 Dense D768 Sandwich 的 PathVQA seed46 Validation；seed44/45/46为60.7765/57.2935/59.3865，三seed为59.1522 +/- 1.7528，确认明显初始化敏感性。
 - [x] 锁定 Validation 决策后，对最终三个 checkpoint 各运行一次正式 Test；三seed Test为60.4554/56.8983/59.2945，均值58.8827 +/- 1.8141，未根据Test重新选择模型。
 - [x] 完成SLAKE最终Sandwich seed44/45/46：76.74/76.65/77.46，三seed76.95 +/- 0.44；相对旧非Sandwich均值77.03无增益，不再修改架构或追加训练。
-- [ ] 仅补PathVQA最终Dense Sandwich seed47 Validation，用于降低三seed估计对单个坏初始化的权重并进一步量化软Prompt方差；预注册为唯一新增seed，无论结果高低均与44/45/46汇总为四seed结果。不运行seed48、SLAKE seed47或任何新增Test。
 - [ ] 计算 multi-seed mean ± std、McNemar、image-clustered paired bootstrap CI。
 - [ ] 生成主性能表、容量表、消融表、效率表和文献独立表。
 - [ ] 生成架构图、Pareto 图、宽度曲线和 mismatch 图。
-- [ ] 运行一次自建电气数据集 D768 seed44；该项为必做，但不扩展多seed或消融。
+- [ ] 运行一次自建电气数据集最终Dense D768 Sandwich seed47；该项为必做，但不扩展多seed或消融，不修改现有数据集内容。
 
 当日产物：全部定稿数字、图表初版、统计脚本与机器可读结果。
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Train the classic static Prompt Tuning baseline on PathVQA."""
+"""Train the classic static Prompt Tuning baseline."""
 
 from __future__ import annotations
 
@@ -20,6 +20,12 @@ from transformers import (
 )
 
 from pathvqa.data_pipeline import PathVQADataCollator, PathVQADataset
+from pathvqa.train_dynamic_prompt import (
+    DynamicPromptCollator,
+    _build_train_dataset,
+    _dataset_display_name,
+    _normalize_dataset_name,
+)
 from slake.prompt_tuning import StaticPromptTuningModel
 
 
@@ -162,7 +168,9 @@ def parse_args() -> argparse.Namespace:
     return args
 
 
-def main() -> int:
+def main(dataset_name: str = "pathvqa") -> int:
+    dataset_name = _normalize_dataset_name(dataset_name)
+    display_name = _dataset_display_name(dataset_name)
     args = parse_args()
     random.seed(args.seed)
     np.random.seed(args.seed)
@@ -187,16 +195,7 @@ def main() -> int:
         visual_prompt_length=args.visual_prompt_length,
         visual_anchor_layers=(args.visual_anchor_layer,),
     )
-    dataset = PathVQADataset(
-        processor=processor,
-        data_root=args.data_root,
-        split="train",
-        cache_dir=args.cache_dir,
-        ce_enabled=True,
-        seed=args.data_seed,
-        deterministic_sampling=True,
-        max_length=args.max_length,
-    )
+    dataset = _build_train_dataset(dataset_name, args, processor)
     trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
     expected = (
         args.prompt_length * model.get_input_embeddings().weight.shape[-1]
@@ -214,7 +213,7 @@ def main() -> int:
             f"Trainable parameter audit failed: expected={expected} actual={trainable}"
         )
     print(
-        "[PATHVQA_PROMPT_TUNING_CONFIG] "
+        f"[{display_name.upper()}_PROMPT_TUNING_CONFIG] "
         f"prompt_length={args.prompt_length} "
         f"hidden_size={model.get_input_embeddings().weight.shape[-1]} "
         f"visual_prompt_length={args.visual_prompt_length} "
@@ -249,7 +248,11 @@ def main() -> int:
             data_seed=args.data_seed,
         ),
         train_dataset=dataset,
-        data_collator=PromptTuningCollator(processor),
+        data_collator=(
+            PromptTuningCollator(processor)
+            if dataset_name == "pathvqa"
+            else DynamicPromptCollator(processor, dataset_name)
+        ),
         processing_class=processor,
         callbacks=[callback],
         text_prompt_lr=args.learning_rate,
@@ -262,7 +265,7 @@ def main() -> int:
     report = {
         "method": "static_prompt_tuning",
         "experiment": args.experiment_name,
-        "dataset": "PathVQA",
+        "dataset": display_name,
         "prompt_length": args.prompt_length,
         "visual_prompt_length": args.visual_prompt_length,
         "visual_anchor_layer": args.visual_anchor_layer,
@@ -276,7 +279,7 @@ def main() -> int:
         "w", encoding="utf-8"
     ) as handle:
         json.dump(report, handle, ensure_ascii=False, indent=2, default=str)
-    print(f"[PATHVQA_PROMPT_TUNING_PASS] checkpoint={final_dir}")
+    print(f"[{display_name.upper()}_PROMPT_TUNING_PASS] checkpoint={final_dir}")
     return 0
 
 

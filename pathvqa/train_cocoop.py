@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Train the CoCoOp-style conditional Prompt baseline on PathVQA."""
+"""Train the CoCoOp-style conditional Prompt baseline."""
 
 from __future__ import annotations
 
@@ -20,6 +20,12 @@ from transformers import (
 
 from pathvqa.data_pipeline import PathVQADataset
 from pathvqa.train_prompt_tuning import PromptTuningCollator
+from pathvqa.train_dynamic_prompt import (
+    DynamicPromptCollator,
+    _build_train_dataset,
+    _dataset_display_name,
+    _normalize_dataset_name,
+)
 from slake.cocoop_prompt_tuning import CoCoOpStylePromptTuningModel
 
 
@@ -174,7 +180,9 @@ def parse_args() -> argparse.Namespace:
     return args
 
 
-def main() -> int:
+def main(dataset_name: str = "pathvqa") -> int:
+    dataset_name = _normalize_dataset_name(dataset_name)
+    display_name = _dataset_display_name(dataset_name)
     args = parse_args()
     random.seed(args.seed)
     np.random.seed(args.seed)
@@ -198,16 +206,7 @@ def main() -> int:
         bottleneck_dim=args.bottleneck_dim,
         init_seed=args.seed,
     )
-    dataset = PathVQADataset(
-        processor=processor,
-        data_root=args.data_root,
-        split="train",
-        cache_dir=args.cache_dir,
-        ce_enabled=True,
-        seed=args.data_seed,
-        deterministic_sampling=True,
-        max_length=args.max_length,
-    )
+    dataset = _build_train_dataset(dataset_name, args, processor)
     trainable = sum(
         parameter.numel()
         for parameter in model.parameters()
@@ -228,7 +227,7 @@ def main() -> int:
             f"actual={trainable}"
         )
     print(
-        "[PATHVQA_COCOOP_STYLE_CONFIG] "
+        f"[{display_name.upper()}_COCOOP_STYLE_CONFIG] "
         f"experiment={args.experiment_name} prompt_length={args.prompt_length} "
         f"hidden_size={hidden_size} bottleneck={args.bottleneck_dim} "
         f"trainable={trainable} prompt_lr={args.prompt_learning_rate} "
@@ -262,7 +261,11 @@ def main() -> int:
             data_seed=args.data_seed,
         ),
         train_dataset=dataset,
-        data_collator=PromptTuningCollator(processor),
+        data_collator=(
+            PromptTuningCollator(processor)
+            if dataset_name == "pathvqa"
+            else DynamicPromptCollator(processor, dataset_name)
+        ),
         processing_class=processor,
         callbacks=[callback],
         prompt_lr=args.prompt_learning_rate,
@@ -276,7 +279,7 @@ def main() -> int:
         "method": "cocoop_style_conditional_prompt_tuning",
         "approximation": "generative_mllm_unified_protocol",
         "experiment": args.experiment_name,
-        "dataset": "PathVQA",
+        "dataset": display_name,
         "prompt_length": args.prompt_length,
         "bottleneck_dim": args.bottleneck_dim,
         "trainable_parameters": trainable,
@@ -294,7 +297,7 @@ def main() -> int:
         "w", encoding="utf-8"
     ) as handle:
         json.dump(report, handle, ensure_ascii=False, indent=2, default=str)
-    print(f"[PATHVQA_COCOOP_STYLE_PASS] checkpoint={final_dir}")
+    print(f"[{display_name.upper()}_COCOOP_STYLE_PASS] checkpoint={final_dir}")
     return 0
 
 

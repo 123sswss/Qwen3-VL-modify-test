@@ -195,3 +195,7 @@ This file is the concise experiment memory shared by the user and Codex. The com
 
 - PathVQA Static Prompt P20 seeds44/45/46 Validation为54.8650/55.0567/55.3124，Overall **55.0780 +/- 0.2244**，range0.4474；Yes/No **88.9493 +/- 0.5509**，Free-form **21.3040 +/- 0.9117**。Overall未达到预注册的std0.5或range1.0触发线，因此不补CoCoOp seeds45/46。
 - 结果不支持“Prompt方法普遍高度seed敏感”的强主张。Static Prompt aggregate稳定，QDPT Sandwich的1.7528 Overall std应诚实描述为当前复杂条件检索/Prompt路径的稳定性代价；稳定性表仍可用于对比LoRA、Static Prompt和QDPT，但不能替QDPT消解责任。
+## 2026-09-11 CoCoOp-style多seed稳定性
+
+- PathVQA CoCoOp-style P20/H160 seeds44/45/46 Validation为57.4053/56.3988/55.1366，Overall **56.3136 +/- 1.1367**，range2.2687；Yes/No **89.3547 +/- 0.5903**，Free-form **23.3674 +/- 1.6913**。最佳seed比均值高1.0917分。
+- 同协议Overall std呈LoRA-r8 0.0666、Static Prompt0.2244、CoCoOp-style1.1367、QDPT Sandwich1.7528的递增梯度。结果支持“当前冻结生成式VLM中的条件动态Prompt比静态Prompt和LoRA更具初始化敏感性”，但不推广为所有Prompt方法的普遍定律。论文加入专门稳定性表，并继续以多seed均值而非最佳seed作为主结论。

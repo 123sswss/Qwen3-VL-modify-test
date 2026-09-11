@@ -21,13 +21,15 @@ PATHVQA_GRASP_OUTPUT_ROOT="${PATHVQA_GRASP_OUTPUT_ROOT:-$ROOT_DIR/pathvqa/output
 ELECTRICAL_DATA_ROOT="${ELECTRICAL_DATA_ROOT:-/root/autodl-tmp/dataset}"
 ELECTRICAL_QDPT_OUTPUT_ROOT="${ELECTRICAL_QDPT_OUTPUT_ROOT:-$ROOT_DIR/electrical/outputs/qdpt}"
 ELECTRICAL_GRASP_OUTPUT_ROOT="${ELECTRICAL_GRASP_OUTPUT_ROOT:-$ROOT_DIR/electrical/outputs/grasp}"
+ELECTRICAL_PROMPT_OUTPUT_ROOT="${ELECTRICAL_PROMPT_OUTPUT_ROOT:-$ROOT_DIR/electrical/outputs/prompt_tuning}"
+ELECTRICAL_COCOOP_OUTPUT_ROOT="${ELECTRICAL_COCOOP_OUTPUT_ROOT:-$ROOT_DIR/electrical/outputs/cocoop}"
 ENV_RUN_TARGET="${RUN_TARGET:-}"
 RUN_TARGET="${1:-${ENV_RUN_TARGET:-${MMRL_RUN_TARGET:-all}}}"
 RUN_DATE="${MMRL_RUN_DATE:-$(date +%Y%m%d)}"
 SEED="${MMRL_FIXED_SEED:-44}"
 SHUTDOWN_ON_EXIT="${MMRL_SHUTDOWN_ON_EXIT:-0}"
 
-mkdir -p "$OUTPUT_ROOT" "$SLAKE_OUTPUT_ROOT" "$SLAKE_DYNAMIC_PROMPT_OUTPUT_ROOT" "$SLAKE_GRASP_OUTPUT_ROOT" "$SLAKE_LORA_OUTPUT_ROOT" "$PATHVQA_OUTPUT_ROOT" "$PATHVQA_LORA_OUTPUT_ROOT" "$PATHVQA_BASE_OUTPUT_ROOT" "$PATHVQA_PROMPT_OUTPUT_ROOT" "$PATHVQA_COCOOP_OUTPUT_ROOT" "$PATHVQA_DYNAMIC_PROMPT_OUTPUT_ROOT" "$PATHVQA_GRASP_OUTPUT_ROOT" "$ELECTRICAL_QDPT_OUTPUT_ROOT" "$ELECTRICAL_GRASP_OUTPUT_ROOT"
+mkdir -p "$OUTPUT_ROOT" "$SLAKE_OUTPUT_ROOT" "$SLAKE_DYNAMIC_PROMPT_OUTPUT_ROOT" "$SLAKE_GRASP_OUTPUT_ROOT" "$SLAKE_LORA_OUTPUT_ROOT" "$PATHVQA_OUTPUT_ROOT" "$PATHVQA_LORA_OUTPUT_ROOT" "$PATHVQA_BASE_OUTPUT_ROOT" "$PATHVQA_PROMPT_OUTPUT_ROOT" "$PATHVQA_COCOOP_OUTPUT_ROOT" "$PATHVQA_DYNAMIC_PROMPT_OUTPUT_ROOT" "$PATHVQA_GRASP_OUTPUT_ROOT" "$ELECTRICAL_QDPT_OUTPUT_ROOT" "$ELECTRICAL_GRASP_OUTPUT_ROOT" "$ELECTRICAL_PROMPT_OUTPUT_ROOT" "$ELECTRICAL_COCOOP_OUTPUT_ROOT"
 echo "[RUN_TARGET] selected=$RUN_TARGET positional=${1:-<unset>} env=${ENV_RUN_TARGET:-<unset>} mmrl_env=${MMRL_RUN_TARGET:-<unset>} shutdown_on_exit=$SHUTDOWN_ON_EXIT"
 
 cancel_shutdown_on_interrupt() {
@@ -1664,9 +1666,31 @@ run_pathvqa_qdpt_d768_marathon_seed44() {
   python -c 'import csv,pathlib,sys; root=pathlib.Path(sys.argv[1]); rows=list(csv.DictReader((root/"marathon_progress.tsv").open(encoding="utf-8"),delimiter="\t")); expected=list(range(3,11)); actual=[int(row["epoch"]) for row in rows if row["status"]=="complete"]; assert actual==expected,(actual,expected); assert all((root/"eval_validation"/f"epoch_{epoch}"/"pathvqa_summary.json").is_file() for epoch in expected); print("[QDPT_D768_MARATHON_PASS] epochs=3-10 progress="+str(root/"marathon_progress.tsv"))' "$output_dir" || return 1
 }
 
+find_completed_electrical_run() {
+  local output_root="$1"
+  local experiment_name="$2"
+  local candidate
+  while IFS= read -r candidate; do
+    if [ -f "$candidate/eval_private/epoch_3/electrical_summary.json" ]; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done < <(
+    find "$output_root" -mindepth 1 -maxdepth 1 -type d \
+      -name "${experiment_name}_*" -printf '%T@\t%p\n' 2>/dev/null \
+      | sort -nr | cut -f2-
+  )
+  return 1
+}
+
 run_electrical_qdpt_d768_sandwich_seed47() {
   local experiment_name="electrical_qdpt_d768_question_q10_l17_p20_s8_av10_sandwich_seed47"
-  local output_dir
+  local completed_run output_dir
+  completed_run="$(find_completed_electrical_run "$ELECTRICAL_QDPT_OUTPUT_ROOT" "$experiment_name")" || completed_run=""
+  if [ -n "$completed_run" ]; then
+    echo "[ELECTRICAL_QDPT_SKIP_COMPLETE] run=$completed_run"
+    return 0
+  fi
   output_dir="$(available_output_dir \
     "$ELECTRICAL_QDPT_OUTPUT_ROOT" \
     "${experiment_name}_${RUN_DATE}")"
@@ -1729,6 +1753,113 @@ run_electrical_qdpt_d768_sandwich_seed47() {
     "$experiment_name" "$score" "$checkpoint" \
     >> "$output_dir/selected_result.tsv"
   cat "$output_dir/selected_result.tsv"
+}
+
+run_electrical_static_prompt_p20_seed47() {
+  local experiment_name="electrical_static_prompt_p20_seed47"
+  local completed_run output_dir
+  completed_run="$(find_completed_electrical_run "$ELECTRICAL_PROMPT_OUTPUT_ROOT" "$experiment_name")" || completed_run=""
+  if [ -n "$completed_run" ]; then
+    echo "[ELECTRICAL_STATIC_PROMPT_SKIP_COMPLETE] run=$completed_run"
+    return 0
+  fi
+  output_dir="$(available_output_dir "$ELECTRICAL_PROMPT_OUTPUT_ROOT" "${experiment_name}_${RUN_DATE}")"
+  mkdir -p "$output_dir"
+  echo "[ELECTRICAL_STATIC_PROMPT_CONFIG] experiment=$experiment_name seed=47 data_seed=42 prompt_tokens=20 expected_trainable=51200 epochs=3 evaluation=private_fixed_holdout output=$output_dir"
+  (
+    cd "$ROOT_DIR" || exit 1
+    python -m unittest test_prompt_tuning.py test_electrical_qdpt.py || exit 1
+    python -m electrical.train_prompt_tuning \
+      --model-path "$MODEL_PATH" \
+      --data-root "$ELECTRICAL_DATA_ROOT" \
+      --output-dir "$output_dir" \
+      --experiment-name "$experiment_name" \
+      --prompt-length 20 \
+      --visual-prompt-length 0 \
+      --epochs 3 \
+      --seed 47 \
+      --data-seed 42 \
+      --learning-rate "${ELECTRICAL_STATIC_PROMPT_LR:-0.3}" \
+      --expected-trainable-parameters 51200 \
+      --batch-size "${ELECTRICAL_PROMPT_BATCH_SIZE:-2}" \
+      --gradient-accumulation "${ELECTRICAL_PROMPT_GRAD_ACCUM:-16}" \
+      --dataloader-workers "${ELECTRICAL_PROMPT_WORKERS:-2}" \
+      --max-length 1024 \
+      2>&1 | tee "$output_dir/train.log"
+  ) || return 1
+
+  local checkpoint="$output_dir/checkpoints/epoch_3"
+  python -m electrical.eval_prompt_baseline \
+    --backend static-prompt \
+    --checkpoint "$checkpoint" \
+    --base-model "$MODEL_PATH" \
+    --output-dir "$output_dir/eval_private/epoch_3" \
+    2>&1 | tee "$output_dir/eval_private_epoch_3.log" || return 1
+  local score
+  score="$(python -c 'import json,sys;print(json.load(open(sys.argv[1],encoding="utf-8"))["score"])' "$output_dir/eval_private/epoch_3/electrical_summary.json")" || return 1
+  printf 'experiment\tseed\tepoch\tprivate_accuracy\tcheckpoint\tprotocol\n' > "$output_dir/selected_result.tsv"
+  printf '%s\t47\t3\t%s\t%s\tprivate_fixed_holdout\n' "$experiment_name" "$score" "$checkpoint" >> "$output_dir/selected_result.tsv"
+  cat "$output_dir/selected_result.tsv"
+}
+
+run_electrical_cocoop_p20_h160_seed47() {
+  local experiment_name="electrical_cocoop_style_p20_h160_seed47"
+  local completed_run output_dir
+  completed_run="$(find_completed_electrical_run "$ELECTRICAL_COCOOP_OUTPUT_ROOT" "$experiment_name")" || completed_run=""
+  if [ -n "$completed_run" ]; then
+    echo "[ELECTRICAL_COCOOP_SKIP_COMPLETE] run=$completed_run"
+    return 0
+  fi
+  output_dir="$(available_output_dir "$ELECTRICAL_COCOOP_OUTPUT_ROOT" "${experiment_name}_${RUN_DATE}")"
+  mkdir -p "$output_dir"
+  echo "[ELECTRICAL_COCOOP_CONFIG] experiment=$experiment_name seed=47 data_seed=42 prompt_tokens=20 bottleneck=160 expected_trainable=873120 epochs=3 evaluation=private_fixed_holdout output=$output_dir"
+  (
+    cd "$ROOT_DIR" || exit 1
+    python -m unittest test_cocoop_prompt_tuning.py test_electrical_qdpt.py || exit 1
+    python -m electrical.train_cocoop \
+      --model-path "$MODEL_PATH" \
+      --data-root "$ELECTRICAL_DATA_ROOT" \
+      --output-dir "$output_dir" \
+      --experiment-name "$experiment_name" \
+      --prompt-length 20 \
+      --bottleneck-dim 160 \
+      --prompt-learning-rate "${ELECTRICAL_COCOOP_PROMPT_LR:-0.3}" \
+      --meta-net-learning-rate "${ELECTRICAL_COCOOP_META_LR:-3e-4}" \
+      --epochs 3 \
+      --seed 47 \
+      --data-seed 42 \
+      --batch-size "${ELECTRICAL_COCOOP_BATCH_SIZE:-2}" \
+      --gradient-accumulation "${ELECTRICAL_COCOOP_GRAD_ACCUM:-16}" \
+      --dataloader-workers "${ELECTRICAL_COCOOP_WORKERS:-2}" \
+      --max-length 1024 \
+      --expected-trainable-parameters 873120 \
+      2>&1 | tee "$output_dir/train.log"
+  ) || return 1
+
+  local checkpoint="$output_dir/checkpoints/epoch_3"
+  python -m electrical.eval_prompt_baseline \
+    --backend cocoop-style \
+    --checkpoint "$checkpoint" \
+    --base-model "$MODEL_PATH" \
+    --output-dir "$output_dir/eval_private/epoch_3" \
+    2>&1 | tee "$output_dir/eval_private_epoch_3.log" || return 1
+  local score
+  score="$(python -c 'import json,sys;print(json.load(open(sys.argv[1],encoding="utf-8"))["score"])' "$output_dir/eval_private/epoch_3/electrical_summary.json")" || return 1
+  printf 'experiment\tseed\tepoch\tprivate_accuracy\tcheckpoint\tprotocol\n' > "$output_dir/selected_result.tsv"
+  printf '%s\t47\t3\t%s\t%s\tprivate_fixed_holdout\n' "$experiment_name" "$score" "$checkpoint" >> "$output_dir/selected_result.tsv"
+  cat "$output_dir/selected_result.tsv"
+}
+
+run_electrical_final_prompt_comparison_seed47() {
+  local suite_failures=0
+  run_electrical_static_prompt_p20_seed47 || suite_failures=$((suite_failures + 1))
+  run_electrical_cocoop_p20_h160_seed47 || suite_failures=$((suite_failures + 1))
+  run_electrical_qdpt_d768_sandwich_seed47 || suite_failures=$((suite_failures + 1))
+  if [ "$suite_failures" -ne 0 ]; then
+    echo "[ERR] Electrical final Prompt comparison failures=$suite_failures; all three experiments were attempted." >&2
+    return 1
+  fi
+  echo "[ELECTRICAL_FINAL_PROMPT_COMPARISON_PASS] methods=static_prompt,cocoop_style,qdpt seed=47"
 }
 
 run_qdpt_d768_final_pathvqa_slake_seed44() {
@@ -3253,6 +3384,9 @@ case "$RUN_TARGET" in
   electrical_qdpt_d768_sandwich_seed47)
     run_electrical_qdpt_d768_sandwich_seed47 || failures=$((failures + 1))
     ;;
+  electrical_final_prompt_comparison_seed47)
+    run_electrical_final_prompt_comparison_seed47 || failures=$((failures + 1))
+    ;;
   pathvqa_grasp_seed44)
     run_pathvqa_grasp_seed44 || failures=$((failures + 1))
     ;;
@@ -3333,7 +3467,7 @@ case "$RUN_TARGET" in
     run_slake || failures=$((failures + 1))
     ;;
   *)
-    echo "[ERR] 未知目标: $RUN_TARGET；新增目标: pathvqa_static_prompt_p20_seeds45_46、pathvqa_cocoop_style_p20_h160_seed44、pathvqa_cocoop_style_p20_h160_seeds45_46、pathvqa_lora_full_model_attn_r8_seeds45_46、pathvqa_qdpt_d768_no_static_visual_seed44、pathvqa_qdpt_d768_no_static_visual_resume_eval、pathvqa_qdpt_d768_learned_static_query_seed44、pathvqa_qdpt_d768_question_only_seed44、pathvqa_qdpt_d768_direct_visual_z_concat_seeds44_46、pathvqa_qdpt_d768_layer_sensitivity_seed44、pathvqa_qdpt_d768_layer_sensitivity_resume_eval、electrical_qdpt_d768_sandwich_seed47、qdpt_d768_final_pathvqa_slake_seed44、slake_qdpt_d768_final_seeds44_46、slake_lora_full_model_attn_r8_seeds44_46。" >&2
+    echo "[ERR] 未知目标: $RUN_TARGET；新增目标包括 electrical_final_prompt_comparison_seed47。" >&2
     exit 2
     ;;
 esac

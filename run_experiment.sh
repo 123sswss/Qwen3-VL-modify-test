@@ -511,6 +511,89 @@ run_pathvqa_prompt_tuning_seed44() {
   cat "$output_dir/selected_result.tsv"
 }
 
+find_completed_pathvqa_static_prompt_run() {
+  local run_seed="$1"
+  local candidate
+  while IFS= read -r candidate; do
+    if [ -f "$candidate/checkpoints/epoch_3/prompt_config.json" ] \
+      && [ -f "$candidate/checkpoints/epoch_3/soft_prompt.pt" ] \
+      && [ -f "$candidate/eval_validation/epoch_3/pathvqa_summary.json" ]; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done < <(
+    find "$PATHVQA_PROMPT_OUTPUT_ROOT" -mindepth 1 -maxdepth 1 -type d \
+      -name "pathvqa_prompt_tuning_len20_seed${run_seed}_*" \
+      -printf '%T@\t%p\n' 2>/dev/null \
+      | sort -nr \
+      | cut -f2-
+  )
+  return 1
+}
+
+run_pathvqa_static_prompt_p20_seed() {
+  local run_seed="$1"
+  local experiment_name="pathvqa_prompt_tuning_len20_seed${run_seed}"
+  local completed_run output_dir
+  completed_run="$(find_completed_pathvqa_static_prompt_run "$run_seed")" \
+    || completed_run=""
+  if [ -n "$completed_run" ]; then
+    echo "[PATHVQA_STATIC_PROMPT_P20_SKIP_COMPLETE] seed=$run_seed run=$completed_run"
+    return 0
+  fi
+  if ! python -c 'import datasets, pyarrow' >/dev/null 2>&1; then
+    echo "[ERR] PathVQA Static Prompt P20 requires datasets and pyarrow." >&2
+    return 2
+  fi
+
+  output_dir="$(available_output_dir \
+    "$PATHVQA_PROMPT_OUTPUT_ROOT" \
+    "${experiment_name}_${RUN_DATE}")"
+  mkdir -p "$output_dir"
+  echo "[PATHVQA_STATIC_PROMPT_P20_CONFIG] experiment=$experiment_name seed=$run_seed data_seed=42 prompt_tokens=20 trainable_parameters=51200 epochs=3 full_evaluation=epoch3_validation_only test=false output=$output_dir"
+  (
+    cd "$ROOT_DIR" || exit 1
+    python -m unittest test_prompt_tuning.py || exit 1
+    python -m pathvqa.train_prompt_tuning \
+      --model-path "$MODEL_PATH" \
+      --data-root "$PATHVQA_DATA_ROOT" \
+      --cache-dir "$PATHVQA_CACHE_ROOT" \
+      --output-dir "$output_dir" \
+      --experiment-name "$experiment_name" \
+      --prompt-length 20 \
+      --visual-prompt-length 0 \
+      --epochs 3 \
+      --seed "$run_seed" \
+      --data-seed 42 \
+      --learning-rate 0.3 \
+      --expected-trainable-parameters 51200 \
+      --batch-size "${PATHVQA_PROMPT_BATCH_SIZE:-2}" \
+      --gradient-accumulation "${PATHVQA_PROMPT_GRAD_ACCUM:-16}" \
+      --dataloader-workers "${PATHVQA_PROMPT_WORKERS:-2}" \
+      2>&1 | tee "$output_dir/train.log"
+  ) || return 1
+
+  run_pathvqa_prompt_eval \
+    "$output_dir/checkpoints/epoch_3" \
+    validation \
+    "$output_dir/eval_validation/epoch_3" \
+    "$output_dir/eval_validation_epoch_3.log"
+}
+
+run_pathvqa_static_prompt_p20_seeds45_46() {
+  local suite_failures=0
+  local run_seed
+  for run_seed in 45 46; do
+    run_pathvqa_static_prompt_p20_seed "$run_seed" \
+      || suite_failures=$((suite_failures + 1))
+  done
+  if [ "$suite_failures" -ne 0 ]; then
+    echo "[ERR] PathVQA Static Prompt P20 seed failures=$suite_failures; both seeds were attempted." >&2
+    return 1
+  fi
+  echo "[PATHVQA_STATIC_PROMPT_P20_SEEDS_DONE] seeds=45,46 protocol=epoch3_validation_only"
+}
+
 run_pathvqa_static_prompt_baseline_variant_seed44() {
   local variant="$1"
   local experiment_name text_prompt_tokens expected_trainable
@@ -3050,6 +3133,9 @@ case "$RUN_TARGET" in
   pathvqa_prompt_tuning_seed44)
     run_pathvqa_prompt_tuning_seed44 || failures=$((failures + 1))
     ;;
+  pathvqa_static_prompt_p20_seeds45_46)
+    run_pathvqa_static_prompt_p20_seeds45_46 || failures=$((failures + 1))
+    ;;
   pathvqa_static_visual_prompt_seed44)
     run_pathvqa_static_prompt_baseline_variant_seed44 static_visual || failures=$((failures + 1))
     ;;
@@ -3199,7 +3285,7 @@ case "$RUN_TARGET" in
     run_slake || failures=$((failures + 1))
     ;;
   *)
-    echo "[ERR] 未知目标: $RUN_TARGET；新增目标: pathvqa_cocoop_style_p20_h160_seed44、pathvqa_lora_full_model_attn_r8_seeds45_46、pathvqa_qdpt_d768_no_static_visual_seed44、pathvqa_qdpt_d768_no_static_visual_resume_eval、pathvqa_qdpt_d768_learned_static_query_seed44、pathvqa_qdpt_d768_question_only_seed44、pathvqa_qdpt_d768_direct_visual_z_concat_seeds44_46、pathvqa_qdpt_d768_layer_sensitivity_seed44、pathvqa_qdpt_d768_layer_sensitivity_resume_eval、electrical_qdpt_d768_sandwich_seed47、qdpt_d768_final_pathvqa_slake_seed44、slake_qdpt_d768_final_seeds44_46、slake_lora_full_model_attn_r8_seeds44_46。" >&2
+    echo "[ERR] 未知目标: $RUN_TARGET；新增目标: pathvqa_static_prompt_p20_seeds45_46、pathvqa_cocoop_style_p20_h160_seed44、pathvqa_lora_full_model_attn_r8_seeds45_46、pathvqa_qdpt_d768_no_static_visual_seed44、pathvqa_qdpt_d768_no_static_visual_resume_eval、pathvqa_qdpt_d768_learned_static_query_seed44、pathvqa_qdpt_d768_question_only_seed44、pathvqa_qdpt_d768_direct_visual_z_concat_seeds44_46、pathvqa_qdpt_d768_layer_sensitivity_seed44、pathvqa_qdpt_d768_layer_sensitivity_resume_eval、electrical_qdpt_d768_sandwich_seed47、qdpt_d768_final_pathvqa_slake_seed44、slake_qdpt_d768_final_seeds44_46、slake_lora_full_model_attn_r8_seeds44_46。" >&2
     exit 2
     ;;
 esac

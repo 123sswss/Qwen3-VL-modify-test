@@ -408,6 +408,7 @@ CoTBox-TTT可以计入“同方向Related Work”的文献数量，但**不计�
 - [ ] 生成主性能表、容量表、消融表、效率表和文献独立表。
 - [ ] 生成架构图、Pareto 图、宽度曲线和 mismatch 图。
 - [ ] 运行一次自建电气数据集最终Dense D768 Sandwich seed47；该项为必做，但不扩展多seed或消融，不修改现有数据集内容。
+- [ ] 完成PathVQA Static Prompt P20 seed45/46的稳定性补充；与已有seed44统一使用data seed42、三epoch和epoch3-only Validation，报告三个原始分数、mean +/- sample std及range。若Static Prompt Overall sample std>=0.5或range>=1.0，再补CoCoOp-style seed45/46；否则停止稳定性扩展。不得依据结果替换方法或隐去任一seed。
 
 当日产物：全部定稿数字、图表初版、统计脚本与机器可读结果。
 

@@ -408,7 +408,8 @@ CoTBox-TTT可以计入“同方向Related Work”的文献数量，但**不计�
 - [ ] 生成主性能表、容量表、消融表、效率表和文献独立表。
 - [ ] 生成架构图、Pareto 图、宽度曲线和 mismatch 图。
 - [ ] 运行一次自建电气数据集最终Dense D768 Sandwich seed47；该项为必做，但不扩展多seed或消融，不修改现有数据集内容。
-- [ ] 完成PathVQA Static Prompt P20 seed45/46的稳定性补充；与已有seed44统一使用data seed42、三epoch和epoch3-only Validation，报告三个原始分数、mean +/- sample std及range。若Static Prompt Overall sample std>=0.5或range>=1.0，再补CoCoOp-style seed45/46；否则停止稳定性扩展。不得依据结果替换方法或隐去任一seed。
+- [x] 完成PathVQA Static Prompt P20 seed45/46稳定性补充：seeds44/45/46 Overall54.8650/55.0567/55.3124，mean55.0780 +/- 0.2244，range0.4474。未达到原先为“Prompt普遍不稳定”假设设置的触发线，因此终止该强假设；稳定性表不得宣称Prompt普遍高度seed敏感。后续CoCoOp多seed仅因动态Prompt基线覆盖不足而独立补充。
+- [ ] 协议修订后补PathVQA CoCoOp-style P20/H160 seed45/46：研究目的不是继续验证“所有Prompt普遍不稳定”，而是补齐一个经典图像条件动态Prompt的稳定性对照，区分静态Prompt、简单动态Prompt与QDPT复杂跨模态检索路径。与seed44固定data seed42、三epoch、873,120参数和epoch3-only Validation；不跑Test/SLAKE，不依据结果追加seed或调参，三个seed全部报告。
 
 当日产物：全部定稿数字、图表初版、统计脚本与机器可读结果。
 

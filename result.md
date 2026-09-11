@@ -188,3 +188,10 @@ This file is the concise experiment memory shared by the user and Codex. The com
 - PathVQA已全部完成。Validation seeds44/45/46为60.7765/57.2935/59.3865，三seed **59.1522 +/- 1.7528**；Test为60.4554/56.8983/59.2945，三seed **58.8827 +/- 1.8141**。Test与Validation保持相同seed排序，初始化敏感性主要体现在Free-form和`where`。
 - SLAKE最终Sandwich seeds44/45/46 Test为**76.74/76.65/77.46**，三seed **76.95 +/- 0.44**；CLOSED/OPEN均值84.01/72.26，KVQA/VQA均值62.17/79.11，EN/ZH均值77.51/76.38。相对旧非Sandwich均值77.03几乎不变(-0.08)，说明因果位置收益集中在PathVQA，未迁移为SLAKE准确率增益。
 - 最终套件8/8全部完成。PathVQA mean Validation与LoRA-r8约持平，但SLAKE仍低LoRA-r8均值4.87分且参数更多；论文必须表述为任务相关的准确率-适配范式权衡，不宣称普遍击败LoRA。
+## 2026-09-11 Electrical Dense Sandwich seed47 interrupted
+
+- 电气最终Dense D768 Sandwich seed47只运行到121/1875 steps（约6.5%），无epoch3 checkpoint、train report或私有holdout summary，因此没有可报告分数。已有loss与各分支诊断正常且无Python/CUDA traceback，暂记为外部中断，不解释为模型失败；服务器稳定后原配置重跑。
+## 2026-09-11 Static Prompt P20多seed稳定性
+
+- PathVQA Static Prompt P20 seeds44/45/46 Validation为54.8650/55.0567/55.3124，Overall **55.0780 +/- 0.2244**，range0.4474；Yes/No **88.9493 +/- 0.5509**，Free-form **21.3040 +/- 0.9117**。Overall未达到预注册的std0.5或range1.0触发线，因此不补CoCoOp seeds45/46。
+- 结果不支持“Prompt方法普遍高度seed敏感”的强主张。Static Prompt aggregate稳定，QDPT Sandwich的1.7528 Overall std应诚实描述为当前复杂条件检索/Prompt路径的稳定性代价；稳定性表仍可用于对比LoRA、Static Prompt和QDPT，但不能替QDPT消解责任。

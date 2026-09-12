@@ -1198,6 +1198,23 @@ run_qdpt_d768_final_dataset() {
         --directional-unified-static-visual-prompt
       )
       ;;
+    unified_static_visual_sandwich_rng_control)
+      experiment_stem="qdpt_d768_question_q10_l17_p20_unified_v20_sandwich_rng_control"
+      expected_trainable=7807232
+      query_source="question_attention_pooling"
+      static_visual_write=true
+      private_visual_tokens=0
+      visual_workspace_tokens=0
+      unified_visual_tokens=20
+      visual_prompt_tokens_arg=20
+      text_prompt_placement="static_before_visual_dynamic_after_visual"
+      control_flags=(
+        --directional-query-source question_attention_pooling
+        --directional-static-visual-write
+        --directional-unified-static-visual-prompt
+        --directional-sandwich-text-prompt
+      )
+      ;;
     no_static_visual)
       experiment_stem="qdpt_d768_question_q10_l17_p20_no_static_visual"
       expected_trainable=7786752
@@ -1467,6 +1484,11 @@ run_pathvqa_qdpt_d768_layer_sensitivity_resume_eval() {
 run_pathvqa_qdpt_d768_unified_v20_rng_control_seed44() {
   run_qdpt_d768_final_dataset \
     pathvqa unified_static_visual_rng_control 44
+}
+
+run_pathvqa_qdpt_d768_unified_v20_sandwich_rng_control_seed44() {
+  run_qdpt_d768_final_dataset \
+    pathvqa unified_static_visual_sandwich_rng_control 44
 }
 
 run_pathvqa_qdpt_d768_sandwich_seed44() {
@@ -3359,6 +3381,9 @@ case "$RUN_TARGET" in
     ;;
   pathvqa_qdpt_d768_unified_v20_rng_control_seed44)
     run_pathvqa_qdpt_d768_unified_v20_rng_control_seed44 || failures=$((failures + 1))
+    ;;
+  pathvqa_qdpt_d768_unified_v20_sandwich_rng_control_seed44)
+    run_pathvqa_qdpt_d768_unified_v20_sandwich_rng_control_seed44 || failures=$((failures + 1))
     ;;
   pathvqa_qdpt_d768_sandwich_seed44)
     run_pathvqa_qdpt_d768_sandwich_seed44 || failures=$((failures + 1))

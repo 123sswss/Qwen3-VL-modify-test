@@ -199,3 +199,8 @@ This file is the concise experiment memory shared by the user and Codex. The com
 
 - PathVQA CoCoOp-style P20/H160 seeds44/45/46 Validation为57.4053/56.3988/55.1366，Overall **56.3136 +/- 1.1367**，range2.2687；Yes/No **89.3547 +/- 0.5903**，Free-form **23.3674 +/- 1.6913**。最佳seed比均值高1.0917分。
 - 同协议Overall std呈LoRA-r8 0.0666、Static Prompt0.2244、CoCoOp-style1.1367、QDPT Sandwich1.7528的递增梯度。结果支持“当前冻结生成式VLM中的条件动态Prompt比静态Prompt和LoRA更具初始化敏感性”，但不推广为所有Prompt方法的普遍定律。论文加入专门稳定性表，并继续以多seed均值而非最佳seed作为主结论。
+
+## 2026-09-12 电气数据集最终对比
+
+- 同一私有固定holdout、seed47/data seed42和三epoch协议下，Static Prompt P20、CoCoOp-style P20/H160、QDPT Dense D768 Sandwich分别为 **70.06/70.88/71.91**，均评估954条并跳过18条。QDPT比Static、CoCoOp和已有LoRA-r8 70.69分别高 **1.85/1.03/1.22**，但目前仅有总分，不能宣称统计显著。
+- 该数据集以看图判别和封闭选择为主，恰好匹配QDPT“问题Q从冻结视觉K/V中检索证据，再生成LLM侧动态Prompt”的归纳偏置。应将结果解释为视觉证据选择型任务上的适配优势，而非QDPT普遍优于LoRA；封闭答案空间、答案先验和较低的语言生成/推理负担都可能放大该优势。结合PathVQA近似持平和SLAKE明显落后LoRA，论文结论固定为Prompt空间与权重空间适配具有不同任务偏好。

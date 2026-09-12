@@ -253,7 +253,7 @@ CoTBox-TTT可以计入“同方向Related Work”的文献数量，但**不计�
 
 - **PathVQA：主数据集。** 用于方法选择、宽度曲线、同范式Prompt对比、机制控制和主要统计结论。
 - **SLAKE：跨数据集验证。** 最终架构必须原样迁移，不允许根据 SLAKE 重新搜索层数、宽度或槽数。
-- **自建电气数据集：必做的补充应用案例。** 质量有限且不可开源，只允许最终Dense Sandwich方法 seed47 一次运行；不做多seed、消融或SOTA声明。
+- **自建电气数据集：已完成的补充应用案例。** Static Prompt、CoCoOp-style与最终Dense Sandwich统一seed47对比；不做多seed、消融或SOTA声明。结果只支持视觉证据选择型任务上的适配优势，不外推为普遍优于LoRA。
 
 ### 5.2 划分和 Test 使用规则
 
@@ -328,7 +328,7 @@ CoTBox-TTT可以计入“同方向Related Work”的文献数量，但**不计�
 
 ### 6.4 补充数据集
 
-- [ ] 自建电气数据集：**必做**。最终Dense D768 Sandwich seed47一次；只报告应用可行性，不进行多seed、消融或SOTA声明。专用训练/私有固定holdout评估入口已实现，等待运行。
+- [x] 自建电气数据集最终对比完成：Static Prompt70.06、CoCoOp-style70.88、Dense D768 Sandwich QDPT71.91，均为seed47、954条有效评估。只报告应用可行性与任务匹配性，不进行多seed、消融或SOTA声明。
 - [ ] 不新增第四个公开数据集。PathVQA + SLAKE 已足以支撑主张，自建数据集只展示跨领域应用。
 
 ## 7. 论文表格与图
@@ -407,7 +407,8 @@ CoTBox-TTT可以计入“同方向Related Work”的文献数量，但**不计�
 - [ ] 计算 multi-seed mean ± std、McNemar、image-clustered paired bootstrap CI。
 - [ ] 生成主性能表、容量表、消融表、效率表和文献独立表。
 - [ ] 生成架构图、Pareto 图、宽度曲线和 mismatch 图。
-- [ ] 串行完成自建电气数据集最终对比：Static Prompt P20、CoCoOp-style P20/H160、Dense D768 Sandwich QDPT，统一seed47/data seed42、三epoch和既有private fixed holdout。三项均为必做，但不扩展多seed或消融，不修改现有数据集内容；任一项失败仍继续后续项。
+- [x] 串行完成自建电气数据集最终对比：Static Prompt P20为70.06、CoCoOp-style P20/H160为70.88、Dense D768 Sandwich QDPT为71.91，统一seed47/data seed42、三epoch和既有private fixed holdout；不扩展多seed或消融。
+- [ ] 补充最终结构视觉Prompt统一控制：PathVQA seed44保持Dense D768 Sandwich的`[P20; Visual; Z10; Question]`、数据顺序及下游RNG初始化不变，只将`S8@3e-5+A_v10@1e-4`替换为单表`V20@1e-4`；仅epoch3全量Validation，跑完即停止，不追加seed。
 - [x] 完成PathVQA Static Prompt P20 seed45/46稳定性补充：seeds44/45/46 Overall54.8650/55.0567/55.3124，mean55.0780 +/- 0.2244，range0.4474。未达到原先为“Prompt普遍不稳定”假设设置的触发线，因此终止该强假设；稳定性表不得宣称Prompt普遍高度seed敏感。后续CoCoOp多seed仅因动态Prompt基线覆盖不足而独立补充。
 - [x] 完成PathVQA CoCoOp-style P20/H160 seed45/46：seeds44/45/46 Overall57.4053/56.3988/55.1366，mean56.3136 +/- 1.1367，range2.2687。稳定性表固定为LoRA-r8、Static Prompt、CoCoOp-style和QDPT Sandwich，报告从静态到条件动态Prompt的描述性方差梯度；不追加seed、Test、SLAKE或调参，不宣称跨方法/数据集普遍定律。
 

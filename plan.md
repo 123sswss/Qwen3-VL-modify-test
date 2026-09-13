@@ -395,7 +395,10 @@ CoTBox-TTT可以计入“同方向Related Work”的文献数量，但**不计�
 - [x] 完成Full-Attention LoRA-r8 seed44/45/46：Overall 81.95/81.57/81.95，均值81.82 +/- 0.22；QDPT均值低4.79且三个同seed配对均极显著，停止跨数据集LoRA性能持平叙事。
 - [x] 取消SLAKE GRASP迁移：PathVQA正式顺序实现已确认有效但仅39.7508，继续跨数据集运行不具备当前收尾价值。
 - [x] GRASP-Qwen适配救援第一步：保持N4/h512、Entmax-1.5、单全局Prompt、原论文因果顺序与三轮统一协议不变，仅将四个Prompt原型改为Qwen冻结词嵌入行初始化，并采用Prompt LR0.3、路由投影LR1e-4。PathVQA Validation约42.40，比39.7508恢复约2.65但仍远低于Static Prompt，确认尺度失配存在却不是主因；不得冒充忠实GRASP复现结果。
-- [ ] GRASP-Qwen适配救援第二步：固定embedding-row初始化、Prompt LR0.3、投影LR1e-4及全部结构，只移除或门控固定二维正弦位置编码，隔离其约35.8的范数是否压过真实视觉块语义。先做无位置编码这一最清楚的单变量控制；在结果可看之前继续按位置编码、空间块粒度、训练长度和输出容量逐项救援。
+- [x] GRASP-Qwen适配救援第二步：固定embedding-row初始化、Prompt LR0.3、投影LR1e-4及全部结构，只移除固定二维正弦位置编码。PathVQA Validation约43.92，比42.40再提高约1.52，但仍远低于Static Prompt；位置编码竞争真实视觉语义是次要问题，不是主要失败原因。
+- [ ] GRASP-Qwen适配救援第三步：保留当前无位置编码最佳配置，将每个区域的Prompt原型扩展为多槽原型，并用同一组Entmax区域权重生成4个全局Prompt Token，单独检验“单输出Token容量不足”。随后再按N=16细粒度区域、10-epoch收敛和问题查询池化逐项测试；不要同时加入真实视觉Value，以免直接把GRASP改成QDPT/Q-Former。
+- [x] 在第三步结构改造前评估无位置版已有epoch1/2 checkpoint：epoch1/2/3 Overall42.1793/43.4414/43.9208，Yes-No77.6320/78.5280/79.0400，Free-form6.8283/8.4556/8.9024。Validation连续改善，确认三轮未完全收敛，但增益快速递减。
+- [ ] 暂缓4个全局Prompt结构改造，先运行`pathvqa_grasp_qwen_adapted_no_position_marathon10_n4_h512_seed44`：从头训练无位置最佳配置10 epochs，使线性scheduler按10轮重新设定；训练后串行评估epoch3-10并实时追加`marathon_progress.tsv`，单轮评估失败继续后续轮次。不得从三轮checkpoint直接续训，因为其学习率已衰减至零。若长程最佳仍明显低于Static Prompt，再恢复多Prompt容量实验。
 - [ ] 复核 Static Prompt 的 checkpoint、split 和评价结果。
 - [ ] 禁止根据 SLAKE 分数修改 D、层数、Prompt 长度或训练策略。
 

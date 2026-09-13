@@ -213,3 +213,6 @@ This file is the concise experiment memory shared by the user and Codex. The com
 ## 2026-09-13 GRASP-Qwen第一次救援
 
 - `pathvqa_grasp_qwen_adapted_embedding_init_dual_lr_n4_h512_seed44`将四个Prompt原型改为Qwen词嵌入行初始化，并使用Prompt LR0.3、路由投影LR1e-4；其余GRASP结构与三轮协议不变。用户报告PathVQA Validation约 **42.40 Overall**，比正式顺序复现39.7508高约2.65，但仍比Static Prompt54.8650低约12.47。由此确认Prompt尺度失配存在但不是主因；下一步固定该适配配置，优先隔离范数约35.8的二维位置编码是否压过真实视觉块语义。精确分项、诊断和路径待补。
+- 第二步移除固定二维位置编码后约 **43.92 Overall**，再提高约1.52，累计比39.7508高约4.17。位置编码确有负面影响但不是主因；剩余主要疑点转向“四区域经静态原型凸组合后仅输出一个Prompt Token”的信息与容量瓶颈。
+- 精确结果为42.4029/76.2240/8.6790和43.9208/79.0400/8.9024。去位置编码的+1.5179几乎全来自Yes/No +2.8160，Free-form仅+0.2234；它降低了晚期路由稀疏度但没有修复开放生成。无位置版最终Prompt范数91.17、原型范数174.45，尺度不足已排除；训练loss仍按epoch下降16.54->13.25->12.46，下一步应先评估现有epoch1/2检查点确认Validation趋势，再决定长程训练或多Prompt容量改造。
+- 无位置版现有epoch1/2/3 Validation为 **42.1793/43.4414/43.9208 Overall**、77.6320/78.5280/79.0400 Yes-No、6.8283/8.4556/8.9024 Free-form，确认三轮内仍在改善，但Overall单轮增益已从+1.2621缩至+0.4794。应先从头执行更长scheduler-horizon的收敛实验，不可直接续训已衰减到零学习率的epoch3；趋势支持欠训练存在，却不足以证明长训能追回与Static Prompt约10.95分差距。

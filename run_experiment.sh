@@ -2143,6 +2143,84 @@ run_pathvqa_grasp_qwen_adapted_no_position_seed44() {
   cat "$output_dir/selected_result.tsv"
 }
 
+run_pathvqa_grasp_qwen_adapted_no_position_marathon10_seed44() {
+  local experiment_name="pathvqa_grasp_qwen_adapted_no_position_marathon10_n4_h512_seed44"
+  local output_dir
+  output_dir="$(available_output_dir "$PATHVQA_GRASP_OUTPUT_ROOT" "${experiment_name}_${RUN_DATE}")"
+  mkdir -p "$output_dir"
+  echo "[PATHVQA_GRASP_QWEN_ADAPTED_MARATHON_CONFIG] experiment=$experiment_name seed=44 data_seed=42 blocks=4 bottleneck=512 alpha=1.5 prompt_tokens=1 prompt_init=embedding_rows prompt_lr=0.3 prompt_weight_decay=0 projection_lr=1e-4 projection_weight_decay=0.01 position_encoding=none question=raw_question_only_frozen_llm_last_hidden_mean visual=post_merger_grid prompt_placement=before_visual_segment expected_trainable=2632704 epochs=10 scheduler=linear scheduler_horizon_epochs=10 epoch3_not_bitwise_replication_of_three_epoch_schedule=true full_validation_epochs=3,4,5,6,7,8,9,10 compact_progress=$output_dir/marathon_progress.tsv output=$output_dir"
+  (
+    cd "$ROOT_DIR" || exit 1
+    python -m unittest test_grasp_prompt_tuning.py || exit 1
+    python -m pathvqa.train_grasp \
+      --model-path "$MODEL_PATH" \
+      --data-root "$PATHVQA_DATA_ROOT" \
+      --cache-dir "$PATHVQA_CACHE_ROOT" \
+      --output-dir "$output_dir" \
+      --experiment-name "$experiment_name" \
+      --blocks 4 \
+      --bottleneck-dim 512 \
+      --prompt-init-mode embedding_rows \
+      --prompt-init-std 0.02 \
+      --position-encoding-mode none \
+      --prompt-learning-rate 0.3 \
+      --projection-learning-rate 1e-4 \
+      --prompt-weight-decay 0 \
+      --projection-weight-decay 0.01 \
+      --epochs 10 \
+      --seed 44 \
+      --data-seed 42 \
+      --batch-size "${PATHVQA_GRASP_BATCH_SIZE:-2}" \
+      --gradient-accumulation "${PATHVQA_GRASP_GRAD_ACCUM:-16}" \
+      --dataloader-workers "${PATHVQA_GRASP_WORKERS:-2}" \
+      --expected-trainable-parameters 2632704 \
+      2>&1 | tee "$output_dir/train.log"
+  ) || return 1
+
+  local progress="$output_dir/marathon_progress.tsv"
+  printf 'epoch\toverall\tyes_no\tfree_form\tcheckpoint\tstatus\n' > "$progress"
+  local epoch checkpoint eval_dir eval_status suite_failures=0
+  for epoch in $(seq 3 10); do
+    checkpoint="$output_dir/checkpoints/epoch_$epoch"
+    eval_dir="$output_dir/eval_validation/epoch_$epoch"
+    mkdir -p "$eval_dir"
+    if [ ! -f "$checkpoint/grasp_prompt.pt" ]; then
+      printf '%s\t\t\t\t%s\tmissing_checkpoint\n' "$epoch" "$checkpoint" >> "$progress"
+      echo "[PATHVQA_GRASP_MARATHON_EVAL] epoch=$epoch status=missing_checkpoint" >&2
+      suite_failures=$((suite_failures + 1))
+      continue
+    fi
+    python pathvqa/pathvqa_official_eval.py \
+      --backend grasp \
+      --base-model "$MODEL_PATH" \
+      --checkpoint "$checkpoint" \
+      --data-root "$PATHVQA_DATA_ROOT" \
+      --cache-dir "$PATHVQA_CACHE_ROOT" \
+      --split validation \
+      --output-dir "$eval_dir" \
+      --overwrite \
+      2>&1 | tee "$output_dir/eval_validation_epoch_${epoch}.log"
+    eval_status=${PIPESTATUS[0]}
+    if [ "$eval_status" -ne 0 ]; then
+      printf '%s\t\t\t\t%s\tfailed\n' "$epoch" "$checkpoint" >> "$progress"
+      echo "[PATHVQA_GRASP_MARATHON_EVAL] epoch=$epoch status=failed exit_code=$eval_status" >&2
+      suite_failures=$((suite_failures + 1))
+      continue
+    fi
+    python -c 'import json,sys; epoch,summary_path,checkpoint,progress=sys.argv[1:]; data=json.load(open(summary_path,encoding="utf-8")); row=(epoch,str(data["overall_accuracy"]),str(data["yes_no_accuracy"]),str(data["free_form_accuracy"]),checkpoint,"complete"); open(progress,"a",encoding="utf-8").write("\t".join(row)+"\n"); print("[PATHVQA_GRASP_MARATHON_EVAL] epoch="+epoch+" overall="+row[1]+" yes_no="+row[2]+" free_form="+row[3]+" status=complete")' \
+      "$epoch" "$eval_dir/pathvqa_summary.json" "$checkpoint" "$progress" || {
+        suite_failures=$((suite_failures + 1))
+        continue
+      }
+  done
+  cat "$progress"
+  python -c 'import csv,sys; rows=[r for r in csv.DictReader(open(sys.argv[1],encoding="utf-8"),delimiter="\t") if r["status"]=="complete"]; assert rows,"no completed GRASP marathon evaluations"; best=max(rows,key=lambda r:float(r["overall"])); print("[PATHVQA_GRASP_MARATHON_BEST] epoch="+best["epoch"]+" overall="+best["overall"]+" yes_no="+best["yes_no"]+" free_form="+best["free_form"]+" checkpoint="+best["checkpoint"])' "$progress" || return 1
+  if [ "$suite_failures" -ne 0 ]; then
+    echo "[ERR] PathVQA GRASP marathon evaluation failures=$suite_failures; all epochs were attempted." >&2
+    return 1
+  fi
+}
+
 run_slake_grasp_seed44() {
   local experiment_name="slake_grasp_reimpl_n4_h512_seed44"
   local output_dir
@@ -3523,6 +3601,9 @@ case "$RUN_TARGET" in
     ;;
   pathvqa_grasp_qwen_adapted_no_position_seed44)
     run_pathvqa_grasp_qwen_adapted_no_position_seed44 || failures=$((failures + 1))
+    ;;
+  pathvqa_grasp_qwen_adapted_no_position_marathon10_seed44)
+    run_pathvqa_grasp_qwen_adapted_no_position_marathon10_seed44 || failures=$((failures + 1))
     ;;
   pathvqa_cocoop_style_p20_h160_seed44)
     run_pathvqa_cocoop_style_seed44 || failures=$((failures + 1))

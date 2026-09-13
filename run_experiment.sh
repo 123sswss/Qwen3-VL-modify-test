@@ -1239,6 +1239,20 @@ run_qdpt_d768_final_dataset() {
         --directional-static-visual-write
       )
       ;;
+    learned_static_query_sandwich)
+      experiment_stem="qdpt_d768_learned_q10_l17_p20_s8_av10_sandwich"
+      expected_trainable=7805184
+      query_source="learned_static"
+      static_visual_write=true
+      private_visual_tokens=8
+      visual_workspace_tokens=10
+      text_prompt_placement="static_before_visual_dynamic_after_visual"
+      control_flags=(
+        --directional-query-source learned_static
+        --directional-static-visual-write
+        --directional-sandwich-text-prompt
+      )
+      ;;
     question_only)
       experiment_stem="qdpt_d768_question_only_q10_l17_p20_s8_av10"
       expected_trainable=7805184
@@ -1403,6 +1417,11 @@ run_pathvqa_qdpt_d768_no_static_visual_resume_eval() {
 
 run_pathvqa_qdpt_d768_learned_static_query_seed44() {
   run_qdpt_d768_final_dataset pathvqa learned_static_query 44
+}
+
+run_pathvqa_qdpt_d768_learned_static_query_sandwich_seed44() {
+  echo "[QDPT_LEARNED_QUERY_SANDWICH_CONTROL] capacity_matched_to_question_query=true replaced_parameters=workspace_text_score_projection_10x2560_with_learned_static_query_10x2560 expected_trainable=7805184"
+  run_qdpt_d768_final_dataset pathvqa learned_static_query_sandwich 44
 }
 
 run_pathvqa_qdpt_d768_question_only_seed44() {
@@ -3625,6 +3644,9 @@ case "$RUN_TARGET" in
     ;;
   pathvqa_qdpt_d768_learned_static_query_seed44)
     run_pathvqa_qdpt_d768_learned_static_query_seed44 || failures=$((failures + 1))
+    ;;
+  pathvqa_qdpt_d768_learned_static_query_sandwich_seed44)
+    run_pathvqa_qdpt_d768_learned_static_query_sandwich_seed44 || failures=$((failures + 1))
     ;;
   pathvqa_qdpt_d768_question_only_seed44)
     run_pathvqa_qdpt_d768_question_only_seed44 || failures=$((failures + 1))

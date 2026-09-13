@@ -396,10 +396,11 @@ CoTBox-TTT可以计入“同方向Related Work”的文献数量，但**不计�
 - [x] 取消SLAKE GRASP迁移：PathVQA正式顺序实现已确认有效但仅39.7508，继续跨数据集运行不具备当前收尾价值。
 - [x] GRASP-Qwen适配救援第一步：保持N4/h512、Entmax-1.5、单全局Prompt、原论文因果顺序与三轮统一协议不变，仅将四个Prompt原型改为Qwen冻结词嵌入行初始化，并采用Prompt LR0.3、路由投影LR1e-4。PathVQA Validation约42.40，比39.7508恢复约2.65但仍远低于Static Prompt，确认尺度失配存在却不是主因；不得冒充忠实GRASP复现结果。
 - [x] GRASP-Qwen适配救援第二步：固定embedding-row初始化、Prompt LR0.3、投影LR1e-4及全部结构，只移除固定二维正弦位置编码。PathVQA Validation约43.92，比42.40再提高约1.52，但仍远低于Static Prompt；位置编码竞争真实视觉语义是次要问题，不是主要失败原因。
-- [ ] GRASP-Qwen适配救援第三步：保留当前无位置编码最佳配置，将每个区域的Prompt原型扩展为多槽原型，并用同一组Entmax区域权重生成4个全局Prompt Token，单独检验“单输出Token容量不足”。随后再按N=16细粒度区域、10-epoch收敛和问题查询池化逐项测试；不要同时加入真实视觉Value，以免直接把GRASP改成QDPT/Q-Former。
+- [x] 取消GRASP-Qwen后续救援：不再运行多Prompt、N16、查询池化、SLAKE或其他调参。正式顺序39.7508及两次适配42.4029/43.9208保留为附录探索性独立复现，不承担证明QDPT优越性的证据。
 - [x] 在第三步结构改造前评估无位置版已有epoch1/2 checkpoint：epoch1/2/3 Overall42.1793/43.4414/43.9208，Yes-No77.6320/78.5280/79.0400，Free-form6.8283/8.4556/8.9024。Validation连续改善，确认三轮未完全收敛，但增益快速递减。
 - [x] `pathvqa_grasp_qwen_adapted_no_position_marathon10_n4_h512_seed44`失败：10轮scheduler horizon配合Prompt LR0.3在epoch2数值发散，约epoch5.82时Prompt、原型、路由和梯度均为NaN，随后人工停止；无有效Validation结果，epoch2后检查点禁用。
-- [ ] 运行安全替代目标`pathvqa_grasp_qwen_adapted_no_position_marathon10_lr009_n4_h512_seed44`：Prompt峰值LR由0.3按3/10缩放为0.09，使10轮线性调度的累计LR面积与三轮版近似匹配；投影LR仍为1e-4，其余结构不变。模型前向loss/路由/Prompt及优化前参数与梯度均加入finite fail-fast，首次NaN/Inf立即失败退出。不得原样重跑0.3版本。
+- [x] 取消安全替代目标`pathvqa_grasp_qwen_adapted_no_position_marathon10_lr009_n4_h512_seed44`：因论文收尾时间不足主动终止GRASP探索；即使已有部分训练也不继续评估，不将其作为完成性能实验。
+- [ ] 运行最终Sandwich Learned Query容量匹配对照`pathvqa_qdpt_d768_learned_q10_l17_p20_s8_av10_sandwich_seed44`：保持D768、Layer17完整视觉K/V、Cross-Attention、P20、Z10、`S8+A_v10`和`[P20; Visual; Z10; Question]`不变，仅用`learned_static_query[10,2560]`等量替换问题注意力池化的`workspace_text_score_projection[10,2560]`，两者总参数均为7,805,184。该实验直接检验当前问题条件是否为最终QDPT收益来源，不得与早期非Sandwich learned-query运行混用。
 - [ ] 复核 Static Prompt 的 checkpoint、split 和评价结果。
 - [ ] 禁止根据 SLAKE 分数修改 D、层数、Prompt 长度或训练策略。
 

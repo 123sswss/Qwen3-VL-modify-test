@@ -1116,8 +1116,24 @@ class SparseVisualMMRLTest(unittest.TestCase):
             visual_dynamic_write=False,
             query_source="learned_static",
         )
+        question_conditioned = DirectionalConcatWorkspaceVisual(
+            visual_dim=1024,
+            text_dim=2560,
+            anchor_layer=17,
+            private_prompt_tokens=8,
+            workspace_tokens=10,
+            workspace_dim=768,
+            workspace_heads=16,
+            visual_dynamic_write=False,
+            query_source="question_attention_pooling",
+        )
         self.assertEqual(total(no_static), 7_786_752)
         self.assertEqual(total(learned_static), 7_805_184)
+        self.assertEqual(total(question_conditioned), total(learned_static))
+        self.assertEqual(
+            learned_static.learned_static_query.numel(),
+            question_conditioned.workspace_text_score_projection.weight.numel(),
+        )
         direct_visual_z = DirectionalConcatWorkspaceVisual(
             visual_dim=1024,
             text_dim=2560,

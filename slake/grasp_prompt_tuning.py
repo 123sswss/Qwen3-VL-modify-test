@@ -190,6 +190,11 @@ class GRASPPromptTuningModel(nn.Module):
             + list(self.text_query_projection.parameters()),
         }
 
+    @staticmethod
+    def _require_finite(name: str, value: torch.Tensor) -> None:
+        if not bool(torch.isfinite(value).all()):
+            raise FloatingPointError(f"GRASP found non-finite values in {name}")
+
     def _expand_inputs(self, batch: Dict[str, Any]):
         batch = dict(batch)
         input_ids = batch.pop("input_ids")
@@ -355,6 +360,16 @@ class GRASPPromptTuningModel(nn.Module):
             scores = torch.einsum("bnh,bh->bn", keys, query) / math.sqrt(self.bottleneck_dim)
             weights = entmax15(scores)
             prompt = torch.einsum("bn,nd->bd", weights, self.prompt_prototypes).to(embeddings)
+            for name, value in (
+                ("question representation", question),
+                ("visual blocks", blocks),
+                ("visual keys", keys),
+                ("text query", query),
+                ("routing scores", scores),
+                ("routing weights", weights),
+                ("global Prompt", prompt),
+            ):
+                self._require_finite(name, value)
             updated_embeddings = embeddings.clone()
             batch_indices = torch.arange(embeddings.shape[0], device=embeddings.device)
             updated_embeddings[
@@ -397,7 +412,11 @@ class GRASPPromptTuningModel(nn.Module):
     def forward(self, **kwargs):
         expanded, ids, positions, question_ids, question_mask, grid = self._expand_inputs(kwargs)
         with self._inject_prompt(ids, positions, question_ids, question_mask, grid):
-            return self.base_model(**expanded)
+            output = self.base_model(**expanded)
+        loss = getattr(output, "loss", None)
+        if torch.is_tensor(loss):
+            self._require_finite("training loss", loss)
+        return output
 
     def generate(self, **kwargs):
         expanded, ids, positions, question_ids, question_mask, grid = self._expand_inputs(kwargs)

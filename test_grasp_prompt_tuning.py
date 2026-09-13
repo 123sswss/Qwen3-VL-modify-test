@@ -158,6 +158,27 @@ class GRASPTest(unittest.TestCase):
                 position_encoding_mode="learned",
             )
 
+    def test_non_finite_prompt_fails_before_frozen_llm_consumes_it(self):
+        model = GRASPPromptTuningModel(
+            FakeBaseModel(),
+            FakeTokenizer(),
+            block_count=4,
+            bottleneck_dim=4,
+            position_encoding_mode="none",
+        )
+        with torch.no_grad():
+            model.prompt_prototypes[0, 0] = float("nan")
+        with self.assertRaisesRegex(FloatingPointError, "global Prompt"):
+            model(
+                input_ids=torch.tensor([[30, 11, 10, 10, 10, 10, 12, 20, 21]]),
+                attention_mask=torch.ones(1, 9, dtype=torch.long),
+                labels=torch.full((1, 9), -100, dtype=torch.long),
+                grasp_question_input_ids=torch.tensor([[20]]),
+                grasp_question_attention_mask=torch.ones(1, 1, dtype=torch.long),
+                image_grid_thw=torch.tensor([[1, 4, 4]]),
+                pixel_values=torch.zeros(1, 2),
+            )
+
     def test_forward_uses_raw_question_and_visual_adjacent_prompt(self):
         base = FakeBaseModel()
         model = GRASPPromptTuningModel(

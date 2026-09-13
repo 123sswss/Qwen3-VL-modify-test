@@ -142,9 +142,23 @@ class GRASPCallback(TrainerCallback):
         self.diagnostics_path = output_dir / "grasp_diagnostics.jsonl"
 
     def on_pre_optimizer_step(self, args, state, control, **kwargs):
+        model = kwargs["model"]
+        for group_name, parameters in model.trainable_parameter_groups().items():
+            for parameter in parameters:
+                if not bool(torch.isfinite(parameter.detach()).all()):
+                    raise FloatingPointError(
+                        f"GRASP found non-finite parameter in {group_name} "
+                        f"at global_step={int(state.global_step)}"
+                    )
+                if parameter.grad is not None and not bool(
+                    torch.isfinite(parameter.grad.detach()).all()
+                ):
+                    raise FloatingPointError(
+                        f"GRASP found non-finite gradient in {group_name} "
+                        f"at global_step={int(state.global_step)}"
+                    )
         if not state.is_world_process_zero or int(state.global_step) % 20:
             return control
-        model = kwargs["model"]
         row = {"step": int(state.global_step), "epoch": float(state.epoch or 0)}
         for name, parameters in model.trainable_parameter_groups().items():
             gradients = [

@@ -398,7 +398,8 @@ CoTBox-TTT可以计入“同方向Related Work”的文献数量，但**不计�
 - [x] GRASP-Qwen适配救援第二步：固定embedding-row初始化、Prompt LR0.3、投影LR1e-4及全部结构，只移除固定二维正弦位置编码。PathVQA Validation约43.92，比42.40再提高约1.52，但仍远低于Static Prompt；位置编码竞争真实视觉语义是次要问题，不是主要失败原因。
 - [ ] GRASP-Qwen适配救援第三步：保留当前无位置编码最佳配置，将每个区域的Prompt原型扩展为多槽原型，并用同一组Entmax区域权重生成4个全局Prompt Token，单独检验“单输出Token容量不足”。随后再按N=16细粒度区域、10-epoch收敛和问题查询池化逐项测试；不要同时加入真实视觉Value，以免直接把GRASP改成QDPT/Q-Former。
 - [x] 在第三步结构改造前评估无位置版已有epoch1/2 checkpoint：epoch1/2/3 Overall42.1793/43.4414/43.9208，Yes-No77.6320/78.5280/79.0400，Free-form6.8283/8.4556/8.9024。Validation连续改善，确认三轮未完全收敛，但增益快速递减。
-- [ ] 暂缓4个全局Prompt结构改造，先运行`pathvqa_grasp_qwen_adapted_no_position_marathon10_n4_h512_seed44`：从头训练无位置最佳配置10 epochs，使线性scheduler按10轮重新设定；训练后串行评估epoch3-10并实时追加`marathon_progress.tsv`，单轮评估失败继续后续轮次。不得从三轮checkpoint直接续训，因为其学习率已衰减至零。若长程最佳仍明显低于Static Prompt，再恢复多Prompt容量实验。
+- [x] `pathvqa_grasp_qwen_adapted_no_position_marathon10_n4_h512_seed44`失败：10轮scheduler horizon配合Prompt LR0.3在epoch2数值发散，约epoch5.82时Prompt、原型、路由和梯度均为NaN，随后人工停止；无有效Validation结果，epoch2后检查点禁用。
+- [ ] 运行安全替代目标`pathvqa_grasp_qwen_adapted_no_position_marathon10_lr009_n4_h512_seed44`：Prompt峰值LR由0.3按3/10缩放为0.09，使10轮线性调度的累计LR面积与三轮版近似匹配；投影LR仍为1e-4，其余结构不变。模型前向loss/路由/Prompt及优化前参数与梯度均加入finite fail-fast，首次NaN/Inf立即失败退出。不得原样重跑0.3版本。
 - [ ] 复核 Static Prompt 的 checkpoint、split 和评价结果。
 - [ ] 禁止根据 SLAKE 分数修改 D、层数、Prompt 长度或训练策略。
 

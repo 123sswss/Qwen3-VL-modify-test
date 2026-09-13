@@ -402,7 +402,7 @@ CoTBox-TTT可以计入“同方向Related Work”的文献数量，但**不计�
 - [x] 在第三步结构改造前评估无位置版已有epoch1/2 checkpoint：epoch1/2/3 Overall42.1793/43.4414/43.9208，Yes-No77.6320/78.5280/79.0400，Free-form6.8283/8.4556/8.9024。Validation连续改善，确认三轮未完全收敛，但增益快速递减。
 - [x] `pathvqa_grasp_qwen_adapted_no_position_marathon10_n4_h512_seed44`失败：10轮scheduler horizon配合Prompt LR0.3在epoch2数值发散，约epoch5.82时Prompt、原型、路由和梯度均为NaN，随后人工停止；无有效Validation结果，epoch2后检查点禁用。
 - [x] 取消安全替代目标`pathvqa_grasp_qwen_adapted_no_position_marathon10_lr009_n4_h512_seed44`：因论文收尾时间不足主动终止GRASP探索；即使已有部分训练也不继续评估，不将其作为完成性能实验。
-- [ ] 运行最终Sandwich Learned Query容量匹配对照`pathvqa_qdpt_d768_learned_q10_l17_p20_s8_av10_sandwich_seed44`：保持D768、Layer17完整视觉K/V、Cross-Attention、P20、Z10、`S8+A_v10`和`[P20; Visual; Z10; Question]`不变，仅用`learned_static_query[10,2560]`等量替换问题注意力池化的`workspace_text_score_projection[10,2560]`，两者总参数均为7,805,184。该实验直接检验当前问题条件是否为最终QDPT收益来源，不得与早期非Sandwich learned-query运行混用。
+- [x] 完成最终Sandwich Learned Query容量匹配对照`pathvqa_qdpt_d768_learned_q10_l17_p20_s8_av10_sandwich_seed44`：约59.05/90.88/27.31，相对同seed问题引导Sandwich约下降1.73/1.86/1.60。两者总参数均为7,805,184且视觉K/V、位置和训练协议一致，支持收益来自当前问题条件而非额外Query容量；按单seed机制消融报告，精确summary与配对统计待补。
 - [ ] 复核 Static Prompt 的 checkpoint、split 和评价结果。
 - [ ] 禁止根据 SLAKE 分数修改 D、层数、Prompt 长度或训练策略。
 
@@ -416,6 +416,7 @@ CoTBox-TTT可以计入“同方向Related Work”的文献数量，但**不计�
 - [ ] 计算 multi-seed mean ± std、McNemar、image-clustered paired bootstrap CI。
 - [ ] 生成主性能表、容量表、消融表、效率表和文献独立表。
 - [ ] 生成架构图、Pareto 图、宽度曲线和 mismatch 图。
+- [x] 实现论文分析制图工具链：从现有日志生成三seed训练动力学、Prompt方法seed稳定性和模块活性图；新增默认关闭的完整Directional Cross-Attention导出，并提供同图多问题候选的确定性选择规则。真实checkpoint注意力导出尚未执行，不计为已完成实验。
 - [x] 串行完成自建电气数据集最终对比：Static Prompt P20为70.06、CoCoOp-style P20/H160为70.88、Dense D768 Sandwich QDPT为71.91，统一seed47/data seed42、三epoch和既有private fixed holdout；不扩展多seed或消融。
 - [x] 补充最终结构视觉Prompt统一控制：RNG控制的统一V20 Sandwich seed44显示约55.70，相对最终`S8+A_v10` Sandwich60.7765约低5.08；确认统一参数化与Sandwich位置存在负交互，永久保留双速率8+10，不追加seed。精确分项、诊断和输出路径待从服务器summary补齐。
 - [x] 完成PathVQA Static Prompt P20 seed45/46稳定性补充：seeds44/45/46 Overall54.8650/55.0567/55.3124，mean55.0780 +/- 0.2244，range0.4474。未达到原先为“Prompt普遍不稳定”假设设置的触发线，因此终止该强假设；稳定性表不得宣称Prompt普遍高度seed敏感。后续CoCoOp多seed仅因动态Prompt基线覆盖不足而独立补充。

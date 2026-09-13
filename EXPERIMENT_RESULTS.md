@@ -1,5 +1,28 @@
 # MMRL Experiment Ledger
 
+## 2026-09-13 correction: private electrical evaluation denominator
+
+The user, who authored the evaluator, confirmed that all methods automatically received credit for the same 18 samples with missing image-file associations. The previously recorded 70.06 / 70.88 / 71.91 percentages used all 972 samples, including these automatic credits; they are not accuracies over the 954 evaluated samples. Historical entries below are preserved.
+
+- Corrected protocol: exclude those same 18 samples from both numerator and denominator. No model retraining or new inference was performed.
+- electrical_static_prompt_p20_seed47_20260911: the reported rounded total corresponds to681/972; excluding automatic credits gives **663/954 = 69.4968553459%**, reported as **69.50%**.
+- electrical_cocoop_style_p20_h160_seed47_20260911:689/972 becomes **671/954 = 70.3354297694%**, reported as **70.34%**.
+- electrical_qdpt_d768_question_q10_l17_p20_s8_av10_sandwich_seed47_20260911_1:699/972 becomes **681/954 = 71.3836477987%**, reported as **71.38%**.
+- These integer totals are reconstructed from the previously reported two-decimal scores with denominator972 and the user-confirmed scoring rule; raw per-sample files were not reread in this correction. Model seed47, data seed42, epoch3 checkpoints and output paths under the existing experiment roots remain unchanged.
+- QDPT gains over Static and CoCoOp-style are **18/954*100 = 1.8867924528** and **10/954*100 = 1.0482180294** percentage points, reported as **1.89 / 1.05**.
+- The user verified the electrical Full-Attention LoRA-r8 evaluator output as `rank8: score=70.96 evaluated=954`, with **677/954 = 70.9643605870%**, reported as **70.96%**. The historical70.69% and the tentative687/972 count came from a transposed or mixed-denominator record and are superseded by this direct954-sample result.
+- QDPT exceeds Full-Attention LoRA-r8 by **4/954*100 = 0.4192872117** percentage points, reported as **0.42**. The corrected single-seed ordering on the954 valid samples is Static69.50 < CoCoOp-style70.34 < Full-Attention LoRA-r8 70.96 < QDPT71.38.
+- No answer-type breakdown, paired analysis or new seed results were supplied.
+
+## 2026-09-13 paper configuration clarification supplied by user
+
+- Backbone: Qwen3-VL-4B-Instruct, approximately4.445B parameters,24 visual Transformer blocks at width1024 and36 language blocks at width2560. Original backbone parameters frozen; BF16; native AutoProcessor dynamic resolution with no method-specific fixed image resolution or visual-token cap; text maximum length2048.
+- QDPT: AdamW betas0.9/0.999, epsilon1e-8, all weight decay0,3% linear warmup then linear decay, max gradient norm1.0, no gradient checkpointing;3 epochs, microbatch2 and accumulation16. Public multi-seed runs use44/45/46, data seed42; public single-run controls use44; private electrical runs retain47. Use epoch3, not validation-best epoch.
+- Learning rates: P20 and A_t10 at0.3; S8 at3e-5; A_v10 and the question-guided generator, attention and output projection at1e-4. Paper groups S8 and A_v10 as18 static visual Prompt tokens with18,432 parameters. The other generator modules total7,709,952; P20+A_t10 total76,800; overall7,805,184. Implementation grouping S8=8,192 and A_v10+generator=7,720,192 is an equivalent accounting.
+- Output head: LayerNorm at width768, biased768-to768 Linear, tanh-approximate GELU, biased768-to2560 Linear. Last-layer weight and bias initialized to zero; output added to A_t10. Visual read/Prompt site is before zero-index17, the18th block; LLM order is [P20; Visual; A_t+g(Z)10; Question].
+- Full-Attention LoRA: rank8, alpha16, dropout0.05, no bias training or DoRA;24 visual layers qkv/proj and36 language layers q/k/v/o,192 Linear targets,7,077,888 trainable parameters. AdamW LR1e-4, weight decay0,3% warmup and linear decay, microbatch1 and accumulation32; same public seed, precision, epoch and checkpoint protocol.
+- Static P20:51,200 parameters, LR0.3. CoCoOp-style P20/H160:873,120 parameters, Prompt/Meta-Net LR0.3/3e-4. Architecture/hyperparameters selected on PathVQA Validation and fixed for final multi-seed and cross-dataset runs. Generation length and decoding arguments remain to be documented.
+
 Last updated: 2026-08-31
 
 This file is the persistent source of truth for completed experiments. Results are recorded from official SLAKE evaluation output or diagnostics supplied during development. Unless noted otherwise, SLAKE evaluation contains 2,094 test questions, uses all languages, and reports percentages.
@@ -1265,3 +1288,11 @@ These results remain useful negative evidence and should not be rerun unless a n
 - Evidence: epoch1 logged loss mean17.4057, first66.75, last14.89 and minimum13.59. During epoch2 the logged mean becomes122,678.63, followed by reported zeros; epochs3-6 show only0.0. The zeros are not convergence: latest diagnostics at epochs5.692-5.822 report NaN global Prompt norm, prototype norm, routing entropy, maximum weight and both Prompt/projection gradient norms.
 - Interpretation: extending the linear scheduler horizon while retaining Prompt LR0.3 materially changes the optimization exposure. In the successful3-epoch run, the high Prompt LR decays to zero quickly; in the10-epoch schedule it remains large for much longer and causes runaway non-finite Prompt/projection state during epoch2. This failed run does not test whether longer GRASP training improves generalization. Any replacement must reduce or cap cumulative Prompt optimization, add explicit finite guards, and preserve the failed run as negative evidence rather than evaluating corrupted checkpoints.
 - Interpretation: the large fixed positional signal was mildly harmful, supporting the hypothesis that it competed with real visual semantics, but it was not the dominant failure. Even after correcting initialization/optimization scale and removing positional encoding, GRASP remains approximately10.95 points below Static Prompt54.8650. The next high-value axis is output capacity: test whether collapsing all routed regions into one static-prototype Prompt is the principal bottleneck before spending on a long schedule.
+
+### 2026-09-14 - PathVQA Sandwich Learned Query capacity-matched control seed44
+
+- Exact logical experiment: `pathvqa_qdpt_d768_learned_q10_l17_p20_s8_av10_sandwich_seed44`; implementation commit `a4bf3ba`. Dataset PathVQA, model/data seeds44/42, three epochs and complete official Validation evaluation.
+- Controlled change: retain the final D768 Sandwich architecture, Layer17 full visual K/V, Cross-Attention, `P20`, `Z10`, `S8+A_v10`, `[P20; Visual; Z10; Question]`, optimizer and all learning rates. Replace only the question-attention-pooling score projection `workspace_text_score_projection[10,2560]` with an equal-size learned static query table `learned_static_query[10,2560]`. Both methods contain exactly **7,805,184** trainable parameters.
+- User-reported displayed Validation result: **59.05 Overall /90.88 Yes-No /27.31 Free-form**. The exact unrounded summary values, diagnostics and unique output directory have not yet been supplied; record these displayed values as rounded and do not invent unavailable precision or significance statistics.
+- Same-seed comparison with the final question-guided Sandwich result60.7765/92.7360/28.9087 gives approximate changes of **-1.73 Overall /-1.86 Yes-No /-1.60 Free-form**. Because parameter count, visual evidence path, Prompt placement and training protocol are matched, the loss cannot be attributed to lower adapter capacity or removal of visual K/V access.
+- Conclusion: current-question conditioning contributes beyond a generic learned-query visual aggregator in the final architecture. The control strengthens the mechanism claim that QDPT performs question-directed retrieval rather than merely adding learned visual queries. This is a single-seed controlled effect, so report it as a seed44 capacity-matched ablation and do not claim cross-seed stability or statistical significance until paired predictions are available.

@@ -1,5 +1,9 @@
 # Experiment Result Summary
 
+## 2026-09-13 电气评估口径更正
+
+用户确认原评价将相同的18条缺图样本自动计对，并以972为分母。按954条有效样本重新计分，Static Prompt为663/954＝69.50%，CoCoOp-style为671/954＝70.34%，QDPT为681/954＝71.38%；QDPT分别高1.89、1.05个百分点。上述三个整数总数由原两位百分比与已确认的972分母重建，本轮未重新运行模型。LoRA以评估器输出`rank8: score=70.96 evaluated=954`为准，即677/954＝70.96%；旧70.69%及候选687/972属于抄录或统计口径混用。QDPT比LoRA多答对4题，高0.42个百分点。本次单种子结果的排序为Static Prompt < CoCoOp-style < LoRA < QDPT。以下历史记录保留，涉及原电气分数的结论以上述更正为准。
+
 Last updated: 2026-09-06
 
 This file is the concise experiment memory shared by the user and Codex. The complete append-only record remains in `EXPERIMENT_RESULTS.md`.
@@ -217,3 +221,8 @@ This file is the concise experiment memory shared by the user and Codex. The com
 - 精确结果为42.4029/76.2240/8.6790和43.9208/79.0400/8.9024。去位置编码的+1.5179几乎全来自Yes/No +2.8160，Free-form仅+0.2234；它降低了晚期路由稀疏度但没有修复开放生成。无位置版最终Prompt范数91.17、原型范数174.45，尺度不足已排除；训练loss仍按epoch下降16.54->13.25->12.46，下一步应先评估现有epoch1/2检查点确认Validation趋势，再决定长程训练或多Prompt容量改造。
 - 无位置版现有epoch1/2/3 Validation为 **42.1793/43.4414/43.9208 Overall**、77.6320/78.5280/79.0400 Yes-No、6.8283/8.4556/8.9024 Free-form，确认三轮内仍在改善，但Overall单轮增益已从+1.2621缩至+0.4794。应先从头执行更长scheduler-horizon的收敛实验，不可直接续训已衰减到零学习率的epoch3；趋势支持欠训练存在，却不足以证明长训能追回与Static Prompt约10.95分差距。
 - 10-epoch长程控制在epoch2发生数值发散并于约epoch5.82人工停止：epoch2 loss日志出现122,678量级，随后loss被记录为0，Prompt/原型/路由及梯度诊断全部NaN。原因是10轮scheduler让Prompt LR0.3维持高位远长于三轮版；该运行没有产生有效长训性能结论，epoch2以后检查点不得评估或使用。
+
+## 2026-09-14 Sandwich Learned Query容量匹配对照
+
+- `pathvqa_qdpt_d768_learned_q10_l17_p20_s8_av10_sandwich_seed44`得到约 **59.05 Overall /90.88 Yes-No /27.31 Free-form**。它与最终问题引导Sandwich严格同为7,805,184参数、同seed44、同视觉K/V、同Prompt位置和训练协议，只把问题生成的Q10替换为等量可学习静态Q10。
+- 相对问题引导Sandwich的60.7765/92.7360/28.9087，约下降 **1.73/1.86/1.60**。因此最终收益不能解释为单纯增加Query参数或通用learned-query视觉汇聚；当前问题条件确实提供了额外价值。该结果仍是单seed机制消融，正文不得写成跨seed稳定优势。精确未舍入值、配对统计、诊断和唯一输出路径待从服务器summary补齐。

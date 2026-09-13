@@ -5,6 +5,7 @@ eval/
 mmrl_output/
 experiment_outputs/
 pathvqa/outputs/
+paper_figures/output/
 loraTest/runs/
 tmp/
 els-cas-templates/

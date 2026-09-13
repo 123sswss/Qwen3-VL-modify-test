@@ -362,6 +362,9 @@ class DirectionalConcatWorkspaceVisual(nn.Module):
         self._question_query_units_natural = 0
         self._question_query_mismatch_rate = torch.tensor(0.0)
         self._question_query_source_cosine = torch.tensor(1.0)
+        self._attention_capture_enabled = False
+        self._attention_captures: list[Dict[str, torch.Tensor]] = []
+        self._current_grid_thw: torch.Tensor | None = None
 
     def private_parameters(self) -> list[nn.Parameter]:
         return (
@@ -470,6 +473,17 @@ class DirectionalConcatWorkspaceVisual(nn.Module):
         self._question_query_units_natural = 0
         self._question_query_mismatch_rate = torch.tensor(0.0)
         self._question_query_source_cosine = torch.tensor(1.0)
+
+    def configure_attention_capture(self, enabled: bool) -> None:
+        """Enable a detached CPU copy of directional attention for figure export."""
+        self._attention_capture_enabled = bool(enabled)
+        self.clear_attention_captures()
+
+    def clear_attention_captures(self) -> None:
+        self._attention_captures = []
+
+    def attention_captures(self) -> list[Dict[str, torch.Tensor]]:
+        return [dict(capture) for capture in self._attention_captures]
 
     @staticmethod
     def _same_visual_memory(
@@ -708,6 +722,7 @@ class DirectionalConcatWorkspaceVisual(nn.Module):
             self._image_lengths = None
             self._image_to_sample = None
             self._workspace_by_image = None
+            self._current_grid_thw = None
             self._layer_debug_context = {}
 
     def prepare_visual(self, grid_thw: torch.Tensor) -> None:
@@ -720,6 +735,11 @@ class DirectionalConcatWorkspaceVisual(nn.Module):
         if int(self._images_per_sample.sum().item()) != int(grid_thw.shape[0]):
             raise RuntimeError("Directional Workspace image count mismatch")
         self._image_lengths = grid_thw.prod(dim=-1).to(dtype=torch.long)
+        self._current_grid_thw = (
+            grid_thw.detach().to(device="cpu", dtype=torch.long)
+            if self._attention_capture_enabled
+            else None
+        )
         sample_ids = torch.arange(
             self._images_per_sample.numel(),
             device=self._images_per_sample.device,
@@ -847,6 +867,28 @@ class DirectionalConcatWorkspaceVisual(nn.Module):
                 need_weights=True,
                 average_attn_weights=False,
             )
+            if self._attention_capture_enabled:
+                if self._current_grid_thw is None:
+                    raise RuntimeError("Attention capture requires image_grid_thw")
+                self._attention_captures = []
+                for image_index in range(cross_weights.shape[0]):
+                    valid_tokens = int(attention_visual_mask[image_index].sum().item())
+                    capture = {
+                        "cross_attention": cross_weights[
+                            image_index, :, :, :valid_tokens
+                        ].detach().float().cpu(),
+                        "visual_mask": attention_visual_mask[
+                            image_index, :valid_tokens
+                        ].detach().cpu(),
+                        "grid_thw": self._current_grid_thw[image_index].clone(),
+                        "workspace": cross.new_empty(0).detach().cpu(),
+                    }
+                    if pooling is not None:
+                        valid_text = int(text_mask[image_index].sum().item())
+                        capture["question_pooling"] = pooling[
+                            image_index, :, :valid_text
+                        ].detach().float().cpu()
+                    self._attention_captures.append(capture)
         else:
             if self._visual_memory_mode != "normal":
                 raise RuntimeError(
@@ -859,6 +901,9 @@ class DirectionalConcatWorkspaceVisual(nn.Module):
             cross_weights = None
         workspace = queries + cross
         self._workspace_by_image = workspace
+        if self._attention_capture_enabled:
+            for image_index, capture in enumerate(self._attention_captures):
+                capture["workspace"] = workspace[image_index].detach().float().cpu()
 
         with torch.no_grad():
             if pooling is not None:

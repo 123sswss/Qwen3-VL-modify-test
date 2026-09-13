@@ -1,3 +1,4 @@
 datasets>=3.0
 peft
 pyarrow>=17.0
+matplotlib>=3.8

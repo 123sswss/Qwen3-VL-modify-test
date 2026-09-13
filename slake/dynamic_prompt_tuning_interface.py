@@ -280,6 +280,32 @@ class DynamicPromptTuningModelInterface:
         self._workspace_debug_count = 0
         self.last_generation_timing = None
 
+    def configure_attention_capture(self, enabled: bool = True) -> None:
+        sparse_visual = getattr(self.model, "sparse_visual", None)
+        if sparse_visual is None or not hasattr(
+            sparse_visual, "configure_attention_capture"
+        ):
+            raise RuntimeError(
+                "This checkpoint does not expose directional visual attention"
+            )
+        sparse_visual.configure_attention_capture(enabled)
+
+    def clear_attention_captures(self) -> None:
+        sparse_visual = getattr(self.model, "sparse_visual", None)
+        if sparse_visual is None or not hasattr(sparse_visual, "clear_attention_captures"):
+            raise RuntimeError(
+                "This checkpoint does not expose directional visual attention"
+            )
+        sparse_visual.clear_attention_captures()
+
+    def attention_captures(self) -> list[Dict[str, torch.Tensor]]:
+        sparse_visual = getattr(self.model, "sparse_visual", None)
+        if sparse_visual is None or not hasattr(sparse_visual, "attention_captures"):
+            raise RuntimeError(
+                "This checkpoint does not expose directional visual attention"
+            )
+        return sparse_visual.attention_captures()
+
     def inference_intervention_summary(self) -> Dict[str, Any]:
         summary = self.model.inference_intervention_summary()
         summary["workspace_debug_means"] = (

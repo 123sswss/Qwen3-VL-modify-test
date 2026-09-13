@@ -1,0 +1,22 @@
+{
+  "dataset": "PathVQA Validation",
+  "methods": [
+    {
+      "name": "Static Prompt",
+      "scores": [54.8650, 55.0567, 55.3124]
+    },
+    {
+      "name": "CoCoOp-style",
+      "scores": [57.4053, 56.3988, 55.1366]
+    },
+    {
+      "name": "QDPT",
+      "scores": [60.7765, 57.2935, 59.3865]
+    },
+    {
+      "name": "Full-Attn LoRA-r8",
+      "scores": [59.3386, 59.2427, 59.2107]
+    }
+  ],
+  "seeds": [44, 45, 46]
+}

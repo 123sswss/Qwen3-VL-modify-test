@@ -960,6 +960,47 @@ class SparseVisualMMRLTest(unittest.TestCase):
             ]
         )
 
+    def test_directional_attention_capture_preserves_heads_queries_and_grid(self):
+        torch.manual_seed(41)
+        visual = _FakeVisual()
+        adapter = DirectionalConcatWorkspaceVisual(
+            visual_dim=8,
+            text_dim=12,
+            anchor_layer=1,
+            private_prompt_tokens=2,
+            workspace_tokens=3,
+            workspace_dim=8,
+            workspace_heads=2,
+            visual_dynamic_write=False,
+        )
+        adapter.install(visual)
+        adapter.configure_attention_capture(True)
+        hidden = torch.randn(7, 8)
+        text_tokens = torch.randn(2, 4, 12)
+        text_mask = torch.tensor(
+            [[True, True, False, False], [True, True, True, False]]
+        )
+        with adapter.activate(
+            torch.randn(2, 12),
+            torch.tensor([1, 1]),
+            text_tokens=text_tokens,
+            text_token_mask=text_mask,
+        ):
+            adapter.prepare_visual(torch.tensor([[1, 1, 4], [1, 1, 3]]))
+            visual.blocks[1](
+                hidden,
+                cu_seqlens=torch.tensor([0, 2, 4, 7], dtype=torch.int32),
+            )
+        captures = adapter.attention_captures()
+        self.assertEqual(len(captures), 2)
+        self.assertEqual(tuple(captures[0]["cross_attention"].shape), (2, 3, 4))
+        self.assertEqual(tuple(captures[1]["cross_attention"].shape), (2, 3, 3))
+        self.assertEqual(captures[0]["grid_thw"].tolist(), [1, 1, 4])
+        self.assertEqual(tuple(captures[0]["question_pooling"].shape), (3, 2))
+        self.assertEqual(tuple(captures[0]["workspace"].shape), (3, 8))
+        adapter.configure_attention_capture(False)
+        self.assertEqual(adapter.attention_captures(), [])
+
     def test_directional_learned_static_query_ignores_question_tokens(self):
         torch.manual_seed(33)
         adapter = DirectionalConcatWorkspaceVisual(

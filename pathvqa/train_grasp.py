@@ -81,8 +81,19 @@ class GRASPCollator:
 
 
 class GRASPTrainer(Trainer):
-    def __init__(self, *args, grasp_lr: float, **kwargs):
-        self.grasp_lr = float(grasp_lr)
+    def __init__(
+        self,
+        *args,
+        prompt_lr: float,
+        projection_lr: float,
+        prompt_weight_decay: float,
+        projection_weight_decay: float,
+        **kwargs,
+    ):
+        self.prompt_lr = float(prompt_lr)
+        self.projection_lr = float(projection_lr)
+        self.prompt_weight_decay = float(prompt_weight_decay)
+        self.projection_weight_decay = float(projection_weight_decay)
         super().__init__(*args, **kwargs)
 
     def create_optimizer(self):
@@ -94,11 +105,29 @@ class GRASPTrainer(Trainer):
         if {id(p) for p in parameters} != {id(p) for p in active}:
             raise RuntimeError("GRASP optimizer grouping does not match trainable parameters")
         self.optimizer = torch.optim.AdamW(
-            parameters, lr=self.grasp_lr, weight_decay=0.01, betas=(0.9, 0.999), eps=1e-8
+            [
+                {
+                    "params": groups["prompt_prototypes"],
+                    "lr": self.prompt_lr,
+                    "weight_decay": self.prompt_weight_decay,
+                    "group_name": "prompt_prototypes",
+                },
+                {
+                    "params": groups["projections"],
+                    "lr": self.projection_lr,
+                    "weight_decay": self.projection_weight_decay,
+                    "group_name": "projections",
+                },
+            ],
+            betas=(0.9, 0.999),
+            eps=1e-8,
         )
         print(
             "[GRASP_OPTIMIZER] "
-            f"lr={self.grasp_lr} weight_decay=0.01 tensors={len(parameters)} "
+            f"prompt_lr={self.prompt_lr} prompt_weight_decay={self.prompt_weight_decay} "
+            f"projection_lr={self.projection_lr} "
+            f"projection_weight_decay={self.projection_weight_decay} "
+            f"tensors={len(parameters)} "
             "scheduler=linear warmup_ratio=0.1"
         )
         return self.optimizer
@@ -167,6 +196,15 @@ def parse_args(dataset_name: str) -> argparse.Namespace:
     parser.add_argument("--blocks", type=int, default=4)
     parser.add_argument("--bottleneck-dim", type=int, default=512)
     parser.add_argument("--prompt-init-std", type=float, default=0.02)
+    parser.add_argument(
+        "--prompt-init-mode",
+        choices=("gaussian", "embedding_rows"),
+        default="gaussian",
+    )
+    parser.add_argument("--prompt-learning-rate", type=float)
+    parser.add_argument("--projection-learning-rate", type=float)
+    parser.add_argument("--prompt-weight-decay", type=float, default=0.01)
+    parser.add_argument("--projection-weight-decay", type=float, default=0.01)
     parser.add_argument("--learning-rate", type=float, default=1e-4)
     parser.add_argument("--epochs", type=int, default=3)
     parser.add_argument("--seed", type=int, default=44)
@@ -186,6 +224,14 @@ def parse_args(dataset_name: str) -> argparse.Namespace:
         parser.error("--blocks must be a perfect square")
     if args.dataloader_workers < 0:
         parser.error("--dataloader-workers must be non-negative")
+    if args.prompt_learning_rate is None:
+        args.prompt_learning_rate = args.learning_rate
+    if args.projection_learning_rate is None:
+        args.projection_learning_rate = args.learning_rate
+    if min(args.prompt_learning_rate, args.projection_learning_rate) <= 0:
+        parser.error("GRASP Prompt and projection learning rates must be positive")
+    if min(args.prompt_weight_decay, args.projection_weight_decay) < 0:
+        parser.error("GRASP weight decay values must be non-negative")
     return args
 
 
@@ -208,6 +254,7 @@ def main(dataset_name: str = "pathvqa") -> int:
         block_count=args.blocks,
         bottleneck_dim=args.bottleneck_dim,
         prompt_init_std=args.prompt_init_std,
+        prompt_init_mode=args.prompt_init_mode,
         init_seed=args.seed,
     )
     dataset = GRASPQuestionDataset(
@@ -229,13 +276,19 @@ def main(dataset_name: str = "pathvqa") -> int:
         f"blocks={args.blocks} bottleneck={args.bottleneck_dim} alpha=1.5 "
         f"question=raw_question_only_frozen_llm_last_hidden_mean "
         f"visual=post_merger_grid prompt_placement=before_visual_segment "
-        f"prompt_tokens=1 parameters={counts} total={trainable} "
-        f"lr={args.learning_rate} weight_decay=0.01 warmup=0.1 "
+        f"prompt_tokens=1 prompt_init={args.prompt_init_mode} "
+        f"parameters={counts} total={trainable} "
+        f"prompt_lr={args.prompt_learning_rate} projection_lr={args.projection_learning_rate} "
+        f"prompt_weight_decay={args.prompt_weight_decay} "
+        f"projection_weight_decay={args.projection_weight_decay} warmup=0.1 "
         f"epochs={args.epochs} seed={args.seed} data_seed={args.data_seed}"
     )
     trainer = GRASPTrainer(
         model=model,
-        grasp_lr=args.learning_rate,
+        prompt_lr=args.prompt_learning_rate,
+        projection_lr=args.projection_learning_rate,
+        prompt_weight_decay=args.prompt_weight_decay,
+        projection_weight_decay=args.projection_weight_decay,
         args=TrainingArguments(
             output_dir=str(args.output_dir / "trainer"),
             num_train_epochs=args.epochs,
@@ -273,13 +326,16 @@ def main(dataset_name: str = "pathvqa") -> int:
         "blocks": args.blocks,
         "bottleneck_dim": args.bottleneck_dim,
         "entmax_alpha": 1.5,
+        "prompt_init_mode": args.prompt_init_mode,
         "question_encoder": "raw_question_only_frozen_llm_last_hidden_mean",
         "visual_source": "post_merger_grid",
         "prompt_placement": "before_visual_segment",
         "trainable_parameters": counts,
         "total_trainable_parameters": trainable,
-        "learning_rate": args.learning_rate,
-        "weight_decay": 0.01,
+        "prompt_learning_rate": args.prompt_learning_rate,
+        "projection_learning_rate": args.projection_learning_rate,
+        "prompt_weight_decay": args.prompt_weight_decay,
+        "projection_weight_decay": args.projection_weight_decay,
         "warmup_ratio": 0.1,
         "epochs": args.epochs,
         "seed": args.seed,

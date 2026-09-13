@@ -394,6 +394,7 @@ CoTBox-TTT可以计入“同方向Related Work”的文献数量，但**不计�
 - [x] 准备`slake_lora_full_model_attn_r8_seeds44_46`：三个seed串行、失败继续、仅epoch3官方Test，并在启动前跳过已有完整结果。
 - [x] 完成Full-Attention LoRA-r8 seed44/45/46：Overall 81.95/81.57/81.95，均值81.82 +/- 0.22；QDPT均值低4.79且三个同seed配对均极显著，停止跨数据集LoRA性能持平叙事。
 - [x] 取消SLAKE GRASP迁移：PathVQA正式顺序实现已确认有效但仅39.7508，继续跨数据集运行不具备当前收尾价值。
+- [ ] GRASP-Qwen适配救援第一步：保持N4/h512、Entmax-1.5、单全局Prompt、原论文因果顺序与三轮统一协议不变，仅将四个Prompt原型改为Qwen冻结词嵌入行初始化，并采用Prompt LR 0.3、路由投影LR 1e-4。该实验用于隔离原39.7508是否主要源于Prompt初始化和优化尺度失配；不得冒充忠实GRASP复现结果。目标为`pathvqa_grasp_qwen_adapted_embedding_init_dual_lr_n4_h512_seed44`。
 - [ ] 复核 Static Prompt 的 checkpoint、split 和评价结果。
 - [ ] 禁止根据 SLAKE 分数修改 D、层数、Prompt 长度或训练策略。
 
@@ -408,7 +409,7 @@ CoTBox-TTT可以计入“同方向Related Work”的文献数量，但**不计�
 - [ ] 生成主性能表、容量表、消融表、效率表和文献独立表。
 - [ ] 生成架构图、Pareto 图、宽度曲线和 mismatch 图。
 - [x] 串行完成自建电气数据集最终对比：Static Prompt P20为70.06、CoCoOp-style P20/H160为70.88、Dense D768 Sandwich QDPT为71.91，统一seed47/data seed42、三epoch和既有private fixed holdout；不扩展多seed或消融。
-- [ ] 补充最终结构视觉Prompt统一控制：PathVQA seed44保持Dense D768 Sandwich的`[P20; Visual; Z10; Question]`、数据顺序及下游RNG初始化不变，只将`S8@3e-5+A_v10@1e-4`替换为单表`V20@1e-4`；仅epoch3全量Validation，跑完即停止，不追加seed。
+- [x] 补充最终结构视觉Prompt统一控制：RNG控制的统一V20 Sandwich seed44显示约55.70，相对最终`S8+A_v10` Sandwich60.7765约低5.08；确认统一参数化与Sandwich位置存在负交互，永久保留双速率8+10，不追加seed。精确分项、诊断和输出路径待从服务器summary补齐。
 - [x] 完成PathVQA Static Prompt P20 seed45/46稳定性补充：seeds44/45/46 Overall54.8650/55.0567/55.3124，mean55.0780 +/- 0.2244，range0.4474。未达到原先为“Prompt普遍不稳定”假设设置的触发线，因此终止该强假设；稳定性表不得宣称Prompt普遍高度seed敏感。后续CoCoOp多seed仅因动态Prompt基线覆盖不足而独立补充。
 - [x] 完成PathVQA CoCoOp-style P20/H160 seed45/46：seeds44/45/46 Overall57.4053/56.3988/55.1366，mean56.3136 +/- 1.1367，range2.2687。稳定性表固定为LoRA-r8、Static Prompt、CoCoOp-style和QDPT Sandwich，报告从静态到条件动态Prompt的描述性方差梯度；不追加seed、Test、SLAKE或调参，不宣称跨方法/数据集普遍定律。
 

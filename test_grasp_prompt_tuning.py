@@ -99,6 +99,38 @@ class GRASPTest(unittest.TestCase):
         self.assertTrue(model.prompt_prototypes.requires_grad)
         self.assertIn("prompt_prototypes", dict(model.named_parameters()))
 
+    def test_embedding_row_initialization_is_deterministic_and_on_embedding_scale(self):
+        base = FakeBaseModel()
+        first = GRASPPromptTuningModel(
+            base,
+            FakeTokenizer(),
+            block_count=4,
+            bottleneck_dim=4,
+            prompt_init_mode="embedding_rows",
+            init_seed=44,
+        )
+        second = GRASPPromptTuningModel(
+            base,
+            FakeTokenizer(),
+            block_count=4,
+            bottleneck_dim=4,
+            prompt_init_mode="embedding_rows",
+            init_seed=44,
+        )
+        torch.testing.assert_close(first.prompt_prototypes, second.prompt_prototypes)
+        self.assertEqual(first.prompt_prototypes.dtype, torch.float32)
+        self.assertGreater(float(first.prompt_prototypes.norm()), 1.0)
+
+    def test_unknown_prompt_initialization_is_rejected(self):
+        with self.assertRaisesRegex(ValueError, "prompt_init_mode"):
+            GRASPPromptTuningModel(
+                FakeBaseModel(),
+                FakeTokenizer(),
+                block_count=4,
+                bottleneck_dim=4,
+                prompt_init_mode="unknown",
+            )
+
     def test_forward_uses_raw_question_and_visual_adjacent_prompt(self):
         base = FakeBaseModel()
         model = GRASPPromptTuningModel(

@@ -59,6 +59,7 @@ class GRASPModelInterface:
             block_count=int(config["block_count"]),
             bottleneck_dim=int(config["bottleneck_dim"]),
             prompt_init_std=float(config["prompt_init_std"]),
+            prompt_init_mode=str(config.get("prompt_init_mode", "gaussian")),
             init_seed=int(config["init_seed"]),
         )
         self.model.load_grasp(checkpoint)
@@ -69,6 +70,7 @@ class GRASPModelInterface:
             "[grasp] "
             f"loaded={checkpoint} blocks={self.model.block_count} "
             f"bottleneck={self.model.bottleneck_dim} alpha=1.5 "
+            f"prompt_init={self.model.prompt_init_mode} "
             "question=raw_question_only_frozen_llm_last_hidden_mean "
             "visual=post_merger_grid prompt_placement=before_visual_segment"
         )

@@ -101,6 +101,7 @@ class GRASPPromptTuningModel(nn.Module):
         block_count: int = 4,
         bottleneck_dim: int = 512,
         prompt_init_std: float = 0.02,
+        prompt_init_mode: str = "gaussian",
         init_seed: int = 44,
     ) -> None:
         super().__init__()
@@ -115,18 +116,34 @@ class GRASPPromptTuningModel(nn.Module):
         self.block_count = int(block_count)
         self.bottleneck_dim = int(bottleneck_dim)
         self.prompt_init_std = float(prompt_init_std)
+        self.prompt_init_mode = str(prompt_init_mode)
         self.init_seed = int(init_seed)
         self.prompt_length = 1
         generator = torch.Generator(device="cpu").manual_seed(self.init_seed)
-        prompt_init = (
-            torch.randn(
-                self.block_count,
-                self.hidden_size,
+        if self.prompt_init_mode == "gaussian":
+            prompt_init = (
+                torch.randn(
+                    self.block_count,
+                    self.hidden_size,
+                    generator=generator,
+                    dtype=torch.float32,
+                )
+                * self.prompt_init_std
+            ).to(device=model_device)
+        elif self.prompt_init_mode == "embedding_rows":
+            sampled_rows = torch.randint(
+                embeddings.shape[0],
+                (self.block_count,),
                 generator=generator,
-                dtype=torch.float32,
             )
-            * self.prompt_init_std
-        ).to(device=model_device)
+            prompt_init = embeddings.detach()[
+                sampled_rows.to(embeddings.device)
+            ].float().clone()
+        else:
+            raise ValueError(
+                "Unsupported GRASP prompt_init_mode="
+                f"{self.prompt_init_mode!r}; expected gaussian or embedding_rows"
+            )
         self.prompt_prototypes = nn.Parameter(prompt_init)
         self.visual_key_projection = nn.Linear(
             self.hidden_size, bottleneck_dim
@@ -376,6 +393,7 @@ class GRASPPromptTuningModel(nn.Module):
             "bottleneck_dim": self.bottleneck_dim,
             "entmax_alpha": 1.5,
             "prompt_init_std": self.prompt_init_std,
+            "prompt_init_mode": self.prompt_init_mode,
             "init_seed": self.init_seed,
             "hidden_size": self.hidden_size,
             "question_source": "raw_question_only",
@@ -386,7 +404,11 @@ class GRASPPromptTuningModel(nn.Module):
             "position_encoding": "fixed_2d_sincos",
             "approximation_notes": [
                 "last hidden layer selected because the paper does not identify a layer",
-                "prompt initialization std=0.02 because the paper leaves sigma unspecified",
+                (
+                    "prompt initialization std=0.02 because the paper leaves sigma unspecified"
+                    if self.prompt_init_mode == "gaussian"
+                    else "prompt prototypes initialized from frozen Qwen token-embedding rows"
+                ),
             ],
         }
         with (output / GRASP_CONFIG_NAME).open("w", encoding="utf-8") as handle:

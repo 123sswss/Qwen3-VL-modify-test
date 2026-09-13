@@ -204,3 +204,8 @@ This file is the concise experiment memory shared by the user and Codex. The com
 
 - 同一私有固定holdout、seed47/data seed42和三epoch协议下，Static Prompt P20、CoCoOp-style P20/H160、QDPT Dense D768 Sandwich分别为 **70.06/70.88/71.91**，均评估954条并跳过18条。QDPT比Static、CoCoOp和已有LoRA-r8 70.69分别高 **1.85/1.03/1.22**，但目前仅有总分，不能宣称统计显著。
 - 该数据集以看图判别和封闭选择为主，恰好匹配QDPT“问题Q从冻结视觉K/V中检索证据，再生成LLM侧动态Prompt”的归纳偏置。应将结果解释为视觉证据选择型任务上的适配优势，而非QDPT普遍优于LoRA；封闭答案空间、答案先验和较低的语言生成/推理负担都可能放大该优势。结合PathVQA近似持平和SLAKE明显落后LoRA，论文结论固定为Prompt空间与权重空间适配具有不同任务偏好。
+
+## 2026-09-13 PathVQA效率补全与统一V20 Sandwich
+
+- PathVQA三seed Validation计时：最终QDPT Sandwich TTFT/TPOT均值为 **0.052451s/0.018487s-token**，Full-Attention LoRA-r8为 **0.057551s/0.030364s-token**；QDPT观测值分别低8.86%和39.12%。仅在确认硬件和软件条件匹配后作受控速度主张。
+- RNG控制的统一V20 Sandwich seed44显示约 **55.70 Overall**，相对最终`S8+A_v10` Sandwich60.7765约低5.08，也比统一V20非-Sandwich58.5237低约2.82。Sandwich对双速率8+10有益、对统一V20反而有害，说明视觉Prompt参数化与LLM因果位置存在强优化交互；保留8+10。当前只掌握显示精度总分，精确分项和诊断待从服务器summary补齐。

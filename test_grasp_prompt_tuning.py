@@ -131,6 +131,33 @@ class GRASPTest(unittest.TestCase):
                 prompt_init_mode="unknown",
             )
 
+    def test_no_position_mode_preserves_raw_spatial_blocks(self):
+        model = GRASPPromptTuningModel(
+            FakeBaseModel(),
+            FakeTokenizer(),
+            block_count=4,
+            bottleneck_dim=4,
+            position_encoding_mode="none",
+        )
+        embeddings = torch.arange(32, dtype=torch.float32).reshape(1, 4, 8)
+        blocks = model._pool_visual(
+            embeddings,
+            torch.ones(1, 4, dtype=torch.bool),
+            torch.tensor([[1, 4, 4]]),
+        )
+        torch.testing.assert_close(blocks, embeddings)
+        self.assertEqual(float(model._last_position_encoding_norm), 0.0)
+
+    def test_unknown_position_encoding_is_rejected(self):
+        with self.assertRaisesRegex(ValueError, "position_encoding_mode"):
+            GRASPPromptTuningModel(
+                FakeBaseModel(),
+                FakeTokenizer(),
+                block_count=4,
+                bottleneck_dim=4,
+                position_encoding_mode="learned",
+            )
+
     def test_forward_uses_raw_question_and_visual_adjacent_prompt(self):
         base = FakeBaseModel()
         model = GRASPPromptTuningModel(

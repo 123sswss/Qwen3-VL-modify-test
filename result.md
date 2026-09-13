@@ -209,3 +209,7 @@ This file is the concise experiment memory shared by the user and Codex. The com
 
 - PathVQA三seed Validation计时：最终QDPT Sandwich TTFT/TPOT均值为 **0.052451s/0.018487s-token**，Full-Attention LoRA-r8为 **0.057551s/0.030364s-token**；QDPT观测值分别低8.86%和39.12%。仅在确认硬件和软件条件匹配后作受控速度主张。
 - RNG控制的统一V20 Sandwich seed44显示约 **55.70 Overall**，相对最终`S8+A_v10` Sandwich60.7765约低5.08，也比统一V20非-Sandwich58.5237低约2.82。Sandwich对双速率8+10有益、对统一V20反而有害，说明视觉Prompt参数化与LLM因果位置存在强优化交互；保留8+10。当前只掌握显示精度总分，精确分项和诊断待从服务器summary补齐。
+
+## 2026-09-13 GRASP-Qwen第一次救援
+
+- `pathvqa_grasp_qwen_adapted_embedding_init_dual_lr_n4_h512_seed44`将四个Prompt原型改为Qwen词嵌入行初始化，并使用Prompt LR0.3、路由投影LR1e-4；其余GRASP结构与三轮协议不变。用户报告PathVQA Validation约 **42.40 Overall**，比正式顺序复现39.7508高约2.65，但仍比Static Prompt54.8650低约12.47。由此确认Prompt尺度失配存在但不是主因；下一步固定该适配配置，优先隔离范数约35.8的二维位置编码是否压过真实视觉块语义。精确分项、诊断和路径待补。

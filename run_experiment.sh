@@ -2091,6 +2091,58 @@ run_pathvqa_grasp_qwen_adapted_seed44() {
   cat "$output_dir/selected_result.tsv"
 }
 
+run_pathvqa_grasp_qwen_adapted_no_position_seed44() {
+  local experiment_name="pathvqa_grasp_qwen_adapted_no_position_n4_h512_seed44"
+  local output_dir
+  output_dir="$(available_output_dir "$PATHVQA_GRASP_OUTPUT_ROOT" "${experiment_name}_${RUN_DATE}")"
+  mkdir -p "$output_dir"
+  echo "[PATHVQA_GRASP_QWEN_ADAPTED_NO_POSITION_CONFIG] experiment=$experiment_name seed=44 data_seed=42 blocks=4 bottleneck=512 alpha=1.5 prompt_tokens=1 prompt_init=embedding_rows prompt_lr=0.3 prompt_weight_decay=0 projection_lr=1e-4 projection_weight_decay=0.01 position_encoding=none question=raw_question_only_frozen_llm_last_hidden_mean visual=post_merger_grid prompt_placement=before_visual_segment expected_trainable=2632704 epochs=3 split=validation output=$output_dir"
+  (
+    cd "$ROOT_DIR" || exit 1
+    python -m unittest test_grasp_prompt_tuning.py || exit 1
+    python -m pathvqa.train_grasp \
+      --model-path "$MODEL_PATH" \
+      --data-root "$PATHVQA_DATA_ROOT" \
+      --cache-dir "$PATHVQA_CACHE_ROOT" \
+      --output-dir "$output_dir" \
+      --experiment-name "$experiment_name" \
+      --blocks 4 \
+      --bottleneck-dim 512 \
+      --prompt-init-mode embedding_rows \
+      --prompt-init-std 0.02 \
+      --position-encoding-mode none \
+      --prompt-learning-rate 0.3 \
+      --projection-learning-rate 1e-4 \
+      --prompt-weight-decay 0 \
+      --projection-weight-decay 0.01 \
+      --epochs 3 \
+      --seed 44 \
+      --data-seed 42 \
+      --batch-size "${PATHVQA_GRASP_BATCH_SIZE:-2}" \
+      --gradient-accumulation "${PATHVQA_GRASP_GRAD_ACCUM:-16}" \
+      --dataloader-workers "${PATHVQA_GRASP_WORKERS:-2}" \
+      --expected-trainable-parameters 2632704 \
+      2>&1 | tee "$output_dir/train.log"
+  ) || return 1
+  local checkpoint="$output_dir/checkpoints/epoch_3"
+  mkdir -p "$output_dir/eval_validation/epoch_3"
+  python pathvqa/pathvqa_official_eval.py \
+    --backend grasp \
+    --base-model "$MODEL_PATH" \
+    --checkpoint "$checkpoint" \
+    --data-root "$PATHVQA_DATA_ROOT" \
+    --cache-dir "$PATHVQA_CACHE_ROOT" \
+    --split validation \
+    --output-dir "$output_dir/eval_validation/epoch_3" \
+    --overwrite \
+    2>&1 | tee "$output_dir/eval_validation_epoch_3.log" || return 1
+  local score
+  score="$(python -c 'import json,sys;print(json.load(open(sys.argv[1],encoding="utf-8"))["overall_accuracy"])' "$output_dir/eval_validation/epoch_3/pathvqa_summary.json")" || return 1
+  printf 'experiment\tseed\tprotocol\tvalidation_epoch\tvalidation_accuracy\tcheckpoint\n' > "$output_dir/selected_result.tsv"
+  printf '%s\t44\tfixed_epoch3_validation\t3\t%s\t%s\n' "$experiment_name" "$score" "$checkpoint" >> "$output_dir/selected_result.tsv"
+  cat "$output_dir/selected_result.tsv"
+}
+
 run_slake_grasp_seed44() {
   local experiment_name="slake_grasp_reimpl_n4_h512_seed44"
   local output_dir
@@ -3468,6 +3520,9 @@ case "$RUN_TARGET" in
     ;;
   pathvqa_grasp_qwen_adapted_seed44)
     run_pathvqa_grasp_qwen_adapted_seed44 || failures=$((failures + 1))
+    ;;
+  pathvqa_grasp_qwen_adapted_no_position_seed44)
+    run_pathvqa_grasp_qwen_adapted_no_position_seed44 || failures=$((failures + 1))
     ;;
   pathvqa_cocoop_style_p20_h160_seed44)
     run_pathvqa_cocoop_style_seed44 || failures=$((failures + 1))

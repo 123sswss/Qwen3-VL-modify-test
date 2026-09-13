@@ -394,7 +394,8 @@ CoTBox-TTT可以计入“同方向Related Work”的文献数量，但**不计�
 - [x] 准备`slake_lora_full_model_attn_r8_seeds44_46`：三个seed串行、失败继续、仅epoch3官方Test，并在启动前跳过已有完整结果。
 - [x] 完成Full-Attention LoRA-r8 seed44/45/46：Overall 81.95/81.57/81.95，均值81.82 +/- 0.22；QDPT均值低4.79且三个同seed配对均极显著，停止跨数据集LoRA性能持平叙事。
 - [x] 取消SLAKE GRASP迁移：PathVQA正式顺序实现已确认有效但仅39.7508，继续跨数据集运行不具备当前收尾价值。
-- [ ] GRASP-Qwen适配救援第一步：保持N4/h512、Entmax-1.5、单全局Prompt、原论文因果顺序与三轮统一协议不变，仅将四个Prompt原型改为Qwen冻结词嵌入行初始化，并采用Prompt LR 0.3、路由投影LR 1e-4。该实验用于隔离原39.7508是否主要源于Prompt初始化和优化尺度失配；不得冒充忠实GRASP复现结果。目标为`pathvqa_grasp_qwen_adapted_embedding_init_dual_lr_n4_h512_seed44`。
+- [x] GRASP-Qwen适配救援第一步：保持N4/h512、Entmax-1.5、单全局Prompt、原论文因果顺序与三轮统一协议不变，仅将四个Prompt原型改为Qwen冻结词嵌入行初始化，并采用Prompt LR0.3、路由投影LR1e-4。PathVQA Validation约42.40，比39.7508恢复约2.65但仍远低于Static Prompt，确认尺度失配存在却不是主因；不得冒充忠实GRASP复现结果。
+- [ ] GRASP-Qwen适配救援第二步：固定embedding-row初始化、Prompt LR0.3、投影LR1e-4及全部结构，只移除或门控固定二维正弦位置编码，隔离其约35.8的范数是否压过真实视觉块语义。先做无位置编码这一最清楚的单变量控制；在结果可看之前继续按位置编码、空间块粒度、训练长度和输出容量逐项救援。
 - [ ] 复核 Static Prompt 的 checkpoint、split 和评价结果。
 - [ ] 禁止根据 SLAKE 分数修改 D、层数、Prompt 长度或训练策略。
 

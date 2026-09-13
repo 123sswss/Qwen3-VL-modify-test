@@ -102,6 +102,7 @@ class GRASPPromptTuningModel(nn.Module):
         bottleneck_dim: int = 512,
         prompt_init_std: float = 0.02,
         prompt_init_mode: str = "gaussian",
+        position_encoding_mode: str = "fixed_2d_sincos",
         init_seed: int = 44,
     ) -> None:
         super().__init__()
@@ -117,6 +118,7 @@ class GRASPPromptTuningModel(nn.Module):
         self.bottleneck_dim = int(bottleneck_dim)
         self.prompt_init_std = float(prompt_init_std)
         self.prompt_init_mode = str(prompt_init_mode)
+        self.position_encoding_mode = str(position_encoding_mode)
         self.init_seed = int(init_seed)
         self.prompt_length = 1
         generator = torch.Generator(device="cpu").manual_seed(self.init_seed)
@@ -143,6 +145,11 @@ class GRASPPromptTuningModel(nn.Module):
             raise ValueError(
                 "Unsupported GRASP prompt_init_mode="
                 f"{self.prompt_init_mode!r}; expected gaussian or embedding_rows"
+            )
+        if self.position_encoding_mode not in {"fixed_2d_sincos", "none"}:
+            raise ValueError(
+                "Unsupported GRASP position_encoding_mode="
+                f"{self.position_encoding_mode!r}; expected fixed_2d_sincos or none"
             )
         self.prompt_prototypes = nn.Parameter(prompt_init)
         self.visual_key_projection = nn.Linear(
@@ -310,7 +317,14 @@ class GRASPPromptTuningModel(nn.Module):
                 )
             )
         blocks = torch.stack(pooled)
-        return blocks + self.block_position_encoding.to(blocks).unsqueeze(0)
+        self._last_raw_visual_block_norm = blocks.float().norm(dim=-1).mean().detach()
+        position_norm = blocks.new_zeros(())
+        if self.position_encoding_mode == "fixed_2d_sincos":
+            position = self.block_position_encoding.to(blocks).unsqueeze(0)
+            position_norm = position.float().norm(dim=-1).mean().detach()
+            blocks = blocks + position
+        self._last_position_encoding_norm = position_norm
+        return blocks
 
     @contextmanager
     def _inject_prompt(
@@ -354,15 +368,22 @@ class GRASPPromptTuningModel(nn.Module):
                 "grasp_max_region_weight": weights.max(1).values.mean().detach(),
                 "grasp_global_prompt_norm": prompt.float().norm(dim=-1).mean().detach(),
                 "grasp_question_norm": question.float().norm(dim=-1).mean().detach(),
+                "grasp_raw_visual_block_norm": self._last_raw_visual_block_norm,
+                "grasp_position_encoding_norm": self._last_position_encoding_norm,
                 "grasp_visual_block_norm": blocks.float().norm(dim=-1).mean().detach(),
             }
             if not self._forward_audited:
                 print(
                     "[GRASP_FORWARD_AUDIT] blocks=%d bottleneck=%d alpha=1.5 "
                     "question=raw_question_only_frozen_llm_last_hidden_mean "
-                    "visual=post_merger prompt_placement=before_visual_segment "
+                    "visual=post_merger position_encoding=%s "
+                    "prompt_placement=before_visual_segment "
                     "prompt_tokens=1 pass=True"
-                    % (self.block_count, self.bottleneck_dim)
+                    % (
+                        self.block_count,
+                        self.bottleneck_dim,
+                        self.position_encoding_mode,
+                    )
                 )
                 self._forward_audited = True
             return args, kwargs
@@ -401,7 +422,7 @@ class GRASPPromptTuningModel(nn.Module):
             "prompt_length": 1,
             "question_encoder": "raw_question_only_frozen_llm_last_hidden_mean",
             "visual_source": "post_merger_grid",
-            "position_encoding": "fixed_2d_sincos",
+            "position_encoding": self.position_encoding_mode,
             "approximation_notes": [
                 "last hidden layer selected because the paper does not identify a layer",
                 (

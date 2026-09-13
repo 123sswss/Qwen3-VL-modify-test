@@ -201,6 +201,11 @@ def parse_args(dataset_name: str) -> argparse.Namespace:
         choices=("gaussian", "embedding_rows"),
         default="gaussian",
     )
+    parser.add_argument(
+        "--position-encoding-mode",
+        choices=("fixed_2d_sincos", "none"),
+        default="fixed_2d_sincos",
+    )
     parser.add_argument("--prompt-learning-rate", type=float)
     parser.add_argument("--projection-learning-rate", type=float)
     parser.add_argument("--prompt-weight-decay", type=float, default=0.01)
@@ -255,6 +260,7 @@ def main(dataset_name: str = "pathvqa") -> int:
         bottleneck_dim=args.bottleneck_dim,
         prompt_init_std=args.prompt_init_std,
         prompt_init_mode=args.prompt_init_mode,
+        position_encoding_mode=args.position_encoding_mode,
         init_seed=args.seed,
     )
     dataset = GRASPQuestionDataset(
@@ -277,6 +283,7 @@ def main(dataset_name: str = "pathvqa") -> int:
         f"question=raw_question_only_frozen_llm_last_hidden_mean "
         f"visual=post_merger_grid prompt_placement=before_visual_segment "
         f"prompt_tokens=1 prompt_init={args.prompt_init_mode} "
+        f"position_encoding={args.position_encoding_mode} "
         f"parameters={counts} total={trainable} "
         f"prompt_lr={args.prompt_learning_rate} projection_lr={args.projection_learning_rate} "
         f"prompt_weight_decay={args.prompt_weight_decay} "
@@ -327,6 +334,7 @@ def main(dataset_name: str = "pathvqa") -> int:
         "bottleneck_dim": args.bottleneck_dim,
         "entmax_alpha": 1.5,
         "prompt_init_mode": args.prompt_init_mode,
+        "position_encoding": args.position_encoding_mode,
         "question_encoder": "raw_question_only_frozen_llm_last_hidden_mean",
         "visual_source": "post_merger_grid",
         "prompt_placement": "before_visual_segment",

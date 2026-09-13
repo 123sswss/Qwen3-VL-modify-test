@@ -1651,6 +1651,49 @@ run_pathvqa_qdpt_d768_prompt_placement_controls_seed44() {
   echo "[PATHVQA_PROMPT_PLACEMENT_CONTROLS_DONE] variants=all_after_visual,reversed_sandwich seed=44"
 }
 
+run_pathvqa_qdpt_d768_prompt_placement_controls_seeds45_46() {
+  local suite_failures=0
+  local variant
+  local experiment_stem
+  local run_seed
+  local completed_summary
+
+  for variant in \
+    question_static_visual_all_after \
+    question_static_visual_reversed_sandwich; do
+    case "$variant" in
+      question_static_visual_all_after)
+        experiment_stem="qdpt_d768_question_q10_l17_p20_s8_av10_all_after_visual"
+        ;;
+      question_static_visual_reversed_sandwich)
+        experiment_stem="qdpt_d768_question_q10_l17_p20_s8_av10_reversed_sandwich"
+        ;;
+    esac
+    for run_seed in 45 46; do
+      completed_summary="$(find "$PATHVQA_DYNAMIC_PROMPT_OUTPUT_ROOT" \
+        -path "*/pathvqa_${experiment_stem}_seed${run_seed}_*/eval_validation/epoch_3/pathvqa_summary.json" \
+        -print -quit 2>/dev/null)"
+      if [ -n "$completed_summary" ]; then
+        echo "[QDPT_PROMPT_PLACEMENT_SKIP_COMPLETE] variant=$variant seed=$run_seed summary=$completed_summary"
+        continue
+      fi
+      echo "[QDPT_PROMPT_PLACEMENT_REPLICATION] variant=$variant seed=$run_seed status=starting"
+      if run_qdpt_d768_final_dataset pathvqa "$variant" "$run_seed"; then
+        echo "[QDPT_PROMPT_PLACEMENT_REPLICATION] variant=$variant seed=$run_seed status=completed"
+      else
+        suite_failures=$((suite_failures + 1))
+        echo "[QDPT_PROMPT_PLACEMENT_REPLICATION] variant=$variant seed=$run_seed status=failed_continue" >&2
+      fi
+    done
+  done
+
+  if [ "$suite_failures" -ne 0 ]; then
+    echo "[ERR] PathVQA Prompt placement seed45/46 failures=$suite_failures; all four items were attempted." >&2
+    return 1
+  fi
+  echo "[PATHVQA_PROMPT_PLACEMENT_REPLICATIONS_DONE] variants=all_after_visual,reversed_sandwich seeds=45,46"
+}
+
 run_pathvqa_qdpt_d768_marathon_seed44() {
   local experiment_name="pathvqa_qdpt_d768_question_q10_l17_p20_s8_av10_marathon10_seed44"
   local output_dir
@@ -3683,6 +3726,9 @@ case "$RUN_TARGET" in
     ;;
   pathvqa_qdpt_d768_prompt_placement_controls_seed44)
     run_pathvqa_qdpt_d768_prompt_placement_controls_seed44 || failures=$((failures + 1))
+    ;;
+  pathvqa_qdpt_d768_prompt_placement_controls_seeds45_46)
+    run_pathvqa_qdpt_d768_prompt_placement_controls_seeds45_46 || failures=$((failures + 1))
     ;;
   pathvqa_qdpt_d768_marathon_seed44)
     run_pathvqa_qdpt_d768_marathon_seed44 || failures=$((failures + 1))

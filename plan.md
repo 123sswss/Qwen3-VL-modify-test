@@ -105,6 +105,8 @@ DRAPE 已在多模态持续指令微调中证明：任务级静态 Prompt 难以
 
 Sandwich取得明确收益后追加的两个同seed位置控制均已完成：`[Visual; P20; Dynamic10; Question]`为59.2587，`[Dynamic10; Visual; P20; Question]`为58.1243，均低于Sandwich `[P20; Visual; Dynamic10; Question]`的60.7765。位置机制已经闭环：静态P应在视觉前提供领域先验，动态证据应在视觉后靠近问题；停止追加Prompt顺序搜索。
 
+审稿前稳定性补充：鉴于最终QDPT在seed44/45/46间存在明显方差，两个seed44位置对照各补seed45/46，共四项串行实验。该补充只检验同seed位置差值是否稳定，不再搜索新排列；统一入口为`pathvqa_qdpt_d768_prompt_placement_controls_seeds45_46`，任一项失败继续后续项，重启时跳过已有完整Validation summary。
+
 `P20 + Dynamic20` 槽数实验降为低优先级：现有结构本来就是20个静态领域 Prompt 加10个动态证据 Prompt，当前先隔离位置效应，不把槽数和位置同时改变。除非 Sandwich 获得明确收益或审稿阶段要求 Prompt 数量敏感性，否则不运行20+20。
 
 Sandwich 60.7765永久保留为不可移动的Dense D768主基线。独立效率端点`QDPT-Lite R256`已完成：只将文本动态输出头由`768->768->2560`改为`768->256->2560`，参数由7,805,184降至6,100,736，但PathVQA seed44仅57.4213，较Dense下降3.3552并明显越过1分止损线。诊断显示CA和文本残差仍活跃，损失集中在Free-form与`where`，属于LLM空间表达瓶颈。拒绝Lite替代，不运行R160、其他rank或R256 seed。

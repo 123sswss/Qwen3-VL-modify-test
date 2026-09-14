@@ -3297,6 +3297,22 @@ run_pathvqa_qdpt_lora_training_throughput_benchmark() {
   [ "$suite_failures" -eq 0 ]
 }
 
+run_pathvqa_qdpt_paper_figures_final_bundle() {
+  local bundle_dir="$ROOT_DIR/paper_figures/output/final_bundle_${RUN_DATE}"
+  echo "[QDPT_PAPER_FIGURES] training=false output=$bundle_dir"
+  (
+    cd "$ROOT_DIR" || exit 1
+    python -m unittest \
+      test_generate_final_bundle.py \
+      test_qdpt_paper_figures.py || exit 1
+    python -m paper_figures.generate_final_bundle \
+      --output-dir "$bundle_dir" \
+      --model-path "$MODEL_PATH" \
+      --data-root "$PATHVQA_DATA_ROOT" \
+      --cache-dir "$PATHVQA_CACHE_ROOT"
+  )
+}
+
 find_completed_slake_lora_r8_summary() {
   local run_seed="$1"
   find \
@@ -3950,6 +3966,9 @@ case "$RUN_TARGET" in
     ;;
   pathvqa_qdpt_lora_training_throughput_benchmark)
     run_pathvqa_qdpt_lora_training_throughput_benchmark || failures=$((failures + 1))
+    ;;
+  pathvqa_qdpt_paper_figures_final_bundle)
+    run_pathvqa_qdpt_paper_figures_final_bundle || failures=$((failures + 1))
     ;;
   pathvqa_day2_d768_lora_r8_seeds45_46)
     run_pathvqa_day2_d768_lora_r8_seeds45_46 || failures=$((failures + 1))

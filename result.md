@@ -237,3 +237,9 @@ This file is the concise experiment memory shared by the user and Codex. The com
 
 - Static Prompt P20 seeds44/45/46 Test Overall为 **55.8268/55.9161/56.4965**，均值 **56.0798 +/- 0.3636**；CoCoOp-style为 **57.7467/57.0323/56.0798**，均值 **56.9529 +/- 0.8363**。两组均已完整生成summary。
 - Full-Attention LoRA-r8 seed44/45为 **59.6815/59.6369**，两seed暂均值 **59.6592 +/- 0.0315**；seed46只有评估日志而没有summary，当前记为未完成，禁止用两seed均值冒充最终三seed结果。QDPT Sandwich既有Test均值为 **58.8827 +/- 1.8141**，最终与LoRA的比较待补seed46。
+- 补评更正：LoRA-r8 seed46 PathVQA Test已完成，显示结果 **59.67 Overall /91.6716 Yes-No /27.61 Free-form**，聚类95% CI[58.29,61.09]；TTFT0.055708s、TPOT0.030822s/token。三seed Overall为59.6815/59.6369/59.67，按显示精度约 **59.6628 +/-0.0232**，比QDPT Sandwich Test均值58.8827高约0.78分。上一条“seed46未完成”状态作废，最终精确统计应从summary读取未舍入值。
+
+## 2026-09-14 Learned Query多seed与受控吞吐
+
+- Learned Query容量匹配对照seeds44/45/46 Validation为 **59.0510/57.7249/58.1882**，均值 **58.3214 +/-0.6730**。相对问题引导QDPT同seed分别-1.7255/+0.4314/-1.1983，平均低 **0.8308**；问题条件化平均有益且两seed胜出，但seed45反转，不能宣称逐seed稳定机制优势。
+- RTX5090公平短测中，QDPT和LoRA均用microbatch1/累积32、相同3,200样本和1,202,879视觉Token，20步预热后计时100个optimizer steps。QDPT为438.07s、7.3048 samples/s、峰值allocated15.805GiB；LoRA为824.08s、3.8831 samples/s、19.317GiB。QDPT训练吞吐为 **1.881x**，峰值allocated显存低 **3.512GiB/18.18%**。三轮2.245h/4.223h只能标注为纯训练线性外推，不是完整实测时间。

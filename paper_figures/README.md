@@ -2,6 +2,19 @@
 
 These scripts keep raw values separate from rendered figures. Every plotting command writes SVG, PDF, and 300-DPI PNG files with the same prefix.
 
+## Final one-folder bundle
+
+Generate Figures 1-4, attention source data, selection metadata, a machine-readable
+status report, and a tar archive inside one directory:
+
+```bash
+RUN_TARGET=pathvqa_qdpt_paper_figures_final_bundle bash run_experiment.sh
+```
+
+The default destination is `paper_figures/output/final_bundle_<RUN_DATE>/`.
+This target performs no training. Figure 1 loads the frozen seed44 checkpoint for
+two no-gradient inference calls; the remaining figures only read existing files.
+
 ## Dependencies
 
 ```bash

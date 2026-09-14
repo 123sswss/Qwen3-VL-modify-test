@@ -232,7 +232,7 @@ CoTBox-TTT可以计入“同方向Related Work”的文献数量，但**不计�
 |---|---|---|
 | Static Prompt vs Dynamic Prompt | PathVQA/SLAKE seed44 已有 | 必须进入主表，作为“实例条件化有什么用”的第一证据 |
 | w/o Cross-Modal Attention | 当前只有视觉 K/V 错配 | **新增必做 question-only 重训**，区分正确视觉读取与错误视觉污染 |
-| Learned Query | 最终输入顺序下seed44已完成，下降约1.73；seed45/46串行入口已实现 | 运行`pathvqa_qdpt_d768_learned_query_sandwich_seeds45_46`后报告多seed结果，随后停止该消融 |
+| Learned Query | seeds44/45/46已完成，58.3214 +/-0.6730；相对问题引导QDPT均值-0.8308 | 已闭环并停止；报告平均收益及seed45反转，不追加SLAKE或Test |
 | Mean Pooling / Query初始化变体 | 历史池化实验较多，但非最终结构同协议 | 不为此重开架构搜索；只在 Related Work 中讨论 |
 | 隐宽 `H=256/512/768/1024` | D256/D512/D768/D1024 已闭环 | 直接形成容量曲线；承认宽度平台不是独家发现 |
 | Prompt数量敏感性 | QDPT 尚无最终结构槽数扫描 | 非必做；审稿后再补，不占当前收尾窗口 |
@@ -241,7 +241,7 @@ CoTBox-TTT可以计入“同方向Related Work”的文献数量，但**不计�
 | 同图不同问题案例 | 可从 PathVQA/SLAKE 重复图像中筛选 | 必做定性图，展示问题变化如何改变视觉注意与答案 |
 | 路由混淆矩阵 | QDPT 无任务路由 | 不适用，不照搬 |
 | 遗忘、BWT、null-space分析 | QDPT 非持续学习 | 不适用，不照搬 |
-| 效率表 | 参数、训练时间、TTFT、TPOT已有；公平短测入口已实现 | QDPT/LoRA统一microbatch1、累积32，20个optimizer step预热后计时100步；只报告训练吞吐与峰值显存，不把外推时间冒充完整训练实测 |
+| 效率表 | 公平短测已完成：QDPT相对LoRA为1.881x吞吐，峰值allocated显存低3.512GiB | 正文主报100步实测吞吐与显存；三轮外推只作辅助并明确排除评估、I/O和启动开销 |
 
 **可选：DRAPE 的近似复现。** 实现一个 DRAPE-style late-feature generator：根据论文公开公式，由问题/指令生成 Query，读取 `visual.merger` 后视觉 Token，并直接生成 LLM Prompt；不引入持续学习专属的任务生成器池、CLIP 路由和 null-space 模块。由于官方项目代码尚未公开、原任务协议也不同，该实验必须标注为“根据论文描述实现的单任务近似版本”，不得称为官方 DRAPE 复现。
 
@@ -306,7 +306,7 @@ CoTBox-TTT可以计入“同方向Related Work”的文献数量，但**不计�
 | 优先级 | 实验 | Seed | 目的 |
 |---|---|---:|---|
 | P0 | D768 移除静态视觉插入 | 44 | 已完成：58.4438，显著下降1.1184；静态视觉校准必须保留 |
-| P0-ready | 最终输入顺序下的容量匹配 Learned Query | 44/45/46 | seed44已完成59.05；seed45/46启动入口已实现，只跑Validation，完成后停止该消融 |
+| Completed | 最终输入顺序下的容量匹配 Learned Query | 44/45/46 | 58.3214 +/-0.6730；比问题引导QDPT均值低0.8308，但seed45反转，停止该消融 |
 | P0 | D768视觉前缀改为`A_v10 + Proj(Z10)`硬拼接 | 44/45/46 | 单卡串行三seed；检验独立动态Z视觉Token能否替代重复的`S_v8+A_v10`静态前缀，并直接得到稳定性结论 |
 | P0 | 最终 D768 复现 | 45/46 | 主方法均值与稳定性 |
 | P0 | Static Visual Prompt | 44 | 已完成：35.9482/68.7040/3.2865；Layer17 V20，仅20,480参数 |
@@ -314,7 +314,7 @@ CoTBox-TTT可以计入“同方向Related Work”的文献数量，但**不计�
 | Completed | Image-conditioned Prompt | 44 | 已由CoCoOp-style P20/H160覆盖：仅使用post-merger图像均值，不读取问题 |
 | Appendix-complete | Full-Attention LoRA-r8复现 | 44/45/46 | 已完成，仅作为附录跨范式参考 |
 | Cancelled | Full-Attention LoRA-r4/r16 | 44 | 不再运行；不扩展跨范式容量扫描 |
-| Partial | PathVQA正式 Test 对比 | QDPT、Static Prompt、CoCoOp均已完成44/45/46；LoRA-r8已完成44/45，seed46日志存在但summary缺失 | 诊断或补评LoRA seed46既有checkpoint，并提取各方法Test分项；不重训、不据Test调参 |
+| Completed | PathVQA正式 Test 对比 | QDPT、Static Prompt、CoCoOp、LoRA-r8均已完成44/45/46 | 提取Static/CoCoOp完整Test分项并生成最终表；不重训、不据Test调参 |
 | Completed | question-only / w/o visual CA | 44 | 已完成：57.6290，相对完整QDPT显著下降1.9332；证明正确视觉K/V读取有独立增益，不追加seed |
 | Conditional P0 | DRAPE-style近似复现 | 44 | 当前搁置；若最终不足3个可信同方向Prompt对比则自动升级为必做 |
 | Post-review | IA3 单配置 | 44 | 当前不实现；仅在审稿人要求增加轻量PEFT时补做 |
@@ -415,9 +415,10 @@ CoTBox-TTT可以计入“同方向Related Work”的文献数量，但**不计�
 - [x] 完成SLAKE最终Sandwich seed44/45/46：76.74/76.65/77.46，三seed76.95 +/- 0.44；相对旧非Sandwich均值77.03无增益，不再修改架构或追加训练。
 - [ ] 计算 multi-seed mean ± std、McNemar、image-clustered paired bootstrap CI。
 - [ ] 生成主性能表、容量表、消融表、效率表和文献独立表。
-- [ ] 运行统一训练吞吐短测：`pathvqa_qdpt_lora_training_throughput_benchmark`，QDPT与LoRA均为microbatch1/累积32、20步预热+100步计时、seed44/data seed42；禁用checkpoint和评估，记录样本/视觉Token吞吐及CUDA峰值显存。该结果仅用于受控吞吐，不替代完整三轮训练耗时。
+- [x] 完成统一训练吞吐短测：QDPT与LoRA均为microbatch1/累积32、20步预热+100步计时、seed44/data seed42，相同3,200样本和1,202,879视觉Token。QDPT为7.3048 samples/s、LoRA为3.8831，速度比1.881x；峰值allocated显存15.805/19.317GiB。三轮2.245/4.223h仅为纯训练外推，不替代完整实测。
 - [ ] 生成架构图、Pareto 图、宽度曲线和 mismatch 图。
 - [x] 实现论文分析制图工具链：从现有日志生成三seed训练动力学、Prompt方法seed稳定性和模块活性图；新增默认关闭的完整Directional Cross-Attention导出，并提供同图多问题候选的确定性选择规则。真实checkpoint注意力导出尚未执行，不计为已完成实验。
+- [x] 实现正式一目录制图入口`pathvqa_qdpt_paper_figures_final_bundle`：自动生成Figure1-4、注意力原始矩阵、案例选择依据、`bundle_report.json`和同目录tar包；Figure3已加入Learned Query三seed。该入口只读既有日志/checkpoint，不训练，待服务器执行并检查成图。
 - [x] 串行完成自建电气数据集最终对比：Static Prompt P20为70.06、CoCoOp-style P20/H160为70.88、Dense D768 Sandwich QDPT为71.91，统一seed47/data seed42、三epoch和既有private fixed holdout；不扩展多seed或消融。
 - [x] 补充最终结构视觉Prompt统一控制：RNG控制的统一V20 Sandwich seed44显示约55.70，相对最终`S8+A_v10` Sandwich60.7765约低5.08；确认统一参数化与Sandwich位置存在负交互，永久保留双速率8+10，不追加seed。精确分项、诊断和输出路径待从服务器summary补齐。
 - [x] 完成PathVQA Static Prompt P20 seed45/46稳定性补充：seeds44/45/46 Overall54.8650/55.0567/55.3124，mean55.0780 +/- 0.2244，range0.4474。未达到原先为“Prompt普遍不稳定”假设设置的触发线，因此终止该强假设；稳定性表不得宣称Prompt普遍高度seed敏感。后续CoCoOp多seed仅因动态Prompt基线覆盖不足而独立补充。

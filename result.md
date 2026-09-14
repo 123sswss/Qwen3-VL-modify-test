@@ -226,3 +226,14 @@ This file is the concise experiment memory shared by the user and Codex. The com
 
 - `pathvqa_qdpt_d768_learned_q10_l17_p20_s8_av10_sandwich_seed44`得到约 **59.05 Overall /90.88 Yes-No /27.31 Free-form**。它与最终问题引导Sandwich严格同为7,805,184参数、同seed44、同视觉K/V、同Prompt位置和训练协议，只把问题生成的Q10替换为等量可学习静态Q10。
 - 相对问题引导Sandwich的60.7765/92.7360/28.9087，约下降 **1.73/1.86/1.60**。因此最终收益不能解释为单纯增加Query参数或通用learned-query视觉汇聚；当前问题条件确实提供了额外价值。该结果仍是单seed机制消融，正文不得写成跨seed稳定优势。精确未舍入值、配对统计、诊断和唯一输出路径待从服务器summary补齐。
+
+## 2026-09-14 Prompt位置控制多seed更正
+
+- 全放视觉后 `[Visual; P20; Z10; Question]` seeds44/45/46为59.2587/58.4119/59.2267，均值 **58.9658 +/- 0.4799**；反向Sandwich `[Z10; Visual; P20; Question]`为58.1243/58.4119/59.0989，均值 **58.5450 +/- 0.5008**；最终Sandwich沿用未舍入summary统计为 **59.1522 +/- 1.7528**。
+- 相对最终Sandwich，同seed差值分别为全放视觉后-1.5178/+1.1184/-0.1598，反向-2.6522/+1.1184/-0.2876。seed44的位置优势没有稳定复现，三种顺序均值接近，且Sandwich方差最大。旧有“位置机制已经闭环、Sandwich稳定最优”的表述作废；只能说位置会影响优化轨迹，其方向依赖初始化。
+- 不据此更换最终结构：Sandwich是在补充多seed结果前按seed44 Validation选定并冻结，正式PathVQA Test与SLAKE均已完成。论文保留其主模型身份，但位置消融必须报告三seed并降级为稳定性限制，不再用因果可见性解释承担核心创新证据。
+
+## 2026-09-14 PathVQA基线Test
+
+- Static Prompt P20 seeds44/45/46 Test Overall为 **55.8268/55.9161/56.4965**，均值 **56.0798 +/- 0.3636**；CoCoOp-style为 **57.7467/57.0323/56.0798**，均值 **56.9529 +/- 0.8363**。两组均已完整生成summary。
+- Full-Attention LoRA-r8 seed44/45为 **59.6815/59.6369**，两seed暂均值 **59.6592 +/- 0.0315**；seed46只有评估日志而没有summary，当前记为未完成，禁止用两seed均值冒充最终三seed结果。QDPT Sandwich既有Test均值为 **58.8827 +/- 1.8141**，最终与LoRA的比较待补seed46。

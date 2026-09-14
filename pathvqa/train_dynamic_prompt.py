@@ -23,6 +23,12 @@ from transformers import (
 
 from pathvqa.data_pipeline import PathVQADataCollator, PathVQADataset
 from pathvqa.marathon_validation import PathVQAMarathonValidator
+from pathvqa.throughput_benchmark import (
+    ThroughputBenchmarkCallback,
+    TrainingWorkTracker,
+    estimated_optimizer_steps,
+    spatial_merge_size,
+)
 from loraTest.data_protocol import (
     TRAIN_EXPERT_IMAGE_DIRS,
     TRAIN_EXPERT_JSONS,
@@ -104,13 +110,20 @@ class DynamicPromptTrainer(Trainer):
         dynamic_lr: float,
         sparse_visual_lr: float,
         workspace_lr: float,
+        work_tracker: TrainingWorkTracker | None = None,
         **kwargs,
     ):
         self.prompt_lr = float(prompt_lr)
         self.dynamic_lr = float(dynamic_lr)
         self.sparse_visual_lr = float(sparse_visual_lr)
         self.workspace_lr = float(workspace_lr)
+        self.work_tracker = work_tracker
         super().__init__(*args, **kwargs)
+
+    def training_step(self, model, inputs, *args, **kwargs):
+        if self.work_tracker is not None:
+            self.work_tracker.observe(inputs)
+        return super().training_step(model, inputs, *args, **kwargs)
 
     def create_optimizer(self):
         if self.optimizer is not None:
@@ -510,6 +523,9 @@ def parse_args(dataset_name: str = "pathvqa") -> argparse.Namespace:
     parser.add_argument("--dataloader-workers", type=int, default=2)
     parser.add_argument("--max-length", type=int, default=2048)
     parser.add_argument("--expected-trainable-parameters", type=int)
+    parser.add_argument("--throughput-benchmark", action="store_true")
+    parser.add_argument("--throughput-warmup-steps", type=int, default=20)
+    parser.add_argument("--throughput-timed-steps", type=int, default=100)
     parser.add_argument(
         "--marathon-validation",
         action="store_true",
@@ -574,6 +590,10 @@ def parse_args(dataset_name: str = "pathvqa") -> argparse.Namespace:
         parser.error("Learning rates must be positive")
     if args.dataloader_workers < 0:
         parser.error("--dataloader-workers must be non-negative")
+    if args.throughput_warmup_steps < 0 or args.throughput_timed_steps < 1:
+        parser.error("Throughput warmup must be non-negative and timed steps positive")
+    if args.throughput_benchmark and args.marathon_validation:
+        parser.error("Throughput benchmark and marathon validation are exclusive")
     if (
         args.directional_text_projection_hidden_dim is not None
         and args.directional_text_projection_hidden_dim < 1
@@ -891,21 +911,47 @@ def main(dataset_name: str = "pathvqa") -> int:
         if args.marathon_validation
         else None
     )
-    callback = DynamicPromptCallback(
-        processor,
-        args.output_dir,
-        dataset_name=dataset_name,
-        marathon_validator=marathon_validator,
+    benchmark_steps = args.throughput_warmup_steps + args.throughput_timed_steps
+    work_tracker = (
+        TrainingWorkTracker(spatial_merge_size(model))
+        if args.throughput_benchmark
+        else None
     )
+    callbacks = []
+    if args.throughput_benchmark:
+        callbacks.append(
+            ThroughputBenchmarkCallback(
+                output_path=args.output_dir / "throughput_report.json",
+                warmup_steps=args.throughput_warmup_steps,
+                timed_steps=args.throughput_timed_steps,
+                effective_batch_size=args.batch_size * args.gradient_accumulation,
+                work_tracker=work_tracker,
+                estimated_total_optimizer_steps=estimated_optimizer_steps(
+                    len(dataset), args.batch_size * args.gradient_accumulation, args.epochs
+                ),
+                method="qdpt",
+            )
+        )
+    else:
+        callbacks.append(
+            DynamicPromptCallback(
+                processor,
+                args.output_dir,
+                dataset_name=dataset_name,
+                marathon_validator=marathon_validator,
+            )
+        )
     trainer = DynamicPromptTrainer(
         model=model,
         prompt_lr=args.prompt_lr,
         dynamic_lr=args.dynamic_lr,
         sparse_visual_lr=args.sparse_visual_lr,
         workspace_lr=args.workspace_lr,
+        work_tracker=work_tracker,
         args=TrainingArguments(
             output_dir=str(args.output_dir / "trainer"),
             num_train_epochs=args.epochs,
+            max_steps=benchmark_steps if args.throughput_benchmark else -1,
             per_device_train_batch_size=args.batch_size,
             gradient_accumulation_steps=args.gradient_accumulation,
             learning_rate=args.prompt_lr,
@@ -926,12 +972,13 @@ def main(dataset_name: str = "pathvqa") -> int:
         train_dataset=dataset,
         data_collator=DynamicPromptCollator(processor, dataset_name=dataset_name),
         processing_class=processor,
-        callbacks=[callback],
+        callbacks=callbacks,
     )
     result = trainer.train()
     final_dir = args.output_dir / "final"
-    model.save_dynamic_prompt(final_dir)
-    processor.save_pretrained(final_dir)
+    if not args.throughput_benchmark:
+        model.save_dynamic_prompt(final_dir)
+        processor.save_pretrained(final_dir)
     report = {
         "method": "dynamic_multimodal_prompt_tuning",
         "experiment": args.experiment_name,
@@ -1131,10 +1178,25 @@ def main(dataset_name: str = "pathvqa") -> int:
             else None
         ),
         "train_metrics": result.metrics,
+        "throughput_benchmark": (
+            {
+                "warmup_optimizer_steps": args.throughput_warmup_steps,
+                "timed_optimizer_steps": args.throughput_timed_steps,
+                "report": str(args.output_dir / "throughput_report.json"),
+            }
+            if args.throughput_benchmark
+            else None
+        ),
     }
     with (args.output_dir / "train_report.json").open("w", encoding="utf-8") as handle:
         json.dump(report, handle, ensure_ascii=False, indent=2, default=str)
-    print(f"[{log_prefix}_DYNAMIC_PROMPT_PASS] checkpoint={final_dir}")
+    if args.throughput_benchmark:
+        print(
+            f"[{log_prefix}_DYNAMIC_PROMPT_BENCHMARK_PASS] "
+            f"report={args.output_dir / 'throughput_report.json'}"
+        )
+    else:
+        print(f"[{log_prefix}_DYNAMIC_PROMPT_PASS] checkpoint={final_dir}")
     return 0
 
 

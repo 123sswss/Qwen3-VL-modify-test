@@ -33,6 +33,13 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from pathvqa.data_pipeline import PathVQADataCollator, PathVQADataset
+from pathvqa.throughput_benchmark import (
+    ThroughputBenchmarkCallback,
+    ThroughputTrainer,
+    TrainingWorkTracker,
+    estimated_optimizer_steps,
+    spatial_merge_size,
+)
 
 
 try:
@@ -132,6 +139,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--dataloader-workers", type=int, default=2)
     parser.add_argument("--max-length", type=int, default=2048)
     parser.add_argument("--expected-trainable-parameters", type=int)
+    parser.add_argument("--throughput-benchmark", action="store_true")
+    parser.add_argument("--throughput-warmup-steps", type=int, default=20)
+    parser.add_argument("--throughput-timed-steps", type=int, default=100)
     args = parser.parse_args()
     if args.epochs < 1:
         parser.error("--epochs must be positive")
@@ -141,6 +151,8 @@ def parse_args() -> argparse.Namespace:
         parser.error("batch size and gradient accumulation must be positive")
     if args.dataloader_workers < 0:
         parser.error("--dataloader-workers must be non-negative")
+    if args.throughput_warmup_steps < 0 or args.throughput_timed_steps < 1:
+        parser.error("Throughput warmup must be non-negative and timed steps positive")
     if args.max_length < 32:
         parser.error("--max-length must be at least 32")
     if args.rank < 1:
@@ -511,9 +523,34 @@ def main() -> int:
     )
     model.print_trainable_parameters()
 
+    benchmark_steps = args.throughput_warmup_steps + args.throughput_timed_steps
+    work_tracker = TrainingWorkTracker(spatial_merge_size(model))
+    callbacks = []
+    trainer_class = Trainer
+    trainer_kwargs = {}
+    if args.throughput_benchmark:
+        trainer_class = ThroughputTrainer
+        trainer_kwargs["work_tracker"] = work_tracker
+        callbacks.append(
+            ThroughputBenchmarkCallback(
+                output_path=output_dir / "throughput_report.json",
+                warmup_steps=args.throughput_warmup_steps,
+                timed_steps=args.throughput_timed_steps,
+                effective_batch_size=args.batch_size * args.gradient_accumulation,
+                work_tracker=work_tracker,
+                estimated_total_optimizer_steps=estimated_optimizer_steps(
+                    len(dataset), args.batch_size * args.gradient_accumulation, args.epochs
+                ),
+                method="full_attention_lora_r8",
+            )
+        )
+    else:
+        callbacks.append(EpochAdapterCheckpointCallback(processor, output_dir))
+
     training_args = TrainingArguments(
         output_dir=str(trainer_dir),
         num_train_epochs=args.epochs,
+        max_steps=benchmark_steps if args.throughput_benchmark else -1,
         per_device_train_batch_size=args.batch_size,
         gradient_accumulation_steps=args.gradient_accumulation,
         learning_rate=args.learning_rate,
@@ -532,19 +569,21 @@ def main() -> int:
         seed=args.seed,
         data_seed=args.data_seed,
     )
-    trainer = Trainer(
+    trainer = trainer_class(
         model=model,
         args=training_args,
         train_dataset=dataset,
         data_collator=VisualLoRACollator(processor),
         processing_class=processor,
-        callbacks=[EpochAdapterCheckpointCallback(processor, output_dir)],
+        callbacks=callbacks,
+        **trainer_kwargs,
     )
     train_result = trainer.train()
-    trainer.save_metrics("train", train_result.metrics)
-    trainer.save_state()
-    trainer.save_model(str(final_dir))
-    processor.save_pretrained(str(final_dir))
+    if not args.throughput_benchmark:
+        trainer.save_metrics("train", train_result.metrics)
+        trainer.save_state()
+        trainer.save_model(str(final_dir))
+        processor.save_pretrained(str(final_dir))
 
     report = {
         "status": "pass",
@@ -570,12 +609,27 @@ def main() -> int:
         "model_path": str(model_path),
         "data_root": str(data_root),
         "cache_dir": str(cache_dir),
-        "final_checkpoint": str(final_dir),
+        "final_checkpoint": None if args.throughput_benchmark else str(final_dir),
+        "throughput_benchmark": (
+            {
+                "warmup_optimizer_steps": args.throughput_warmup_steps,
+                "timed_optimizer_steps": args.throughput_timed_steps,
+                "report": str(output_dir / "throughput_report.json"),
+            }
+            if args.throughput_benchmark
+            else None
+        ),
     }
     report_path = output_dir / "train_report.json"
     with report_path.open("w", encoding="utf-8") as handle:
         json.dump(report, handle, ensure_ascii=False, indent=2, default=str)
-    print(f"[PATHVQA_LORA_TRAIN_PASS] checkpoint={final_dir} report={report_path}")
+    if args.throughput_benchmark:
+        print(
+            "[PATHVQA_LORA_BENCHMARK_PASS] "
+            f"report={output_dir / 'throughput_report.json'}"
+        )
+    else:
+        print(f"[PATHVQA_LORA_TRAIN_PASS] checkpoint={final_dir} report={report_path}")
     return 0
 
 

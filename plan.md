@@ -103,9 +103,9 @@ DRAPE 已在多模态持续指令微调中证明：任务级静态 Prompt 难以
 
 固定最终 D768、seed44、`Q10/Z10`、Layer17 `S8+A_v10`、全部初始化和学习率，只把 LLM 输入从 `[P20; A_t10+DeltaP10; Visual; Question]` 改为 `[P20; Visual; A_t10+DeltaP10; Question]`。其中 `P20` 紧邻 `<|vision_start|>` 之前，动态10个 Prompt 紧邻 `<|vision_end|>` 之后，不进入视觉包装内部。该实验检验因果 LLM 中 Prompt 位置是否限制视觉 Token 对任务先验的可见性，以及将问题条件化证据放在问题之前、视觉之后是否更符合功能分工。实验名为 `pathvqa_qdpt_d768_question_q10_l17_p20_s8_av10_sandwich_seed44`，只跑 PathVQA 三轮固定协议。
 
-Sandwich取得明确收益后追加的两个同seed位置控制均已完成：`[Visual; P20; Dynamic10; Question]`为59.2587，`[Dynamic10; Visual; P20; Question]`为58.1243，均低于Sandwich `[P20; Visual; Dynamic10; Question]`的60.7765。位置机制已经闭环：静态P应在视觉前提供领域先验，动态证据应在视觉后靠近问题；停止追加Prompt顺序搜索。
+Sandwich在seed44取得明确收益后追加的两个同seed位置控制为：`[Visual; P20; Dynamic10; Question]` 59.2587，`[Dynamic10; Visual; P20; Question]` 58.1243，均低于Sandwich `[P20; Visual; Dynamic10; Question]` 60.7765。后续seed45/46没有稳定复现该排序，因此seed44只能解释为开发集上的结构选择，不能再宣称位置机制已经闭环或因果顺序稳定优越。
 
-审稿前稳定性补充：鉴于最终QDPT在seed44/45/46间存在明显方差，两个seed44位置对照各补seed45/46，共四项串行实验。该补充只检验同seed位置差值是否稳定，不再搜索新排列；统一入口为`pathvqa_qdpt_d768_prompt_placement_controls_seeds45_46`，任一项失败继续后续项，重启时跳过已有完整Validation summary。
+审稿前位置稳定性补充已完成：全放视觉后三seed58.9658 +/-0.4799，反向Sandwich58.5450 +/-0.5008，最终Sandwich59.1522 +/-1.7528；同seed排序发生反转，平均差仅0.19/0.61。保留此前冻结的Sandwich主结构，不依据后见结果换模型；论文把位置效应降级为初始化敏感设计选择，并停止追加排列实验。
 
 `P20 + Dynamic20` 槽数实验降为低优先级：现有结构本来就是20个静态领域 Prompt 加10个动态证据 Prompt，当前先隔离位置效应，不把槽数和位置同时改变。除非 Sandwich 获得明确收益或审稿阶段要求 Prompt 数量敏感性，否则不运行20+20。
 
@@ -232,7 +232,7 @@ CoTBox-TTT可以计入“同方向Related Work”的文献数量，但**不计�
 |---|---|---|
 | Static Prompt vs Dynamic Prompt | PathVQA/SLAKE seed44 已有 | 必须进入主表，作为“实例条件化有什么用”的第一证据 |
 | w/o Cross-Modal Attention | 当前只有视觉 K/V 错配 | **新增必做 question-only 重训**，区分正确视觉读取与错误视觉污染 |
-| Learned Query | QDPT seed44 已完成，下降2.3806 | 直接进入机制消融，不再重复 |
+| Learned Query | 最终输入顺序下seed44已完成，下降约1.73；seed45/46串行入口已实现 | 运行`pathvqa_qdpt_d768_learned_query_sandwich_seeds45_46`后报告多seed结果，随后停止该消融 |
 | Mean Pooling / Query初始化变体 | 历史池化实验较多，但非最终结构同协议 | 不为此重开架构搜索；只在 Related Work 中讨论 |
 | 隐宽 `H=256/512/768/1024` | D256/D512/D768/D1024 已闭环 | 直接形成容量曲线；承认宽度平台不是独家发现 |
 | Prompt数量敏感性 | QDPT 尚无最终结构槽数扫描 | 非必做；审稿后再补，不占当前收尾窗口 |
@@ -241,7 +241,7 @@ CoTBox-TTT可以计入“同方向Related Work”的文献数量，但**不计�
 | 同图不同问题案例 | 可从 PathVQA/SLAKE 重复图像中筛选 | 必做定性图，展示问题变化如何改变视觉注意与答案 |
 | 路由混淆矩阵 | QDPT 无任务路由 | 不适用，不照搬 |
 | 遗忘、BWT、null-space分析 | QDPT 非持续学习 | 不适用，不照搬 |
-| 效率表 | 参数、训练时间、TTFT、TPOT已有 | 采用其完整报告思路，但保留硬件和实现口径限制 |
+| 效率表 | 参数、训练时间、TTFT、TPOT已有；公平短测入口已实现 | QDPT/LoRA统一microbatch1、累积32，20个optimizer step预热后计时100步；只报告训练吞吐与峰值显存，不把外推时间冒充完整训练实测 |
 
 **可选：DRAPE 的近似复现。** 实现一个 DRAPE-style late-feature generator：根据论文公开公式，由问题/指令生成 Query，读取 `visual.merger` 后视觉 Token，并直接生成 LLM Prompt；不引入持续学习专属的任务生成器池、CLIP 路由和 null-space 模块。由于官方项目代码尚未公开、原任务协议也不同，该实验必须标注为“根据论文描述实现的单任务近似版本”，不得称为官方 DRAPE 复现。
 
@@ -306,7 +306,7 @@ CoTBox-TTT可以计入“同方向Related Work”的文献数量，但**不计�
 | 优先级 | 实验 | Seed | 目的 |
 |---|---|---:|---|
 | P0 | D768 移除静态视觉插入 | 44 | 已完成：58.4438，显著下降1.1184；静态视觉校准必须保留 |
-| P0 | D768 learned static query | 44 | 证明 question-guided Q 的必要性 |
+| P0-ready | 最终输入顺序下的容量匹配 Learned Query | 44/45/46 | seed44已完成59.05；seed45/46启动入口已实现，只跑Validation，完成后停止该消融 |
 | P0 | D768视觉前缀改为`A_v10 + Proj(Z10)`硬拼接 | 44/45/46 | 单卡串行三seed；检验独立动态Z视觉Token能否替代重复的`S_v8+A_v10`静态前缀，并直接得到稳定性结论 |
 | P0 | 最终 D768 复现 | 45/46 | 主方法均值与稳定性 |
 | P0 | Static Visual Prompt | 44 | 已完成：35.9482/68.7040/3.2865；Layer17 V20，仅20,480参数 |
@@ -314,7 +314,7 @@ CoTBox-TTT可以计入“同方向Related Work”的文献数量，但**不计�
 | Completed | Image-conditioned Prompt | 44 | 已由CoCoOp-style P20/H160覆盖：仅使用post-merger图像均值，不读取问题 |
 | Appendix-complete | Full-Attention LoRA-r8复现 | 44/45/46 | 已完成，仅作为附录跨范式参考 |
 | Cancelled | Full-Attention LoRA-r4/r16 | 44 | 不再运行；不扩展跨范式容量扫描 |
-| P1 | 最终架构正式 Test | 44/45/46 最终 checkpoint | 冻结后仅运行一次 |
+| Partial | PathVQA正式 Test 对比 | QDPT、Static Prompt、CoCoOp均已完成44/45/46；LoRA-r8已完成44/45，seed46日志存在但summary缺失 | 诊断或补评LoRA seed46既有checkpoint，并提取各方法Test分项；不重训、不据Test调参 |
 | Completed | question-only / w/o visual CA | 44 | 已完成：57.6290，相对完整QDPT显著下降1.9332；证明正确视觉K/V读取有独立增益，不追加seed |
 | Conditional P0 | DRAPE-style近似复现 | 44 | 当前搁置；若最终不足3个可信同方向Prompt对比则自动升级为必做 |
 | Post-review | IA3 单配置 | 44 | 当前不实现；仅在审稿人要求增加轻量PEFT时补做 |
@@ -379,7 +379,7 @@ CoTBox-TTT可以计入“同方向Related Work”的文献数量，但**不计�
 - [x] 完成 direct-visual-Z concat seeds44/45/46：三seed均值58.8007，较原D768均值-0.2023且方差增大，拒绝作为最终结构。
 - [x] 最终层位敏感性：Layer18-only为58.3959，共享Layer17+18+19为58.3799，均较Layer17的59.5622显著低约1.18分；多层与Layer18完全打平且进一步伤害`where`。最终固定Layer17-only，停止层数扫描。
 - [x] 最后一次统一V20抢救：严格固定下游初始化后为58.5237，仍较旧8+10同seed显著低1.0385；永久保留旧8+10双速率视觉Prompt，V20只作为负消融，不再重复运行。
-- [x] 完成 learned-static-query seed44：57.1817，较问题引导Q10显著下降2.3806，确认当前问题条件化Query的必要性，不追加seed。
+- [x] 完成早期输入顺序下的 learned-static-query seed44：57.1817，较同配置问题引导Q10下降2.3806；该历史结果不替代最终输入顺序下的多seed对照。
 - [x] 取消LoRA-r4/r16 seed44；已有r8足以作为附录中的跨范式强参考，不再用rank扫描消耗收尾时间。
 - [x] 未发现GRASP作者正式仓库；已按论文公式完成Qwen3-VL近似复现、PathVQA/SLAKE/现有电气数据接口连接和CPU单测。保留冻结LLM的额外question-only前向，并明确标注为独立复现。
 - [x] 完成GRASP正式顺序近似复现：`[Prompt, Visual, Question]`、纯问题冻结LLM编码、N4/h512/seed44三轮得到39.7508/75.36/4.2438；稀疏路由与梯度正常但开放题近乎失效。保留为统一协议负基线，不再扫描或迁移SLAKE。
@@ -415,6 +415,7 @@ CoTBox-TTT可以计入“同方向Related Work”的文献数量，但**不计�
 - [x] 完成SLAKE最终Sandwich seed44/45/46：76.74/76.65/77.46，三seed76.95 +/- 0.44；相对旧非Sandwich均值77.03无增益，不再修改架构或追加训练。
 - [ ] 计算 multi-seed mean ± std、McNemar、image-clustered paired bootstrap CI。
 - [ ] 生成主性能表、容量表、消融表、效率表和文献独立表。
+- [ ] 运行统一训练吞吐短测：`pathvqa_qdpt_lora_training_throughput_benchmark`，QDPT与LoRA均为microbatch1/累积32、20步预热+100步计时、seed44/data seed42；禁用checkpoint和评估，记录样本/视觉Token吞吐及CUDA峰值显存。该结果仅用于受控吞吐，不替代完整三轮训练耗时。
 - [ ] 生成架构图、Pareto 图、宽度曲线和 mismatch 图。
 - [x] 实现论文分析制图工具链：从现有日志生成三seed训练动力学、Prompt方法seed稳定性和模块活性图；新增默认关闭的完整Directional Cross-Attention导出，并提供同图多问题候选的确定性选择规则。真实checkpoint注意力导出尚未执行，不计为已完成实验。
 - [x] 串行完成自建电气数据集最终对比：Static Prompt P20为70.06、CoCoOp-style P20/H160为70.88、Dense D768 Sandwich QDPT为71.91，统一seed47/data seed42、三epoch和既有private fixed holdout；不扩展多seed或消融。

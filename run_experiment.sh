@@ -1424,6 +1424,33 @@ run_pathvqa_qdpt_d768_learned_static_query_sandwich_seed44() {
   run_qdpt_d768_final_dataset pathvqa learned_static_query_sandwich 44
 }
 
+run_pathvqa_qdpt_d768_learned_query_sandwich_seeds45_46() {
+  local suite_failures=0
+  local run_seed summary
+  for run_seed in 45 46; do
+    summary="$(find "$PATHVQA_DYNAMIC_PROMPT_OUTPUT_ROOT" \
+      -path "*/pathvqa_qdpt_d768_learned_q10_l17_p20_s8_av10_sandwich_seed${run_seed}_*/eval_validation/epoch_3/pathvqa_summary.json" \
+      -print -quit 2>/dev/null)"
+    if [ -n "$summary" ]; then
+      echo "[QDPT_LEARNED_QUERY_REPLICATION] seed=$run_seed status=skip_complete summary=$summary"
+      continue
+    fi
+    echo "[QDPT_LEARNED_QUERY_REPLICATION] seed=$run_seed status=starting"
+    if run_qdpt_d768_final_dataset \
+      pathvqa learned_static_query_sandwich "$run_seed"; then
+      echo "[QDPT_LEARNED_QUERY_REPLICATION] seed=$run_seed status=completed"
+    else
+      echo "[QDPT_LEARNED_QUERY_REPLICATION] seed=$run_seed status=failed_continue" >&2
+      suite_failures=$((suite_failures + 1))
+    fi
+  done
+  if [ "$suite_failures" -ne 0 ]; then
+    echo "[ERR] Learned Query seed45/46 failures=$suite_failures; both seeds were attempted." >&2
+    return 1
+  fi
+  echo "[QDPT_LEARNED_QUERY_REPLICATION_DONE] seeds=45,46 status=completed"
+}
+
 run_pathvqa_qdpt_d768_question_only_seed44() {
   run_qdpt_d768_final_dataset pathvqa question_only 44
 }
@@ -3172,6 +3199,104 @@ run_pathvqa_lora_full_model_attn_r8_seeds45_46() {
   echo "[PATHVQA_LORA_R8_REPLICATION_DONE] seeds=45,46 status=completed"
 }
 
+run_pathvqa_qdpt_lora_training_throughput_benchmark() {
+  local suite_failures=0
+  local warmup_steps="${THROUGHPUT_WARMUP_STEPS:-20}"
+  local timed_steps="${THROUGHPUT_TIMED_STEPS:-100}"
+  local qdpt_output lora_output
+
+  if ! CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0}" python -c \
+    'import torch; assert torch.cuda.is_available(), "CUDA unavailable; refusing CPU benchmark"; torch.zeros(1, device="cuda")'; then
+    echo "[ERR] CUDA preflight failed; throughput benchmark was not started." >&2
+    return 1
+  fi
+
+  qdpt_output="$(available_output_dir "$PATHVQA_DYNAMIC_PROMPT_OUTPUT_ROOT" \
+    "pathvqa_qdpt_d768_sandwich_throughput_w${warmup_steps}_t${timed_steps}_seed44_${RUN_DATE}")"
+  mkdir -p "$qdpt_output"
+  echo "[THROUGHPUT_SUITE] method=qdpt status=starting output=$qdpt_output"
+  (
+    cd "$ROOT_DIR" || exit 1
+    python -m unittest \
+      test_training_throughput.py \
+      test_dynamic_prompt_tuning.py \
+      test_sparse_visual_mmrl.py || exit 1
+    CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0}" \
+    python -m pathvqa.train_dynamic_prompt \
+      --model-path "$MODEL_PATH" \
+      --data-root "$PATHVQA_DATA_ROOT" \
+      --cache-dir "$PATHVQA_CACHE_ROOT" \
+      --output-dir "$qdpt_output" \
+      --experiment-name pathvqa_qdpt_d768_sandwich_throughput \
+      --prompt-length 20 \
+      --attention-dim 256 \
+      --attention-heads 8 \
+      --sparse-visual \
+      --sparse-visual-anchor-layers 17 \
+      --sparse-visual-rep-tokens 8 \
+      --sparse-visual-attention-dim 128 \
+      --sparse-visual-heads 4 \
+      --sparse-visual-lr 3e-5 \
+      --shared-s-text-mode none \
+      --directional-concat-workspace \
+      --no-directional-visual-dynamic-write \
+      --directional-query-source question_attention_pooling \
+      --directional-static-visual-write \
+      --directional-sandwich-text-prompt \
+      --workspace-tokens 10 \
+      --workspace-dim 768 \
+      --workspace-heads 16 \
+      --workspace-lr 1e-4 \
+      --epochs 3 \
+      --seed 44 \
+      --data-seed 42 \
+      --prompt-lr 0.3 \
+      --dynamic-lr 3e-4 \
+      --batch-size 1 \
+      --gradient-accumulation 32 \
+      --dataloader-workers 0 \
+      --expected-trainable-parameters 7805184 \
+      --throughput-benchmark \
+      --throughput-warmup-steps "$warmup_steps" \
+      --throughput-timed-steps "$timed_steps" \
+      2>&1 | tee "$qdpt_output/train.log"
+  ) || suite_failures=$((suite_failures + 1))
+
+  lora_output="$(available_output_dir "$PATHVQA_LORA_OUTPUT_ROOT" \
+    "pathvqa_lora_full_attention_r8_throughput_w${warmup_steps}_t${timed_steps}_seed44_${RUN_DATE}")"
+  mkdir -p "$lora_output"
+  echo "[THROUGHPUT_SUITE] method=lora status=starting output=$lora_output"
+  (
+    cd "$ROOT_DIR" || exit 1
+    python -m unittest test_training_throughput.py test_pathvqa_lora_targets.py || exit 1
+    CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0}" \
+    python -m pathvqa.train_visual_lora \
+      --data-root "$PATHVQA_DATA_ROOT" \
+      --cache-dir "$PATHVQA_CACHE_ROOT" \
+      --model-path "$MODEL_PATH" \
+      --output-dir "$lora_output" \
+      --experiment-name pathvqa_lora_full_attention_r8_throughput \
+      --target-scope full_model \
+      --rank 8 \
+      --last-n-vision-layers 24 \
+      --expected-trainable-parameters 7077888 \
+      --epochs 3 \
+      --seed 44 \
+      --data-seed 42 \
+      --learning-rate 1e-4 \
+      --batch-size 1 \
+      --gradient-accumulation 32 \
+      --dataloader-workers 0 \
+      --throughput-benchmark \
+      --throughput-warmup-steps "$warmup_steps" \
+      --throughput-timed-steps "$timed_steps" \
+      2>&1 | tee "$lora_output/train.log"
+  ) || suite_failures=$((suite_failures + 1))
+
+  echo "[THROUGHPUT_SUITE_DONE] failures=$suite_failures qdpt=$qdpt_output lora=$lora_output"
+  [ "$suite_failures" -eq 0 ]
+}
+
 find_completed_slake_lora_r8_summary() {
   local run_seed="$1"
   find \
@@ -3691,6 +3816,9 @@ case "$RUN_TARGET" in
   pathvqa_qdpt_d768_learned_static_query_sandwich_seed44)
     run_pathvqa_qdpt_d768_learned_static_query_sandwich_seed44 || failures=$((failures + 1))
     ;;
+  pathvqa_qdpt_d768_learned_query_sandwich_seeds45_46)
+    run_pathvqa_qdpt_d768_learned_query_sandwich_seeds45_46 || failures=$((failures + 1))
+    ;;
   pathvqa_qdpt_d768_question_only_seed44)
     run_pathvqa_qdpt_d768_question_only_seed44 || failures=$((failures + 1))
     ;;
@@ -3819,6 +3947,9 @@ case "$RUN_TARGET" in
     ;;
   pathvqa_lora_full_model_attn_r8_seeds45_46)
     run_pathvqa_lora_full_model_attn_r8_seeds45_46 || failures=$((failures + 1))
+    ;;
+  pathvqa_qdpt_lora_training_throughput_benchmark)
+    run_pathvqa_qdpt_lora_training_throughput_benchmark || failures=$((failures + 1))
     ;;
   pathvqa_day2_d768_lora_r8_seeds45_46)
     run_pathvqa_day2_d768_lora_r8_seeds45_46 || failures=$((failures + 1))

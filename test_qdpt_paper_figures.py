@@ -8,6 +8,7 @@ import numpy as np
 from paper_figures.qdpt_figures import (
     attention_maps,
     finite_series,
+    load_losses,
     load_jsonl,
     moving_average,
     parse_run_argument,
@@ -55,6 +56,19 @@ class QDPTPaperFiguresTest(unittest.TestCase):
         self.assertEqual(path, Path("/tmp/run"))
         self.assertEqual(question_type("Where is the lesion?"), "where")
         self.assertEqual(question_type("Is this malignant?"), "yes/no")
+
+    def test_load_losses_falls_back_to_trainer_stdout_log(self):
+        with tempfile.TemporaryDirectory() as directory:
+            run_dir = Path(directory)
+            (run_dir / "train.log").write_text(
+                "loading\n"
+                "{'loss': 12.5, 'learning_rate': 0.1, 'epoch': 0.5}\n"
+                "progress {'loss': 10.25, 'epoch': 1.0} trailing\n",
+                encoding="utf-8",
+            )
+            steps, losses = load_losses(run_dir)
+        np.testing.assert_allclose(steps, (0.5, 1.0))
+        np.testing.assert_allclose(losses, (12.5, 10.25))
 
 
 if __name__ == "__main__":

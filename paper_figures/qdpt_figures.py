@@ -4,8 +4,10 @@
 from __future__ import annotations
 
 import argparse
+import ast
 import json
 import math
+import re
 from pathlib import Path
 from typing import Any, Iterable, Sequence
 
@@ -116,20 +118,44 @@ def moving_average(values: np.ndarray, window: int) -> np.ndarray:
 
 
 def load_losses(run_dir: Path) -> tuple[np.ndarray, np.ndarray]:
-    state_path = find_one(
-        run_dir,
-        ("trainer/trainer_state.json", "trainer_state.json"),
-    )
-    state = load_json(state_path)
-    points = []
-    for row in state.get("log_history", []):
-        if "loss" not in row or "step" not in row:
+    points: list[tuple[float, float]] = []
+    source_path: Path
+    try:
+        source_path = find_one(
+            run_dir,
+            ("trainer/trainer_state.json", "trainer_state.json"),
+        )
+        state = load_json(source_path)
+        rows = state.get("log_history", [])
+        coordinate = "step"
+    except FileNotFoundError:
+        source_path = find_one(run_dir, ("train.log",))
+        rows = []
+        pattern = re.compile(r"\{.*?['\"]loss['\"]\s*:.*?\}")
+        with source_path.open("r", encoding="utf-8", errors="replace") as handle:
+            for line in handle:
+                match = pattern.search(line)
+                if match is None:
+                    continue
+                fragment = match.group(0)
+                try:
+                    row = ast.literal_eval(fragment)
+                except (SyntaxError, ValueError):
+                    try:
+                        row = json.loads(fragment)
+                    except json.JSONDecodeError:
+                        continue
+                if isinstance(row, dict):
+                    rows.append(row)
+        coordinate = "epoch"
+    for row in rows:
+        if "loss" not in row or coordinate not in row:
             continue
-        step, loss = float(row["step"]), float(row["loss"])
+        step, loss = float(row[coordinate]), float(row["loss"])
         if math.isfinite(step) and math.isfinite(loss):
             points.append((step, loss))
     if not points:
-        raise ValueError(f"No finite step loss values in {state_path}")
+        raise ValueError(f"No finite loss values in {source_path}")
     x, y = zip(*points)
     return np.asarray(x), np.asarray(y)
 
@@ -192,12 +218,11 @@ def plot_dynamics(
         diagnostics = load_diagnostics(run_dir)
         diag_steps = np.asarray([float(row["step"]) for row in diagnostics])
         loss_steps, losses = load_losses(run_dir)
-        maximum = float(max(np.max(diag_steps), np.max(loss_steps)))
         line_label = label
         if label in score_by_label:
             line_label += f"  ({score_by_label[label]:.2f})"
         axes[0, 0].plot(
-            progress_percent(loss_steps, maximum),
+            progress_percent(loss_steps),
             moving_average(losses, smooth_window),
             color=color,
             linewidth=2.0,
@@ -211,7 +236,7 @@ def plot_dynamics(
         ):
             steps, values, _ = finite_series(diagnostics, keys)
             axis.plot(
-                progress_percent(steps, maximum),
+                progress_percent(steps),
                 moving_average(values, smooth_window),
                 color=color,
                 linestyle=linestyle,

@@ -3313,6 +3313,24 @@ run_pathvqa_qdpt_paper_figures_final_bundle() {
   )
 }
 
+run_pathvqa_qdpt_paper_figure2_training_dynamics() {
+  local bundle_dir="$ROOT_DIR/paper_figures/output/final_bundle_${RUN_DATE}"
+  mkdir -p "$bundle_dir"
+  echo "[QDPT_PAPER_FIGURE2] training=false output=$bundle_dir/figure2_training_dynamics"
+  (
+    cd "$ROOT_DIR" || exit 1
+    python -m unittest test_qdpt_paper_figures.py || exit 1
+    python -m paper_figures.qdpt_figures dynamics \
+      --run "seed44=$PATHVQA_DYNAMIC_PROMPT_OUTPUT_ROOT/pathvqa_qdpt_d768_question_q10_l17_p20_s8_av10_sandwich_seed44_20260909" \
+      --run "seed45=$PATHVQA_DYNAMIC_PROMPT_OUTPUT_ROOT/pathvqa_qdpt_d768_question_q10_l17_p20_s8_av10_sandwich_seed45_20260910_1" \
+      --run "seed46=$PATHVQA_DYNAMIC_PROMPT_OUTPUT_ROOT/pathvqa_qdpt_d768_question_q10_l17_p20_s8_av10_sandwich_seed46_20260910" \
+      --score 60.7765 \
+      --score 57.2935 \
+      --score 59.3865 \
+      --output "$bundle_dir/figure2_training_dynamics"
+  )
+}
+
 find_completed_slake_lora_r8_summary() {
   local run_seed="$1"
   find \
@@ -3969,6 +3987,9 @@ case "$RUN_TARGET" in
     ;;
   pathvqa_qdpt_paper_figures_final_bundle)
     run_pathvqa_qdpt_paper_figures_final_bundle || failures=$((failures + 1))
+    ;;
+  pathvqa_qdpt_paper_figure2_training_dynamics)
+    run_pathvqa_qdpt_paper_figure2_training_dynamics || failures=$((failures + 1))
     ;;
   pathvqa_day2_d768_lora_r8_seeds45_46)
     run_pathvqa_day2_d768_lora_r8_seeds45_46 || failures=$((failures + 1))

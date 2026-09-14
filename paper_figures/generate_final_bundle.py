@@ -29,18 +29,30 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--cache-dir", default="/root/autodl-tmp/dataset/pathVQA/.hf_cache"
     )
+    parser.add_argument(
+        "--attention-candidate-rank",
+        type=int,
+        default=2,
+        help="One-based rank from the deterministic attention candidate list.",
+    )
     return parser.parse_args()
 
 
-def select_candidate_rows(candidate_data: dict[str, Any]) -> tuple[int, int]:
+def select_candidate_rows(
+    candidate_data: dict[str, Any], candidate_rank: int = 1
+) -> tuple[int, int]:
     candidates = candidate_data.get("candidates", [])
-    if not candidates:
-        raise ValueError("No same-image, different-question-type candidate exists")
-    first = candidates[0]["records"][0]
+    if not 1 <= candidate_rank <= len(candidates):
+        raise ValueError(
+            f"Attention candidate rank {candidate_rank} is unavailable; "
+            f"candidate count={len(candidates)}"
+        )
+    candidate = candidates[candidate_rank - 1]
+    first = candidate["records"][0]
     second = next(
         (
             row
-            for row in candidates[0]["records"]
+            for row in candidate["records"]
             if row["question_type"] != first["question_type"]
         ),
         None,
@@ -76,6 +88,8 @@ def create_archive(output_dir: Path) -> Path:
 
 def main() -> int:
     args = parse_args()
+    if args.attention_candidate_rank < 1:
+        raise ValueError("--attention-candidate-rank must be positive")
     output_dir = args.output_dir.expanduser().resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
     python = sys.executable
@@ -161,9 +175,11 @@ def main() -> int:
     )
     if candidates_ok:
         candidate_data = json.loads(candidates_path.read_text(encoding="utf-8"))
-        row_a, row_b = select_candidate_rows(candidate_data)
+        row_a, row_b = select_candidate_rows(
+            candidate_data, args.attention_candidate_rank
+        )
         report["attention_selection"] = {
-            "candidate_rank": 1,
+            "candidate_rank": args.attention_candidate_rank,
             "row_indices": [row_a, row_b],
             "rule": candidate_data["selection_rule"],
             "rationale": "top-ranked same-image pair with distinct question types",
@@ -186,7 +202,9 @@ def main() -> int:
             ],
             report,
         )
-        attention_dir = output_dir / "attention_case_01"
+        attention_dir = output_dir / (
+            f"attention_case_rank{args.attention_candidate_rank:02d}"
+        )
         if cuda_ok:
             export_ok = run_step(
                 "figure1_attention_export",

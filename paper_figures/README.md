@@ -14,6 +14,8 @@ RUN_TARGET=pathvqa_qdpt_paper_figures_final_bundle bash run_experiment.sh
 The default destination is `paper_figures/output/final_bundle_<RUN_DATE>/`.
 This target performs no training. Figure 1 loads the frozen seed44 checkpoint for
 two no-gradient inference calls; the remaining figures only read existing files.
+The attention case defaults to deterministic candidate rank2 so that the original
+rank1 case is not reused. Override it with `ATTENTION_CANDIDATE_RANK=3` if needed.
 
 ## Dependencies
 

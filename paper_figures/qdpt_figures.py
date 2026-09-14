@@ -324,7 +324,8 @@ def plot_stability(score_file: Path, output: Path) -> None:
     config = load_json(score_file)
     methods = config["methods"]
     seeds = config.get("seeds", list(range(len(methods[0]["scores"]))))
-    fig, axis = plt.subplots(figsize=(9.2, 5.2), constrained_layout=True)
+    fig, axis = plt.subplots(figsize=(11.4, 6.1))
+    fig.subplots_adjust(left=0.09, right=0.98, bottom=0.16, top=0.79)
     for index, method in enumerate(methods):
         scores = np.asarray(method["scores"], dtype=float)
         x = np.full(scores.shape, index, dtype=float)
@@ -350,20 +351,22 @@ def plot_stability(score_file: Path, output: Path) -> None:
             axis.annotate(str(seed), (index + offset, score), xytext=(0, -13), textcoords="offset points", ha="center", fontsize=7, color="#606A65")
     axis.set_xticks(range(len(methods)), [method["name"] for method in methods])
     axis.set_ylabel("Overall accuracy (%)")
-    axis.set_title(
+    fig.suptitle(
         "Conditional Prompt methods show higher initialization sensitivity",
-        loc="left",
+        x=0.09,
+        y=0.965,
+        ha="left",
         fontsize=15,
         fontweight="bold",
         color="#183C3A",
     )
-    axis.text(
-        0,
-        1.01,
+    fig.text(
+        0.09,
+        0.895,
         f"{config.get('dataset', '')} · dots are seeds · diamonds are mean ± sample standard deviation",
-        transform=axis.transAxes,
         color="#606A65",
         fontsize=9,
+        ha="left",
     )
     axis.grid(axis="y", alpha=0.8)
     axis.spines[["top", "right"]].set_visible(False)

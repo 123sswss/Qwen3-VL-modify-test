@@ -3299,7 +3299,8 @@ run_pathvqa_qdpt_lora_training_throughput_benchmark() {
 
 run_pathvqa_qdpt_paper_figures_final_bundle() {
   local bundle_dir="$ROOT_DIR/paper_figures/output/final_bundle_${RUN_DATE}"
-  echo "[QDPT_PAPER_FIGURES] training=false output=$bundle_dir"
+  local attention_rank="${ATTENTION_CANDIDATE_RANK:-2}"
+  echo "[QDPT_PAPER_FIGURES] training=false attention_candidate_rank=$attention_rank output=$bundle_dir"
   (
     cd "$ROOT_DIR" || exit 1
     python -m unittest \
@@ -3309,7 +3310,8 @@ run_pathvqa_qdpt_paper_figures_final_bundle() {
       --output-dir "$bundle_dir" \
       --model-path "$MODEL_PATH" \
       --data-root "$PATHVQA_DATA_ROOT" \
-      --cache-dir "$PATHVQA_CACHE_ROOT"
+      --cache-dir "$PATHVQA_CACHE_ROOT" \
+      --attention-candidate-rank "$attention_rank"
   )
 }
 

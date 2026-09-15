@@ -169,9 +169,9 @@ def configure_style() -> None:
     plt.rcParams.update(
         {
             "font.family": "DejaVu Sans",
-            "font.size": 9.5,
-            "axes.titlesize": 11,
-            "axes.labelsize": 9.5,
+            "font.size": 10.5,
+            "axes.titlesize": 12,
+            "axes.labelsize": 10.5,
             "axes.edgecolor": "#46534F",
             "axes.linewidth": 0.8,
             "axes.facecolor": "#FFFEFA",
@@ -198,7 +198,8 @@ def style_axis(axis: Any) -> None:
     axis.grid(axis="y", alpha=0.8)
     axis.spines[["top", "right"]].set_visible(False)
     axis.set_xlim(0, 100)
-    axis.set_xlabel("Training progress (%)")
+    axis.set_xlabel("Training progress (%)", fontsize=11)
+    axis.tick_params(axis="both", labelsize=10.5)
 
 
 def plot_dynamics(
@@ -244,26 +245,38 @@ def plot_dynamics(
                 label=label,
             )
     titles = (
-        (axes[0, 0], "Training loss", "Cross-entropy"),
+        (axes[0, 0], "Training objective", "Logged training loss"),
         (axes[0, 1], "Prompt scale", "L2 norm"),
-        (axes[1, 0], "Workspace Z10 scale", "Mean token norm"),
+        (axes[1, 0], r"Workspace $Z$ scale", "Mean token norm"),
         (axes[1, 1], "Visual attention entropy", "Normalized entropy"),
     )
     for axis, title, ylabel in titles:
         style_axis(axis)
-        axis.set_title(title, loc="left", fontweight="bold")
-        axis.set_ylabel(ylabel)
-    axes[0, 0].legend(title="Seed (final Val.)", ncol=1)
+        axis.set_title(title, loc="left", fontweight="bold", fontsize=12.5)
+        axis.set_ylabel(ylabel, fontsize=11)
+    axes[0, 0].legend(
+        title="Seed (final Val.)", ncol=1, fontsize=10.5, title_fontsize=10.5
+    )
     prompt_handles = [
-        axes[0, 1].plot([], [], color="#46534F", linestyle="-", label="P20")[0],
         axes[0, 1].plot(
-            [], [], color="#46534F", linestyle="--", label="Text anchor"
+            [],
+            [],
+            color="#46534F",
+            linestyle="-",
+            label=r"Static language prompt $P^t$",
+        )[0],
+        axes[0, 1].plot(
+            [],
+            [],
+            color="#46534F",
+            linestyle="--",
+            label=r"Dynamic language anchor $P^d$",
         )[0],
     ]
-    axes[0, 1].legend(handles=prompt_handles)
+    axes[0, 1].legend(handles=prompt_handles, fontsize=10.5)
     fig.suptitle(
         "QDPT optimization follows seed-dependent trajectories",
-        fontsize=16,
+        fontsize=17,
         fontweight="bold",
         color="#183C3A",
     )
@@ -346,13 +359,13 @@ def plot_stability(score_file: Path, output: Path) -> None:
             capsize=5,
             zorder=4,
         )
-        axis.text(index, scores.max() + 0.35, f"{mean:.2f} ± {std:.2f}", ha="center", fontsize=9)
+        axis.text(index, scores.max() + 0.35, f"{mean:.2f} ± {std:.2f}", ha="center", fontsize=10)
         for offset, score, seed in zip(offsets, scores, seeds):
-            axis.annotate(str(seed), (index + offset, score), xytext=(0, -13), textcoords="offset points", ha="center", fontsize=7, color="#606A65")
+            axis.annotate(str(seed), (index + offset, score), xytext=(0, -14), textcoords="offset points", ha="center", fontsize=9, color="#606A65")
     axis.set_xticks(range(len(methods)), [method["name"] for method in methods])
     axis.set_ylabel("Overall accuracy (%)")
     fig.suptitle(
-        "Conditional Prompt methods show higher initialization sensitivity",
+        "PathVQA validation accuracy across random seeds",
         x=0.09,
         y=0.965,
         ha="left",

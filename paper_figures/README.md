@@ -34,7 +34,7 @@ python -m paper_figures.qdpt_figures dynamics \
   --output paper_figures/output/figure2_training_dynamics
 ```
 
-The x-axis is each run's logged step divided by its final diagnostic step. Loss is read from `trainer/trainer_state.json`; all other curves come from `dynamic_prompt_diagnostics.jsonl`.
+The x-axis is each run's logged step divided by its final diagnostic step. Loss is read from `trainer/trainer_state.json`, with legacy runs falling back to Trainer records in `train.log`; all other curves come from `dynamic_prompt_diagnostics.jsonl`. Trainer records the displayed loss every 20 optimizer steps as a logging-window aggregate, so the axis is labeled `Logged training loss` rather than a globally answer-token-weighted cross-entropy. Curves use a 7-point moving average by default.
 
 ## Figure 3: Seed stability
 

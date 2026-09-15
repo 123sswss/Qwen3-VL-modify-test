@@ -14,7 +14,7 @@ from typing import Any, Iterable, Sequence
 import numpy as np
 
 
-SEED_COLORS = ("#167D77", "#D56A3A", "#3366A3")
+SEED_COLORS = ("#0072B2", "#D55E00", "#009E73")
 METHOD_COLORS = ("#8B6F47", "#D56A3A", "#167D77", "#3366A3")
 
 
@@ -164,22 +164,30 @@ def load_diagnostics(run_dir: Path) -> list[dict[str, Any]]:
     return load_jsonl(find_one(run_dir, ("dynamic_prompt_diagnostics.jsonl",)))
 
 
-def configure_style() -> None:
+def configure_style(*, white_background: bool = False) -> None:
     plt, _ = _require_matplotlib()
+    axes_facecolor = "#FFFFFF" if white_background else "#FFFEFA"
+    figure_facecolor = "#FFFFFF" if white_background else "#F7F4EC"
+    grid_color = "#E6E6E6" if white_background else "#DDD8CC"
     plt.rcParams.update(
         {
             "font.family": "DejaVu Sans",
             "font.size": 10.5,
             "axes.titlesize": 12,
             "axes.labelsize": 10.5,
-            "axes.edgecolor": "#46534F",
+            "axes.edgecolor": "#3A3A3A",
+            "axes.labelcolor": "#2B2B2B",
             "axes.linewidth": 0.8,
-            "axes.facecolor": "#FFFEFA",
-            "figure.facecolor": "#F7F4EC",
-            "grid.color": "#DDD8CC",
-            "grid.linewidth": 0.7,
+            "axes.facecolor": axes_facecolor,
+            "figure.facecolor": figure_facecolor,
+            "grid.color": grid_color,
+            "grid.linewidth": 0.6,
             "legend.frameon": False,
             "savefig.bbox": "tight",
+            "savefig.facecolor": figure_facecolor,
+            "text.color": "#2B2B2B",
+            "xtick.color": "#3A3A3A",
+            "ytick.color": "#3A3A3A",
         }
     )
 
@@ -195,7 +203,7 @@ def save_all(fig: Any, output_prefix: Path) -> None:
 
 
 def style_axis(axis: Any) -> None:
-    axis.grid(axis="y", alpha=0.8)
+    axis.grid(axis="y", alpha=0.55)
     axis.spines[["top", "right"]].set_visible(False)
     axis.set_xlim(0, 100)
     axis.set_xlabel("Training progress (%)", fontsize=11)
@@ -209,7 +217,7 @@ def plot_dynamics(
     smooth_window: int,
 ) -> None:
     plt, _ = _require_matplotlib()
-    configure_style()
+    configure_style(white_background=True)
     fig, axes = plt.subplots(2, 2, figsize=(11.2, 7.2), constrained_layout=True)
     score_by_label = {
         label: score for (label, _), score in zip(runs, scores or ())
@@ -261,25 +269,19 @@ def plot_dynamics(
         axes[0, 1].plot(
             [],
             [],
-            color="#46534F",
+            color="#3A3A3A",
             linestyle="-",
             label=r"Static language prompt $P^t$",
         )[0],
         axes[0, 1].plot(
             [],
             [],
-            color="#46534F",
+            color="#3A3A3A",
             linestyle="--",
-            label=r"Dynamic language anchor $P^d$",
+            label=r"Dynamic Prompt anchor $A^t$",
         )[0],
     ]
     axes[0, 1].legend(handles=prompt_handles, fontsize=10.5)
-    fig.suptitle(
-        "QDPT optimization follows seed-dependent trajectories",
-        fontsize=17,
-        fontweight="bold",
-        color="#183C3A",
-    )
     save_all(fig, output)
     plt.close(fig)
 
@@ -333,7 +335,7 @@ def plot_activity(run: tuple[str, Path], output: Path, smooth_window: int) -> No
 
 def plot_stability(score_file: Path, output: Path) -> None:
     plt, _ = _require_matplotlib()
-    configure_style()
+    configure_style(white_background=True)
     config = load_json(score_file)
     methods = config["methods"]
     seeds = config.get("seeds", list(range(len(methods[0]["scores"]))))
@@ -344,7 +346,7 @@ def plot_stability(score_file: Path, output: Path) -> None:
         x = np.full(scores.shape, index, dtype=float)
         offsets = np.linspace(-0.10, 0.10, scores.size)
         color = METHOD_COLORS[index % len(METHOD_COLORS)]
-        axis.scatter(x + offsets, scores, s=48, color=color, zorder=3)
+        axis.scatter(x + offsets, scores, s=58, color=color, zorder=3)
         mean = float(scores.mean())
         std = float(scores.std(ddof=1)) if scores.size > 1 else 0.0
         axis.errorbar(
@@ -359,29 +361,45 @@ def plot_stability(score_file: Path, output: Path) -> None:
             capsize=5,
             zorder=4,
         )
-        axis.text(index, scores.max() + 0.35, f"{mean:.2f} ± {std:.2f}", ha="center", fontsize=10)
+        axis.text(
+            index,
+            scores.max() + 0.35,
+            f"{mean:.2f} ± {std:.2f}",
+            ha="center",
+            fontsize=11.5,
+        )
         for offset, score, seed in zip(offsets, scores, seeds):
-            axis.annotate(str(seed), (index + offset, score), xytext=(0, -14), textcoords="offset points", ha="center", fontsize=9, color="#606A65")
+            axis.annotate(
+                str(seed),
+                (index + offset, score),
+                xytext=(0, -15),
+                textcoords="offset points",
+                ha="center",
+                fontsize=10.5,
+                color="#4A4A4A",
+            )
     axis.set_xticks(range(len(methods)), [method["name"] for method in methods])
-    axis.set_ylabel("Overall accuracy (%)")
+    axis.tick_params(axis="x", labelsize=11)
+    axis.tick_params(axis="y", labelsize=11)
+    axis.set_ylabel("Overall accuracy (%)", fontsize=11.5)
     fig.suptitle(
         "PathVQA validation accuracy across random seeds",
         x=0.09,
         y=0.965,
         ha="left",
-        fontsize=15,
+        fontsize=16,
         fontweight="bold",
-        color="#183C3A",
+        color="#2B2B2B",
     )
     fig.text(
         0.09,
         0.895,
         f"{config.get('dataset', '')} · dots are seeds · diamonds are mean ± sample standard deviation",
-        color="#606A65",
-        fontsize=9,
+        color="#4A4A4A",
+        fontsize=10.5,
         ha="left",
     )
-    axis.grid(axis="y", alpha=0.8)
+    axis.grid(axis="y", alpha=0.55)
     axis.spines[["top", "right"]].set_visible(False)
     save_all(fig, output)
     plt.close(fig)

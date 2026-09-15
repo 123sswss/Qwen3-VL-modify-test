@@ -45,6 +45,8 @@ python -m paper_figures.qdpt_figures stability \
   --output paper_figures/output/figure3_seed_stability
 ```
 
+The seed-stability and training-dynamics figures use a white publication background. Training trajectories consistently map seeds 44, 45, and 46 to blue (`#0072B2`), orange (`#D55E00`), and bluish green (`#009E73`).
+
 ## Figure 4: Module activity
 
 ```bash

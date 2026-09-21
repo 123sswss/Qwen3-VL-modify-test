@@ -745,6 +745,65 @@ class DynamicPromptTuningTest(unittest.TestCase):
                     value,
                 )
 
+    def test_component_override_replaces_only_requested_tensor(self):
+        kwargs = dict(
+            tokenizer=_FakeTokenizer(),
+            prompt_length=2,
+            attention_dim=4,
+            num_heads=2,
+            sparse_visual_anchor_layers=(1,),
+            sparse_visual_rep_tokens=2,
+            sparse_visual_attention_dim=4,
+            sparse_visual_heads=2,
+            workspace_tokens=3,
+            workspace_dim=8,
+            workspace_heads=2,
+            directional_concat_workspace=True,
+        )
+        receiver = DynamicPromptTuningModel(
+            _FakeMultimodalModel(), init_seed=44, **kwargs
+        )
+        donor = DynamicPromptTuningModel(
+            _FakeMultimodalModel(), init_seed=45, **kwargs
+        )
+        with torch.no_grad():
+            donor.soft_prompt.fill_(1.25)
+            donor.workspace_text_anchor.fill_(2.5)
+        receiver_anchor_before = receiver.workspace_text_anchor.detach().clone()
+        receiver_projection_before = {
+            key: value.detach().clone()
+            for key, value in receiver.workspace_text_projection.state_dict().items()
+        }
+        receiver_visual_before = {
+            key: value.detach().clone()
+            for key, value in receiver.sparse_visual.state_dict().items()
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            checkpoint = Path(directory)
+            donor.save_dynamic_prompt(checkpoint)
+            audit = receiver.load_dynamic_prompt_components(
+                checkpoint, ("soft_prompt",)
+            )
+
+        torch.testing.assert_close(receiver.soft_prompt, donor.soft_prompt)
+        torch.testing.assert_close(
+            receiver.workspace_text_anchor, receiver_anchor_before
+        )
+        for key, value in receiver_projection_before.items():
+            torch.testing.assert_close(
+                receiver.workspace_text_projection.state_dict()[key], value
+            )
+        for key, value in receiver_visual_before.items():
+            torch.testing.assert_close(receiver.sparse_visual.state_dict()[key], value)
+        self.assertEqual(audit["components"], ["soft_prompt"])
+
+    def test_component_override_rejects_duplicate_components(self):
+        model = self._model()
+        with self.assertRaisesRegex(ValueError, "Duplicate"):
+            model.load_dynamic_prompt_components(
+                Path("unused"), ("soft_prompt", "soft_prompt")
+            )
+
     def test_directional_concat_static_visual_anchor_checkpoint_round_trip(self):
         kwargs = dict(
             tokenizer=_FakeTokenizer(),

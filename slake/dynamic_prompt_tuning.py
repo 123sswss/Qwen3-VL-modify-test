@@ -26,6 +26,10 @@ DYNAMIC_PROMPT_INTERVENTIONS = (
     "mean-residual",
     "lagged-memory",
 )
+DYNAMIC_PROMPT_COMPONENT_OVERRIDES = (
+    "soft_prompt",
+    "workspace_text_anchor",
+)
 SHARED_S_TEXT_MODES = (
     "none",
     "separate_residual",
@@ -1721,3 +1725,71 @@ class DynamicPromptTuningModel(nn.Module):
             "[DYNAMIC_PROMPT_CHECKPOINT_AUDIT] "
             f"loaded={checkpoint_path} zero_init_check=skipped_for_trained_state"
         )
+
+    def load_dynamic_prompt_components(
+        self,
+        checkpoint_dir: str | Path,
+        components: Sequence[str],
+    ) -> Dict[str, Any]:
+        """Replace only explicitly named prompt tensors from a donor checkpoint.
+
+        This is intentionally narrower than ``load_dynamic_prompt``.  It exists
+        for inference-only causal diagnostics across independently trained seeds;
+        no module state other than the requested tensor is allowed to move.
+        """
+
+        requested = tuple(str(component) for component in components)
+        if not requested:
+            raise ValueError("At least one Dynamic Prompt component is required")
+        if len(set(requested)) != len(requested):
+            raise ValueError(f"Duplicate Dynamic Prompt components: {requested}")
+        unsupported = sorted(set(requested) - set(DYNAMIC_PROMPT_COMPONENT_OVERRIDES))
+        if unsupported:
+            raise ValueError(
+                "Unsupported Dynamic Prompt component override(s): "
+                f"{unsupported}; choices={list(DYNAMIC_PROMPT_COMPONENT_OVERRIDES)}"
+            )
+
+        checkpoint_path = Path(checkpoint_dir).resolve()
+        state = torch.load(
+            checkpoint_path / DYNAMIC_PROMPT_WEIGHTS_NAME,
+            map_location="cpu",
+            weights_only=True,
+        )
+        target_by_component = {
+            "soft_prompt": self.soft_prompt,
+            "workspace_text_anchor": self.workspace_text_anchor,
+        }
+        shapes: Dict[str, list[int]] = {}
+        with torch.no_grad():
+            for component in requested:
+                donor = state.get(component)
+                target = target_by_component[component]
+                if donor is None or target is None:
+                    raise ValueError(
+                        f"Component {component!r} is absent from donor checkpoint "
+                        "or receiver model"
+                    )
+                if not torch.is_tensor(donor):
+                    raise TypeError(
+                        f"Component {component!r} must be a tensor, got "
+                        f"{type(donor).__name__}"
+                    )
+                if tuple(donor.shape) != tuple(target.shape):
+                    raise ValueError(
+                        f"Component {component!r} shape mismatch: "
+                        f"donor={tuple(donor.shape)} receiver={tuple(target.shape)}"
+                    )
+                target.copy_(donor.to(device=target.device, dtype=target.dtype))
+                shapes[component] = list(target.shape)
+
+        audit = {
+            "donor_checkpoint": str(checkpoint_path),
+            "components": list(requested),
+            "shapes": shapes,
+        }
+        print(
+            "[DYNAMIC_PROMPT_COMPONENT_OVERRIDE_AUDIT] "
+            f"donor={checkpoint_path} components={list(requested)} shapes={shapes}"
+        )
+        return audit

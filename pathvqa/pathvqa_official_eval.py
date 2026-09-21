@@ -23,7 +23,10 @@ from slake.directional_concat_workspace import (
     DIRECTIONAL_QUESTION_QUERY_INTERVENTIONS,
     DIRECTIONAL_VISUAL_MEMORY_INTERVENTIONS,
 )
-from slake.dynamic_prompt_tuning import DYNAMIC_PROMPT_INTERVENTIONS
+from slake.dynamic_prompt_tuning import (
+    DYNAMIC_PROMPT_COMPONENT_OVERRIDES,
+    DYNAMIC_PROMPT_INTERVENTIONS,
+)
 from slake.slake_official_eval import (
     _normalized_timing,
     append_progress_row,
@@ -356,6 +359,20 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--dynamic-prompt-memory-lag", type=int, default=32)
     parser.add_argument(
+        "--dynamic-prompt-component-checkpoint",
+        help=(
+            "Donor checkpoint used only for the explicitly selected inference-only "
+            "component overrides."
+        ),
+    )
+    parser.add_argument(
+        "--dynamic-prompt-component",
+        action="append",
+        choices=DYNAMIC_PROMPT_COMPONENT_OVERRIDES,
+        default=[],
+        help="Repeat to replace more than one supported tensor from the donor.",
+    )
+    parser.add_argument(
         "--directional-question-query-mode",
         choices=DIRECTIONAL_QUESTION_QUERY_INTERVENTIONS,
         default="normal",
@@ -398,9 +415,22 @@ def main() -> int:
         or args.directional_question_query_mode != "normal"
         or args.directional_visual_memory_mode != "normal"
     )
-    if args.backend != "dynamic-prompt" and dynamic_intervention_requested:
+    component_override_requested = bool(
+        args.dynamic_prompt_component_checkpoint or args.dynamic_prompt_component
+    )
+    if args.backend != "dynamic-prompt" and (
+        dynamic_intervention_requested or component_override_requested
+    ):
         raise ValueError(
-            "Dynamic Prompt interventions require --backend dynamic-prompt"
+            "Dynamic Prompt interventions and component overrides require "
+            "--backend dynamic-prompt"
+        )
+    if bool(args.dynamic_prompt_component_checkpoint) != bool(
+        args.dynamic_prompt_component
+    ):
+        raise ValueError(
+            "--dynamic-prompt-component-checkpoint and at least one "
+            "--dynamic-prompt-component must be supplied together"
         )
     stateful_intervention_requested = (
         args.dynamic_prompt_intervention in {"mean-residual", "lagged-memory"}
@@ -411,6 +441,11 @@ def main() -> int:
         raise ValueError(
             "Stateful Dynamic Prompt interventions do not support --resume; "
             "rerun with --overwrite"
+        )
+    if args.resume and component_override_requested:
+        raise ValueError(
+            "Dynamic Prompt component overrides do not support --resume; "
+            "rerun with --overwrite to prevent mixed-checkpoint predictions"
         )
     if args.resume and args.overwrite:
         raise ValueError("--resume and --overwrite are mutually exclusive")
@@ -437,6 +472,10 @@ def main() -> int:
             "directional_visual_memory_mode": (
                 args.directional_visual_memory_mode
             ),
+            "component_checkpoint_path": (
+                args.dynamic_prompt_component_checkpoint
+            ),
+            "component_overrides": tuple(args.dynamic_prompt_component),
         }
         if args.backend == "dynamic-prompt"
         else None
@@ -497,6 +536,10 @@ def main() -> int:
             "backend": args.backend,
             "base_model": args.base_model,
             "checkpoint": args.checkpoint,
+            "dynamic_prompt_component_checkpoint": (
+                args.dynamic_prompt_component_checkpoint
+            ),
+            "dynamic_prompt_components": list(args.dynamic_prompt_component),
             "data_root": str(store.data_root),
             "split": args.split,
             "max_new_tokens": args.max_new_tokens,

@@ -14,6 +14,7 @@ from transformers import AutoModelForImageTextToText, AutoProcessor
 
 from slake.directional_concat_workspace import resolve_sparse_visual_rep_tokens
 from slake.dynamic_prompt_tuning import (
+    DYNAMIC_PROMPT_COMPONENT_OVERRIDES,
     DYNAMIC_PROMPT_CONFIG_NAME,
     DynamicPromptTuningModel,
 )
@@ -37,6 +38,29 @@ def _move_inputs(inputs: Dict[str, Any], device: torch.device) -> Dict[str, Any]
     return moved
 
 
+def validate_component_checkpoint_compatibility(
+    receiver_config: Dict[str, Any],
+    donor_config: Dict[str, Any],
+) -> None:
+    """Require identical architectures while allowing independent init seeds."""
+
+    receiver = dict(receiver_config)
+    donor = dict(donor_config)
+    receiver.pop("init_seed", None)
+    donor.pop("init_seed", None)
+    if receiver == donor:
+        return
+    differing_keys = sorted(
+        key
+        for key in set(receiver) | set(donor)
+        if receiver.get(key) != donor.get(key)
+    )
+    raise ValueError(
+        "Dynamic Prompt component donor is architecture-incompatible with the "
+        f"receiver checkpoint; differing config keys={differing_keys}"
+    )
+
+
 class DynamicPromptTuningModelInterface:
     def __init__(
         self,
@@ -52,6 +76,8 @@ class DynamicPromptTuningModelInterface:
         directional_visual_delta_scale: float = 1.0,
         directional_visual_memory_mode: str = "normal",
         directional_question_query_mode: str = "normal",
+        component_checkpoint_path: str | None = None,
+        component_overrides: Sequence[str] = (),
     ) -> None:
         checkpoint = Path(checkpoint_path).resolve()
         with (checkpoint / DYNAMIC_PROMPT_CONFIG_NAME).open(
@@ -222,6 +248,38 @@ class DynamicPromptTuningModelInterface:
             ),
         )
         self.model.load_dynamic_prompt(checkpoint)
+        self.component_override_audit: Dict[str, Any] | None = None
+        requested_components = tuple(str(value) for value in component_overrides)
+        if component_checkpoint_path is None and requested_components:
+            raise ValueError(
+                "component_overrides requires component_checkpoint_path"
+            )
+        if component_checkpoint_path is not None and not requested_components:
+            raise ValueError(
+                "component_checkpoint_path requires at least one component override"
+            )
+        if component_checkpoint_path is not None:
+            donor_checkpoint = Path(component_checkpoint_path).resolve()
+            with (donor_checkpoint / DYNAMIC_PROMPT_CONFIG_NAME).open(
+                "r", encoding="utf-8"
+            ) as handle:
+                donor_config = json.load(handle)
+            validate_component_checkpoint_compatibility(config, donor_config)
+            self.component_override_audit = self.model.load_dynamic_prompt_components(
+                donor_checkpoint,
+                requested_components,
+            )
+            self.component_override_audit.update(
+                {
+                    "receiver_checkpoint": str(checkpoint),
+                    "receiver_init_seed": config.get("init_seed"),
+                    "donor_init_seed": donor_config.get("init_seed"),
+                    "allowed_components": list(
+                        DYNAMIC_PROMPT_COMPONENT_OVERRIDES
+                    ),
+                    "architecture_match_ignoring_init_seed": True,
+                }
+            )
         self.model.eval()
         self.model.configure_inference_intervention(
             intervention,
@@ -268,7 +326,9 @@ class DynamicPromptTuningModelInterface:
             f"directional_text_delta_scale={directional_text_delta_scale} "
             f"directional_visual_delta_scale={directional_visual_delta_scale} "
             f"directional_visual_memory_mode={directional_visual_memory_mode} "
-            f"directional_question_query_mode={directional_question_query_mode}"
+            f"directional_question_query_mode={directional_question_query_mode} "
+            f"component_overrides={list(requested_components)} "
+            f"component_checkpoint={component_checkpoint_path}"
         )
 
     def reset_inference_state(self) -> None:
@@ -308,6 +368,7 @@ class DynamicPromptTuningModelInterface:
 
     def inference_intervention_summary(self) -> Dict[str, Any]:
         summary = self.model.inference_intervention_summary()
+        summary["component_override"] = self.component_override_audit
         summary["workspace_debug_means"] = (
             {
                 key: value / self._workspace_debug_count

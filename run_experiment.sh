@@ -1582,6 +1582,151 @@ find_completed_qdpt_sandwich_run() {
   return 1
 }
 
+require_completed_pathvqa_qdpt_seed_run() {
+  local run_seed="$1"
+  local completed_run
+  completed_run="$(find_completed_qdpt_sandwich_run pathvqa "$run_seed")" \
+    || completed_run=""
+  if [ -z "$completed_run" ]; then
+    echo "[ERR] No completed PathVQA QDPT Sandwich run for seed=$run_seed" >&2
+    return 1
+  fi
+  if [ ! -f "$completed_run/eval_validation/epoch_3/pathvqa_comparisons.json" ]; then
+    echo "[ERR] Missing PathVQA per-sample comparisons for seed=$run_seed run=$completed_run" >&2
+    return 1
+  fi
+  printf '%s\n' "$completed_run"
+}
+
+run_pathvqa_qdpt_stage1_seed_stability() {
+  local seed44_run seed45_run seed46_run output_root
+  seed44_run="$(require_completed_pathvqa_qdpt_seed_run 44)" || return 1
+  seed45_run="$(require_completed_pathvqa_qdpt_seed_run 45)" || return 1
+  seed46_run="$(require_completed_pathvqa_qdpt_seed_run 46)" || return 1
+  output_root="$(available_output_dir "$PATHVQA_DYNAMIC_PROMPT_OUTPUT_ROOT" \
+    "pathvqa_qdpt_stage1_seed_stability_${RUN_DATE}")"
+  mkdir -p "$output_root"
+  printf 'training\tnone\nsplit\tvalidation\nseed44_run\t%s\nseed45_run\t%s\nseed46_run\t%s\n' \
+    "$seed44_run" "$seed45_run" "$seed46_run" \
+    > "$output_root/analysis_manifest.tsv"
+  (
+    cd "$ROOT_DIR" || exit 1
+    python diagnostics/analyze_qdpt_seed_stability.py \
+      --run "seed44=$seed44_run" \
+      --run "seed45=$seed45_run" \
+      --run "seed46=$seed46_run" \
+      --output-dir "$output_root"
+  ) || return 1
+  echo "[PATHVQA_QDPT_STAGE1_SEED_STABILITY_DONE] output=$output_root"
+}
+
+run_pathvqa_qdpt_stage1_training_dynamics() {
+  local seed44_run seed45_run seed46_run output_root score44 score45 score46
+  seed44_run="$(require_completed_pathvqa_qdpt_seed_run 44)" || return 1
+  seed45_run="$(require_completed_pathvqa_qdpt_seed_run 45)" || return 1
+  seed46_run="$(require_completed_pathvqa_qdpt_seed_run 46)" || return 1
+  score44="$(python -c 'import json,sys;print(json.load(open(sys.argv[1],encoding="utf-8"))["overall_accuracy"])' "$seed44_run/eval_validation/epoch_3/pathvqa_summary.json")" || return 1
+  score45="$(python -c 'import json,sys;print(json.load(open(sys.argv[1],encoding="utf-8"))["overall_accuracy"])' "$seed45_run/eval_validation/epoch_3/pathvqa_summary.json")" || return 1
+  score46="$(python -c 'import json,sys;print(json.load(open(sys.argv[1],encoding="utf-8"))["overall_accuracy"])' "$seed46_run/eval_validation/epoch_3/pathvqa_summary.json")" || return 1
+  output_root="$(available_output_dir "$PATHVQA_DYNAMIC_PROMPT_OUTPUT_ROOT" \
+    "pathvqa_qdpt_stage1_training_dynamics_${RUN_DATE}")"
+  mkdir -p "$output_root"
+  printf 'training\tnone_new\nseed44_run\t%s\nseed45_run\t%s\nseed46_run\t%s\n' \
+    "$seed44_run" "$seed45_run" "$seed46_run" \
+    > "$output_root/analysis_manifest.tsv"
+  (
+    cd "$ROOT_DIR" || exit 1
+    python -m paper_figures.qdpt_figures dynamics \
+      --run "seed44=$seed44_run" \
+      --run "seed45=$seed45_run" \
+      --run "seed46=$seed46_run" \
+      --score "$score44" \
+      --score "$score45" \
+      --score "$score46" \
+      --output "$output_root/training_dynamics"
+  ) || return 1
+  echo "[PATHVQA_QDPT_STAGE1_TRAINING_DYNAMICS_DONE] output=$output_root"
+}
+
+run_pathvqa_qdpt_stage1_checkpoint_representations() {
+  local seed44_run seed45_run seed46_run output_root
+  seed44_run="$(require_completed_pathvqa_qdpt_seed_run 44)" || return 1
+  seed45_run="$(require_completed_pathvqa_qdpt_seed_run 45)" || return 1
+  seed46_run="$(require_completed_pathvqa_qdpt_seed_run 46)" || return 1
+  output_root="$(available_output_dir "$PATHVQA_DYNAMIC_PROMPT_OUTPUT_ROOT" \
+    "pathvqa_qdpt_stage1_checkpoint_representations_${RUN_DATE}")"
+  mkdir -p "$output_root"
+  (
+    cd "$ROOT_DIR" || exit 1
+    python diagnostics/analyze_qdpt_checkpoint_representations.py \
+      --checkpoint "seed44=$seed44_run/checkpoints/epoch_3" \
+      --checkpoint "seed45=$seed45_run/checkpoints/epoch_3" \
+      --checkpoint "seed46=$seed46_run/checkpoints/epoch_3" \
+      --output-dir "$output_root"
+  ) || return 1
+  echo "[PATHVQA_QDPT_STAGE1_CHECKPOINT_REPRESENTATIONS_DONE] output=$output_root"
+}
+
+run_pathvqa_qdpt_stage1_component_swaps() {
+  local seed44_run seed45_run output_root receiver44_root receiver45_root
+  local checkpoint44 checkpoint45
+  seed44_run="$(require_completed_pathvqa_qdpt_seed_run 44)" || return 1
+  seed45_run="$(require_completed_pathvqa_qdpt_seed_run 45)" || return 1
+  checkpoint44="$seed44_run/checkpoints/epoch_3"
+  checkpoint45="$seed45_run/checkpoints/epoch_3"
+  output_root="$(available_output_dir "$PATHVQA_DYNAMIC_PROMPT_OUTPUT_ROOT" \
+    "pathvqa_qdpt_stage1_component_swaps_seed44_45_${RUN_DATE}")"
+  receiver44_root="$output_root/receiver_seed44"
+  receiver45_root="$output_root/receiver_seed45"
+  mkdir -p "$receiver44_root" "$receiver45_root"
+  printf 'training\tnone\nsplit\tvalidation\nreceiver_seed44\t%s\nreceiver_seed45\t%s\ncontrol\tonly_named_tensor_is_loaded_from_donor\n' \
+    "$checkpoint44" "$checkpoint45" \
+    > "$output_root/component_swap_manifest.tsv"
+
+  # Receiver is the complete "rest" checkpoint; the donor contributes exactly
+  # one audited tensor.  This preserves every unlisted trained parameter.
+  run_pathvqa_dynamic_prompt_eval \
+    "$checkpoint45" validation \
+    "$receiver45_root/p20_seed44_rest_seed45" \
+    "$receiver45_root/p20_seed44_rest_seed45.log" \
+    --dynamic-prompt-component-checkpoint "$checkpoint44" \
+    --dynamic-prompt-component soft_prompt || return 1
+  run_pathvqa_dynamic_prompt_eval \
+    "$checkpoint44" validation \
+    "$receiver44_root/p20_seed45_rest_seed44" \
+    "$receiver44_root/p20_seed45_rest_seed44.log" \
+    --dynamic-prompt-component-checkpoint "$checkpoint45" \
+    --dynamic-prompt-component soft_prompt || return 1
+  run_pathvqa_dynamic_prompt_eval \
+    "$checkpoint45" validation \
+    "$receiver45_root/anchor_seed44_rest_seed45" \
+    "$receiver45_root/anchor_seed44_rest_seed45.log" \
+    --dynamic-prompt-component-checkpoint "$checkpoint44" \
+    --dynamic-prompt-component workspace_text_anchor || return 1
+  run_pathvqa_dynamic_prompt_eval \
+    "$checkpoint44" validation \
+    "$receiver44_root/anchor_seed45_rest_seed44" \
+    "$receiver44_root/anchor_seed45_rest_seed44.log" \
+    --dynamic-prompt-component-checkpoint "$checkpoint45" \
+    --dynamic-prompt-component workspace_text_anchor || return 1
+
+  python diagnostics/compare_pathvqa_conditioning_mismatches.py \
+    --baseline "$seed44_run/eval_validation/epoch_3" \
+    --intervention-root "$receiver44_root" || return 1
+  python diagnostics/compare_pathvqa_conditioning_mismatches.py \
+    --baseline "$seed45_run/eval_validation/epoch_3" \
+    --intervention-root "$receiver45_root" || return 1
+  echo "[PATHVQA_QDPT_STAGE1_COMPONENT_SWAPS_DONE] output=$output_root"
+}
+
+run_pathvqa_qdpt_stage1_no_training() {
+  run_pathvqa_qdpt_stage1_seed_stability || return 1
+  run_pathvqa_qdpt_stage1_training_dynamics || return 1
+  run_pathvqa_qdpt_stage1_checkpoint_representations || return 1
+  run_pathvqa_qdpt_stage1_component_swaps || return 1
+  echo "[PATHVQA_QDPT_STAGE1_NO_TRAINING_DONE] training=false"
+}
+
 ensure_qdpt_sandwich_run() {
   local dataset="$1"
   local run_seed="$2"
@@ -3901,6 +4046,21 @@ case "$RUN_TARGET" in
     ;;
   qdpt_dense_sandwich_final_suite)
     run_qdpt_dense_sandwich_final_suite || failures=$((failures + 1))
+    ;;
+  pathvqa_qdpt_stage1_seed_stability)
+    run_pathvqa_qdpt_stage1_seed_stability || failures=$((failures + 1))
+    ;;
+  pathvqa_qdpt_stage1_training_dynamics)
+    run_pathvqa_qdpt_stage1_training_dynamics || failures=$((failures + 1))
+    ;;
+  pathvqa_qdpt_stage1_checkpoint_representations)
+    run_pathvqa_qdpt_stage1_checkpoint_representations || failures=$((failures + 1))
+    ;;
+  pathvqa_qdpt_stage1_component_swaps)
+    run_pathvqa_qdpt_stage1_component_swaps || failures=$((failures + 1))
+    ;;
+  pathvqa_qdpt_stage1_no_training)
+    run_pathvqa_qdpt_stage1_no_training || failures=$((failures + 1))
     ;;
   pathvqa_qdpt_d768_all_after_visual_seed44)
     run_pathvqa_qdpt_d768_all_after_visual_seed44 || failures=$((failures + 1))

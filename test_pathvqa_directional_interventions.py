@@ -51,6 +51,31 @@ class PathVQADirectionalInterventionTest(unittest.TestCase):
             args = parse_args()
         self.assertEqual(args.directional_question_query_mode, "normal")
         self.assertEqual(args.directional_visual_memory_mode, "normal")
+        self.assertIsNone(args.dynamic_prompt_component_checkpoint)
+        self.assertEqual(args.dynamic_prompt_component, [])
+
+    def test_cli_accepts_audited_component_override(self):
+        argv = [
+            "pathvqa_official_eval.py",
+            "--data-root",
+            "data",
+            "--backend",
+            "dynamic-prompt",
+            "--base-model",
+            "model",
+            "--checkpoint",
+            "receiver",
+            "--output-dir",
+            "output",
+            "--dynamic-prompt-component-checkpoint",
+            "donor",
+            "--dynamic-prompt-component",
+            "soft_prompt",
+        ]
+        with patch.object(sys, "argv", argv):
+            args = parse_args()
+        self.assertEqual(args.dynamic_prompt_component_checkpoint, "donor")
+        self.assertEqual(args.dynamic_prompt_component, ["soft_prompt"])
 
     def test_cli_accepts_both_directional_mismatches(self):
         argv = [

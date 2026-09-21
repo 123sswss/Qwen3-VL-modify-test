@@ -243,3 +243,9 @@ This file is the concise experiment memory shared by the user and Codex. The com
 
 - Learned Query容量匹配对照seeds44/45/46 Validation为 **59.0510/57.7249/58.1882**，均值 **58.3214 +/-0.6730**。相对问题引导QDPT同seed分别-1.7255/+0.4314/-1.1983，平均低 **0.8308**；问题条件化平均有益且两seed胜出，但seed45反转，不能宣称逐seed稳定机制优势。
 - RTX5090公平短测中，QDPT和LoRA均用microbatch1/累积32、相同3,200样本和1,202,879视觉Token，20步预热后计时100个optimizer steps。QDPT为438.07s、7.3048 samples/s、峰值allocated15.805GiB；LoRA为824.08s、3.8831 samples/s、19.317GiB。QDPT训练吞吐为 **1.881x**，峰值allocated显存低 **3.512GiB/18.18%**。三轮2.245h/4.223h只能标注为纯训练线性外推，不是完整实测时间。
+
+## 2026-09-21 QDPT seed44/45无训练模块交换
+
+- PathVQA Validation上，`P20_45+rest_44`与`P20_44+rest_45`分别为**54.2898/55.0727 Overall**，相对各自receiver下降**6.4867/2.2208**；`A_t10_45+rest_44`与`A_t10_44+rest_45`分别为**53.0276/49.3849**，下降**7.7488/7.9086**。四项均为配对显著负效应，Anchor双向交换尤其严重，where最多下降32.27分。
+- 较强seed44的P20或Anchor移入seed45都不能提升其性能，说明终点参数不是可独立替换的“好模块”；当前seed方差主要表现为P20、文本Anchor与动态生成器之间的seed特异强共适应。该结果不能将方差归咎于单个Prompt张量，也不能把交换模型作为性能方案。`P20_44+rest_45`的where仍提高3.18，提示seed44 P20含部分可迁移空间偏置，但总体兼容性损失更大。
+- 本轮尚未包含后来加入的`Visual18`双向交换；它仍需单独运行，以判断Layer17静态视觉Prompt是否也参与这种跨seed共适应。

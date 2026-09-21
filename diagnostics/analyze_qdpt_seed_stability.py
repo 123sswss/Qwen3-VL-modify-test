@@ -7,10 +7,16 @@ import argparse
 import csv
 import json
 import math
+import sys
 from collections import defaultdict
 from itertools import combinations
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
+
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 
 from pathvqa.pathvqa_vqa_metric import normalize_pathvqa_answer
 

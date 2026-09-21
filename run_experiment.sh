@@ -1667,6 +1667,56 @@ run_pathvqa_qdpt_stage1_checkpoint_representations() {
   echo "[PATHVQA_QDPT_STAGE1_CHECKPOINT_REPRESENTATIONS_DONE] output=$output_root"
 }
 
+find_incomplete_pathvqa_qdpt_component_swap_root() {
+  local candidate completed
+  while IFS= read -r candidate; do
+    if [ -f "$candidate/stage1_component_swaps_complete.tsv" ]; then
+      continue
+    fi
+    if [ ! -f "$candidate/component_swap_manifest.tsv" ]; then
+      continue
+    fi
+    completed="$(find "$candidate" -type f -name pathvqa_summary.json 2>/dev/null | wc -l)"
+    if [ "$completed" -lt 6 ]; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done < <(
+    find "$PATHVQA_DYNAMIC_PROMPT_OUTPUT_ROOT" -mindepth 1 -maxdepth 1 -type d \
+      -name 'pathvqa_qdpt_stage1_component_swaps_seed44_45_*' \
+      -printf '%T@\t%p\n' 2>/dev/null \
+      | sort -nr \
+      | cut -f2-
+  )
+  return 1
+}
+
+run_pathvqa_qdpt_component_swap_variant() {
+  local receiver_checkpoint="$1"
+  local donor_checkpoint="$2"
+  local component="$3"
+  local eval_output_dir="$4"
+  local eval_log="$5"
+  local force_components=",${PATHVQA_QDPT_COMPONENT_SWAP_FORCE_COMPONENTS:-},"
+  local force_rerun=0
+  case "$force_components" in
+    *",$component,"*) force_rerun=1 ;;
+  esac
+  if [ -f "$eval_output_dir/pathvqa_summary.json" ] && [ "$force_rerun" -eq 0 ]; then
+    echo "[PATHVQA_QDPT_COMPONENT_SWAP_SKIP_COMPLETE] component=$component output=$eval_output_dir"
+    return 0
+  fi
+  if [ "$force_rerun" -eq 1 ]; then
+    echo "[PATHVQA_QDPT_COMPONENT_SWAP_FORCE_RERUN] component=$component output=$eval_output_dir"
+  fi
+  echo "[PATHVQA_QDPT_COMPONENT_SWAP_RUN] component=$component output=$eval_output_dir"
+  run_pathvqa_dynamic_prompt_eval \
+    "$receiver_checkpoint" validation \
+    "$eval_output_dir" "$eval_log" \
+    --dynamic-prompt-component-checkpoint "$donor_checkpoint" \
+    --dynamic-prompt-component "$component"
+}
+
 run_pathvqa_qdpt_stage1_component_swaps() {
   local seed44_run seed45_run output_root receiver44_root receiver45_root
   local checkpoint44 checkpoint45
@@ -1674,8 +1724,17 @@ run_pathvqa_qdpt_stage1_component_swaps() {
   seed45_run="$(require_completed_pathvqa_qdpt_seed_run 45)" || return 1
   checkpoint44="$seed44_run/checkpoints/epoch_3"
   checkpoint45="$seed45_run/checkpoints/epoch_3"
-  output_root="$(available_output_dir "$PATHVQA_DYNAMIC_PROMPT_OUTPUT_ROOT" \
-    "pathvqa_qdpt_stage1_component_swaps_seed44_45_${RUN_DATE}")"
+  output_root="${PATHVQA_QDPT_COMPONENT_SWAP_OUTPUT_ROOT:-}"
+  if [ -z "$output_root" ]; then
+    output_root="$(find_incomplete_pathvqa_qdpt_component_swap_root)" \
+      || output_root=""
+  fi
+  if [ -n "$output_root" ]; then
+    echo "[PATHVQA_QDPT_COMPONENT_SWAP_RESUME_ROOT] output=$output_root"
+  else
+    output_root="$(available_output_dir "$PATHVQA_DYNAMIC_PROMPT_OUTPUT_ROOT" \
+      "pathvqa_qdpt_stage1_component_swaps_seed44_45_${RUN_DATE}")"
+  fi
   receiver44_root="$output_root/receiver_seed44"
   receiver45_root="$output_root/receiver_seed45"
   mkdir -p "$receiver44_root" "$receiver45_root"
@@ -1685,42 +1744,30 @@ run_pathvqa_qdpt_stage1_component_swaps() {
 
   # Receiver is the complete "rest" checkpoint; the donor contributes exactly
   # one audited tensor.  This preserves every unlisted trained parameter.
-  run_pathvqa_dynamic_prompt_eval \
-    "$checkpoint45" validation \
+  run_pathvqa_qdpt_component_swap_variant \
+    "$checkpoint45" "$checkpoint44" soft_prompt \
     "$receiver45_root/p20_seed44_rest_seed45" \
-    "$receiver45_root/p20_seed44_rest_seed45.log" \
-    --dynamic-prompt-component-checkpoint "$checkpoint44" \
-    --dynamic-prompt-component soft_prompt || return 1
-  run_pathvqa_dynamic_prompt_eval \
-    "$checkpoint44" validation \
+    "$receiver45_root/p20_seed44_rest_seed45.log" || return 1
+  run_pathvqa_qdpt_component_swap_variant \
+    "$checkpoint44" "$checkpoint45" soft_prompt \
     "$receiver44_root/p20_seed45_rest_seed44" \
-    "$receiver44_root/p20_seed45_rest_seed44.log" \
-    --dynamic-prompt-component-checkpoint "$checkpoint45" \
-    --dynamic-prompt-component soft_prompt || return 1
-  run_pathvqa_dynamic_prompt_eval \
-    "$checkpoint45" validation \
+    "$receiver44_root/p20_seed45_rest_seed44.log" || return 1
+  run_pathvqa_qdpt_component_swap_variant \
+    "$checkpoint45" "$checkpoint44" workspace_text_anchor \
     "$receiver45_root/anchor_seed44_rest_seed45" \
-    "$receiver45_root/anchor_seed44_rest_seed45.log" \
-    --dynamic-prompt-component-checkpoint "$checkpoint44" \
-    --dynamic-prompt-component workspace_text_anchor || return 1
-  run_pathvqa_dynamic_prompt_eval \
-    "$checkpoint44" validation \
+    "$receiver45_root/anchor_seed44_rest_seed45.log" || return 1
+  run_pathvqa_qdpt_component_swap_variant \
+    "$checkpoint44" "$checkpoint45" workspace_text_anchor \
     "$receiver44_root/anchor_seed45_rest_seed44" \
-    "$receiver44_root/anchor_seed45_rest_seed44.log" \
-    --dynamic-prompt-component-checkpoint "$checkpoint45" \
-    --dynamic-prompt-component workspace_text_anchor || return 1
-  run_pathvqa_dynamic_prompt_eval \
-    "$checkpoint45" validation \
+    "$receiver44_root/anchor_seed45_rest_seed44.log" || return 1
+  run_pathvqa_qdpt_component_swap_variant \
+    "$checkpoint45" "$checkpoint44" visual_prompt_18 \
     "$receiver45_root/visual18_seed44_rest_seed45" \
-    "$receiver45_root/visual18_seed44_rest_seed45.log" \
-    --dynamic-prompt-component-checkpoint "$checkpoint44" \
-    --dynamic-prompt-component visual_prompt_18 || return 1
-  run_pathvqa_dynamic_prompt_eval \
-    "$checkpoint44" validation \
+    "$receiver45_root/visual18_seed44_rest_seed45.log" || return 1
+  run_pathvqa_qdpt_component_swap_variant \
+    "$checkpoint44" "$checkpoint45" visual_prompt_18 \
     "$receiver44_root/visual18_seed45_rest_seed44" \
-    "$receiver44_root/visual18_seed45_rest_seed44.log" \
-    --dynamic-prompt-component-checkpoint "$checkpoint45" \
-    --dynamic-prompt-component visual_prompt_18 || return 1
+    "$receiver44_root/visual18_seed45_rest_seed44.log" || return 1
 
   python diagnostics/compare_pathvqa_conditioning_mismatches.py \
     --baseline "$seed44_run/eval_validation/epoch_3" \
@@ -1728,6 +1775,9 @@ run_pathvqa_qdpt_stage1_component_swaps() {
   python diagnostics/compare_pathvqa_conditioning_mismatches.py \
     --baseline "$seed45_run/eval_validation/epoch_3" \
     --intervention-root "$receiver45_root" || return 1
+  printf 'status\tcomplete\nvariants\t6\ncompleted_at\t%s\n' \
+    "$(date --iso-8601=seconds)" \
+    > "$output_root/stage1_component_swaps_complete.tsv"
   echo "[PATHVQA_QDPT_STAGE1_COMPONENT_SWAPS_DONE] output=$output_root"
 }
 

@@ -1,0 +1,20 @@
+\section{GRASP独立实现结果}
+\label{sec:grasp-appendix}
+
+GRASP在实验开展时没有可用的官方代码。我们依据论文描述完成独立实现，并观察了Prompt初始化和二维位置编码对结果的影响，见表\ref{tab:grasp-appendix}。这些配置采用本文统一的三轮训练协议，与原论文的任务和训练预算不同，因此作为实现核验记录置于附录，不参与主表排序。
+
+\begin{table}[t]
+    \centering
+    \caption{GRASP独立实现的PathVQA Validation结果（seed 44，\%）。}
+    \label{tab:grasp-appendix}
+    \small
+    \begin{tabular}{@{}lrrr@{}}
+        \toprule
+        配置 & Overall & Yes/No & Free-form \\
+        \midrule
+        统一三轮独立实现 & 39.75 & 75.36 & 4.24 \\
+        Qwen初始化与分组学习率 & 42.40 & 76.22 & 8.68 \\
+        去除固定二维位置编码 & 43.92 & 79.04 & 8.90 \\
+        \bottomrule
+    \end{tabular}
+\end{table}

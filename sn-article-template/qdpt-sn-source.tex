@@ -1,0 +1,47 @@
+% QDPT Springer Nature working source.
+% This file keeps modular inputs for editing. Generate qdpt-sn.tex as the single-file submission copy.
+\documentclass[pdflatex,sn-mathphys-num]{sn-jnl}
+
+\usepackage[UTF8,scheme=plain]{ctex}
+\usepackage{graphicx}
+\usepackage{amsmath,amssymb,amsfonts}
+\usepackage{booktabs}
+\usepackage{float}
+\usepackage{xcolor}
+
+\raggedbottom
+
+\begin{document}
+
+\title[Question-Guided Directional Prompting]{Question-Guided Directional Prompting for Parameter-Efficient Domain Adaptation of Frozen Multimodal Large Language Models}
+
+% 待补：按投稿系统中的顺序填写作者、通信作者、邮箱和单位。
+% \author*[1]{\fnm{Given Name} \sur{Family Name}}\email{address@example.com}
+% \affil*[1]{\orgdiv{Department}, \orgname{University}, \orgaddress{\city{City}, \country{Country}}}
+
+\abstract{We present Question-Guided Directional Prompt Tuning (QDPT) for adapting frozen multimodal large language models to specialized visual domains. QDPT pools question token embeddings into queries, reads intermediate visual features through cross-attention, and maps the aggregated evidence to dynamic language prompts. On Qwen3-VL-4B-Instruct, QDPT trains 7.81 million parameters while retaining the original backbone weights. On PathVQA, QDPT achieves 58.88\% test accuracy, improving over static language prompts and a CoCoOp-style baseline by 2.80 and 1.93 percentage points, respectively, while remaining 0.78 points below full-attention LoRA-r8. Ablations show a modest, seed-dependent benefit from question conditioning and support the contribution of the visual branch. In a controlled 100-step training benchmark, QDPT achieves 1.88$\times$ the throughput of full-attention LoRA-r8 with 18.2\% lower peak allocated GPU memory. QDPT reaches 76.95\% on SLAKE and 71.38\% on a private electrical inspection test.}
+
+\keywords{multimodal large language models, parameter-efficient fine-tuning, dynamic prompt tuning, visual question answering, domain adaptation}
+
+\maketitle
+
+\input{../QDPT-paper/sections/introduction_zh}
+\input{../QDPT-paper/sections/related_work_zh}
+\input{../QDPT-paper/sections/method_zh}
+\input{../QDPT-paper/sections/experiments_zh}
+\input{../QDPT-paper/sections/conclusion_zh}
+
+\appendix
+\input{../QDPT-paper/sections/output_head_appendix_zh}
+\input{../QDPT-paper/sections/grasp_appendix_zh}
+\input{../QDPT-paper/sections/training_diagnostics_appendix_zh}
+
+\backmatter
+
+\section*{Data availability}
+PathVQA and SLAKE are publicly available from their respective providers. The private electrical inspection dataset is not publicly available.
+% 待补：Funding、Competing interests、Code availability、Author contributions。
+
+\bibliography{qdpt-references}
+
+\end{document}

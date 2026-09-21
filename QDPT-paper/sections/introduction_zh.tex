@@ -1,0 +1,16 @@
+\section{引言}
+
+多模态大语言模型能够接收图像与文本输入，以生成方式完成视觉问答和多轮交互\cite{Alayrac2022FlamingoAV,li2023blip,Liu2023VisualIT,Zhu2023MiniGPT4EV,Bai2025Qwen3VLTR}。将通用模型用于专业场景时，新的图像分布、术语和任务要求通常需要进一步适配，例如医学图像判读和电力设备巡检\cite{He2020PathVQA3Q,Liu2021SlakeAS,Wang2024PowerLLaVALL}。同一设备图像可能对应部件识别、连接关系或异常位置等不同问题，回答所需的视觉线索也随之改变。完整微调需要更新并保存整套模型权重，多领域部署因此面临较高的训练与存储成本\cite{houlsby2019parameter,Hu2022LoRA}。
+
+参数高效微调通过少量可训练参数完成适配。LoRA、IA$^3$和AdaLoRA分别通过低秩更新、激活缩放和自适应预算分配调整网络内部变换\cite{Hu2022LoRA,Liu2022FewShotPF,Zhang2023AdaLoRAAB}。Prompt Tuning及其深层扩展则学习连续上下文，引导冻结模型完成下游任务\cite{li2021prefix,lester2021power,Liu2021PTuningVP,jia2022visual}。静态Prompt在样本间共享，适合学习常见的任务模式；视觉问答还需要利用当前问题确定相关对象和属性\cite{dai2023instructblip}。
+
+条件Prompt和视觉聚合为这种样本差异提供了处理方式。在CLIP的图文表示空间中，CoOp学习共享上下文，CoCoOp进一步引入图像条件Token，MaPLe则联合调整视觉与语言Prompt\cite{Radford2021LearningTV,Zhou2021LearningTP,Zhou2022ConditionalPL,Khattak2022MaPLeMP}。少量潜在Token也可用于汇聚视觉输入\cite{Jaegle2021PerceiverGP,Ryoo2021TokenLearnerWC}：BLIP-2通过Q-Former连接冻结视觉编码器与语言模型，InstructBLIP让指令参与视觉提取，DRAPE则根据指令与视觉特征生成动态Soft Prompt\cite{li2023blip,dai2023instructblip,Hu2026DynamicCP}。本文考察一种具体的领域适配结构：从视觉编码器中间层读取问题相关特征，将其映射为语言侧动态Prompt，并保留共享的静态Prompt。
+
+我们提出Question-Guided Directional Prompt Tuning（QDPT）。该方法对问题Token嵌入进行注意力池化，以所得Query读取视觉编码器中间层特征，并将聚合结果转换为10个语言Prompt。视觉编码器、Merger和语言模型的原有参数在训练中保持固定；适配器还包含视觉侧与语言侧的连续Prompt。各类输入在自回归语言模型中的排列通过Validation实验确定。
+
+实验在PathVQA、SLAKE和自建电气数据集上比较QDPT与静态Prompt、图像条件Prompt及LoRA。在PathVQA Test上，QDPT较静态语言Prompt和CoCoOp-style分别提高2.80和1.93个百分点，较LoRA低0.78个百分点。三次Learned Query对照显示，问题条件Query的平均准确率高0.83个百分点，但这一优势没有在所有种子中复现。统一条件下的短程训练测试中，QDPT的吞吐为LoRA的1.88倍，峰值分配显存低18.18\%。本文的工作包括：
+
+\begin{itemize}
+    \item 构建面向冻结生成式MLLM的Prompt适配器，用当前问题读取视觉编码器中间层特征，并将聚合结果转换为语言侧动态Prompt。
+    \item 通过可训练参数量匹配的Learned Query、关闭视觉Cross-Attention和移除静态视觉Prompt等对照分析各分支；公开VQA基准报告多随机种子结果，电气数据用于单次应用验证。
+\end{itemize}

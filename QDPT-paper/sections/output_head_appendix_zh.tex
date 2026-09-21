@@ -1,0 +1,19 @@
+\section{动态Prompt输出头容量对照}
+\label{sec:output-head-appendix}
+
+输出头压缩实验保留$D=768$的Workspace，并将动态Prompt输出头改为秩256的低秩映射。表\ref{tab:output-head}显示，该改动减少21.84\%的可训练参数，同时使Overall下降3.36个百分点，Free-form下降4.76个百分点。该压缩配置未达到预期的精度与参数量折中，因此主实验采用默认输出头。该对照考察的是固定适配宽度下的一种输出瓶颈设置。
+
+\begin{table}[t]
+    \centering
+    \caption{PathVQA Validation上的动态Prompt输出头容量对照（seed 44，\%）。}
+    \label{tab:output-head}
+    \small
+    \begin{tabular}{@{}lrrrr@{}}
+        \toprule
+        配置 & 可训练参数 & Overall & Yes/No & Free-form \\
+        \midrule
+        QDPT（默认输出头） & 7,805,184 & 60.78 & 92.74 & 28.91 \\
+        QDPT（秩256输出头） & 6,100,736 & 57.42 & 90.78 & 24.15 \\
+        \bottomrule
+    \end{tabular}
+\end{table}

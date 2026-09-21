@@ -1,0 +1,739 @@
+%% BioMed_Central_Bib_Style_v1.01
+
+\begin{thebibliography}{37}
+% BibTex style file: bmc-mathphys.bst (version 2.1), 2014-07-24
+\ifx \bisbn   \undefined \def \bisbn  #1{ISBN #1}\fi
+\ifx \binits  \undefined \def \binits#1{#1}\fi
+\ifx \bauthor  \undefined \def \bauthor#1{#1}\fi
+\ifx \batitle  \undefined \def \batitle#1{#1}\fi
+\ifx \bjtitle  \undefined \def \bjtitle#1{#1}\fi
+\ifx \bvolume  \undefined \def \bvolume#1{\textbf{#1}}\fi
+\ifx \byear  \undefined \def \byear#1{#1}\fi
+\ifx \bissue  \undefined \def \bissue#1{#1}\fi
+\ifx \bfpage  \undefined \def \bfpage#1{#1}\fi
+\ifx \blpage  \undefined \def \blpage #1{#1}\fi
+\ifx \burl  \undefined \def \burl#1{\textsf{#1}}\fi
+\ifx \doiurl  \undefined \def \doiurl#1{\url{https://doi.org/#1}}\fi
+\ifx \betal  \undefined \def \betal{\textit{et al.}}\fi
+\ifx \binstitute  \undefined \def \binstitute#1{#1}\fi
+\ifx \binstitutionaled  \undefined \def \binstitutionaled#1{#1}\fi
+\ifx \bctitle  \undefined \def \bctitle#1{#1}\fi
+\ifx \beditor  \undefined \def \beditor#1{#1}\fi
+\ifx \bpublisher  \undefined \def \bpublisher#1{#1}\fi
+\ifx \bbtitle  \undefined \def \bbtitle#1{#1}\fi
+\ifx \bedition  \undefined \def \bedition#1{#1}\fi
+\ifx \bseriesno  \undefined \def \bseriesno#1{#1}\fi
+\ifx \blocation  \undefined \def \blocation#1{#1}\fi
+\ifx \bsertitle  \undefined \def \bsertitle#1{#1}\fi
+\ifx \bsnm \undefined \def \bsnm#1{#1}\fi
+\ifx \bsuffix \undefined \def \bsuffix#1{#1}\fi
+\ifx \bparticle \undefined \def \bparticle#1{#1}\fi
+\ifx \barticle \undefined \def \barticle#1{#1}\fi
+\bibcommenthead
+\ifx \bconfdate \undefined \def \bconfdate #1{#1}\fi
+\ifx \botherref \undefined \def \botherref #1{#1}\fi
+\ifx \url \undefined \def \url#1{\textsf{#1}}\fi
+\ifx \bchapter \undefined \def \bchapter#1{#1}\fi
+\ifx \bbook \undefined \def \bbook#1{#1}\fi
+\ifx \bcomment \undefined \def \bcomment#1{#1}\fi
+\ifx \oauthor \undefined \def \oauthor#1{#1}\fi
+\ifx \citeauthoryear \undefined \def \citeauthoryear#1{#1}\fi
+\ifx \endbibitem  \undefined \def \endbibitem {}\fi
+\ifx \bconflocation  \undefined \def \bconflocation#1{#1}\fi
+\ifx \arxivurl  \undefined \def \arxivurl#1{\textsf{#1}}\fi
+\csname PreBibitemsHook\endcsname
+
+%%% 1
+\bibitem[\protect\citeauthoryear{Alayrac et~al.}{2022}]{Alayrac2022FlamingoAV}
+\begin{bchapter}
+\bauthor{\bsnm{Alayrac}, \binits{J.-B.}},
+\bauthor{\bsnm{Donahue}, \binits{J.}},
+\bauthor{\bsnm{Luc}, \binits{P.}},
+\bauthor{\bsnm{Miech}, \binits{A.}},
+\bauthor{\bsnm{Barr}, \binits{I.}},
+\bauthor{\bsnm{Hasson}, \binits{Y.}},
+\bauthor{\bsnm{Lenc}, \binits{K.}},
+\bauthor{\bsnm{Mensch}, \binits{A.}},
+\bauthor{\bsnm{Millican}, \binits{K.}},
+\bauthor{\bsnm{Reynolds}, \binits{M.}},
+\bauthor{\bsnm{Ring}, \binits{R.}},
+\bauthor{\bsnm{Rutherford}, \binits{E.}},
+\bauthor{\bsnm{Cabi}, \binits{S.}},
+\bauthor{\bsnm{Han}, \binits{T.}},
+\bauthor{\bsnm{Gong}, \binits{Z.}},
+\bauthor{\bsnm{Samangooei}, \binits{S.}},
+\bauthor{\bsnm{Monteiro}, \binits{M.}},
+\bauthor{\bsnm{Menick}, \binits{J.}},
+\bauthor{\bsnm{Borgeaud}, \binits{S.}},
+\bauthor{\bsnm{Brock}, \binits{A.}},
+\bauthor{\bsnm{Nematzadeh}, \binits{A.}},
+\bauthor{\bsnm{Sharifzadeh}, \binits{S.}},
+\bauthor{\bsnm{Binkowski}, \binits{M.}},
+\bauthor{\bsnm{Barreira}, \binits{R.}},
+\bauthor{\bsnm{Vinyals}, \binits{O.}},
+\bauthor{\bsnm{Zisserman}, \binits{A.}},
+\bauthor{\bsnm{Simonyan}, \binits{K.}}:
+\bctitle{Flamingo: A visual language model for few-shot learning}.
+In: \bbtitle{Advances in Neural Information Processing Systems}
+(\byear{2022}).
+\burl{https://arxiv.org/abs/2204.14198}
+\end{bchapter}
+\endbibitem
+
+%%% 2
+\bibitem[\protect\citeauthoryear{Li et~al.}{2023}]{li2023blip}
+\begin{bchapter}
+\bauthor{\bsnm{Li}, \binits{J.}},
+\bauthor{\bsnm{Li}, \binits{D.}},
+\bauthor{\bsnm{Savarese}, \binits{S.}},
+\bauthor{\bsnm{Hoi}, \binits{S.C.H.}}:
+\bctitle{{BLIP-2}: Bootstrapping language-image pre-training with frozen image
+  encoders and large language models}.
+In: \bbtitle{Proceedings of the 40th International Conference on Machine
+  Learning},
+pp. \bfpage{19730}--\blpage{19742}
+(\byear{2023}).
+\bcomment{PMLR}
+\end{bchapter}
+\endbibitem
+
+%%% 3
+\bibitem[\protect\citeauthoryear{Liu et~al.}{2023}]{Liu2023VisualIT}
+\begin{botherref}
+\oauthor{\bsnm{Liu}, \binits{H.}},
+\oauthor{\bsnm{Li}, \binits{C.}},
+\oauthor{\bsnm{Wu}, \binits{Q.}},
+\oauthor{\bsnm{Lee}, \binits{Y.J.}}:
+Visual instruction tuning.
+arXiv preprint arXiv:2304.08485
+(2023)
+\end{botherref}
+\endbibitem
+
+%%% 4
+\bibitem[\protect\citeauthoryear{Zhu et~al.}{2023}]{Zhu2023MiniGPT4EV}
+\begin{botherref}
+\oauthor{\bsnm{Zhu}, \binits{D.}},
+\oauthor{\bsnm{Chen}, \binits{J.}},
+\oauthor{\bsnm{Shen}, \binits{X.}},
+\oauthor{\bsnm{Li}, \binits{X.}},
+\oauthor{\bsnm{Elhoseiny}, \binits{M.}}:
+{MiniGPT-4}: Enhancing vision-language understanding with advanced large
+  language models.
+arXiv preprint arXiv:2304.10592
+(2023)
+\end{botherref}
+\endbibitem
+
+%%% 5
+\bibitem[\protect\citeauthoryear{Bai et~al.}{2025}]{Bai2025Qwen3VLTR}
+\begin{botherref}
+\oauthor{\bsnm{Bai}, \binits{S.}},
+\oauthor{\bsnm{Cai}, \binits{Y.}},
+\oauthor{\bsnm{Chen}, \binits{R.-Z.}},
+\oauthor{\bsnm{Chen}, \binits{K.}},
+\oauthor{\bsnm{Chen}, \binits{X.-H.}},
+\oauthor{\bsnm{Cheng}, \binits{Z.}},
+\oauthor{\bsnm{Deng}, \binits{L.-H.}},
+\oauthor{\bsnm{Ding}, \binits{W.}},
+\oauthor{\bsnm{Fang}, \binits{R.}},
+\oauthor{\bsnm{Gao}, \binits{C.}},
+\oauthor{\bsnm{Ge}, \binits{C.}},
+\oauthor{\bsnm{Ge}, \binits{W.}},
+\oauthor{\bsnm{Guo}, \binits{Z.}},
+\oauthor{\bsnm{Huang}, \binits{Q.}},
+\oauthor{\bsnm{Huang}, \binits{F.}},
+\oauthor{\bsnm{Hui}, \binits{B.}},
+\oauthor{\bsnm{Jiang}, \binits{S.}},
+\oauthor{\bsnm{Li}, \binits{Z.}},
+\oauthor{\bsnm{Li}, \binits{M.-S.}},
+\oauthor{\bsnm{Li}, \binits{M.}},
+\oauthor{\bsnm{Li}, \binits{K.}},
+\oauthor{\bsnm{Lin}, \binits{Z.}},
+\oauthor{\bsnm{Lin}, \binits{J.}},
+\oauthor{\bsnm{Liu}, \binits{X.-J.}},
+\oauthor{\bsnm{Liu}, \binits{J.}},
+\oauthor{\bsnm{Liu}, \binits{C.}},
+\oauthor{\bsnm{Liu}, \binits{Y.}},
+\oauthor{\bsnm{Liu}, \binits{D.}},
+\oauthor{\bsnm{Liu}, \binits{S.}},
+\oauthor{\bsnm{Lu}, \binits{D.}},
+\oauthor{\bsnm{Luo}, \binits{R.}},
+\oauthor{\bsnm{Lv}, \binits{C.}},
+\oauthor{\bsnm{Men}, \binits{R.}},
+\oauthor{\bsnm{Meng}, \binits{L.Y.}},
+\oauthor{\bsnm{Meng}, \binits{L.}},
+\oauthor{\bsnm{Ren}, \binits{X.-Y.}},
+\oauthor{\bsnm{Song}, \binits{S.}},
+\oauthor{\bsnm{Sun}, \binits{Y.-C.}},
+\oauthor{\bsnm{Tang}, \binits{J.}},
+\oauthor{\bsnm{Tu}, \binits{J.}},
+\oauthor{\bsnm{Wan}, \binits{J.}},
+\oauthor{\bsnm{Wang}, \binits{P.}},
+\oauthor{\bsnm{Wang}, \binits{P.}},
+\oauthor{\bsnm{Wang}, \binits{Q.}},
+\oauthor{\bsnm{Wang}, \binits{Y.}},
+\oauthor{\bsnm{Xie}, \binits{T.}},
+\oauthor{\bsnm{Xu}, \binits{Y.}},
+\oauthor{\bsnm{Xu}, \binits{H.}},
+\oauthor{\bsnm{Xu}, \binits{J.}},
+\oauthor{\bsnm{Yang}, \binits{Z.}},
+\oauthor{\bsnm{Yang}, \binits{M.}},
+\oauthor{\bsnm{Yang}, \binits{J.}},
+\oauthor{\bsnm{Yang}, \binits{A.}},
+\oauthor{\bsnm{Yu}, \binits{B.}},
+\oauthor{\bsnm{Zhang}, \binits{F.}},
+\oauthor{\bsnm{Zhang}, \binits{H.}},
+\oauthor{\bsnm{Zhang}, \binits{X.}},
+\oauthor{\bsnm{Zheng}, \binits{B.}},
+\oauthor{\bsnm{Zhong}, \binits{H.}},
+\oauthor{\bsnm{Zhou}, \binits{J.}},
+\oauthor{\bsnm{Zhou}, \binits{F.}},
+\oauthor{\bsnm{Zhu}, \binits{Y.}},
+\oauthor{\bsnm{Zhu}, \binits{K.}}:
+{Qwen3-VL} technical report.
+arXiv preprint arXiv:2511.21631
+(2025)
+\end{botherref}
+\endbibitem
+
+%%% 6
+\bibitem[\protect\citeauthoryear{He et~al.}{2020}]{He2020PathVQA3Q}
+\begin{botherref}
+\oauthor{\bsnm{He}, \binits{X.}},
+\oauthor{\bsnm{Zhang}, \binits{Y.}},
+\oauthor{\bsnm{Mou}, \binits{L.}},
+\oauthor{\bsnm{Xing}, \binits{E.P.}},
+\oauthor{\bsnm{Xie}, \binits{P.}}:
+{PathVQA}: 30000+ questions for medical visual question answering.
+arXiv preprint arXiv:2003.10286
+(2020)
+\end{botherref}
+\endbibitem
+
+%%% 7
+\bibitem[\protect\citeauthoryear{Liu et~al.}{2021}]{Liu2021SlakeAS}
+\begin{bchapter}
+\bauthor{\bsnm{Liu}, \binits{B.}},
+\bauthor{\bsnm{Zhan}, \binits{L.-M.}},
+\bauthor{\bsnm{Xu}, \binits{L.}},
+\bauthor{\bsnm{Ma}, \binits{L.}},
+\bauthor{\bsnm{Yang}, \binits{Y.}},
+\bauthor{\bsnm{Wu}, \binits{X.-M.}}:
+\bctitle{{SLAKE}: A semantically-labeled knowledge-enhanced dataset for medical
+  visual question answering}.
+In: \bbtitle{2021 IEEE 18th International Symposium on Biomedical Imaging
+  (ISBI)},
+pp. \bfpage{1650}--\blpage{1654}
+(\byear{2021}).
+\burl{https://api.semanticscholar.org/CorpusID:231951663}
+\end{bchapter}
+\endbibitem
+
+%%% 8
+\bibitem[\protect\citeauthoryear{Wang et~al.}{2024}]{Wang2024PowerLLaVALL}
+\begin{bchapter}
+\bauthor{\bsnm{Wang}, \binits{J.}},
+\bauthor{\bsnm{Li}, \binits{M.}},
+\bauthor{\bsnm{Luo}, \binits{H.}},
+\bauthor{\bsnm{Zhu}, \binits{J.}},
+\bauthor{\bsnm{Yang}, \binits{A.}},
+\bauthor{\bsnm{Rong}, \binits{M.}},
+\bauthor{\bsnm{Wang}, \binits{X.}}:
+\bctitle{{Power-LLaVA}: Large language and vision assistant for power
+  transmission line inspection}.
+In: \bbtitle{2024 IEEE International Conference on Image Processing (ICIP)},
+pp. \bfpage{963}--\blpage{969}
+(\byear{2024}).
+\burl{https://arxiv.org/abs/2407.19178}
+\end{bchapter}
+\endbibitem
+
+%%% 9
+\bibitem[\protect\citeauthoryear{Houlsby et~al.}{2019}]{houlsby2019parameter}
+\begin{bchapter}
+\bauthor{\bsnm{Houlsby}, \binits{N.}},
+\bauthor{\bsnm{Giurgiu}, \binits{A.}},
+\bauthor{\bsnm{Jastrzebski}, \binits{S.}},
+\bauthor{\bsnm{Morrone}, \binits{B.}},
+\bauthor{\bsnm{Laroussilhe}, \binits{Q.}},
+\bauthor{\bsnm{Gesmundo}, \binits{A.}},
+\bauthor{\bsnm{Attariyan}, \binits{M.}},
+\bauthor{\bsnm{Gelly}, \binits{S.}}:
+\bctitle{Parameter-efficient transfer learning for {NLP}}.
+In: \bbtitle{Proceedings of the 36th International Conference on Machine
+  Learning},
+pp. \bfpage{2790}--\blpage{2799}
+(\byear{2019}).
+\bcomment{PMLR}
+\end{bchapter}
+\endbibitem
+
+%%% 10
+\bibitem[\protect\citeauthoryear{Hu et~al.}{2022}]{Hu2022LoRA}
+\begin{bchapter}
+\bauthor{\bsnm{Hu}, \binits{E.J.}},
+\bauthor{\bsnm{Shen}, \binits{Y.}},
+\bauthor{\bsnm{Wallis}, \binits{P.}},
+\bauthor{\bsnm{Allen-Zhu}, \binits{Z.}},
+\bauthor{\bsnm{Li}, \binits{Y.}},
+\bauthor{\bsnm{Wang}, \binits{S.}},
+\bauthor{\bsnm{Wang}, \binits{L.}},
+\bauthor{\bsnm{Chen}, \binits{W.}}:
+\bctitle{{LoRA}: Low-rank adaptation of large language models}.
+In: \bbtitle{International Conference on Learning Representations (ICLR)}
+(\byear{2022}).
+\burl{https://arxiv.org/abs/2106.09685}
+\end{bchapter}
+\endbibitem
+
+%%% 11
+\bibitem[\protect\citeauthoryear{Liu et~al.}{2022}]{Liu2022FewShotPF}
+\begin{botherref}
+\oauthor{\bsnm{Liu}, \binits{H.}},
+\oauthor{\bsnm{Tam}, \binits{D.}},
+\oauthor{\bsnm{Muqeeth}, \binits{M.}},
+\oauthor{\bsnm{Mohta}, \binits{J.}},
+\oauthor{\bsnm{Huang}, \binits{T.}},
+\oauthor{\bsnm{Bansal}, \binits{M.}},
+\oauthor{\bsnm{Raffel}, \binits{C.}}:
+Few-shot parameter-efficient fine-tuning is better and cheaper than in-context
+  learning.
+arXiv preprint arXiv:2205.05638
+(2022)
+\end{botherref}
+\endbibitem
+
+%%% 12
+\bibitem[\protect\citeauthoryear{Zhang et~al.}{2023}]{Zhang2023AdaLoRAAB}
+\begin{bchapter}
+\bauthor{\bsnm{Zhang}, \binits{Q.}},
+\bauthor{\bsnm{Chen}, \binits{M.}},
+\bauthor{\bsnm{Bukharin}, \binits{A.}},
+\bauthor{\bsnm{Karampatziakis}, \binits{N.}},
+\bauthor{\bsnm{He}, \binits{P.}},
+\bauthor{\bsnm{Cheng}, \binits{Y.}},
+\bauthor{\bsnm{Chen}, \binits{W.}},
+\bauthor{\bsnm{Zhao}, \binits{T.}}:
+\bctitle{{AdaLoRA}: Adaptive budget allocation for parameter-efficient
+  fine-tuning}.
+In: \bbtitle{International Conference on Learning Representations (ICLR)}
+(\byear{2023}).
+\burl{https://api.semanticscholar.org/CorpusID:266435293}
+\end{bchapter}
+\endbibitem
+
+%%% 13
+\bibitem[\protect\citeauthoryear{Li and Liang}{2021}]{li2021prefix}
+\begin{bchapter}
+\bauthor{\bsnm{Li}, \binits{X.L.}},
+\bauthor{\bsnm{Liang}, \binits{P.}}:
+\bctitle{Prefix-tuning: Optimizing continuous prompts for generation}.
+In: \bbtitle{Proceedings of the 59th Annual Meeting of the Association for
+  Computational Linguistics and the 11th International Joint Conference on
+  Natural Language Processing},
+pp. \bfpage{4582}--\blpage{4597}
+(\byear{2021})
+\end{bchapter}
+\endbibitem
+
+%%% 14
+\bibitem[\protect\citeauthoryear{Lester et~al.}{2021}]{lester2021power}
+\begin{bchapter}
+\bauthor{\bsnm{Lester}, \binits{B.}},
+\bauthor{\bsnm{Al-Rfou}, \binits{R.}},
+\bauthor{\bsnm{Constant}, \binits{N.}}:
+\bctitle{The power of scale for parameter-efficient prompt tuning}.
+In: \bbtitle{Proceedings of the 2021 Conference on Empirical Methods in Natural
+  Language Processing},
+pp. \bfpage{3045}--\blpage{3059}
+(\byear{2021})
+\end{bchapter}
+\endbibitem
+
+%%% 15
+\bibitem[\protect\citeauthoryear{Liu et~al.}{2021}]{Liu2021PTuningVP}
+\begin{botherref}
+\oauthor{\bsnm{Liu}, \binits{X.}},
+\oauthor{\bsnm{Ji}, \binits{K.}},
+\oauthor{\bsnm{Fu}, \binits{Y.}},
+\oauthor{\bsnm{Du}, \binits{Z.}},
+\oauthor{\bsnm{Yang}, \binits{Z.}},
+\oauthor{\bsnm{Tang}, \binits{J.}}:
+{P-Tuning v2}: Prompt tuning can be comparable to fine-tuning universally
+  across scales and tasks.
+arXiv preprint arXiv:2110.07602
+(2021)
+\end{botherref}
+\endbibitem
+
+%%% 16
+\bibitem[\protect\citeauthoryear{Jia et~al.}{2022}]{jia2022visual}
+\begin{bchapter}
+\bauthor{\bsnm{Jia}, \binits{M.}},
+\bauthor{\bsnm{Tang}, \binits{L.}},
+\bauthor{\bsnm{Chen}, \binits{B.-C.}},
+\bauthor{\bsnm{Cardie}, \binits{C.}},
+\bauthor{\bsnm{Belongie}, \binits{S.}},
+\bauthor{\bsnm{Hariharan}, \binits{B.}},
+\bauthor{\bsnm{Lim}, \binits{S.-N.}}:
+\bctitle{Visual prompt tuning}.
+In: \bbtitle{European Conference on Computer Vision},
+pp. \bfpage{709}--\blpage{727}
+(\byear{2022}).
+\bcomment{Springer}
+\end{bchapter}
+\endbibitem
+
+%%% 17
+\bibitem[\protect\citeauthoryear{Dai et~al.}{2023}]{dai2023instructblip}
+\begin{barticle}
+\bauthor{\bsnm{Dai}, \binits{W.}},
+\bauthor{\bsnm{Li}, \binits{J.}},
+\bauthor{\bsnm{Li}, \binits{D.}},
+\bauthor{\bsnm{Tiong}, \binits{A.}},
+\bauthor{\bsnm{Zhao}, \binits{J.}},
+\bauthor{\bsnm{Wang}, \binits{W.}},
+\bauthor{\bsnm{Li}, \binits{B.}},
+\bauthor{\bsnm{Fung}, \binits{P.N.}},
+\bauthor{\bsnm{Hoi}, \binits{S.C.H.}}:
+\batitle{{InstructBLIP}: Towards general-purpose vision-language models with
+  instruction tuning}.
+\bjtitle{Advances in Neural Information Processing Systems}
+\bvolume{36},
+\bfpage{49250}--\blpage{49267}
+(\byear{2023})
+\end{barticle}
+\endbibitem
+
+%%% 18
+\bibitem[\protect\citeauthoryear{Radford et~al.}{2021}]{Radford2021LearningTV}
+\begin{botherref}
+\oauthor{\bsnm{Radford}, \binits{A.}},
+\oauthor{\bsnm{Kim}, \binits{J.W.}},
+\oauthor{\bsnm{Hallacy}, \binits{C.}},
+\oauthor{\bsnm{Ramesh}, \binits{A.}},
+\oauthor{\bsnm{Goh}, \binits{G.}},
+\oauthor{\bsnm{Agarwal}, \binits{S.}},
+\oauthor{\bsnm{Sastry}, \binits{G.}},
+\oauthor{\bsnm{Askell}, \binits{A.}},
+\oauthor{\bsnm{Mishkin}, \binits{P.}},
+\oauthor{\bsnm{Clark}, \binits{J.}},
+\oauthor{\bsnm{Krueger}, \binits{G.}},
+\oauthor{\bsnm{Sutskever}, \binits{I.}}:
+Learning transferable visual models from natural language supervision.
+arXiv preprint arXiv:2103.00020
+(2021)
+\end{botherref}
+\endbibitem
+
+%%% 19
+\bibitem[\protect\citeauthoryear{Zhou et~al.}{2022a}]{Zhou2021LearningTP}
+\begin{barticle}
+\bauthor{\bsnm{Zhou}, \binits{K.}},
+\bauthor{\bsnm{Yang}, \binits{J.}},
+\bauthor{\bsnm{Loy}, \binits{C.C.}},
+\bauthor{\bsnm{Liu}, \binits{Z.}}:
+\batitle{Learning to prompt for vision-language models}.
+\bjtitle{International Journal of Computer Vision}
+\bvolume{130},
+\bfpage{2337}--\blpage{2348}
+(\byear{2022})
+\end{barticle}
+\endbibitem
+
+%%% 20
+\bibitem[\protect\citeauthoryear{Zhou et~al.}{2022b}]{Zhou2022ConditionalPL}
+\begin{bchapter}
+\bauthor{\bsnm{Zhou}, \binits{K.}},
+\bauthor{\bsnm{Yang}, \binits{J.}},
+\bauthor{\bsnm{Loy}, \binits{C.C.}},
+\bauthor{\bsnm{Liu}, \binits{Z.}}:
+\bctitle{Conditional prompt learning for vision-language models}.
+In: \bbtitle{2022 IEEE/CVF Conference on Computer Vision and Pattern
+  Recognition (CVPR)},
+pp. \bfpage{16795}--\blpage{16804}
+(\byear{2022}).
+\burl{https://api.semanticscholar.org/CorpusID:247363011}
+\end{bchapter}
+\endbibitem
+
+%%% 21
+\bibitem[\protect\citeauthoryear{Khattak et~al.}{2023}]{Khattak2022MaPLeMP}
+\begin{bchapter}
+\bauthor{\bsnm{Khattak}, \binits{M.U.}},
+\bauthor{\bsnm{Rasheed}, \binits{H.A.}},
+\bauthor{\bsnm{Maaz}, \binits{M.}},
+\bauthor{\bsnm{Khan}, \binits{S.H.}},
+\bauthor{\bsnm{Khan}, \binits{F.S.}}:
+\bctitle{{MaPLe}: Multi-modal prompt learning}.
+In: \bbtitle{2023 IEEE/CVF Conference on Computer Vision and Pattern
+  Recognition (CVPR)},
+pp. \bfpage{19113}--\blpage{19122}
+(\byear{2023}).
+\burl{https://api.semanticscholar.org/CorpusID:252735181}
+\end{bchapter}
+\endbibitem
+
+%%% 22
+\bibitem[\protect\citeauthoryear{Jaegle et~al.}{2021}]{Jaegle2021PerceiverGP}
+\begin{botherref}
+\oauthor{\bsnm{Jaegle}, \binits{A.}},
+\oauthor{\bsnm{Gimeno}, \binits{F.}},
+\oauthor{\bsnm{Brock}, \binits{A.}},
+\oauthor{\bsnm{Zisserman}, \binits{A.}},
+\oauthor{\bsnm{Vinyals}, \binits{O.}},
+\oauthor{\bsnm{Carreira}, \binits{J.}}:
+Perceiver: General perception with iterative attention.
+arXiv preprint arXiv:2103.03206
+(2021)
+\end{botherref}
+\endbibitem
+
+%%% 23
+\bibitem[\protect\citeauthoryear{Ryoo et~al.}{2021}]{Ryoo2021TokenLearnerWC}
+\begin{botherref}
+\oauthor{\bsnm{Ryoo}, \binits{M.S.}},
+\oauthor{\bsnm{Piergiovanni}, \binits{A.J.}},
+\oauthor{\bsnm{Arnab}, \binits{A.}},
+\oauthor{\bsnm{Dehghani}, \binits{M.}},
+\oauthor{\bsnm{Angelova}, \binits{A.}}:
+{TokenLearner}: What can 8 learned tokens do for images and videos?
+arXiv preprint arXiv:2106.11297
+(2021)
+\end{botherref}
+\endbibitem
+
+%%% 24
+\bibitem[\protect\citeauthoryear{Hu and Zhou}{2026}]{Hu2026DynamicCP}
+\begin{botherref}
+\oauthor{\bsnm{Hu}, \binits{T.}},
+\oauthor{\bsnm{Zhou}, \binits{D.-W.}}:
+Dynamic cross-modal prompt generation for multimodal continual instruction
+  tuning.
+arXiv preprint arXiv:2605.10765
+(2026)
+\end{botherref}
+\endbibitem
+
+%%% 25
+\bibitem[\protect\citeauthoryear{Sung et~al.}{2021}]{sung2021vl}
+\begin{botherref}
+\oauthor{\bsnm{Sung}, \binits{Y.-L.}},
+\oauthor{\bsnm{Cho}, \binits{J.}},
+\oauthor{\bsnm{Bansal}, \binits{M.}}:
+{VL-Adapter}: Parameter-efficient transfer learning for vision-and-language
+  tasks.
+arXiv preprint arXiv:2112.06825
+(2021)
+\end{botherref}
+\endbibitem
+
+%%% 26
+\bibitem[\protect\citeauthoryear{Zhou et~al.}{2024}]{zhou2024empirical}
+\begin{bchapter}
+\bauthor{\bsnm{Zhou}, \binits{X.}},
+\bauthor{\bsnm{He}, \binits{J.}},
+\bauthor{\bsnm{Ke}, \binits{Y.}},
+\bauthor{\bsnm{Zhu}, \binits{G.}},
+\bauthor{\bsnm{Guti{\'e}rrez-Basulto}, \binits{V.}},
+\bauthor{\bsnm{Pan}, \binits{J.Z.}}:
+\bctitle{An empirical study on parameter-efficient fine-tuning for multimodal
+  large language models}.
+In: \bbtitle{Findings of the Association for Computational Linguistics: ACL
+  2024},
+pp. \bfpage{10057}--\blpage{10084}
+(\byear{2024})
+\end{bchapter}
+\endbibitem
+
+%%% 27
+\bibitem[\protect\citeauthoryear{Sun et~al.}{2026}]{Sun2026GRASPGR}
+\begin{botherref}
+\oauthor{\bsnm{Sun}, \binits{Q.}},
+\oauthor{\bsnm{Zhang}, \binits{C.}},
+\oauthor{\bsnm{Zhang}, \binits{J.}},
+\oauthor{\bsnm{Wang}, \binits{X.}},
+\oauthor{\bsnm{Xie}, \binits{J.}},
+\oauthor{\bsnm{Zheng}, \binits{P.}},
+\oauthor{\bsnm{Wang}, \binits{H.}},
+\oauthor{\bsnm{Lee}, \binits{S.}},
+\oauthor{\bsnm{Tai}, \binits{C.-l.A.}},
+\oauthor{\bsnm{Yang}, \binits{Y.}},
+\oauthor{\bsnm{Shen}, \binits{H.T.}}:
+{GRASP}: Guided region-aware sparse prompting for adapting {MLLMs} to remote
+  sensing.
+arXiv preprint arXiv:2601.17089
+(2026)
+\end{botherref}
+\endbibitem
+
+%%% 28
+\bibitem[\protect\citeauthoryear{Qian et~al.}{2025}]{Qian2025CoTBoxTTTGM}
+\begin{botherref}
+\oauthor{\bsnm{Qian}, \binits{J.}},
+\oauthor{\bsnm{Shen}, \binits{Y.}},
+\oauthor{\bsnm{Chen}, \binits{Z.}},
+\oauthor{\bsnm{Zhou}, \binits{J.}},
+\oauthor{\bsnm{Wang}, \binits{P.}}:
+{CoTBox-TTT}: Grounding medical {VQA} with visual chain-of-thought boxes during
+  test-time training.
+arXiv preprint arXiv:2511.12446
+(2025)
+\end{botherref}
+\endbibitem
+
+%%% 29
+\bibitem[\protect\citeauthoryear{Rocha et~al.}{2025}]{Rocha2025AdvancesIE}
+\begin{bchapter}
+\bauthor{\bsnm{Rocha}, \binits{P.D.}},
+\bauthor{\bsnm{Lopes}, \binits{F.J.P.}},
+\bauthor{\bsnm{Cruz}, \binits{L.A.d.S.}}:
+\bctitle{Advances in electrical grid assets inspection: Exploring multimodal
+  large language models}.
+In: \bbtitle{2025 25th International Conference on Digital Signal Processing
+  (DSP)},
+pp. \bfpage{1}--\blpage{5}
+(\byear{2025}).
+\burl{https://api.semanticscholar.org/CorpusID:280164358}
+\end{bchapter}
+\endbibitem
+
+%%% 30
+\bibitem[\protect\citeauthoryear{Hao and Tao}{2025}]{Hao2025PowerGI}
+\begin{botherref}
+\oauthor{\bsnm{Hao}, \binits{J.}},
+\oauthor{\bsnm{Tao}, \binits{Y.}}:
+Power grid inspection based on multimodal foundation models.
+EAI Endorsed Transactions on Energy Web
+\textbf{12}
+(2025)
+\end{botherref}
+\endbibitem
+
+%%% 31
+\bibitem[\protect\citeauthoryear{Lin et~al.}{2025}]{lin2025defectgpt}
+\begin{bchapter}
+\bauthor{\bsnm{Lin}, \binits{Z.}},
+\bauthor{\bsnm{Xu}, \binits{K.}},
+\bauthor{\bsnm{Aung}, \binits{A.P.P.}},
+\bauthor{\bsnm{Qiu}, \binits{W.}},
+\bauthor{\bsnm{Zee}, \binits{B.}},
+\bauthor{\bsnm{Chin}, \binits{J.M.}},
+\bauthor{\bsnm{Jayavelu}, \binits{S.}}:
+\bctitle{{DefectGPT}: Towards multi-class defect detection with limited
+  electrical samples}.
+In: \bbtitle{Proceedings of the British Machine Vision Conference (BMVC)}
+(\byear{2025})
+\end{bchapter}
+\endbibitem
+
+%%% 32
+\bibitem[\protect\citeauthoryear{Wu et~al.}{2026}]{Wu2026DomainAdaptiveML}
+\begin{barticle}
+\bauthor{\bsnm{Wu}, \binits{J.}},
+\bauthor{\bsnm{Chen}, \binits{Y.}},
+\bauthor{\bsnm{Min}, \binits{Q.}},
+\bauthor{\bsnm{Chen}, \binits{M.}},
+\bauthor{\bsnm{Zhao}, \binits{J.}},
+\bauthor{\bsnm{Ye}, \binits{M.}}:
+\batitle{Domain-adaptive multimodal large language models for photovoltaic
+  fault diagnosis via dynamic {LoRA} routing}.
+\bjtitle{Processes}
+\bvolume{14}(\bissue{4}),
+\bfpage{653}
+(\byear{2026})
+\end{barticle}
+\endbibitem
+
+%%% 33
+\bibitem[\protect\citeauthoryear{Anderson
+  et~al.}{2018}]{Anderson2017BottomUpAT}
+\begin{bchapter}
+\bauthor{\bsnm{Anderson}, \binits{P.}},
+\bauthor{\bsnm{He}, \binits{X.}},
+\bauthor{\bsnm{Buehler}, \binits{C.}},
+\bauthor{\bsnm{Teney}, \binits{D.}},
+\bauthor{\bsnm{Johnson}, \binits{M.}},
+\bauthor{\bsnm{Gould}, \binits{S.}},
+\bauthor{\bsnm{Zhang}, \binits{L.}}:
+\bctitle{Bottom-up and top-down attention for image captioning and visual
+  question answering}.
+In: \bbtitle{2018 IEEE/CVF Conference on Computer Vision and Pattern
+  Recognition},
+pp. \bfpage{6077}--\blpage{6086}
+(\byear{2018}).
+\burl{https://api.semanticscholar.org/CorpusID:3753452}
+\end{bchapter}
+\endbibitem
+
+%%% 34
+\bibitem[\protect\citeauthoryear{Kim et~al.}{2018}]{Kim2018BilinearAN}
+\begin{bchapter}
+\bauthor{\bsnm{Kim}, \binits{J.-H.}},
+\bauthor{\bsnm{Jun}, \binits{J.}},
+\bauthor{\bsnm{Zhang}, \binits{B.-T.}}:
+\bctitle{Bilinear attention networks}.
+In: \bbtitle{Advances in Neural Information Processing Systems}
+(\byear{2018}).
+\burl{https://api.semanticscholar.org/CorpusID:29150617}
+\end{bchapter}
+\endbibitem
+
+%%% 35
+\bibitem[\protect\citeauthoryear{Vaswani et~al.}{2017}]{Vaswani2017AttentionIA}
+\begin{bchapter}
+\bauthor{\bsnm{Vaswani}, \binits{A.}},
+\bauthor{\bsnm{Shazeer}, \binits{N.}},
+\bauthor{\bsnm{Parmar}, \binits{N.}},
+\bauthor{\bsnm{Uszkoreit}, \binits{J.}},
+\bauthor{\bsnm{Jones}, \binits{L.}},
+\bauthor{\bsnm{Gomez}, \binits{A.N.}},
+\bauthor{\bsnm{Kaiser}, \binits{L.}},
+\bauthor{\bsnm{Polosukhin}, \binits{I.}}:
+\bctitle{Attention is all you need}.
+In: \bbtitle{Advances in Neural Information Processing Systems},
+vol. \bseriesno{30}
+(\byear{2017}).
+\burl{https://api.semanticscholar.org/CorpusID:13756489}
+\end{bchapter}
+\endbibitem
+
+%%% 36
+\bibitem[\protect\citeauthoryear{Zhang et~al.}{2023}]{Zhang2023LLaMAAdapterEF}
+\begin{botherref}
+\oauthor{\bsnm{Zhang}, \binits{R.}},
+\oauthor{\bsnm{Han}, \binits{J.}},
+\oauthor{\bsnm{Zhou}, \binits{A.}},
+\oauthor{\bsnm{Hu}, \binits{X.}},
+\oauthor{\bsnm{Yan}, \binits{S.}},
+\oauthor{\bsnm{Lu}, \binits{P.}},
+\oauthor{\bsnm{Li}, \binits{H.}},
+\oauthor{\bsnm{Gao}, \binits{P.}},
+\oauthor{\bsnm{Qiao}, \binits{Y.J.}}:
+{LLaMA-Adapter}: Efficient fine-tuning of language models with zero-init
+  attention.
+arXiv preprint arXiv:2303.16199
+(2023)
+\end{botherref}
+\endbibitem
+
+%%% 37
+\bibitem[\protect\citeauthoryear{Agrawal et~al.}{2017}]{Agrawal2015VQAVQ}
+\begin{barticle}
+\bauthor{\bsnm{Agrawal}, \binits{A.}},
+\bauthor{\bsnm{Lu}, \binits{J.}},
+\bauthor{\bsnm{Antol}, \binits{S.}},
+\bauthor{\bsnm{Mitchell}, \binits{M.}},
+\bauthor{\bsnm{Zitnick}, \binits{C.L.}},
+\bauthor{\bsnm{Parikh}, \binits{D.}},
+\bauthor{\bsnm{Batra}, \binits{D.}}:
+\batitle{{VQA}: Visual question answering}.
+\bjtitle{International Journal of Computer Vision}
+\bvolume{123},
+\bfpage{4}--\blpage{31}
+(\byear{2017})
+\end{barticle}
+\endbibitem
+
+\end{thebibliography}

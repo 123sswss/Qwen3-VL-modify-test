@@ -1,0 +1,63 @@
+\relax 
+\bibstyle{sn-mathphys-num}
+\providecommand\hyper@newdestlabel[2]{}
+\providecommand\HyField@AuxAddToFields[1]{}
+\providecommand\HyField@AuxAddToCoFields[2]{}
+\citation{Alayrac2022FlamingoAV,li2023blip,Liu2023VisualIT,Zhu2023MiniGPT4EV,Bai2025Qwen3VLTR}
+\citation{He2020PathVQA3Q,Liu2021SlakeAS,Wang2024PowerLLaVALL}
+\citation{houlsby2019parameter,Hu2022LoRA}
+\citation{Hu2022LoRA,Liu2022FewShotPF,Zhang2023AdaLoRAAB}
+\citation{li2021prefix,lester2021power,Liu2021PTuningVP,jia2022visual}
+\citation{dai2023instructblip}
+\citation{Radford2021LearningTV,Zhou2021LearningTP,Zhou2022ConditionalPL,Khattak2022MaPLeMP}
+\citation{Jaegle2021PerceiverGP,Ryoo2021TokenLearnerWC}
+\citation{li2023blip,dai2023instructblip,Hu2026DynamicCP}
+\@writefile{toc}{\contentsline {section}{\numberline {1}引言}{1}{section.1}\protected@file@percent }
+\citation{houlsby2019parameter}
+\citation{Hu2022LoRA}
+\citation{Liu2022FewShotPF}
+\citation{Zhang2023AdaLoRAAB}
+\citation{lester2021power}
+\citation{li2021prefix,Liu2021PTuningVP}
+\citation{jia2022visual}
+\citation{sung2021vl}
+\citation{Khattak2022MaPLeMP}
+\citation{zhou2024empirical}
+\citation{Radford2021LearningTV}
+\citation{Zhou2021LearningTP}
+\citation{Zhou2022ConditionalPL}
+\@writefile{toc}{\contentsline {section}{\numberline {2}相关工作}{2}{section.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {2.1}多模态大模型的参数高效适配}{2}{subsection.2.1}\protected@file@percent }
+\citation{Jaegle2021PerceiverGP}
+\citation{Ryoo2021TokenLearnerWC}
+\citation{li2023blip}
+\citation{dai2023instructblip}
+\citation{Hu2026DynamicCP}
+\citation{Sun2026GRASPGR}
+\citation{He2020PathVQA3Q,Liu2021SlakeAS}
+\citation{Qian2025CoTBoxTTTGM}
+\citation{Wang2024PowerLLaVALL}
+\citation{Rocha2025AdvancesIE,Hao2025PowerGI}
+\citation{lin2025defectgpt}
+\citation{Wu2026DomainAdaptiveML}
+\citation{Bai2025Qwen3VLTR}
+\@writefile{toc}{\contentsline {subsection}{\numberline {2.2}条件Prompt与问题引导的视觉聚合}{3}{subsection.2.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {2.3}专业视觉领域中的多模态模型}{3}{subsection.2.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {3}方法}{3}{section.3}\protected@file@percent }
+\newlabel{sec:method}{{3}{3}{方法}{section.3}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {3.1}基础模型与总体结构}{3}{subsection.3.1}\protected@file@percent }
+\citation{jia2022visual}
+\@writefile{lof}{\contentsline {figure}{\numberline {1}{\ignorespaces QDPT整体框架。问题引导的视觉聚合生成样本相关的动态Prompt，静态Prompt在视觉侧与语言侧提供领域校准。蓝色模块的原有参数保持冻结，橙色模块为适配部分；视觉区域与问题关键词用于示意证据选择。}}{4}{figure.1}\protected@file@percent }
+\newlabel{fig:qdpt-global}{{1}{4}{QDPT整体框架。问题引导的视觉聚合生成样本相关的动态Prompt，静态Prompt在视觉侧与语言侧提供领域校准。蓝色模块的原有参数保持冻结，橙色模块为适配部分；视觉区域与问题关键词用于示意证据选择。}{figure.1}{}}
+\newlabel{eq:qdpt-overall}{{2}{4}{基础模型与总体结构}{equation.2}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {3.2}静态领域校准}{4}{subsection.3.2}\protected@file@percent }
+\citation{lester2021power}
+\citation{Anderson2017BottomUpAT,Kim2018BilinearAN}
+\citation{Vaswani2017AttentionIA}
+\@writefile{lof}{\contentsline {figure}{\numberline {2}{\ignorespaces Directional Workspace的构造。问题Token嵌入经可训练评分向量和Value Projection形成Query；第17层之前的视觉Token投影为K/V。Cross-Attention读取与问题相关的视觉证据，并通过残差连接得到聚合表示。视觉Block采用从0开始的编号，K/V取自索引0至16的Block输出。}}{5}{figure.2}\protected@file@percent }
+\newlabel{fig:directional-workspace}{{2}{5}{Directional Workspace的构造。问题Token嵌入经可训练评分向量和Value Projection形成Query；第17层之前的视觉Token投影为K/V。Cross-Attention读取与问题相关的视觉证据，并通过残差连接得到聚合表示。视觉Block采用从0开始的编号，K/V取自索引0至16的Block输出。}{figure.2}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {3.3}问题引导的视觉聚合与动态Prompt}{5}{subsection.3.3}\protected@file@percent }
+\citation{Zhang2023LLaMAAdapterEF}
+\@writefile{lof}{\contentsline {figure}{\numberline {3}{\ignorespaces 视觉主路径与动态Prompt输出路径。本图承接图\ref {fig:directional-workspace}生成的Workspace。静态视觉Prompt在第17个视觉Block中提供领域校准，并在该层之后移除；问题条件的Directional Workspace只读取视觉证据，经语言侧映射生成动态Prompt。各路输入在LLM入口的排列见图\ref {fig:causal-placement}。视觉Block采用从0开始的编号，第17个Block指索引17。}}{6}{figure.3}\protected@file@percent }
+\newlabel{fig:qdpt-overview}{{3}{6}{视觉主路径与动态Prompt输出路径。本图承接图\ref {fig:directional-workspace}生成的Workspace。静态视觉Prompt在第17个视觉Block中提供领域校准，并在该层之后移除；问题条件的Directional Workspace只读取视觉证据，经语言侧映射生成动态Prompt。各路输入在LLM入口的排列见图\ref {fig:causal-placement}。视觉Block采用从0开始的编号，第17个Block指索引17。}{figure.3}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {3.4}因果输入排列与参数规模}{6}{subsection.3.4}\protected@file@percent }

@@ -41,24 +41,40 @@ def _move_inputs(inputs: Dict[str, Any], device: torch.device) -> Dict[str, Any]
 def validate_component_checkpoint_compatibility(
     receiver_config: Dict[str, Any],
     donor_config: Dict[str, Any],
-) -> None:
-    """Require identical architectures while allowing independent init seeds."""
+) -> list[str]:
+    """Reject known structural conflicts and report serialization drift."""
 
     receiver = dict(receiver_config)
     donor = dict(donor_config)
     receiver.pop("init_seed", None)
     donor.pop("init_seed", None)
-    if receiver == donor:
-        return
     differing_keys = sorted(
         key
         for key in set(receiver) | set(donor)
         if receiver.get(key) != donor.get(key)
     )
-    raise ValueError(
-        "Dynamic Prompt component donor is architecture-incompatible with the "
-        f"receiver checkpoint; differing config keys={differing_keys}"
+    # These fields directly determine the two tensors that may be overridden.
+    # Missing keys are tolerated for checkpoints saved by older serializers;
+    # the component loader still enforces exact tensor shapes before copying.
+    structural_keys = (
+        "method",
+        "prompt_length",
+        "requested_prompt_length",
+        "hidden_size",
     )
+    conflicts = [
+        key
+        for key in structural_keys
+        if key in receiver
+        and key in donor
+        and receiver[key] != donor[key]
+    ]
+    if conflicts:
+        raise ValueError(
+            "Dynamic Prompt component donor is architecture-incompatible with "
+            f"the receiver checkpoint; conflicting fields={conflicts}"
+        )
+    return differing_keys
 
 
 class DynamicPromptTuningModelInterface:
@@ -264,7 +280,9 @@ class DynamicPromptTuningModelInterface:
                 "r", encoding="utf-8"
             ) as handle:
                 donor_config = json.load(handle)
-            validate_component_checkpoint_compatibility(config, donor_config)
+            config_differences = validate_component_checkpoint_compatibility(
+                config, donor_config
+            )
             self.component_override_audit = self.model.load_dynamic_prompt_components(
                 donor_checkpoint,
                 requested_components,
@@ -277,7 +295,8 @@ class DynamicPromptTuningModelInterface:
                     "allowed_components": list(
                         DYNAMIC_PROMPT_COMPONENT_OVERRIDES
                     ),
-                    "architecture_match_ignoring_init_seed": True,
+                    "component_tensor_shape_match": True,
+                    "config_differences_ignoring_init_seed": config_differences,
                 }
             )
         self.model.eval()

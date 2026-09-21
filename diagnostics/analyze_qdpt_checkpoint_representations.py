@@ -139,6 +139,51 @@ def cosine(left: torch.Tensor, right: torch.Tensor) -> float:
     return float(torch.dot(left, right).div(denominator).item())
 
 
+def config_differences(
+    left: Any,
+    right: Any,
+    prefix: str = "",
+) -> list[str]:
+    if isinstance(left, Mapping) and isinstance(right, Mapping):
+        differences = []
+        for key in sorted(set(left) | set(right)):
+            path = f"{prefix}.{key}" if prefix else str(key)
+            if key not in left or key not in right:
+                differences.append(path)
+            else:
+                differences.extend(config_differences(left[key], right[key], path))
+        return differences
+    return [] if left == right else [prefix]
+
+
+def validate_group_shapes(
+    grouped: Mapping[str, Mapping[str, Mapping[str, torch.Tensor]]],
+) -> None:
+    names = list(grouped)
+    reference_name = names[0]
+    reference_groups = grouped[reference_name]
+    for name in names[1:]:
+        if set(grouped[name]) != set(reference_groups):
+            raise ValueError(
+                f"Checkpoint parameter groups differ for {name}: "
+                f"reference={sorted(reference_groups)} actual={sorted(grouped[name])}"
+            )
+        for group, reference_tensors in reference_groups.items():
+            candidate_tensors = grouped[name][group]
+            if set(candidate_tensors) != set(reference_tensors):
+                raise ValueError(
+                    f"Checkpoint tensor keys differ for {name} group={group}"
+                )
+            for key, reference_tensor in reference_tensors.items():
+                candidate_shape = tuple(candidate_tensors[key].shape)
+                if candidate_shape != tuple(reference_tensor.shape):
+                    raise ValueError(
+                        f"Checkpoint tensor shape differs for {name} "
+                        f"group={group} key={key}: reference="
+                        f"{tuple(reference_tensor.shape)} actual={candidate_shape}"
+                    )
+
+
 def analyze_checkpoints(
     checkpoints: Mapping[str, Path],
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
@@ -158,19 +203,19 @@ def analyze_checkpoints(
         )
         grouped[name] = checkpoint_groups(state)
 
+    validate_group_shapes(grouped)
     reference_name = next(iter(checkpoints))
     reference = dict(configs[reference_name])
     reference.pop("init_seed", None)
+    recorded_config_differences = {}
     for name, config in configs.items():
         normalized = dict(config)
         normalized.pop("init_seed", None)
-        if normalized != reference:
-            raise ValueError(
-                f"Checkpoint architecture differs for {name}; endpoint geometry "
-                "must only compare identical QDPT variants"
-            )
+        recorded_config_differences[name] = config_differences(
+            reference, normalized
+        )
 
-    common_groups = set.intersection(*(set(value) for value in grouped.values()))
+    common_groups = set(grouped[reference_name])
     pairwise_rows = []
     for left, right in combinations(checkpoints, 2):
         for group in sorted(common_groups):
@@ -202,7 +247,10 @@ def analyze_checkpoints(
         "init_seeds": {
             name: config.get("init_seed") for name, config in configs.items()
         },
-        "architecture_match_ignoring_init_seed": True,
+        "tensor_keys_and_shapes_match": True,
+        "config_differences_versus_reference_ignoring_init_seed": (
+            recorded_config_differences
+        ),
         "per_checkpoint": {
             name: {
                 group: group_statistics(tensors)

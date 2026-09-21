@@ -804,6 +804,64 @@ class DynamicPromptTuningTest(unittest.TestCase):
                 Path("unused"), ("soft_prompt", "soft_prompt")
             )
 
+    def test_visual18_override_replaces_only_two_static_visual_prompts(self):
+        kwargs = dict(
+            tokenizer=_FakeTokenizer(),
+            prompt_length=2,
+            attention_dim=4,
+            num_heads=2,
+            sparse_visual_anchor_layers=(1,),
+            sparse_visual_rep_tokens=2,
+            sparse_visual_attention_dim=4,
+            sparse_visual_heads=2,
+            workspace_tokens=3,
+            workspace_dim=8,
+            workspace_heads=2,
+            directional_concat_workspace=True,
+        )
+        receiver = DynamicPromptTuningModel(
+            _FakeMultimodalModel(), init_seed=44, **kwargs
+        )
+        donor = DynamicPromptTuningModel(
+            _FakeMultimodalModel(), init_seed=45, **kwargs
+        )
+        with torch.no_grad():
+            donor.sparse_visual.private_visual_prompt.fill_(3.0)
+            donor.sparse_visual.workspace_visual_anchor.fill_(4.0)
+        receiver_soft_before = receiver.soft_prompt.detach().clone()
+        receiver_text_anchor_before = receiver.workspace_text_anchor.detach().clone()
+        untouched_sparse_before = {
+            key: value.detach().clone()
+            for key, value in receiver.sparse_visual.state_dict().items()
+            if key not in {"private_visual_prompt", "workspace_visual_anchor"}
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            checkpoint = Path(directory)
+            donor.save_dynamic_prompt(checkpoint)
+            audit = receiver.load_dynamic_prompt_components(
+                checkpoint, ("visual_prompt_18",)
+            )
+
+        torch.testing.assert_close(
+            receiver.sparse_visual.private_visual_prompt,
+            donor.sparse_visual.private_visual_prompt,
+        )
+        torch.testing.assert_close(
+            receiver.sparse_visual.workspace_visual_anchor,
+            donor.sparse_visual.workspace_visual_anchor,
+        )
+        torch.testing.assert_close(receiver.soft_prompt, receiver_soft_before)
+        torch.testing.assert_close(
+            receiver.workspace_text_anchor, receiver_text_anchor_before
+        )
+        for key, value in untouched_sparse_before.items():
+            torch.testing.assert_close(receiver.sparse_visual.state_dict()[key], value)
+        self.assertEqual(audit["components"], ["visual_prompt_18"])
+        self.assertEqual(
+            set(audit["shapes"]["visual_prompt_18"]),
+            {"private_visual_prompt", "workspace_visual_anchor"},
+        )
+
     def test_directional_concat_static_visual_anchor_checkpoint_round_trip(self):
         kwargs = dict(
             tokenizer=_FakeTokenizer(),

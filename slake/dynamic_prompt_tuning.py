@@ -7,7 +7,7 @@ import math
 from collections import deque
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Deque, Dict, Iterator, Sequence
+from typing import Any, Deque, Dict, Iterator, Mapping, Sequence
 
 import torch
 from torch import nn
@@ -29,6 +29,7 @@ DYNAMIC_PROMPT_INTERVENTIONS = (
 DYNAMIC_PROMPT_COMPONENT_OVERRIDES = (
     "soft_prompt",
     "workspace_text_anchor",
+    "visual_prompt_18",
 )
 SHARED_S_TEXT_MODES = (
     "none",
@@ -1760,9 +1761,50 @@ class DynamicPromptTuningModel(nn.Module):
             "soft_prompt": self.soft_prompt,
             "workspace_text_anchor": self.workspace_text_anchor,
         }
-        shapes: Dict[str, list[int]] = {}
+        shapes: Dict[str, Any] = {}
         with torch.no_grad():
             for component in requested:
+                if component == "visual_prompt_18":
+                    donor_sparse = state.get("sparse_visual")
+                    if not isinstance(donor_sparse, Mapping):
+                        raise ValueError(
+                            "Component 'visual_prompt_18' requires donor "
+                            "sparse_visual state"
+                        )
+                    if self.sparse_visual is None:
+                        raise ValueError(
+                            "Component 'visual_prompt_18' requires a receiver "
+                            "sparse_visual module"
+                        )
+                    visual_shapes: Dict[str, list[int]] = {}
+                    for key in (
+                        "private_visual_prompt",
+                        "workspace_visual_anchor",
+                    ):
+                        donor = donor_sparse.get(key)
+                        target = getattr(self.sparse_visual, key, None)
+                        if donor is None or target is None:
+                            raise ValueError(
+                                "Visual18 checkpoint/model architecture mismatch: "
+                                f"missing {key!r}"
+                            )
+                        if not torch.is_tensor(donor):
+                            raise TypeError(
+                                f"Visual18 tensor {key!r} has invalid donor type "
+                                f"{type(donor).__name__}"
+                            )
+                        if tuple(donor.shape) != tuple(target.shape):
+                            raise ValueError(
+                                f"Visual18 tensor {key!r} shape mismatch: "
+                                f"donor={tuple(donor.shape)} "
+                                f"receiver={tuple(target.shape)}"
+                            )
+                        target.copy_(
+                            donor.to(device=target.device, dtype=target.dtype)
+                        )
+                        visual_shapes[key] = list(target.shape)
+                    shapes[component] = visual_shapes
+                    continue
                 donor = state.get(component)
                 target = target_by_component[component]
                 if donor is None or target is None:

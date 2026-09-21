@@ -1679,7 +1679,7 @@ run_pathvqa_qdpt_stage1_component_swaps() {
   receiver44_root="$output_root/receiver_seed44"
   receiver45_root="$output_root/receiver_seed45"
   mkdir -p "$receiver44_root" "$receiver45_root"
-  printf 'training\tnone\nsplit\tvalidation\nreceiver_seed44\t%s\nreceiver_seed45\t%s\ncontrol\tonly_named_tensor_is_loaded_from_donor\n' \
+  printf 'training\tnone\nsplit\tvalidation\nreceiver_seed44\t%s\nreceiver_seed45\t%s\ncomponents\tsoft_prompt,workspace_text_anchor,visual_prompt_18\nvisual_prompt_18_definition\tprivate_visual_prompt_S8+workspace_visual_anchor_Av10\ncontrol\tonly_named_tensor_or_declared_atomic_group_is_loaded_from_donor\n' \
     "$checkpoint44" "$checkpoint45" \
     > "$output_root/component_swap_manifest.tsv"
 
@@ -1709,6 +1709,18 @@ run_pathvqa_qdpt_stage1_component_swaps() {
     "$receiver44_root/anchor_seed45_rest_seed44.log" \
     --dynamic-prompt-component-checkpoint "$checkpoint45" \
     --dynamic-prompt-component workspace_text_anchor || return 1
+  run_pathvqa_dynamic_prompt_eval \
+    "$checkpoint45" validation \
+    "$receiver45_root/visual18_seed44_rest_seed45" \
+    "$receiver45_root/visual18_seed44_rest_seed45.log" \
+    --dynamic-prompt-component-checkpoint "$checkpoint44" \
+    --dynamic-prompt-component visual_prompt_18 || return 1
+  run_pathvqa_dynamic_prompt_eval \
+    "$checkpoint44" validation \
+    "$receiver44_root/visual18_seed45_rest_seed44" \
+    "$receiver44_root/visual18_seed45_rest_seed44.log" \
+    --dynamic-prompt-component-checkpoint "$checkpoint45" \
+    --dynamic-prompt-component visual_prompt_18 || return 1
 
   python diagnostics/compare_pathvqa_conditioning_mismatches.py \
     --baseline "$seed44_run/eval_validation/epoch_3" \

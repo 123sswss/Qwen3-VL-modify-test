@@ -464,6 +464,7 @@ class DynamicPromptTuningModel(nn.Module):
         self._intervention_audited = False
         self._workspace_text_write_disabled = False
         self._directional_text_delta_scale = 1.0
+        self._training_dynamic_delta_scale = 1.0
         self.frozen_soft_prompt_source: str | None = None
         self.frozen_soft_prompt_sha256: str | None = None
 
@@ -581,6 +582,57 @@ class DynamicPromptTuningModel(nn.Module):
                 + list(self.workspace_text_attention.parameters())
             )
         return groups
+
+    def directional_dynamic_branch_parameters(self) -> list[nn.Parameter]:
+        """Return only the parameters that generate the Directional text delta.
+
+        Static P20/A_t live outside this list.  Visual18 is also excluded: S8 is
+        already in the sparse-visual group, while A_v is the visual workspace
+        anchor inside ``DirectionalConcatWorkspaceVisual``.  The remaining
+        workspace parameters compute the question/visual-conditioned latent and
+        the zero-initialized text projection that maps it to Delta(I, q).
+        """
+        if not self.directional_concat_workspace_enabled:
+            return []
+        if self.sparse_visual is None or self.workspace_text_projection is None:
+            raise RuntimeError("Directional dynamic branch modules are incomplete")
+        static_visual_parameters = {
+            id(parameter)
+            for parameter in (
+                getattr(self.sparse_visual, "private_visual_prompt", None),
+                getattr(self.sparse_visual, "workspace_visual_anchor", None),
+                getattr(self.sparse_visual, "static_visual_prompt", None),
+            )
+            if parameter is not None
+        }
+        parameters = [
+            parameter
+            for parameter in self.sparse_visual.parameters()
+            if id(parameter) not in static_visual_parameters
+        ]
+        parameters.extend(self.workspace_text_projection.parameters())
+        if len({id(parameter) for parameter in parameters}) != len(parameters):
+            raise RuntimeError("Directional dynamic branch parameters overlap")
+        return parameters
+
+    def directional_dynamic_output_head_max_abs(self) -> float:
+        if self.workspace_text_projection is None:
+            raise RuntimeError("Directional text projection is unavailable")
+        output = self.workspace_text_projection.output_projection
+        return max(
+            float(output.weight.detach().float().abs().max().item()),
+            float(output.bias.detach().float().abs().max().item()),
+        )
+
+    def set_training_dynamic_delta_scale(self, scale: float) -> None:
+        """Set the binary training gate in D = A_t + g(t) Delta(I, q)."""
+        value = float(scale)
+        if value not in (0.0, 1.0):
+            raise ValueError("Training dynamic delta scale must be exactly 0 or 1")
+        if not self.directional_concat_workspace_enabled:
+            raise RuntimeError("Training dynamic gating requires Directional Workspace")
+        self._training_dynamic_delta_scale = value
+        self._directional_text_delta_scale = value
 
     def configure_inference_intervention(
         self,

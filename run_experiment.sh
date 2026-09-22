@@ -1140,6 +1140,22 @@ run_qdpt_d768_final_dataset() {
         --directional-sandwich-text-prompt
       )
       ;;
+    question_static_visual_sandwich_dynamic_late_start10)
+      experiment_stem="qdpt_d768_question_q10_l17_p20_s8_av10_sandwich_dynamic_late_start10"
+      expected_trainable=7805184
+      query_source="question_attention_pooling"
+      static_visual_write=true
+      private_visual_tokens=8
+      visual_workspace_tokens=10
+      text_prompt_placement="static_before_visual_dynamic_after_visual"
+      control_flags=(
+        --directional-query-source question_attention_pooling
+        --directional-static-visual-write
+        --directional-sandwich-text-prompt
+        --dynamic-late-start-fraction 0.10
+        --expected-dynamic-late-start-parameters 7709952
+      )
+      ;;
     question_static_visual_sandwich_frozen_static_p20)
       if [ "$dataset" != "pathvqa" ]; then
         echo "[ERR] Frozen Static P20 control is currently defined only for PathVQA" >&2
@@ -1649,6 +1665,63 @@ run_pathvqa_qdpt_frozen_static_p20_sandwich_seeds44_45() {
     return 1
   fi
   echo "[PATHVQA_QDPT_FROZEN_STATIC_P20_DONE] seeds=44,45 protocol=epoch3_validation_only"
+}
+
+find_completed_pathvqa_qdpt_dynamic_late_start_run() {
+  local run_seed="$1"
+  local candidate
+  while IFS= read -r candidate; do
+    if [ -f "$candidate/checkpoints/epoch_3/dynamic_prompt_config.json" ] \
+      && [ -f "$candidate/checkpoints/epoch_3/dynamic_prompt.pt" ] \
+      && [ -f "$candidate/eval_validation/epoch_3/pathvqa_summary.json" ] \
+      && [ -f "$candidate/dynamic_late_start_config.json" ] \
+      && [ -f "$candidate/dynamic_late_start_audit.jsonl" ]; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done < <(
+    find "$PATHVQA_DYNAMIC_PROMPT_OUTPUT_ROOT" -mindepth 1 -maxdepth 1 -type d \
+      -name "pathvqa_qdpt_d768_question_q10_l17_p20_s8_av10_sandwich_dynamic_late_start10_seed${run_seed}_*" \
+      -printf '%T@\t%p\n' 2>/dev/null \
+      | sort -nr \
+      | cut -f2-
+  )
+  return 1
+}
+
+run_pathvqa_qdpt_dynamic_late_start_sandwich_seeds45_44() {
+  local seed45_run seed44_run summary45 summary44
+  seed45_run="$(find_completed_pathvqa_qdpt_dynamic_late_start_run 45)" \
+    || seed45_run=""
+  if [ -z "$seed45_run" ]; then
+    run_qdpt_d768_final_dataset \
+      pathvqa question_static_visual_sandwich_dynamic_late_start10 45 \
+      || return 1
+    seed45_run="$(find_completed_pathvqa_qdpt_dynamic_late_start_run 45)" \
+      || return 1
+  else
+    echo "[PATHVQA_QDPT_DYNAMIC_LATE_START_SKIP_COMPLETE] seed=45 run=$seed45_run"
+  fi
+  summary45="$seed45_run/eval_validation/epoch_3/pathvqa_summary.json"
+  if ! python -c 'import json,sys; d=json.load(open(sys.argv[1],encoding="utf-8")); overall=float(d["overall_accuracy"]); free=float(d["free_form_accuracy"]); print(f"[PATHVQA_QDPT_DYNAMIC_LATE_START_SEED45_GATE] overall={overall:.10f} minimum=56.9935 free_form={free:.10f} minimum_free_form=23.4949 pass={overall >= 56.9935 and free >= 23.4949}"); raise SystemExit(0 if overall >= 56.9935 and free >= 23.4949 else 1)' "$summary45"; then
+    echo "[PATHVQA_QDPT_DYNAMIC_LATE_START_STOP] seed45 failed the preregistered score gate; seed44 was not started."
+    return 0
+  fi
+
+  seed44_run="$(find_completed_pathvqa_qdpt_dynamic_late_start_run 44)" \
+    || seed44_run=""
+  if [ -z "$seed44_run" ]; then
+    run_qdpt_d768_final_dataset \
+      pathvqa question_static_visual_sandwich_dynamic_late_start10 44 \
+      || return 1
+    seed44_run="$(find_completed_pathvqa_qdpt_dynamic_late_start_run 44)" \
+      || return 1
+  else
+    echo "[PATHVQA_QDPT_DYNAMIC_LATE_START_SKIP_COMPLETE] seed=44 run=$seed44_run"
+  fi
+  summary44="$seed44_run/eval_validation/epoch_3/pathvqa_summary.json"
+  python -c 'import json,sys; d45=json.load(open(sys.argv[1],encoding="utf-8")); d44=json.load(open(sys.argv[2],encoding="utf-8")); o45=float(d45["overall_accuracy"]); o44=float(d44["overall_accuracy"]); f45=float(d45["free_form_accuracy"]); f44=float(d44["free_form_accuracy"]); mean=(o45+o44)/2; gap=abs(o45-o44); fmean=(f45+f44)/2; eligible=mean >= 58.7350 and gap <= 1.50 and o45 > 57.2935 and fmean >= 25.9518; print(f"[PATHVQA_QDPT_DYNAMIC_LATE_START_TWO_SEED_GATE] seed45={o45:.10f} seed44={o44:.10f} mean={mean:.10f} minimum_mean=58.7350 gap={gap:.10f} maximum_gap=1.50 seed45_recovered={o45 > 57.2935} free_form_mean={fmean:.10f} minimum_free_form_mean=25.9518 eligible_for_seed46={eligible}")' "$summary45" "$summary44" || return 1
+  echo "[PATHVQA_QDPT_DYNAMIC_LATE_START_DONE] test_evaluation=false seed46_automatic_run=false"
 }
 
 require_completed_pathvqa_qdpt_seed_run() {
@@ -4177,6 +4250,9 @@ case "$RUN_TARGET" in
     ;;
   pathvqa_qdpt_frozen_static_p20_sandwich_seeds44_45)
     run_pathvqa_qdpt_frozen_static_p20_sandwich_seeds44_45 || failures=$((failures + 1))
+    ;;
+  pathvqa_qdpt_dynamic_late_start_sandwich_seeds45_44)
+    run_pathvqa_qdpt_dynamic_late_start_sandwich_seeds45_44 || failures=$((failures + 1))
     ;;
   qdpt_dense_sandwich_final_suite)
     run_qdpt_dense_sandwich_final_suite || failures=$((failures + 1))

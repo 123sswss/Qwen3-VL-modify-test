@@ -15,6 +15,7 @@ from slake.dynamic_prompt_tuning import (
     DynamicPromptCrossAttention,
     DynamicPromptTuningModel,
 )
+from pathvqa.train_dynamic_prompt import DynamicLateStartCallback
 
 
 class _FakeTokenizer:
@@ -550,6 +551,78 @@ class DynamicPromptTuningTest(unittest.TestCase):
                 if parameter.requires_grad
             },
         )
+
+    def test_directional_dynamic_late_start_preserves_dormant_parameters(self):
+        model = DynamicPromptTuningModel(
+            _FakeMultimodalModel(),
+            tokenizer=_FakeTokenizer(),
+            prompt_length=2,
+            init_seed=5,
+            attention_dim=4,
+            num_heads=2,
+            sparse_visual_anchor_layers=(1,),
+            sparse_visual_rep_tokens=2,
+            sparse_visual_attention_dim=4,
+            sparse_visual_heads=2,
+            workspace_tokens=3,
+            workspace_dim=8,
+            workspace_heads=2,
+            directional_concat_workspace=True,
+            directional_visual_dynamic_write=False,
+            directional_sandwich_text_prompt=True,
+        )
+        dynamic_parameters = model.directional_dynamic_branch_parameters()
+        dynamic_ids = {id(parameter) for parameter in dynamic_parameters}
+        self.assertNotIn(id(model.soft_prompt), dynamic_ids)
+        self.assertNotIn(id(model.workspace_text_anchor), dynamic_ids)
+        self.assertNotIn(id(model.sparse_visual.private_visual_prompt), dynamic_ids)
+        self.assertNotIn(id(model.sparse_visual.workspace_visual_anchor), dynamic_ids)
+        self.assertIn(
+            id(model.workspace_text_projection.output_projection.weight),
+            dynamic_ids,
+        )
+        self.assertEqual(model.directional_dynamic_output_head_max_abs(), 0.0)
+
+        optimizer = torch.optim.AdamW(
+            [parameter for parameter in model.parameters() if parameter.requires_grad],
+            lr=0.01,
+            weight_decay=0.1,
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            callback = DynamicLateStartCallback(Path(directory), fraction=0.1)
+            state = SimpleNamespace(max_steps=10, global_step=0)
+            control = SimpleNamespace()
+            callback.on_train_begin(None, state, control, model=model)
+            before = [parameter.detach().clone() for parameter in dynamic_parameters]
+            soft_prompt_before = model.soft_prompt.detach().clone()
+
+            model(**self._batch()).loss.backward()
+            callback.on_pre_optimizer_step(None, state, control, model=model)
+            self.assertTrue(
+                all(parameter.grad is None for parameter in dynamic_parameters)
+            )
+            optimizer.step()
+            optimizer.zero_grad(set_to_none=True)
+            for parameter, expected in zip(dynamic_parameters, before):
+                torch.testing.assert_close(parameter, expected, rtol=0.0, atol=0.0)
+            self.assertFalse(torch.equal(model.soft_prompt, soft_prompt_before))
+
+            state.global_step = 1
+            callback.on_step_begin(None, state, control, model=model)
+            self.assertEqual(model._training_dynamic_delta_scale, 1.0)
+            model(**self._batch()).loss.backward()
+            callback.on_pre_optimizer_step(None, state, control, model=model)
+            self.assertTrue(callback.first_active_step_audited)
+            self.assertGreater(
+                float(
+                    model.workspace_text_projection.output_projection.weight.grad
+                    .detach()
+                    .float()
+                    .norm()
+                    .item()
+                ),
+                0.0,
+            )
 
     def test_directional_sandwich_places_prompts_around_visual_segment(self):
         model = DynamicPromptTuningModel(

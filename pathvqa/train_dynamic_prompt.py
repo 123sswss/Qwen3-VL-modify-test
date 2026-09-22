@@ -4,8 +4,10 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import importlib.util
 import json
+import math
 import random
 from functools import lru_cache
 from pathlib import Path
@@ -209,6 +211,290 @@ class DynamicPromptTrainer(Trainer):
         return self.optimizer
 
 
+class DynamicLateStartCallback(TrainerCallback):
+    """Keep the Directional delta branch dormant for an initial step fraction."""
+
+    def __init__(
+        self,
+        output_dir: Path,
+        fraction: float,
+        expected_dynamic_parameters: int | None = None,
+    ) -> None:
+        self.output_dir = output_dir
+        self.fraction = float(fraction)
+        self.expected_dynamic_parameters = expected_dynamic_parameters
+        self.audit_path = output_dir / "dynamic_late_start_audit.jsonl"
+        self.config_path = output_dir / "dynamic_late_start_config.json"
+        self.sleep_optimizer_steps = 0
+        self.total_optimizer_steps = 0
+        self.dynamic_parameters: list[torch.nn.Parameter] = []
+        self.initial_parameter_sha256: str | None = None
+        self.activation_parameter_sha256: str | None = None
+        self.activated = False
+        self.first_active_step_audited = False
+
+    @staticmethod
+    def _parameter_sha256(parameters: List[torch.nn.Parameter]) -> str:
+        digest = hashlib.sha256()
+        for parameter in parameters:
+            tensor = parameter.detach().cpu().float().contiguous()
+            digest.update(str(tuple(parameter.shape)).encode("ascii"))
+            digest.update(tensor.numpy().tobytes())
+        return digest.hexdigest()
+
+    @staticmethod
+    def _gradient_norm(parameters: List[torch.nn.Parameter]) -> float:
+        squares = [
+            parameter.grad.detach().float().pow(2).sum()
+            for parameter in parameters
+            if parameter.grad is not None
+        ]
+        if not squares:
+            return 0.0
+        return float(torch.stack(squares).sum().sqrt().item())
+
+    @staticmethod
+    def _single_gradient_norm(parameter: torch.nn.Parameter | None) -> float:
+        if parameter is None or parameter.grad is None:
+            return 0.0
+        return float(parameter.grad.detach().float().norm().item())
+
+    def _write_event(self, event: Dict[str, Any]) -> None:
+        self.output_dir.mkdir(parents=True, exist_ok=True)
+        with self.audit_path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(event, ensure_ascii=False) + "\n")
+        print("[DYNAMIC_LATE_START_AUDIT] " + json.dumps(event, ensure_ascii=False))
+
+    def on_train_begin(self, args, state, control, **kwargs):
+        model = kwargs["model"]
+        self.total_optimizer_steps = int(state.max_steps)
+        self.sleep_optimizer_steps = int(
+            math.ceil(self.total_optimizer_steps * self.fraction)
+        )
+        if self.sleep_optimizer_steps < 1:
+            raise RuntimeError("Dynamic late start must sleep for at least one step")
+        self.dynamic_parameters = model.directional_dynamic_branch_parameters()
+        if not self.dynamic_parameters:
+            raise RuntimeError("Dynamic late start found no dynamic branch parameters")
+        dynamic_parameter_count = sum(
+            parameter.numel() for parameter in self.dynamic_parameters
+        )
+        if (
+            self.expected_dynamic_parameters is not None
+            and dynamic_parameter_count != self.expected_dynamic_parameters
+        ):
+            raise RuntimeError(
+                "Dynamic late-start parameter audit failed: "
+                f"expected={self.expected_dynamic_parameters} "
+                f"actual={dynamic_parameter_count}"
+            )
+        output_head_max_abs = model.directional_dynamic_output_head_max_abs()
+        if output_head_max_abs != 0.0:
+            raise RuntimeError(
+                "Dynamic late start requires an exactly zero-initialized output head: "
+                f"max_abs={output_head_max_abs}"
+            )
+        self.initial_parameter_sha256 = self._parameter_sha256(
+            self.dynamic_parameters
+        )
+        model.set_training_dynamic_delta_scale(0.0)
+        config = {
+            "fraction": self.fraction,
+            "total_optimizer_steps": self.total_optimizer_steps,
+            "sleep_optimizer_steps": self.sleep_optimizer_steps,
+            "first_active_zero_based_step": self.sleep_optimizer_steps,
+            "dynamic_parameter_count": dynamic_parameter_count,
+            "expected_dynamic_parameter_count": self.expected_dynamic_parameters,
+            "initial_parameter_sha256": self.initial_parameter_sha256,
+            "output_head_initial_max_abs": output_head_max_abs,
+            "scheduler_restarted": False,
+            "extra_training_steps": 0,
+            "sleep_optimizer_policy": "dynamic_grad_none_before_adamw",
+        }
+        self.output_dir.mkdir(parents=True, exist_ok=True)
+        with self.config_path.open("w", encoding="utf-8") as handle:
+            json.dump(config, handle, ensure_ascii=False, indent=2)
+        self._write_event({"event": "sleep_begin", "step": 0, **config})
+        return control
+
+    def on_step_begin(self, args, state, control, **kwargs):
+        step = int(state.global_step)
+        if self.activated or step < self.sleep_optimizer_steps:
+            return control
+        model = kwargs["model"]
+        self.activation_parameter_sha256 = self._parameter_sha256(
+            self.dynamic_parameters
+        )
+        unchanged = self.activation_parameter_sha256 == self.initial_parameter_sha256
+        output_head_max_abs = model.directional_dynamic_output_head_max_abs()
+        if not unchanged or output_head_max_abs != 0.0:
+            raise RuntimeError(
+                "Dormant dynamic branch changed before activation: "
+                f"parameters_unchanged={unchanged} "
+                f"output_head_max_abs={output_head_max_abs}"
+            )
+        model.set_training_dynamic_delta_scale(1.0)
+        self.activated = True
+        self._write_event(
+            {
+                "event": "activate_before_forward",
+                "step": step,
+                "parameters_unchanged": unchanged,
+                "activation_parameter_sha256": self.activation_parameter_sha256,
+                "output_head_max_abs": output_head_max_abs,
+                "dynamic_delta_scale": 1.0,
+            }
+        )
+        return control
+
+    def on_pre_optimizer_step(self, args, state, control, **kwargs):
+        step = int(state.global_step)
+        model = kwargs["model"]
+        dynamic_grad_norm = self._gradient_norm(self.dynamic_parameters)
+        if step < self.sleep_optimizer_steps:
+            if dynamic_grad_norm != 0.0:
+                raise RuntimeError(
+                    "Dormant dynamic branch received a nonzero gradient: "
+                    f"step={step} norm={dynamic_grad_norm}"
+                )
+            gradients_cleared = 0
+            for parameter in self.dynamic_parameters:
+                if parameter.grad is not None:
+                    parameter.grad = None
+                    gradients_cleared += 1
+            if step in (0, self.sleep_optimizer_steps - 1):
+                sparse_visual = model.sparse_visual
+                self._write_event(
+                    {
+                        "event": "sleep_pre_optimizer",
+                        "step": step,
+                        "dynamic_grad_norm": dynamic_grad_norm,
+                        "dynamic_gradients_set_to_none": gradients_cleared,
+                        "dynamic_delta_scale": 0.0,
+                        "soft_prompt_grad_norm": self._single_gradient_norm(
+                            model.soft_prompt
+                        ),
+                        "text_anchor_grad_norm": self._single_gradient_norm(
+                            model.workspace_text_anchor
+                        ),
+                        "private_visual_prompt_grad_norm": self._single_gradient_norm(
+                            sparse_visual.private_visual_prompt
+                        ),
+                        "visual_anchor_grad_norm": self._single_gradient_norm(
+                            sparse_visual.workspace_visual_anchor
+                        ),
+                        "raw_delta_norm": float(
+                            model.debug_context[
+                                "workspace_text_raw_delta_norm_mean"
+                            ]
+                            .detach()
+                            .float()
+                            .item()
+                        ),
+                        "delta_to_anchor_ratio": float(
+                            model.debug_context[
+                                "workspace_text_delta_to_anchor_ratio"
+                            ]
+                            .detach()
+                            .float()
+                            .item()
+                        ),
+                        "visual_attention_entropy": float(
+                            model.debug_context[
+                                "workspace_visual_attention_entropy_norm"
+                            ]
+                            .detach()
+                            .float()
+                            .item()
+                        ),
+                    }
+                )
+            return control
+        if not self.first_active_step_audited:
+            raw_delta_norm = float(
+                model.debug_context["workspace_text_raw_delta_norm_mean"]
+                .detach()
+                .float()
+                .item()
+            )
+            delta_to_anchor = float(
+                model.debug_context["workspace_text_delta_to_anchor_ratio"]
+                .detach()
+                .float()
+                .item()
+            )
+            if raw_delta_norm != 0.0 or delta_to_anchor != 0.0:
+                raise RuntimeError(
+                    "Dynamic branch activation introduced a nonzero residual jump: "
+                    f"raw_delta_norm={raw_delta_norm} "
+                    f"delta_to_anchor={delta_to_anchor}"
+                )
+            self.first_active_step_audited = True
+            self._write_event(
+                {
+                    "event": "first_active_pre_optimizer",
+                    "step": step,
+                    "dynamic_grad_norm": dynamic_grad_norm,
+                    "raw_delta_norm": raw_delta_norm,
+                    "delta_to_anchor_ratio": delta_to_anchor,
+                    "visual_attention_entropy": float(
+                        model.debug_context[
+                            "workspace_visual_attention_entropy_norm"
+                        ]
+                        .detach()
+                        .float()
+                        .item()
+                    ),
+                }
+            )
+        return control
+
+    def on_log(self, args, state, control, logs=None, **kwargs):
+        if logs is None or "loss" not in logs:
+            return control
+        step = int(state.global_step)
+        self._write_event(
+            {
+                "event": "loss",
+                "step": step,
+                "phase": (
+                    "sleep" if step <= self.sleep_optimizer_steps else "joint"
+                ),
+                "loss": float(logs["loss"]),
+                "learning_rate": float(logs.get("learning_rate", 0.0)),
+            }
+        )
+        return control
+
+    def on_train_end(self, args, state, control, **kwargs):
+        if not self.activated or not self.first_active_step_audited:
+            raise RuntimeError("Dynamic late-start activation audit did not complete")
+        self._write_event(
+            {
+                "event": "train_end",
+                "step": int(state.global_step),
+                "activated": True,
+                "first_active_step_audited": True,
+            }
+        )
+        return control
+
+    def summary(self) -> Dict[str, Any]:
+        return {
+            "fraction": self.fraction,
+            "total_optimizer_steps": self.total_optimizer_steps,
+            "sleep_optimizer_steps": self.sleep_optimizer_steps,
+            "first_active_zero_based_step": self.sleep_optimizer_steps,
+            "initial_parameter_sha256": self.initial_parameter_sha256,
+            "activation_parameter_sha256": self.activation_parameter_sha256,
+            "parameters_unchanged_during_sleep": (
+                self.initial_parameter_sha256 == self.activation_parameter_sha256
+            ),
+            "first_active_zero_residual_audited": self.first_active_step_audited,
+            "audit_log": str(self.audit_path),
+        }
+
+
 class DynamicPromptCallback(TrainerCallback):
     def __init__(
         self,
@@ -261,6 +547,29 @@ class DynamicPromptCallback(TrainerCallback):
             else torch.tensor(0.0)
         )
         sparse_visual = getattr(model, "sparse_visual", None)
+        late_dynamic_parameters = (
+            model.directional_dynamic_branch_parameters()
+            if getattr(model, "directional_concat_workspace_enabled", False)
+            else []
+        )
+        late_dynamic_grads = [
+            parameter.grad.detach().float().pow(2).sum()
+            for parameter in late_dynamic_parameters
+            if parameter.grad is not None
+        ]
+        late_dynamic_grad_norm = (
+            torch.stack(late_dynamic_grads).sum().sqrt()
+            if late_dynamic_grads
+            else torch.tensor(0.0)
+        )
+        visual_anchor = (
+            getattr(sparse_visual, "workspace_visual_anchor", None)
+            if sparse_visual is not None
+            else None
+        )
+        visual_anchor_grad = (
+            visual_anchor.grad if visual_anchor is not None else None
+        )
         sparse_grads = [
             parameter.grad.detach().float().pow(2).sum()
             for parameter in parameter_groups.get("sparse_visual", [])
@@ -300,6 +609,17 @@ class DynamicPromptCallback(TrainerCallback):
                 else 0.0
             ),
             "dynamic_prompt_grad_norm": float(dynamic_grad_norm.item()),
+            "directional_dynamic_branch_grad_norm": float(
+                late_dynamic_grad_norm.item()
+            ),
+            "training_dynamic_delta_scale": float(
+                getattr(model, "_training_dynamic_delta_scale", 1.0)
+            ),
+            "workspace_visual_anchor_grad_norm": (
+                float(visual_anchor_grad.detach().float().norm().item())
+                if visual_anchor_grad is not None
+                else 0.0
+            ),
             "sparse_visual_grad_norm": float(sparse_grad_norm.item()),
             "shared_workspace_grad_norm": (
                 float(torch.stack(workspace_grads).sum().sqrt().item())
@@ -438,6 +758,21 @@ def parse_args(dataset_name: str = "pathvqa") -> argparse.Namespace:
         ),
     )
     parser.add_argument("--dynamic-lr", type=float, default=3e-4)
+    parser.add_argument(
+        "--dynamic-late-start-fraction",
+        type=float,
+        default=0.0,
+        help=(
+            "Keep the Directional text-delta generator dormant for this initial "
+            "fraction of optimizer steps, then resume joint training without "
+            "restarting the global scheduler."
+        ),
+    )
+    parser.add_argument(
+        "--expected-dynamic-late-start-parameters",
+        type=int,
+        help="Optional exact parameter-count audit for the dormant branch.",
+    )
     parser.add_argument("--sparse-visual", action="store_true")
     parser.add_argument(
         "--sparse-visual-anchor-layers",
@@ -598,6 +933,25 @@ def parse_args(dataset_name: str = "pathvqa") -> argparse.Namespace:
         parser.error("Learning rates must be positive")
     if args.dataloader_workers < 0:
         parser.error("--dataloader-workers must be non-negative")
+    if not 0.0 <= args.dynamic_late_start_fraction < 1.0:
+        parser.error("--dynamic-late-start-fraction must be in [0, 1)")
+    if args.dynamic_late_start_fraction > 0.0 and not args.directional_concat_workspace:
+        parser.error(
+            "--dynamic-late-start-fraction requires --directional-concat-workspace"
+        )
+    if (
+        args.expected_dynamic_late_start_parameters is not None
+        and args.expected_dynamic_late_start_parameters < 1
+    ):
+        parser.error("--expected-dynamic-late-start-parameters must be positive")
+    if (
+        args.expected_dynamic_late_start_parameters is not None
+        and args.dynamic_late_start_fraction == 0.0
+    ):
+        parser.error(
+            "--expected-dynamic-late-start-parameters requires a nonzero "
+            "--dynamic-late-start-fraction"
+        )
     if args.throughput_warmup_steps < 0 or args.throughput_timed_steps < 1:
         parser.error("Throughput warmup must be non-negative and timed steps positive")
     if args.throughput_benchmark and args.marathon_validation:
@@ -871,6 +1225,7 @@ def main(dataset_name: str = "pathvqa") -> int:
         f"parameters={counts} total={trainable} "
         f"epochs={args.epochs} prompt_lr={args.prompt_lr} "
         f"dynamic_lr={args.dynamic_lr} seed={args.seed} data_seed={args.data_seed} "
+        f"dynamic_late_start_fraction={args.dynamic_late_start_fraction} "
         f"sparse_visual={args.sparse_visual} "
         f"sparse_anchors={list(args.sparse_visual_anchor_layers) if args.sparse_visual else []} "
         f"sparse_rep_tokens={args.sparse_visual_rep_tokens if args.sparse_visual and (not args.directional_concat_workspace or (args.directional_static_visual_write and not args.directional_direct_visual_z_tokens)) else 0} "
@@ -930,6 +1285,16 @@ def main(dataset_name: str = "pathvqa") -> int:
         else None
     )
     callbacks = []
+    dynamic_late_start_callback = None
+    if args.dynamic_late_start_fraction > 0.0:
+        if args.throughput_benchmark:
+            raise ValueError("Dynamic late start is incompatible with throughput mode")
+        dynamic_late_start_callback = DynamicLateStartCallback(
+            args.output_dir,
+            args.dynamic_late_start_fraction,
+            args.expected_dynamic_late_start_parameters,
+        )
+        callbacks.append(dynamic_late_start_callback)
     if args.throughput_benchmark:
         callbacks.append(
             ThroughputBenchmarkCallback(
@@ -1012,6 +1377,11 @@ def main(dataset_name: str = "pathvqa") -> int:
             else None
         ),
         "dynamic_learning_rate": args.dynamic_lr,
+        "dynamic_late_start": (
+            dynamic_late_start_callback.summary()
+            if dynamic_late_start_callback is not None
+            else None
+        ),
         "sparse_visual_learning_rate": args.sparse_visual_lr,
         "shared_s_text_mode": args.shared_s_text_mode,
         "shared_s_text_merger": (

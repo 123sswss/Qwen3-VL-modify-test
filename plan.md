@@ -230,8 +230,8 @@
 - [x] 为模块交换加入严格参数来源审计；实际六项运行均通过形状与来源检查。
 - [ ] 本地完成静态检查和测试。
 - [x] 用户授权后完成服务器推理级模块交换，并将完整结果计入两份实验记录。
-- [ ] 阶段一完成后更新 `EXPERIMENT_RESULTS.md` 与 `result.md`，再选择唯一稳定化干预。
-- [ ] 运行首个稳定化控制：分别用同seed独立Static P20 epoch3初始化并冻结QDPT的LLM侧P20，其余Visual18、A_t10和条件分支按原协议重新训练seed44/45；目标名`pathvqa_qdpt_frozen_static_p20_sandwich_seeds44_45`。若均值下降超过0.30或两seed差距仍高于1.50，不补seed46。
+- [x] 阶段一现有诊断与首个稳定化控制结果已更新至 `EXPERIMENT_RESULTS.md` 与 `result.md`。
+- [x] 首个稳定化控制已停止并关闭：seed45冻结同seedStatic P20后Overall为55.0248，较原QDPT seed45下降2.2687且几乎退化至Static P20基线；seed44因旧checkpoint缺少seed元数据在训练前失败。按止损规则不修该兼容问题、不补跑seed44/46，不连续叠加补丁抢救。
 
 ## 11. 停止规则
 

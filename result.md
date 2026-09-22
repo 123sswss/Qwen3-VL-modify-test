@@ -255,3 +255,8 @@ This file is the concise experiment memory shared by the user and Codex. The com
 - 本条明确续补上一条记录，不修改旧四项结果。`Visual18_45+rest_44`为**60.4729 Overall**，相对receiver44仅-0.3036，Yes/No +0.0640、Free-form -0.6701，配对95% CI[-0.5578,-0.0474]、McNemar p=0.0271；`Visual18_44+rest_45`为**57.0858**，相对receiver45仅-0.2077，Yes/No -0.0320、Free-form -0.3829，CI[-0.5212,+0.0960]、p=0.2082。
 - Visual18双向平均绝对损失仅**0.2556**，而P20与文本Anchor分别为4.3537和7.8287；交换后seed间差距仍保留原差距约97%。因此Layer17完整`S8+A_v10`视觉Prompt具有很强跨seed可移植性，可排除为当前方差的主要来源。后续优先检查LLM侧P20、文本Anchor、动态生成器的初始化与联合优化轨迹，不优先重构轻量视觉Prompt。
 - 边界：该实验只排除了保存的Visual18终点张量是主因，不能推出所有视觉适配均无关；P20/Anchor的大幅交换损失证明文本侧强共适应，但仍不能把方差唯一归因于其中某一张量。
+
+## 2026-09-22 冻结同seed Static P20稳定化控制（负结果，路线关闭）
+
+- seed45在加载同seed独立Static P20 epoch3并冻结P20、仅重新训练Visual18/A_t10/完整动态分支后，PathVQA Validation为 **55.0248 Overall /89.8880 Yes-No /20.2616 Free-form**，较原QDPT seed45下降 **2.2687/0.8000/3.7333**；Overall又与独立Static P20 seed45的55.0567几乎相同。说明当前冻结P20方案使动态分支未能恢复QDPT增益，不满足最多下降0.30分的止损线。
+- seed44因旧Static Prompt checkpoint没有保存seed元数据，在训练前被严格加载检查拒绝，报`checkpoint=None model=44`，无分数。这是旧checkpoint兼容问题而非训练发散。鉴于seed45已构成充分的性能否决证据，本路线直接关闭：不修兼容逻辑，不补跑seed44/46。单seed不能回答方差是否下降，但足以否定“预训练并冻结P20可在基本不扣分下稳定QDPT”；当前增益依赖P20、A_t与条件分支的联合适配。

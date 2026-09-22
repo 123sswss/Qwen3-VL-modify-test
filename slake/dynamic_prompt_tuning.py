@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 from collections import deque
@@ -463,6 +464,71 @@ class DynamicPromptTuningModel(nn.Module):
         self._intervention_audited = False
         self._workspace_text_write_disabled = False
         self._directional_text_delta_scale = 1.0
+        self.frozen_soft_prompt_source: str | None = None
+        self.frozen_soft_prompt_sha256: str | None = None
+
+    def load_frozen_soft_prompt(self, checkpoint_dir: str | Path) -> None:
+        """Load a standalone Static P20 checkpoint and freeze only that tensor."""
+        if self.soft_prompt is None:
+            raise RuntimeError("Frozen Static P20 requires a private soft_prompt")
+        checkpoint_path = Path(checkpoint_dir)
+        config_path = checkpoint_path / "prompt_config.json"
+        weights_path = checkpoint_path / "soft_prompt.pt"
+        if not config_path.is_file() or not weights_path.is_file():
+            raise FileNotFoundError(
+                f"Static Prompt checkpoint is incomplete: {checkpoint_path}"
+            )
+        with config_path.open("r", encoding="utf-8") as handle:
+            config = json.load(handle)
+        if config.get("method") != "static_prompt_tuning":
+            raise ValueError(
+                "Frozen P20 source must be a standalone Static Prompt checkpoint; "
+                f"method={config.get('method')!r}"
+            )
+        if int(config.get("init_seed", -1)) != self.init_seed:
+            raise ValueError(
+                "Static Prompt seed must match the QDPT model seed: "
+                f"checkpoint={config.get('init_seed')} model={self.init_seed}"
+            )
+        if int(config.get("prompt_length", -1)) != self.private_prompt_length:
+            raise ValueError(
+                "Static Prompt length mismatch: "
+                f"checkpoint={config.get('prompt_length')} "
+                f"model={self.private_prompt_length}"
+            )
+        if int(config.get("hidden_size", -1)) != self.hidden_size:
+            raise ValueError(
+                "Static Prompt hidden size mismatch: "
+                f"checkpoint={config.get('hidden_size')} model={self.hidden_size}"
+            )
+        state = torch.load(weights_path, map_location="cpu", weights_only=True)
+        prompt = state.get("soft_prompt")
+        if not torch.is_tensor(prompt):
+            raise ValueError("Static Prompt checkpoint has no text soft_prompt tensor")
+        if tuple(prompt.shape) != tuple(self.soft_prompt.shape):
+            raise ValueError(
+                "Static Prompt tensor shape mismatch: "
+                f"checkpoint={tuple(prompt.shape)} model={tuple(self.soft_prompt.shape)}"
+            )
+        prompt_cpu = (
+            prompt.detach().to(device="cpu", dtype=torch.float32).contiguous()
+        )
+        digest = hashlib.sha256(prompt_cpu.numpy().tobytes()).hexdigest()
+        with torch.no_grad():
+            self.soft_prompt.copy_(
+                prompt_cpu.to(
+                    device=self.soft_prompt.device,
+                    dtype=self.soft_prompt.dtype,
+                )
+            )
+        self.soft_prompt.requires_grad_(False)
+        self.frozen_soft_prompt_source = str(checkpoint_path.resolve())
+        self.frozen_soft_prompt_sha256 = digest
+        print(
+            "[FROZEN_STATIC_P20_LOADED] "
+            f"checkpoint={self.frozen_soft_prompt_source} "
+            f"shape={tuple(self.soft_prompt.shape)} sha256={digest}"
+        )
 
     @staticmethod
     def _resolve_visual_token_ids(tokenizer: Any) -> Sequence[int]:
@@ -488,7 +554,7 @@ class DynamicPromptTuningModel(nn.Module):
         prompt_parameters = [
             parameter
             for parameter in (self.soft_prompt, self.workspace_text_anchor)
-            if parameter is not None
+            if parameter is not None and parameter.requires_grad
         ]
         groups = {
             "soft_prompt": prompt_parameters,
@@ -1362,6 +1428,15 @@ class DynamicPromptTuningModel(nn.Module):
             "attention_dim": self.attention_dim,
             "num_heads": self.num_heads,
             "init_seed": self.init_seed,
+            "frozen_soft_prompt": (
+                {
+                    "source_checkpoint": self.frozen_soft_prompt_source,
+                    "sha256": self.frozen_soft_prompt_sha256,
+                    "trainable": False,
+                }
+                if self.frozen_soft_prompt_source is not None
+                else None
+            ),
             "memory": (
                 (
                     f"{self.directional_query_source}_queries_plus_full_visual_kv"
@@ -1500,7 +1575,9 @@ class DynamicPromptTuningModel(nn.Module):
                 if self.directional_concat_workspace_enabled
                 else None
             ),
-            "train_soft_prompt": self.soft_prompt is not None,
+            "train_soft_prompt": (
+                self.soft_prompt is not None and self.soft_prompt.requires_grad
+            ),
             "sparse_visual": (
                 {
                     "anchor_layers": list(self.sparse_visual.anchor_layers),

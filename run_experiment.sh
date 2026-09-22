@@ -1104,6 +1104,7 @@ run_qdpt_d768_final_dataset() {
   local visual_conditioning text_prompt_placement text_projection_hidden_dim
   local private_visual_tokens visual_workspace_tokens unified_visual_tokens
   local visual_prompt_tokens_arg
+  local frozen_soft_prompt_checkpoint=""
   local direct_visual_z_tokens=false
   local -a control_flags anchor_layers
   anchor_layers=(17)
@@ -1137,6 +1138,33 @@ run_qdpt_d768_final_dataset() {
         --directional-query-source question_attention_pooling
         --directional-static-visual-write
         --directional-sandwich-text-prompt
+      )
+      ;;
+    question_static_visual_sandwich_frozen_static_p20)
+      if [ "$dataset" != "pathvqa" ]; then
+        echo "[ERR] Frozen Static P20 control is currently defined only for PathVQA" >&2
+        return 2
+      fi
+      local static_prompt_run
+      static_prompt_run="$(find_completed_pathvqa_static_prompt_run "$run_seed")" \
+        || static_prompt_run=""
+      if [ -z "$static_prompt_run" ]; then
+        echo "[ERR] No completed PathVQA Static P20 run for seed=$run_seed" >&2
+        return 1
+      fi
+      frozen_soft_prompt_checkpoint="$static_prompt_run/checkpoints/epoch_3"
+      experiment_stem="qdpt_d768_question_q10_l17_p20_staticinit_frozen_s8_av10_sandwich"
+      expected_trainable=7753984
+      query_source="question_attention_pooling"
+      static_visual_write=true
+      private_visual_tokens=8
+      visual_workspace_tokens=10
+      text_prompt_placement="static_before_visual_dynamic_after_visual"
+      control_flags=(
+        --directional-query-source question_attention_pooling
+        --directional-static-visual-write
+        --directional-sandwich-text-prompt
+        --frozen-soft-prompt-checkpoint "$frozen_soft_prompt_checkpoint"
       )
       ;;
     question_static_visual_sandwich_r256)
@@ -1327,7 +1355,7 @@ run_qdpt_d768_final_dataset() {
   local output_dir
   output_dir="$(available_output_dir "$output_root" "${experiment_name}_${RUN_DATE}")"
   mkdir -p "$output_dir"
-  echo "[QDPT_D768_FINAL_CONFIG] dataset=$dataset experiment=$experiment_name seed=$run_seed data_seed=42 anchors=${anchor_layers[*]} parameter_sharing=all_directional_and_visual_prompt_parameters private_text_prompt=20 text_workspace_anchor=10 private_visual_prompt=$private_visual_tokens visual_workspace_anchor=$visual_workspace_tokens unified_static_visual_prompt=$unified_visual_tokens workspace=10x768 query_source=$query_source visual_conditioning=$visual_conditioning visual_kv=$([ "$visual_conditioning" = "cross_attention" ] && printf 'full_current_anchor_tokens' || printf 'disabled') final_text_z=last_anchor static_visual_write=$static_visual_write direct_visual_z_tokens=$direct_visual_z_tokens visual_dynamic_write=false text_output=dynamic_anchor_token_concat text_projection_hidden_dim=$text_projection_hidden_dim text_prompt_placement=$text_prompt_placement expected_trainable=$expected_trainable epochs=3 full_evaluation=$eval_protocol intermediate_full_evaluation=disabled output=$output_dir"
+  echo "[QDPT_D768_FINAL_CONFIG] dataset=$dataset experiment=$experiment_name seed=$run_seed data_seed=42 anchors=${anchor_layers[*]} parameter_sharing=all_directional_and_visual_prompt_parameters private_text_prompt=20 frozen_static_p20_checkpoint=${frozen_soft_prompt_checkpoint:-none} text_workspace_anchor=10 private_visual_prompt=$private_visual_tokens visual_workspace_anchor=$visual_workspace_tokens unified_static_visual_prompt=$unified_visual_tokens workspace=10x768 query_source=$query_source visual_conditioning=$visual_conditioning visual_kv=$([ "$visual_conditioning" = "cross_attention" ] && printf 'full_current_anchor_tokens' || printf 'disabled') final_text_z=last_anchor static_visual_write=$static_visual_write direct_visual_z_tokens=$direct_visual_z_tokens visual_dynamic_write=false text_output=dynamic_anchor_token_concat text_projection_hidden_dim=$text_projection_hidden_dim text_prompt_placement=$text_prompt_placement expected_trainable=$expected_trainable epochs=3 full_evaluation=$eval_protocol intermediate_full_evaluation=disabled output=$output_dir"
   (
     cd "$ROOT_DIR" || exit 1
     python -m unittest \
@@ -1580,6 +1608,47 @@ find_completed_qdpt_sandwich_run() {
       | cut -f2-
   )
   return 1
+}
+
+find_completed_pathvqa_qdpt_frozen_static_p20_run() {
+  local run_seed="$1"
+  local candidate
+  while IFS= read -r candidate; do
+    if [ -f "$candidate/checkpoints/epoch_3/dynamic_prompt_config.json" ] \
+      && [ -f "$candidate/checkpoints/epoch_3/dynamic_prompt.pt" ] \
+      && [ -f "$candidate/eval_validation/epoch_3/pathvqa_summary.json" ]; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done < <(
+    find "$PATHVQA_DYNAMIC_PROMPT_OUTPUT_ROOT" -mindepth 1 -maxdepth 1 -type d \
+      -name "pathvqa_qdpt_d768_question_q10_l17_p20_staticinit_frozen_s8_av10_sandwich_seed${run_seed}_*" \
+      -printf '%T@\t%p\n' 2>/dev/null \
+      | sort -nr \
+      | cut -f2-
+  )
+  return 1
+}
+
+run_pathvqa_qdpt_frozen_static_p20_sandwich_seeds44_45() {
+  local failures=0
+  local run_seed completed_run
+  for run_seed in 44 45; do
+    completed_run="$(find_completed_pathvqa_qdpt_frozen_static_p20_run "$run_seed")" \
+      || completed_run=""
+    if [ -n "$completed_run" ]; then
+      echo "[PATHVQA_QDPT_FROZEN_STATIC_P20_SKIP_COMPLETE] seed=$run_seed run=$completed_run"
+      continue
+    fi
+    run_qdpt_d768_final_dataset \
+      pathvqa question_static_visual_sandwich_frozen_static_p20 "$run_seed" \
+      || failures=$((failures + 1))
+  done
+  if [ "$failures" -ne 0 ]; then
+    echo "[ERR] Frozen Static P20 QDPT failures=$failures; both seeds were attempted." >&2
+    return 1
+  fi
+  echo "[PATHVQA_QDPT_FROZEN_STATIC_P20_DONE] seeds=44,45 protocol=epoch3_validation_only"
 }
 
 require_completed_pathvqa_qdpt_seed_run() {
@@ -4105,6 +4174,9 @@ case "$RUN_TARGET" in
     ;;
   pathvqa_qdpt_lite_d768_r256_sandwich_seed44)
     run_pathvqa_qdpt_lite_d768_r256_sandwich_seed44 || failures=$((failures + 1))
+    ;;
+  pathvqa_qdpt_frozen_static_p20_sandwich_seeds44_45)
+    run_pathvqa_qdpt_frozen_static_p20_sandwich_seeds44_45 || failures=$((failures + 1))
     ;;
   qdpt_dense_sandwich_final_suite)
     run_qdpt_dense_sandwich_final_suite || failures=$((failures + 1))

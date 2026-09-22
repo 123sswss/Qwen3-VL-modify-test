@@ -89,6 +89,50 @@ class _FakeMultimodalModel(nn.Module):
 
 
 class DynamicPromptTuningTest(unittest.TestCase):
+    def test_load_frozen_static_p20_preserves_trainable_anchor(self):
+        model = DynamicPromptTuningModel(
+            _FakeMultimodalModel(),
+            tokenizer=_FakeTokenizer(),
+            prompt_length=2,
+            init_seed=5,
+            sparse_visual_anchor_layers=(1,),
+            sparse_visual_rep_tokens=1,
+            directional_concat_workspace=True,
+            directional_visual_dynamic_write=False,
+            workspace_tokens=1,
+            workspace_dim=4,
+            workspace_heads=2,
+            directional_query_source="question_attention_pooling",
+            directional_visual_conditioning="cross_attention",
+        )
+        expected = torch.arange(16, dtype=torch.float32).reshape(2, 8)
+        with tempfile.TemporaryDirectory() as directory:
+            checkpoint = Path(directory)
+            (checkpoint / "prompt_config.json").write_text(
+                json.dumps(
+                    {
+                        "method": "static_prompt_tuning",
+                        "prompt_length": 2,
+                        "hidden_size": 8,
+                        "init_seed": 5,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            torch.save(
+                {"soft_prompt": expected, "static_visual_prompt": None},
+                checkpoint / "soft_prompt.pt",
+            )
+            model.load_frozen_soft_prompt(checkpoint)
+
+        torch.testing.assert_close(model.soft_prompt, expected)
+        self.assertFalse(model.soft_prompt.requires_grad)
+        self.assertTrue(model.workspace_text_anchor.requires_grad)
+        prompt_group = model.trainable_parameter_groups()["soft_prompt"]
+        self.assertEqual(len(prompt_group), 1)
+        self.assertIs(prompt_group[0], model.workspace_text_anchor)
+        self.assertIsNotNone(model.frozen_soft_prompt_sha256)
+
     def test_directional_checkpoint_resolves_visual_prompt_table_size(self):
         sparse_visual = {"rep_token_count": 8}
         legacy_directional = {

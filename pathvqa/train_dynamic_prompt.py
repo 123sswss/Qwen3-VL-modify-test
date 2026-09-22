@@ -429,6 +429,14 @@ def parse_args(dataset_name: str = "pathvqa") -> argparse.Namespace:
     parser.add_argument("--seed", type=int, default=44)
     parser.add_argument("--data-seed", type=int, default=42)
     parser.add_argument("--prompt-lr", type=float, default=0.3)
+    parser.add_argument(
+        "--frozen-soft-prompt-checkpoint",
+        type=Path,
+        help=(
+            "Load P20 from a standalone Static Prompt checkpoint and freeze only "
+            "that tensor while training the remaining QDPT parameters."
+        ),
+    )
     parser.add_argument("--dynamic-lr", type=float, default=3e-4)
     parser.add_argument("--sparse-visual", action="store_true")
     parser.add_argument(
@@ -829,6 +837,8 @@ def main(dataset_name: str = "pathvqa") -> int:
             args.directional_text_projection_hidden_dim
         ),
     )
+    if args.frozen_soft_prompt_checkpoint is not None:
+        model.load_frozen_soft_prompt(args.frozen_soft_prompt_checkpoint)
     dataset = _build_train_dataset(dataset_name, args, processor)
     groups = model.trainable_parameter_groups()
     counts = {
@@ -892,7 +902,9 @@ def main(dataset_name: str = "pathvqa") -> int:
         f"workspace_text_ca={args.workspace_text_attention_dim if args.shared_workspace else 0}x{args.workspace_text_heads if args.shared_workspace else 0} "
         f"workspace_visual_ca={args.workspace_visual_attention_dim if args.shared_workspace else 0}x{args.workspace_visual_heads if args.shared_workspace else 0} "
         f"workspace_lr={args.workspace_lr} "
-        f"train_soft_prompt={model.soft_prompt is not None} "
+        f"train_soft_prompt={model.soft_prompt is not None and model.soft_prompt.requires_grad} "
+        f"frozen_soft_prompt_checkpoint={model.frozen_soft_prompt_source or 'none'} "
+        f"frozen_soft_prompt_sha256={model.frozen_soft_prompt_sha256 or 'none'} "
         f"text_workspace_anchor_tokens={model.workspace_prompt_length} "
         f"marathon_validation={args.marathon_validation} "
         f"marathon_validation_start_epoch={args.marathon_validation_start_epoch if args.marathon_validation else 0} "
@@ -990,6 +1002,15 @@ def main(dataset_name: str = "pathvqa") -> int:
         "trainable_parameters": counts,
         "total_trainable_parameters": trainable,
         "prompt_learning_rate": args.prompt_lr,
+        "frozen_soft_prompt": (
+            {
+                "source_checkpoint": model.frozen_soft_prompt_source,
+                "sha256": model.frozen_soft_prompt_sha256,
+                "trainable": False,
+            }
+            if model.frozen_soft_prompt_source is not None
+            else None
+        ),
         "dynamic_learning_rate": args.dynamic_lr,
         "sparse_visual_learning_rate": args.sparse_visual_lr,
         "shared_s_text_mode": args.shared_s_text_mode,
@@ -1111,7 +1132,9 @@ def main(dataset_name: str = "pathvqa") -> int:
             if args.directional_concat_workspace
             else None
         ),
-        "train_soft_prompt": model.soft_prompt is not None,
+        "train_soft_prompt": (
+            model.soft_prompt is not None and model.soft_prompt.requires_grad
+        ),
         "sparse_visual": (
             {
                 "anchor_layers": list(args.sparse_visual_anchor_layers),

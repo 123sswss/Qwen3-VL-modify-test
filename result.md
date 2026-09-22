@@ -260,3 +260,9 @@ This file is the concise experiment memory shared by the user and Codex. The com
 
 - seed45在加载同seed独立Static P20 epoch3并冻结P20、仅重新训练Visual18/A_t10/完整动态分支后，PathVQA Validation为 **55.0248 Overall /89.8880 Yes-No /20.2616 Free-form**，较原QDPT seed45下降 **2.2687/0.8000/3.7333**；Overall又与独立Static P20 seed45的55.0567几乎相同。说明当前冻结P20方案使动态分支未能恢复QDPT增益，不满足最多下降0.30分的止损线。
 - seed44因旧Static Prompt checkpoint没有保存seed元数据，在训练前被严格加载检查拒绝，报`checkpoint=None model=44`，无分数。这是旧checkpoint兼容问题而非训练发散。鉴于seed45已构成充分的性能否决证据，本路线直接关闭：不修兼容逻辑，不补跑seed44/46。单seed不能回答方差是否下降，但足以否定“预训练并冻结P20可在基本不扣分下稳定QDPT”；当前增益依赖P20、A_t与条件分支的联合适配。
+
+## 2026-09-22 动态分支晚启动10%控制（方差降低但均值崩塌，路线关闭）
+
+- 晚启动seed45/44 PathVQA Validation Overall为 **57.8048/57.2136**。相对原同seed QDPT，seed45 **+0.5113**，但seed44 **-3.5629**；两seed均值由59.0350降至 **57.5092 (-1.5258)**。seed差距由3.4830缩至 **0.5912**（缩小83.03%），主要来自压低强seed，不是合格的稳定性改进。
+- Free-form两seed均值由26.4518降至 **25.1595 (-1.2923)**，未达到预注册25.9518下限；seed44为24.5692，较原值下降4.3395。seed45确实回升且通过首轮门槛，但最终两seed均值与Free-form门槛均失败，因此不补seed46、不扫启动比例、不评估Test。
+- 机制上，这说明静态与动态分支同时起跑确实会影响seed依赖的优化轨迹：延迟动态分支能救弱seed45，却会破坏强seed44。它是稳定性来源之一但不是可直接采用的解决方案；固定10%硬切换被否决。边界审计的精确loss、梯度、残差比与注意力熵仍待从服务器`dynamic_late_start_audit.jsonl`提取。

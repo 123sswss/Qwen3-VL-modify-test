@@ -583,6 +583,18 @@ class DynamicPromptTuningTest(unittest.TestCase):
         )
         self.assertEqual(model.directional_dynamic_output_head_max_abs(), 0.0)
 
+        # The fake base model never executes its visual encoder, so supply the
+        # workspace and its diagnostic exactly as the older Directional tests do.
+        workspace = torch.randn(1, 3, 8)
+
+        def fake_workspace():
+            model.sparse_visual.debug_context[
+                "workspace_visual_attention_entropy_norm"
+            ] = workspace.new_tensor(0.5)
+            return workspace
+
+        model.sparse_visual.shared_workspace_text_memory = fake_workspace
+
         optimizer = torch.optim.AdamW(
             [parameter for parameter in model.parameters() if parameter.requires_grad],
             lr=0.01,

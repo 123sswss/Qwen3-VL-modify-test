@@ -261,7 +261,7 @@ def main() -> int:
     parser.add_argument("--output-dir", type=Path, required=True)
     args = parser.parse_args()
     if args.output_dir.exists() and any(
-        path.name not in {"preflight_tests.log", "diagnostic.log"}
+        path.name != "diagnostic.log"
         for path in args.output_dir.iterdir()
     ):
         raise FileExistsError(f"Diagnostic output must be a fresh directory: {args.output_dir}")

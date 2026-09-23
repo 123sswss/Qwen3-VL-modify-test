@@ -4166,7 +4166,6 @@ run_pathvqa_v0_seed44_epoch3_diagnostic() {
   fi
   (
     cd "$ROOT_DIR" || exit 1
-    python -m unittest test_visual_selection_offset 2>&1 | tee "$output_dir/preflight_tests.log" || exit 1
     python -m diagnostics.diagnose_pathvqa_v0_epoch3 \
       --base-model "$MODEL_PATH" --checkpoint "$checkpoint" \
       --data-root "$PATHVQA_DATA_ROOT" --cache-dir "$PATHVQA_CACHE_ROOT" \

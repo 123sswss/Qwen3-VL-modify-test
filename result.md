@@ -281,3 +281,10 @@ This file is the concise experiment memory shared by the user and Codex. The com
 ### 2026-09-23 V0 seed44 epoch3只读诊断首次启动失败
 
 - 目标`pathvqa_v0_seed44_epoch3_diagnostic`在脚本导入阶段因`from train.data_pipeline`报`ModuleNotFoundError`，尚未加载模型、运行128条前向诊断或`offset_off`/`condition_off`完整PathVQA Validation；无新Overall、分项分数或配对CI。未训练、未改checkpoint、未跑Test或其他seed。失败日志位于V0的`diagnostics/`独立输出目录，首次脚本未打印精确目录名，待用户确认；原V0成绩55.6479不变。已修正导入，待同范围重跑；这次失败不构成结构优劣证据。
+
+### 2026-09-23 V0只读诊断在问题mask一致性审计处停止
+
+- 修复导入后，目标成功加载原seed44 epoch3 checkpoint并重新核对2,356,675参数契约，但在首个命中样本`pathvqa:validation:756`发现训练问题token为`[12555,1558,419,2168,1473,30]`、推理prefill为`[12555,1558,419,2168,1473]`，推理少了末尾问号token。原因是现有推理fallback只保留完整字符offset落在原问题内的token，边界token可能跨越问题后的换行而被整体排除。
+- 按预注册停止条件，没有继续128条统计，也没有运行`offset_off`或`condition_off`完整Validation；因此无新分数、独占正确数或配对CI，不能据此判断公共偏移退化。原55.6479应标记为旧推理mask实现下的历史结果，不能再视为训练/推理语义完全一致的干净V0基线。
+- checkpoint未被修改，完整图文仍进入冻结基座；错误只影响V0用于生成条件地图/摘要的真实问题范围及偏移注入位置。当前不重训、不加Norm/gate、不改学习率。若继续，最小正确顺序是先修边界mask，再用同一checkpoint只重跑正常Validation基线，之后才决定是否恢复两项干预。输出：`pathvqa/outputs/visual_selection_offset/diagnostics/pathvqa_v0_seed44_epoch3_diagnostic_20260923_1`。
+- 已实现边界修复：推理选择所有与原问题字符范围相交的token，并强制最终token ID序列与训练问题token完全一致；新增`pathvqa_v0_seed44_mask_fixed_validation`，只重跑同checkpoint正常Validation并与旧预测配对。新分数尚未产生，这不是干预结果或重训授权。

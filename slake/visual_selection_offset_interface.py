@@ -21,6 +21,7 @@ except ModuleNotFoundError:
 
 class VisualSelectionOffsetInterface:
     requires_raw_question = True
+    question_mask_policy = "raw_question_overlap_with_exact_training_ids_v1"
 
     def __init__(self, checkpoint_path: str, base_model_path: str,
                  intervention: str = "normal") -> None:

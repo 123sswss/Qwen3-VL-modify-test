@@ -30,7 +30,8 @@ RUN_DATE="${MMRL_RUN_DATE:-$(date +%Y%m%d)}"
 SEED="${MMRL_FIXED_SEED:-44}"
 SHUTDOWN_ON_EXIT="${MMRL_SHUTDOWN_ON_EXIT:-0}"
 if [ "$RUN_TARGET" = "pathvqa_visual_selection_offset_v0_seed44" ] || \
-   [ "$RUN_TARGET" = "pathvqa_v0_seed44_epoch3_diagnostic" ]; then
+   [ "$RUN_TARGET" = "pathvqa_v0_seed44_epoch3_diagnostic" ] || \
+   [ "$RUN_TARGET" = "pathvqa_v0_seed44_mask_fixed_validation" ]; then
   SHUTDOWN_ON_EXIT=0
 fi
 
@@ -4176,8 +4177,47 @@ run_pathvqa_v0_seed44_epoch3_diagnostic() {
   echo "[PATHVQA_V0_DIAGNOSTIC_DONE] output=$output_dir training=false test=false other_seeds=false"
 }
 
+run_pathvqa_v0_seed44_mask_fixed_validation() {
+  local baseline_root="${PATHVQA_V0_BASELINE_ROOT:-$PATHVQA_V0_OUTPUT_ROOT/pathvqa_v0_visual_selection_offset_seed44_20260923}"
+  local checkpoint="$baseline_root/checkpoints/epoch_3"
+  local baseline_eval="$baseline_root/eval_validation/epoch_3"
+  local output_dir
+  output_dir="$(available_output_dir "$PATHVQA_V0_OUTPUT_ROOT/diagnostics" "pathvqa_v0_seed44_mask_fixed_validation_${RUN_DATE}")"
+  local fixed_eval="$output_dir/mask_fixed_normal"
+  mkdir -p "$fixed_eval"
+  echo "[PATHVQA_V0_MASK_FIXED_OUTPUT] output=$output_dir"
+  if [ ! -f "$checkpoint/visual_selection_offset.pt" ] || \
+     [ ! -f "$baseline_eval/pathvqa_comparisons.json" ]; then
+    echo "[ERR] Complete original V0 checkpoint and Validation predictions required: $baseline_root" >&2
+    return 1
+  fi
+  (
+    cd "$ROOT_DIR" || exit 1
+    python -m pathvqa.pathvqa_official_eval \
+      --backend visual-selection-offset \
+      --base-model "$MODEL_PATH" \
+      --checkpoint "$checkpoint" \
+      --data-root "$PATHVQA_DATA_ROOT" \
+      --cache-dir "$PATHVQA_CACHE_ROOT" \
+      --split validation \
+      --output-dir "$fixed_eval" \
+      2>&1 | tee "$output_dir/mask_fixed_validation.log" || exit 1
+    python -m diagnostics.compare_pathvqa_conditioning_mismatches \
+      --baseline "$baseline_eval" \
+      --intervention-root "$output_dir" \
+      --bootstrap-iterations 10000 \
+      --bootstrap-seed 42 \
+      2>&1 | tee "$output_dir/paired_comparison.log" || exit 1
+  ) || return 1
+  cat "$output_dir/conditioning_mismatch_comparison.tsv"
+  echo "[PATHVQA_V0_MASK_FIXED_DONE] output=$output_dir training=false test=false intervention=false"
+}
+
 failures=0
 case "$RUN_TARGET" in
+  pathvqa_v0_seed44_mask_fixed_validation)
+    run_pathvqa_v0_seed44_mask_fixed_validation || failures=$((failures + 1))
+    ;;
   pathvqa_v0_seed44_epoch3_diagnostic)
     run_pathvqa_v0_seed44_epoch3_diagnostic || failures=$((failures + 1))
     ;;

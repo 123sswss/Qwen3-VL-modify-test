@@ -554,6 +554,9 @@ def main() -> int:
             "base_model": args.base_model,
             "checkpoint": args.checkpoint,
             "v0_intervention": args.v0_intervention,
+            "v0_question_mask_policy": getattr(
+                model, "question_mask_policy", None,
+            ),
             "dynamic_prompt_component_checkpoint": (
                 args.dynamic_prompt_component_checkpoint
             ),

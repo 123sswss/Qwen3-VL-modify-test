@@ -67,8 +67,10 @@ def locate_question_mask(
     if len(matches) != 1 and prompt_text is not None:
         # Evaluation appends a short-answer instruction after the raw question.
         # A BPE token may straddle the question/newline boundary. Match the
-        # complete user text, then retain only tokens whose character offsets
-        # lie wholly inside the raw question (never the instruction).
+        # complete user text, then retain tokens that overlap the raw-question
+        # character range. A tokenizer may attach the following newline to the
+        # final question token; requiring its end offset to remain inside the
+        # question would incorrectly drop that training-time question token.
         if not prompt_text.startswith(str(question).strip()):
             raise ValueError("evaluation prompt does not start with the raw question")
         encoded = tokenizer(
@@ -85,10 +87,16 @@ def locate_question_mask(
             raise ValueError(f"full user text has no unique token span; matches={spans}")
         indices = [
             spans[0] + index for index, (start, end) in enumerate(offsets)
-            if start < end <= len(str(question).strip())
+            if start < len(str(question).strip()) and end > 0
         ]
         if not indices:
-            raise ValueError("no exclusively raw-question tokens after BPE alignment")
+            raise ValueError("no raw-question-overlapping tokens after BPE alignment")
+        selected_ids = [tokens[index] for index in indices]
+        if selected_ids != question_ids:
+            raise ValueError(
+                "prefill raw-question token IDs differ from training semantics "
+                f"after boundary alignment: training={question_ids} prefill={selected_ids}"
+            )
         mask = torch.zeros_like(input_ids, dtype=torch.bool)
         mask[indices] = True
         return mask

@@ -277,3 +277,7 @@ This file is the concise experiment memory shared by the user and Codex. The com
 - 用户补充首批审计、93条训练诊断的摘要及训练报告；未独立读取服务器原始文件。训练6,164.61s、3 epochs、loss12.6862；各分支有有限非零梯度，深层地图明显偏离均匀，不支持“数值炸了/分支全死”的判断。成绩仍为55.6479 Overall，不新增评估结果。
 - 末10条均值condition_rms0.594963、down_rms0.037482，二者均值比约15.87；offset/question RMS比0.681297。地图5/11/17熵均值0.980851/0.907977/0.811040，层权重0.167730/0.549122/0.283148。非均匀不等于正确定位，范数差不等于因果证明。
 - 待证假设：视觉条件在加式ReLU瓶颈中主导激活，可能使问题词得到近似公共偏移，削弱token条件交互。先看词间激活/偏移差异和已训练checkpoint的配对推理干预，再决定是否值得单因素补救；不据此直接加层、扩宽、改学习率或续训。首批与轨迹梯度的聚合/裁剪口径未核实，不能直接比较量级。
+
+### 2026-09-23 V0 seed44 epoch3只读诊断首次启动失败
+
+- 目标`pathvqa_v0_seed44_epoch3_diagnostic`在脚本导入阶段因`from train.data_pipeline`报`ModuleNotFoundError`，尚未加载模型、运行128条前向诊断或`offset_off`/`condition_off`完整PathVQA Validation；无新Overall、分项分数或配对CI。未训练、未改checkpoint、未跑Test或其他seed。失败日志位于V0的`diagnostics/`独立输出目录，首次脚本未打印精确目录名，待用户确认；原V0成绩55.6479不变。已修正导入，待同范围重跑；这次失败不构成结构优劣证据。

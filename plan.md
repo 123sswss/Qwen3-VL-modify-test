@@ -1,6 +1,6 @@
 # QDPT 返修计划：优先解决多随机种子稳定性
 
-> **2026-09-23 V0 epoch3 只读诊断（本地入口已实现，服务器尚未运行）：** 先核对训练/推理真实问题 mask、视觉 post-merger 映射、监控口径和首批/训练轨迹梯度记录时点；若出现明确实现错误，停止后续干预。否则固定 Validation 128条（含16对同图不同问题）做前向探针，再用同一 seed44 epoch3 checkpoint 仅运行 `offset_off`、`condition_off` 两次完整 Validation，与原预测逐样本配对并计算图像簇配对差值区间。所有输出进独立诊断目录，不训练、不改 checkpoint、不评估 Test、不跑其他 seed。完成后依据证据决定是否值得一次最小重训；本计划不授权自动补救训练。待用户执行并回传后，将成功、失败或前置审计止步情况如实追加两份账本。
+> **2026-09-23 V0 epoch3 只读诊断（首次启动在模块导入阶段失败，待修复后同范围重跑）：** 首次服务器启动因诊断脚本错误地从 `train.data_pipeline` 导入而报 `ModuleNotFoundError`，未加载checkpoint、未执行前向或 Validation 干预。已改用项目实际的 `pathvqa.data_pipeline` 导出，并在调度器预先打印独立输出目录；不增加训练或实验分支。重跑仍先核对真实问题 mask、post-merger 映射和监控口径；若有明确实现错误即停止。否则固定 Validation 128条（含16对同图不同问题）前向探针，再用同一 seed44 epoch3 checkpoint 仅运行 `offset_off`、`condition_off` 两次完整 Validation，逐样本配对并计算图像簇配对差值区间。不改checkpoint、不评估Test、不跑其他seed；依据结果再判断是否值得最小重训，本计划不授权补救训练。按用户要求，启动目标不执行单测。
 
 > **2026-09-23 V0 单次实验已完成：** 独立实现问题引导三层视觉选择＋共同原生 Value＋ADePT 风格真实问题偏移。固定 `r_q=128`、`r_delta=192`、三块各64、depthwise k3＋pointwise 残差卷积、P20＋索引17的S8/A_v10 Visual18；偏移输出层 `Normal(0,1e-4)`、零 bias。PathVQA seed44/data seed42、3 epochs、固定epoch3 Validation 为 **55.6479 Overall**，实核可训练参数 **2,356,675**。结果已计入两份实验账本；下一步只读提取首批梯度/偏移与地图诊断，并对照性能缺口。暂不排 Test、其他seed或候选消融；后续服务器实验须重新获得该次明确授权。
 

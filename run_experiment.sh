@@ -4159,6 +4159,7 @@ run_pathvqa_v0_seed44_epoch3_diagnostic() {
   local output_dir
   output_dir="$(available_output_dir "$PATHVQA_V0_OUTPUT_ROOT/diagnostics" "pathvqa_v0_seed44_epoch3_diagnostic_${RUN_DATE}")"
   mkdir -p "$output_dir"
+  echo "[PATHVQA_V0_DIAGNOSTIC_OUTPUT] output=$output_dir"
   if [ ! -f "$checkpoint/visual_selection_offset.pt" ] || \
      [ ! -f "$baseline_eval/pathvqa_comparisons.json" ]; then
     echo "[ERR] Complete original V0 checkpoint and Validation predictions required: $baseline_root" >&2

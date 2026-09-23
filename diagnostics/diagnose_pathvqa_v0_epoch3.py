@@ -19,11 +19,10 @@ import torch.nn.functional as F
 from diagnostics.compare_pathvqa_conditioning_mismatches import (
     clustered_paired_bootstrap, compare_variant, load_json, percentile,
 )
-from pathvqa.data_pipeline import PathVQAParquetStore
+from pathvqa.data_pipeline import PathVQAParquetStore, build_target_supervision_masks
 from pathvqa.pathvqa_official_eval import build_prompt, image_fingerprint
 from slake.visual_selection_offset import locate_question_mask
 from slake.visual_selection_offset_interface import VisualSelectionOffsetInterface
-from train.data_pipeline import build_target_supervision_masks
 
 
 def rms(x: torch.Tensor) -> float:

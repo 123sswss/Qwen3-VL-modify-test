@@ -21,7 +21,7 @@ except ModuleNotFoundError:
 
 class VisualSelectionOffsetInterface:
     requires_raw_question = True
-    question_mask_policy = "raw_question_overlap_with_exact_training_ids_v1"
+    question_mask_policy = "standalone_training_source_with_prefill_overlap_targets_v2"
 
     def __init__(self, checkpoint_path: str, base_model_path: str,
                  intervention: str = "normal") -> None:
@@ -90,5 +90,19 @@ class VisualSelectionOffsetInterface:
             inputs["input_ids"][0], question, self.processor.tokenizer,
             prompt_text=prompt,
         )
+        question_ids = self.processor.tokenizer.encode(
+            str(question).strip(), add_special_tokens=False,
+        )
+        if int(raw_mask.sum()) != len(question_ids):
+            raise ValueError(
+                "standalone question source cannot align with prefill targets: "
+                f"source={len(question_ids)} target={int(raw_mask.sum())}"
+            )
         inputs["question_mask"] = raw_mask.unsqueeze(0)
+        inputs["question_source_ids"] = torch.tensor(
+            question_ids, dtype=inputs["input_ids"].dtype,
+        ).unsqueeze(0)
+        inputs["question_source_mask"] = torch.ones_like(
+            inputs["question_source_ids"], dtype=torch.bool,
+        )
         return inputs

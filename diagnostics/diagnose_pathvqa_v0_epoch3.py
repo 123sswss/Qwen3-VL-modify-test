@@ -305,10 +305,10 @@ def main() -> int:
                 raise RuntimeError(f"Validation image differs from original V0 prediction at {qid}")
             prompt = build_prompt(record["question"], None)
             prefill = model.prepare_inputs(image, prompt, question=record["question"])
-            eval_ids = prefill["input_ids"][0, prefill["question_mask"][0]].tolist()
+            eval_ids = prefill["question_source_ids"][0, prefill["question_source_mask"][0]].tolist()
             training_ids = train_question_ids(model.processor, image, record["question"], record["answer"])
             if eval_ids != training_ids:
-                raise RuntimeError(f"Train/prefill real-question token span differs at {qid}: "
+                raise RuntimeError(f"Train/prefill question source differs at {qid}: "
                                    f"train={training_ids} prefill={eval_ids}")
             alt_qid = partners.get(qid)
             model.model.diagnostic_alternative_question_ids = (

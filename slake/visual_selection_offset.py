@@ -91,11 +91,11 @@ def locate_question_mask(
         ]
         if not indices:
             raise ValueError("no raw-question-overlapping tokens after BPE alignment")
-        selected_ids = [tokens[index] for index in indices]
-        if selected_ids != question_ids:
+        if len(indices) != len(question_ids):
             raise ValueError(
-                "prefill raw-question token IDs differ from training semantics "
-                f"after boundary alignment: training={question_ids} prefill={selected_ids}"
+                "prefill question positions cannot align one-to-one with the "
+                f"training question tokens: training_count={len(question_ids)} "
+                f"prefill_count={len(indices)}"
             )
         mask = torch.zeros_like(input_ids, dtype=torch.bool)
         mask[indices] = True
@@ -353,12 +353,26 @@ class VisualSelectionOffsetModel(nn.Module):
         ids = batch.pop("input_ids")
         attention = batch.pop("attention_mask")
         question_mask = batch.pop("question_mask")
+        question_source_ids = batch.pop("question_source_ids", ids)
+        question_source_mask = batch.pop("question_source_mask", question_mask)
         if ids.shape != attention.shape or ids.shape != question_mask.shape:
             raise ValueError("input, attention and question masks must align")
         if not bool((question_mask & attention.bool()).any(dim=1).all()):
             raise ValueError("each V0 sample requires real question tokens")
         if bool((question_mask & ~attention.bool()).any()):
             raise ValueError("question mask overlaps padding")
+        if (question_source_ids.ndim != 2
+            or question_source_ids.shape != question_source_mask.shape
+            or question_source_ids.shape[0] != ids.shape[0]):
+            raise ValueError("question source IDs and mask must align by batch")
+        target_counts = question_mask.sum(dim=1)
+        source_counts = question_source_mask.sum(dim=1)
+        if not torch.equal(target_counts.to(source_counts.device), source_counts):
+            raise ValueError(
+                "standalone question source tokens must align one-to-one with "
+                f"prefill target positions: source={source_counts.tolist()} "
+                f"target={target_counts.tolist()}"
+            )
         labels = batch.pop("labels", None)
         if labels is not None and bool((question_mask & labels.ne(-100)).any()):
             raise ValueError("question mask overlaps teacher-forcing answers")
@@ -370,7 +384,7 @@ class VisualSelectionOffsetModel(nn.Module):
         batch.update(input_ids=expanded_ids, attention_mask=expanded_attention)
         if labels is not None:
             batch["labels"] = torch.cat((labels.new_full((bsz, 20), -100), labels), dim=1)
-        return batch, expanded_question
+        return batch, expanded_question, question_source_ids, question_source_mask
 
     def _question_embeddings(self, ids: torch.Tensor, mask: torch.Tensor):
         weight = self.get_input_embeddings().weight
@@ -450,14 +464,18 @@ class VisualSelectionOffsetModel(nn.Module):
         return torch.cat(blocks, dim=-1), diagnostics
 
     @contextmanager
-    def _injection(self, ids: torch.Tensor, question_mask: torch.Tensor, grid: torch.Tensor) -> Iterator[None]:
+    def _injection(self, ids: torch.Tensor, question_mask: torch.Tensor,
+                   grid: torch.Tensor, question_source_ids: torch.Tensor,
+                   question_source_mask: torch.Tensor) -> Iterator[None]:
         if self._active:
             raise RuntimeError("V0 injection context is not reentrant")
         self._active = True
         self._features = {}
         self._expected_visual_segments = int(grid[:, 0].sum())
         self._expected_visual_patches = int(grid.prod(dim=1).sum())
-        question, valid = self._question_embeddings(ids, question_mask)
+        question, valid = self._question_embeddings(
+            question_source_ids, question_source_mask,
+        )
         embeddings = self.get_input_embeddings()
         language = self.base_model.model.language_model
         prefill_done = False
@@ -555,13 +573,19 @@ class VisualSelectionOffsetModel(nn.Module):
             self._active = False
 
     def forward(self, **kwargs: Any):
-        expanded, mask = self._expand(kwargs)
-        with self._injection(expanded["input_ids"], mask, expanded["image_grid_thw"]):
+        expanded, mask, source_ids, source_mask = self._expand(kwargs)
+        with self._injection(
+            expanded["input_ids"], mask, expanded["image_grid_thw"],
+            source_ids, source_mask,
+        ):
             return self.base_model(**expanded)
 
     def generate(self, **kwargs: Any):
-        expanded, mask = self._expand(kwargs)
-        with self._injection(expanded["input_ids"], mask, expanded["image_grid_thw"]):
+        expanded, mask, source_ids, source_mask = self._expand(kwargs)
+        with self._injection(
+            expanded["input_ids"], mask, expanded["image_grid_thw"],
+            source_ids, source_mask,
+        ):
             return self.base_model.generate(**expanded)
 
     def save_v0(self, output_dir: str | Path) -> None:

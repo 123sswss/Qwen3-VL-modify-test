@@ -1,6 +1,6 @@
 # QDPT 返修计划：优先解决多随机种子稳定性
 
-> **2026-09-23 V0问题mask修复（已实现，待服务器正常Validation）：** 审计在`pathvqa:validation:756`确认训练mask含末尾问号token30、旧推理prefill漏掉该token，原诊断按规则停止且两项干预未运行。现已将推理fallback改为选择与原问题字符区间有交集的token，使跨`问题→换行`边界的末尾token归入问题；每次推理还强制校验所选token ID与训练的独立问题token ID完全相同，否则立即失败。下一步只用原seed44 epoch3 checkpoint运行修复后的正常PathVQA Validation，并与旧55.6479预测作图像簇配对比较；不运行`offset_off`/`condition_off`、不训练、不评估Test或其他seed。目标：`pathvqa_v0_seed44_mask_fixed_validation`。确认新基线后再决定是否恢复诊断。
+> **2026-09-23 V0问题mask修复v2（已实现，待服务器正常Validation）：** v1已证明边界token虽然位置数一致，但完整prompt会把训练的末尾问号ID30改分词为跨换行ID5267，因此“目标位置ID必须等于训练ID”本身不可成立。v2将条件源与注入位置显式拆开：条件分支始终读取独立分词的真实问题ID，严格复现训练来源；偏移写入完整prefill中与问题字符范围相交的位置，且两边token数必须一一对应，否则立即失败。完整生成prompt和解码协议不变。下一步仍只用原seed44 epoch3 checkpoint运行正常PathVQA Validation并与旧55.6479预测作图像簇配对比较；不运行`offset_off`/`condition_off`、不训练、不评估Test或其他seed。目标仍为`pathvqa_v0_seed44_mask_fixed_validation`。
 
 > **2026-09-23 V0 单次实验已完成：** 独立实现问题引导三层视觉选择＋共同原生 Value＋ADePT 风格真实问题偏移。固定 `r_q=128`、`r_delta=192`、三块各64、depthwise k3＋pointwise 残差卷积、P20＋索引17的S8/A_v10 Visual18；偏移输出层 `Normal(0,1e-4)`、零 bias。PathVQA seed44/data seed42、3 epochs、固定epoch3 Validation 为 **55.6479 Overall**，实核可训练参数 **2,356,675**。结果已计入两份实验账本；下一步只读提取首批梯度/偏移与地图诊断，并对照性能缺口。暂不排 Test、其他seed或候选消融；后续服务器实验须重新获得该次明确授权。
 

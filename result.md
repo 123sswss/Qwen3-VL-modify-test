@@ -288,3 +288,8 @@ This file is the concise experiment memory shared by the user and Codex. The com
 - 按预注册停止条件，没有继续128条统计，也没有运行`offset_off`或`condition_off`完整Validation；因此无新分数、独占正确数或配对CI，不能据此判断公共偏移退化。原55.6479应标记为旧推理mask实现下的历史结果，不能再视为训练/推理语义完全一致的干净V0基线。
 - checkpoint未被修改，完整图文仍进入冻结基座；错误只影响V0用于生成条件地图/摘要的真实问题范围及偏移注入位置。当前不重训、不加Norm/gate、不改学习率。若继续，最小正确顺序是先修边界mask，再用同一checkpoint只重跑正常Validation基线，之后才决定是否恢复两项干预。输出：`pathvqa/outputs/visual_selection_offset/diagnostics/pathvqa_v0_seed44_epoch3_diagnostic_20260923_1`。
 - 已实现边界修复：推理选择所有与原问题字符范围相交的token，并强制最终token ID序列与训练问题token完全一致；新增`pathvqa_v0_seed44_mask_fixed_validation`，只重跑同checkpoint正常Validation并与旧预测配对。新分数尚未产生，这不是干预结果或重训授权。
+
+### 2026-09-23 V0问题mask修复v1在warmup停止
+
+- v1恢复了末尾边界位置，但错误要求完整prompt中的边界token ID等于独立问题ID。实际warmup中训练末尾为问号ID30，推理把问号与后续换行上下文化为ID5267，因此在计分前失败；无新Validation分数或配对结果，也未运行干预、训练、Test或其他seed。
+- v2改为分离“条件来源”和“写入位置”：条件分支读取独立分词的真实问题ID以匹配训练，偏移写入完整prefill中与问题重叠的位置；两侧数量必须一致。完整prompt和解码不变。下一步仍只是同checkpoint的修复后正常Validation，不据此重训。

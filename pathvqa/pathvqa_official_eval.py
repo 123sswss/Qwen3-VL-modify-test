@@ -363,6 +363,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--base-model", required=True)
     parser.add_argument("--checkpoint")
     parser.add_argument(
+        "--v0-intervention", choices=("normal", "offset_off", "condition_off"),
+        default="normal", help="Inference-only V0 offset intervention.",
+    )
+    parser.add_argument(
         "--dynamic-prompt-intervention",
         choices=DYNAMIC_PROMPT_INTERVENTIONS,
         default="normal",
@@ -435,6 +439,8 @@ def main() -> int:
             "Dynamic Prompt interventions and component overrides require "
             "--backend dynamic-prompt"
         )
+    if args.v0_intervention != "normal" and args.backend != "visual-selection-offset":
+        raise ValueError("--v0-intervention requires --backend visual-selection-offset")
     if bool(args.dynamic_prompt_component_checkpoint) != bool(
         args.dynamic_prompt_component
     ):
@@ -488,7 +494,8 @@ def main() -> int:
             "component_overrides": tuple(args.dynamic_prompt_component),
         }
         if args.backend == "dynamic-prompt"
-        else None
+        else ({"intervention": args.v0_intervention}
+              if args.backend == "visual-selection-offset" else None)
     )
     model = load_pathvqa_model_interface(
         args.backend,
@@ -546,6 +553,7 @@ def main() -> int:
             "backend": args.backend,
             "base_model": args.base_model,
             "checkpoint": args.checkpoint,
+            "v0_intervention": args.v0_intervention,
             "dynamic_prompt_component_checkpoint": (
                 args.dynamic_prompt_component_checkpoint
             ),

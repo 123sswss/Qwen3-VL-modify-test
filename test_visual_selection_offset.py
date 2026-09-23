@@ -57,9 +57,11 @@ class _Language(nn.Module):
     def __init__(self):
         super().__init__()
         self.calls = 0
+        self.inputs_history = []
 
     def forward(self, inputs_embeds):
         self.calls += 1
+        self.inputs_history.append(inputs_embeds.detach().clone())
         return SimpleNamespace(loss=inputs_embeds.square().mean())
 
 
@@ -157,6 +159,49 @@ class VisualSelectionOffsetTest(unittest.TestCase):
         second, _ = model._condition(question, valid, grid)
         self.assertTrue(torch.equal(first[0], second[0]))
         self.assertFalse(torch.equal(first[1], second[1]))
+
+    def test_read_only_inference_interventions_and_probe(self):
+        torch.manual_seed(44)
+        base = _Base()
+        model = VisualSelectionOffsetModel(base, init_seed=44).eval()
+        model.diagnostic_capture = True
+        model.diagnostic_alternative_question_ids = torch.tensor([17, 18])
+        batch = {
+            "input_ids": torch.tensor([[11, 12, 13, 14, 15]]),
+            "attention_mask": torch.ones((1, 5), dtype=torch.long),
+            "pixel_values": torch.randn(8, 1024),
+            "image_grid_thw": torch.tensor([[1, 2, 4]]),
+            "question_mask": torch.tensor([[False, False, True, True, False]]),
+        }
+        with torch.no_grad():
+            model.inference_intervention = "normal"
+            normal = model(**batch).loss
+            probe = model.last_forward_probe
+            self.assertIn("alternative", probe)
+            self.assertEqual(len(probe["map5"]), 1)
+            self.assertEqual(probe["map5"][0].shape[0], 2)
+            model.inference_intervention = "offset_off"
+            no_offset = model(**batch).loss
+            self.assertEqual(base.model.visual.calls, 2)
+            self.assertEqual(base.model.language_model.calls, 2)
+            model.inference_intervention = "condition_off"
+            no_condition = model(**batch).loss
+        self.assertFalse(torch.equal(normal, no_offset))
+        normal_inputs, offset_off_inputs, condition_off_inputs = base.model.language_model.inputs_history
+        self.assertTrue(torch.allclose(
+            normal_inputs[:, 22:24] - offset_off_inputs[:, 22:24],
+            probe["offset"][:, :2], atol=1e-6,
+        ))
+        self.assertTrue(torch.allclose(
+            condition_off_inputs[:, 22:24] - offset_off_inputs[:, 22:24],
+            probe["offset_condition_off"][:, :2], atol=1e-6,
+        ))
+        self.assertTrue(torch.equal(normal_inputs[:, :22], offset_off_inputs[:, :22]))
+        self.assertTrue(torch.equal(normal_inputs[:, 24:], offset_off_inputs[:, 24:]))
+        self.assertEqual(base.model.visual.calls, 3)
+        self.assertEqual(base.model.language_model.calls, 3)
+        self.assertTrue(torch.equal(probe["preactivation"][0, :2],
+            probe["text"][0, :2] + probe["bias"] + probe["condition"][0]))
 
 
 if __name__ == "__main__":

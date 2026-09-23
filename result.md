@@ -266,3 +266,14 @@ This file is the concise experiment memory shared by the user and Codex. The com
 - 晚启动seed45/44 PathVQA Validation Overall为 **57.8048/57.2136**。相对原同seed QDPT，seed45 **+0.5113**，但seed44 **-3.5629**；两seed均值由59.0350降至 **57.5092 (-1.5258)**。seed差距由3.4830缩至 **0.5912**（缩小83.03%），主要来自压低强seed，不是合格的稳定性改进。
 - Free-form两seed均值由26.4518降至 **25.1595 (-1.2923)**，未达到预注册25.9518下限；seed44为24.5692，较原值下降4.3395。seed45确实回升且通过首轮门槛，但最终两seed均值与Free-form门槛均失败，因此不补seed46、不扫启动比例、不评估Test。
 - 机制上，这说明静态与动态分支同时起跑确实会影响seed依赖的优化轨迹：延迟动态分支能救弱seed45，却会破坏强seed44。它是稳定性来源之一但不是可直接采用的解决方案；固定10%硬切换被否决。边界审计的精确loss、梯度、残差比与注意力熵仍待从服务器`dynamic_late_start_audit.jsonl`提取。
+
+## 2026-09-23 V0 三层视觉选择＋问题偏移 seed44
+
+- `pathvqa_v0_visual_selection_offset_seed44` 在完整 PathVQA Validation（6,259题/832图像簇）、data seed42、3 epochs、固定epoch3取得 **55.6479 Overall /89.6640 Yes-No /显示21.73 Free-form**，聚类95% CI **[54.17,57.08]**。可训练参数 **2,356,675**，约为旧Dense Sandwich QDPT的30.19%；没有旧动态生成器/Z10，也未跑Test或其他seed。输出根目录：`pathvqa/outputs/visual_selection_offset/pathvqa_v0_visual_selection_offset_seed44_20260923`。
+- 同seed同Validation协议，V0较Static P20 **+0.7829**，但较CoCoOp-style P20/H160 **-1.7574**、LoRA-r8 **-3.6907**、Dense Sandwich QDPT **-5.1286**。说明首版可运行且较纯静态P20有小幅收益，尚不足以主张相对更强轻量条件方法的参数/性能优势。当前只有单seed，不能判断稳定性；首批偏移比例、分支梯度、三层地图及层权重的数值待从服务器审计文件提取后再解释机制。
+
+### 2026-09-23 V0诊断续补（用户提供日志，无新实验）
+
+- 用户补充首批审计、93条训练诊断的摘要及训练报告；未独立读取服务器原始文件。训练6,164.61s、3 epochs、loss12.6862；各分支有有限非零梯度，深层地图明显偏离均匀，不支持“数值炸了/分支全死”的判断。成绩仍为55.6479 Overall，不新增评估结果。
+- 末10条均值condition_rms0.594963、down_rms0.037482，二者均值比约15.87；offset/question RMS比0.681297。地图5/11/17熵均值0.980851/0.907977/0.811040，层权重0.167730/0.549122/0.283148。非均匀不等于正确定位，范数差不等于因果证明。
+- 待证假设：视觉条件在加式ReLU瓶颈中主导激活，可能使问题词得到近似公共偏移，削弱token条件交互。先看词间激活/偏移差异和已训练checkpoint的配对推理干预，再决定是否值得单因素补救；不据此直接加层、扩宽、改学习率或续训。首批与轨迹梯度的聚合/裁剪口径未核实，不能直接比较量级。

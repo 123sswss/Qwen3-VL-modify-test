@@ -22,7 +22,10 @@ except ModuleNotFoundError:
 class VisualSelectionOffsetInterface:
     requires_raw_question = True
 
-    def __init__(self, checkpoint_path: str, base_model_path: str) -> None:
+    def __init__(self, checkpoint_path: str, base_model_path: str,
+                 intervention: str = "normal") -> None:
+        if intervention not in {"normal", "offset_off", "condition_off"}:
+            raise ValueError(f"Unsupported V0 inference intervention: {intervention}")
         checkpoint = Path(checkpoint_path)
         with (checkpoint / CONFIG_NAME).open("r", encoding="utf-8") as handle:
             config = json.load(handle)
@@ -34,6 +37,7 @@ class VisualSelectionOffsetInterface:
         self.model = VisualSelectionOffsetModel(base, init_seed=int(config["init_seed"]))
         self.model.load_v0(checkpoint)
         self.model.eval()
+        self.model.inference_intervention = intervention
         self.device = next(base.parameters()).device
         self.last_generation_timing = None
         print(f"[V0_INTERFACE] checkpoint={checkpoint} parameters={self.model._audit_parameters()}")
@@ -43,22 +47,7 @@ class VisualSelectionOffsetInterface:
         max_new_tokens: int = 32, temperature: float = 0.0,
         *, question: str,
     ) -> str:
-        messages = [{
-            "role": "user",
-            "content": [
-                {"type": "image", "image": image},
-                {"type": "text", "text": prompt},
-            ],
-        }]
-        formatted = self.processor.apply_chat_template(
-            messages, tokenize=False, add_generation_prompt=True,
-        )
-        inputs = dict(self.processor(images=image, text=formatted, return_tensors="pt"))
-        raw_mask = locate_question_mask(
-            inputs["input_ids"][0], question, self.processor.tokenizer,
-            prompt_text=prompt,
-        )
-        inputs["question_mask"] = raw_mask.unsqueeze(0)
+        inputs = self.prepare_inputs(image, prompt, question=question)
         original_length = inputs["input_ids"].shape[1]
         moved = {}
         for key, value in inputs.items():
@@ -83,3 +72,22 @@ class VisualSelectionOffsetInterface:
         self.last_generation_timing["generated_token_count"] -= 20
         generated = output[:, original_length + 20:]
         return self.processor.batch_decode(generated, skip_special_tokens=True)[0].strip()
+
+    def prepare_inputs(self, image: Image.Image, prompt: str, *, question: str):
+        messages = [{
+            "role": "user",
+            "content": [
+                {"type": "image", "image": image},
+                {"type": "text", "text": prompt},
+            ],
+        }]
+        formatted = self.processor.apply_chat_template(
+            messages, tokenize=False, add_generation_prompt=True,
+        )
+        inputs = dict(self.processor(images=image, text=formatted, return_tensors="pt"))
+        raw_mask = locate_question_mask(
+            inputs["input_ids"][0], question, self.processor.tokenizer,
+            prompt_text=prompt,
+        )
+        inputs["question_mask"] = raw_mask.unsqueeze(0)
+        return inputs

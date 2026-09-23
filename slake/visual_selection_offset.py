@@ -263,6 +263,11 @@ class VisualSelectionOffsetModel(nn.Module):
         self._expected_visual_segments = 0
         self._expected_visual_patches = 0
         self.debug_context: dict[str, torch.Tensor] = {}
+        # Inference-only, non-persistent diagnostics. Never included in V0 checkpoints.
+        self.inference_intervention = "normal"
+        self.diagnostic_capture = False
+        self.diagnostic_alternative_question_ids: torch.Tensor | None = None
+        self.last_forward_probe: dict[str, Any] | None = None
         self.first_batch_diagnostics: dict[str, float] | None = None
         self.first_backward_gradients: dict[str, float] = {}
         self._first_grad_handles = []
@@ -370,7 +375,8 @@ class VisualSelectionOffsetModel(nn.Module):
             valid[b, :vector.shape[0]] = True
         return padded, valid
 
-    def _condition(self, question: torch.Tensor, valid: torch.Tensor, grid: torch.Tensor):
+    def _condition(self, question: torch.Tensor, valid: torch.Tensor, grid: torch.Tensor,
+                   probe: dict[str, Any] | None = None):
         if set(self._features) != {*LAYERS, "value"}:
             raise RuntimeError(f"V0 expected layers {LAYERS} and native Value, got {set(self._features)}")
         x = self.text_projection(question)
@@ -381,6 +387,8 @@ class VisualSelectionOffsetModel(nn.Module):
         pool_logits = pool_logits.masked_fill(~valid, -torch.inf)
         u = (pool_logits.softmax(dim=-1).unsqueeze(-1) * x).sum(dim=1)
         beta = self.layer_gate(u).softmax(dim=-1)
+        if probe is not None:
+            probe["layer_weights"] = beta.detach().float().cpu().clone()
         grid = grid.to(device=question.device)
         if grid.ndim != 2 or grid.shape[0] != question.shape[0]:
             raise RuntimeError("V0 currently requires exactly one image per sample")
@@ -404,6 +412,7 @@ class VisualSelectionOffsetModel(nn.Module):
             q = self.query_heads[li](u)
             summaries = []
             entropies, top_mass = [], []
+            merged_maps = []
             for b, (h, value) in enumerate(zip(segments, values)):
                 keys = self.key_heads[li](self.key_norms[li](h))
                 logits = (keys * q[b]).sum(dim=-1) / math.sqrt(QUESTION_WIDTH)
@@ -414,9 +423,16 @@ class VisualSelectionOffsetModel(nn.Module):
                 ):
                     raise RuntimeError("V0 patch-to-Value map lost probability or image alignment")
                 summaries.append((merged_prob[:, None] * value).sum(dim=0))
+                if probe is not None:
+                    merged_maps.append(merged_prob)
                 entropies.append(-(patch_prob * patch_prob.clamp_min(1e-12).log()).sum() / math.log(patch_prob.numel()))
                 top_mass.append(merged_prob.max())
             z = torch.stack(summaries)
+            if probe is not None:
+                probe[f"map{layer}"] = [
+                    p.detach().float().cpu().clone() for p in merged_maps
+                ]
+                probe[f"summary{layer}"] = z.detach().float().cpu().clone()
             block = self.value_blocks[li](self.value_norms[li](z)) * beta[:, li, None]
             blocks.append(block)
             diagnostics[f"map{layer}_entropy_norm"] = torch.stack(entropies).mean().detach()
@@ -451,10 +467,49 @@ class VisualSelectionOffsetModel(nn.Module):
             inputs = kwargs.get("inputs_embeds")
             if inputs is None or inputs.shape[:2] != question_mask.shape:
                 raise RuntimeError("V0 prefill inputs_embeds do not align with question mask")
-            condition, map_debug = self._condition(question, valid, grid)
+            if self.inference_intervention not in {"normal", "offset_off", "condition_off"}:
+                raise ValueError(f"Unknown V0 inference intervention: {self.inference_intervention}")
+            if self.training and self.inference_intervention != "normal":
+                raise RuntimeError("V0 interventions are inference-only")
+            probe = {} if self.diagnostic_capture else None
+            condition, map_debug = self._condition(question, valid, grid, probe=probe)
             down = self.offset_down(question)
-            delta = self.offset_up(torch.relu(down + condition[:, None, :]))
+            applied_condition = (
+                torch.zeros_like(condition)
+                if self.inference_intervention == "condition_off" else condition
+            )
+            delta = self.offset_up(torch.relu(down + applied_condition[:, None, :]))
             delta = delta * valid.unsqueeze(-1)
+            if probe is not None:
+                text = torch.nn.functional.linear(question, self.offset_down.weight, None)
+                bias = self.offset_down.bias
+                if bias is None:
+                    raise RuntimeError("V0 offset_down bias unexpectedly absent")
+                alt = self.diagnostic_alternative_question_ids
+                if alt is not None:
+                    if ids.shape[0] != 1:
+                        raise RuntimeError("V0 alternative question probe requires one image")
+                    alt = alt.to(self.get_input_embeddings().weight.device)
+                    if alt.ndim != 1 or alt.numel() < 1:
+                        raise ValueError("V0 alternative question IDs must be nonempty 1-D")
+                    alt_question = self.get_input_embeddings().weight[alt].float().unsqueeze(0)
+                    alt_valid = torch.ones(alt_question.shape[:2], device=alt_question.device, dtype=torch.bool)
+                    alt_probe: dict[str, Any] = {}
+                    self._condition(alt_question, alt_valid, grid, probe=alt_probe)
+                    probe["alternative"] = alt_probe
+                probe.update({
+                    "question": question.detach().float().cpu().clone(),
+                    "valid": valid.detach().cpu().clone(),
+                    "text": text.detach().float().cpu().clone(),
+                    "condition": condition.detach().float().cpu().clone(),
+                    "bias": bias.detach().float().cpu().clone(),
+                    "preactivation": (down + condition[:, None, :]).detach().float().cpu().clone(),
+                    "offset": self.offset_up(torch.relu(down + condition[:, None, :])).detach().float().cpu().clone(),
+                    "offset_condition_off": self.offset_up(torch.relu(down)).detach().float().cpu().clone(),
+                })
+                self.last_forward_probe = probe
+            if self.inference_intervention == "offset_off":
+                delta = torch.zeros_like(delta)
             full_delta = inputs.new_zeros(inputs.shape)
             for b in range(ids.shape[0]):
                 full_delta[b, question_mask[b]] = delta[b, valid[b]].to(inputs.dtype)

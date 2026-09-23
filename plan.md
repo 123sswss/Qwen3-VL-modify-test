@@ -1,5 +1,7 @@
 # QDPT 返修计划：优先解决多随机种子稳定性
 
+> **当前执行项：恢复V0 v2只读诊断（本地实现完成，待用户服务器运行）。** 正常基线已完成：56.7503 Overall /89.5040 Yes-No /24.0906 Free-form /59.4132 where；固定预测目录为`pathvqa/outputs/visual_selection_offset/diagnostics/pathvqa_v0_seed44_mask_fixed_validation_20260923_1/mask_fixed_normal`。`pathvqa_v0_seed44_epoch3_diagnostic`先做128条前向诊断（含16对同图不同问题），独立审计真实问题条件源、prefill写入位置与字符区间对应，统一v2协议；通过后只运行`offset_off`和`condition_off`完整Validation。比较复用上述正常预测，报告四项指标、双方独占正确数及图像簇配对CI。输出进入新的`pathvqa_v0_seed44_epoch3_diagnostic_v2_*`目录，不覆盖历史产物。不重训、不改结构/初始化/学习率、不加Norm/gate、不跑Test/其他seed、不自动关机。结果回传后立即补两份账本并停止；本次按既有用户偏好不执行测试套件。
+
 > **2026-09-23 V0问题mask修复v2（已实现，待服务器正常Validation）：** v1已证明边界token虽然位置数一致，但完整prompt会把训练的末尾问号ID30改分词为跨换行ID5267，因此“目标位置ID必须等于训练ID”本身不可成立。v2将条件源与注入位置显式拆开：条件分支始终读取独立分词的真实问题ID，严格复现训练来源；偏移写入完整prefill中与问题字符范围相交的位置，且两边token数必须一一对应，否则立即失败。完整生成prompt和解码协议不变。下一步仍只用原seed44 epoch3 checkpoint运行正常PathVQA Validation并与旧55.6479预测作图像簇配对比较；不运行`offset_off`/`condition_off`、不训练、不评估Test或其他seed。目标仍为`pathvqa_v0_seed44_mask_fixed_validation`。
 
 > **2026-09-23 V0 单次实验已完成：** 独立实现问题引导三层视觉选择＋共同原生 Value＋ADePT 风格真实问题偏移。固定 `r_q=128`、`r_delta=192`、三块各64、depthwise k3＋pointwise 残差卷积、P20＋索引17的S8/A_v10 Visual18；偏移输出层 `Normal(0,1e-4)`、零 bias。PathVQA seed44/data seed42、3 epochs、固定epoch3 Validation 为 **55.6479 Overall**，实核可训练参数 **2,356,675**。结果已计入两份实验账本；下一步只读提取首批梯度/偏移与地图诊断，并对照性能缺口。暂不排 Test、其他seed或候选消融；后续服务器实验须重新获得该次明确授权。

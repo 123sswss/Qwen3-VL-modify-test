@@ -293,3 +293,9 @@ This file is the concise experiment memory shared by the user and Codex. The com
 
 - v1恢复了末尾边界位置，但错误要求完整prompt中的边界token ID等于独立问题ID。实际warmup中训练末尾为问号ID30，推理把问号与后续换行上下文化为ID5267，因此在计分前失败；无新Validation分数或配对结果，也未运行干预、训练、Test或其他seed。
 - v2改为分离“条件来源”和“写入位置”：条件分支读取独立分词的真实问题ID以匹配训练，偏移写入完整prefill中与问题重叠的位置；两侧数量必须一致。完整prompt和解码不变。下一步仍只是同checkpoint的修复后正常Validation，不据此重训。
+
+### 2026-09-23 V0 mask修复v2正常Validation完成
+
+- 同一seed44 epoch3 checkpoint、不重训，采用`standalone_training_source_with_prefill_overlap_targets_v2`得到 **56.7503 Overall /89.5040 Yes-No /24.0906 Free-form**，where59.4132。相对旧mask结果55.6479，Overall **+1.1024**，配对独占正确202/133，按图像簇配对95%差值CI[+0.4775,+1.7333]；Free-form **+2.3612**，Yes/No-0.16。来源为用户提供JSON，本任务未独立拉取服务器产物。
+- 当前正常V0基线更新为56.7503，旧值保留作实现历史。相对Static P20 seed44高1.8853、相对CoCoOp-style seed44低0.6550，尚无针对这两个基线的新配对统计。已确认推理接口曾造成实质性损失，尚未验证公共偏移退化、视觉定位机制或稳定性；不能据此直接加Norm或重训。输出：`pathvqa/outputs/visual_selection_offset/diagnostics/pathvqa_v0_seed44_mask_fixed_validation_20260923_1`；两项关闭干预仍无结果。
+- 用户已授权恢复128条前向诊断及两项关闭干预，配对基线固定为上述修复后预测，统一v2协议，跳过正常基线重跑。代码准备完成，服务器结果仍待回传；不能提前判断公共偏移、条件净收益或是否值得补救训练。

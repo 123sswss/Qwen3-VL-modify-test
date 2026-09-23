@@ -4156,11 +4156,12 @@ run_pathvqa_visual_selection_offset_v0_seed44() {
 run_pathvqa_v0_seed44_epoch3_diagnostic() {
   local baseline_root="${PATHVQA_V0_BASELINE_ROOT:-$PATHVQA_V0_OUTPUT_ROOT/pathvqa_v0_visual_selection_offset_seed44_20260923}"
   local checkpoint="$baseline_root/checkpoints/epoch_3"
-  local baseline_eval="$baseline_root/eval_validation/epoch_3"
+  local baseline_eval="${PATHVQA_V0_DIAGNOSTIC_BASELINE_EVAL:-$PATHVQA_V0_OUTPUT_ROOT/diagnostics/pathvqa_v0_seed44_mask_fixed_validation_20260923_1/mask_fixed_normal}"
   local output_dir
-  output_dir="$(available_output_dir "$PATHVQA_V0_OUTPUT_ROOT/diagnostics" "pathvqa_v0_seed44_epoch3_diagnostic_${RUN_DATE}")"
+  output_dir="$(available_output_dir "$PATHVQA_V0_OUTPUT_ROOT/diagnostics" "pathvqa_v0_seed44_epoch3_diagnostic_v2_${RUN_DATE}")"
   mkdir -p "$output_dir"
   echo "[PATHVQA_V0_DIAGNOSTIC_OUTPUT] output=$output_dir"
+  echo "[PATHVQA_V0_DIAGNOSTIC_BASELINE] predictions=$baseline_eval overall=56.7503 checkpoint=$checkpoint"
   if [ ! -f "$checkpoint/visual_selection_offset.pt" ] || \
      [ ! -f "$baseline_eval/pathvqa_comparisons.json" ]; then
     echo "[ERR] Complete original V0 checkpoint and Validation predictions required: $baseline_root" >&2

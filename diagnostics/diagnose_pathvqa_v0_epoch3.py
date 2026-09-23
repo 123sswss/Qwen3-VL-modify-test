@@ -24,6 +24,43 @@ from pathvqa.pathvqa_official_eval import build_prompt, image_fingerprint
 from slake.visual_selection_offset import locate_question_mask
 from slake.visual_selection_offset_interface import VisualSelectionOffsetInterface
 
+MASK_POLICY = "standalone_training_source_with_prefill_overlap_targets_v2"
+
+
+def audit_question_alignment(processor, prefill, question, prompt):
+    """Audit source identity separately from contextual write positions."""
+    tokenizer = processor.tokenizer
+    question = question.strip()
+    source = tokenizer(question, add_special_tokens=False, return_offsets_mapping=True)
+    contextual = tokenizer(prompt, add_special_tokens=False, return_offsets_mapping=True)
+    ids = prefill["input_ids"][0].tolist()
+    prompt_ids = contextual["input_ids"]
+    starts = [i for i in range(len(ids) - len(prompt_ids) + 1)
+              if ids[i:i + len(prompt_ids)] == prompt_ids]
+    if len(starts) != 1:
+        raise RuntimeError("Cannot audit unique full-prompt span")
+    positions = prefill["question_mask"][0].nonzero().flatten().tolist()
+    expected = [starts[0] + i for i, (a, b) in enumerate(contextual["offset_mapping"])
+                if a < len(question) and b > a and b > 0]
+    source_ids = prefill["question_source_ids"][0, prefill["question_source_mask"][0]].tolist()
+    if source_ids != source["input_ids"] or positions != expected or len(positions) != len(source_ids):
+        raise RuntimeError("Question source/target coverage or count differs from v2 policy")
+    correspondence = []
+    for ordinal, position in enumerate(positions):
+        a, b = contextual["offset_mapping"][position - starts[0]]
+        source_span = tuple(source["offset_mapping"][ordinal])
+        if source_span != (max(a, 0), min(b, len(question))):
+            raise RuntimeError("Source and target tokens have different question character spans")
+        if b > len(question) and prompt[len(question):b].strip():
+            raise RuntimeError("Question write target includes non-whitespace instruction text")
+        if not bool(prefill["attention_mask"][0, position]):
+            raise RuntimeError("Question write target overlaps padding")
+        correspondence.append({"source_id": source_ids[ordinal], "source_span": source_span,
+                               "prefill_position": position, "prefill_id": ids[position],
+                               "prefill_span": [a, b]})
+    return {"policy": MASK_POLICY, "source_ids": source_ids,
+            "target_positions": positions, "correspondence": correspondence}
+
 
 def rms(x: torch.Tensor) -> float:
     return float(x.float().square().mean().sqrt())
@@ -186,9 +223,13 @@ def forward_row(probe: dict, qid: str) -> dict:
         "question_rms": rms(question),
         "offset_to_question_rms": rms(delta) / max(rms(question), 1e-12),
         "condition_off_offset_rms": rms(delta_without_c),
+        "condition_off_offset_centered_rms": rms(delta_without_c - delta_without_c.mean(dim=0)),
+        "condition_off_pair_cosine": pairs_mean(delta_without_c, "cosine"),
         "condition_effect_rms": effect_abs_rms,
         "condition_effect_common_rms": rms(effect.mean(dim=0)),
         "condition_effect_centered_rms": rms(effect_centered),
+        "condition_effect_centered_ratio": (rms(effect_centered) / effect_abs_rms
+                                            if effect_abs_rms > 1e-12 else None),
         "condition_effect_common_fraction": (rms(effect.mean(dim=0)) / effect_abs_rms
                                             if effect_abs_rms > 1e-12 else None),
         "condition_effect_is_zero": effect_abs_rms <= 1e-12,
@@ -206,6 +247,9 @@ def forward_row(probe: dict, qid: str) -> dict:
             (probe["layer_weights"] - alt["layer_weights"]).abs().sum()
         )
         for layer in (5, 11, 17):
+            li = (5, 11, 17).index(layer)
+            result[f"same_image_swap_layer{layer}_weight_delta"] = float(
+                alt["layer_weights"][0, li] - probe["layer_weights"][0, li])
             result[f"same_image_swap_map{layer}_js"] = js_divergence(
                 probe[f"map{layer}"][0], alt[f"map{layer}"][0]
             )
@@ -217,7 +261,7 @@ def forward_row(probe: dict, qid: str) -> dict:
 
 def write_json(path: Path, value) -> None:
     with path.open("w", encoding="utf-8") as handle:
-        json.dump(value, handle, ensure_ascii=False, indent=2)
+        json.dump(value, handle, ensure_ascii=False, indent=2, allow_nan=False)
 
 
 def existing_training_audit(baseline_root: Path) -> dict:
@@ -276,7 +320,22 @@ def main() -> int:
                    ("split", "max_new_tokens", "temperature", "answer_mode", "instruction"))
     if actual != expected or baseline_summary.get("partial_evaluation"):
         raise ValueError(f"Original V0 generation protocol differs; expected={expected}, actual={actual}")
-    training_audit = existing_training_audit(args.baseline_dir.parent.parent)
+    if (baseline_summary.get("v0_question_mask_policy") != MASK_POLICY
+        or baseline_summary.get("v0_intervention") != "normal"
+        or baseline_summary.get("backend") != "visual-selection-offset"):
+        raise ValueError("Baseline must be the completed normal V0 v2 evaluation")
+    for key, expected_score in (("overall_accuracy", 56.7503),
+                                ("yes_no_accuracy", 89.5040),
+                                ("free_form_accuracy", 24.0906)):
+        if abs(float(baseline_summary[key]) - expected_score) > 0.00015:
+            raise ValueError(f"Wrong repaired baseline score for {key}")
+    if abs(float(baseline_summary["per_question_type_accuracy"]["where"]) - 59.4132) > .00015:
+        raise ValueError("Wrong repaired baseline where score")
+    if (Path(baseline_summary["checkpoint"]).resolve() != args.checkpoint.resolve()
+        or Path(baseline_summary["base_model"]).resolve() != Path(args.base_model).resolve()
+        or Path(baseline_summary["data_root"]).resolve() != args.data_root.resolve()):
+        raise ValueError("Checkpoint, backbone or data root differs from repaired baseline")
+    training_audit = existing_training_audit(args.checkpoint.parent.parent)
     sample_ids, partners = select_samples(baseline)
     baseline_by_id = {str(row["question_id"]): row for row in baseline}
     args.output_dir.mkdir(parents=True, exist_ok=True)
@@ -294,6 +353,8 @@ def main() -> int:
     store = PathVQAParquetStore(args.data_root, "validation", cache_dir=args.cache_dir)
     records = {str(row["question_id"]): row for row in store.samples}
     model = VisualSelectionOffsetInterface(str(args.checkpoint), args.base_model)
+    if model.question_mask_policy != MASK_POLICY:
+        raise RuntimeError("Active interface does not implement the required v2 policy")
     model.model.diagnostic_capture = True
     detail_rows = []
     deterministic = None
@@ -305,11 +366,14 @@ def main() -> int:
                 raise RuntimeError(f"Validation image differs from original V0 prediction at {qid}")
             prompt = build_prompt(record["question"], None)
             prefill = model.prepare_inputs(image, prompt, question=record["question"])
+            alignment = audit_question_alignment(model.processor, prefill, record["question"], prompt)
             eval_ids = prefill["question_source_ids"][0, prefill["question_source_mask"][0]].tolist()
             training_ids = train_question_ids(model.processor, image, record["question"], record["answer"])
             if eval_ids != training_ids:
                 raise RuntimeError(f"Train/prefill question source differs at {qid}: "
                                    f"train={training_ids} prefill={eval_ids}")
+            with (args.output_dir / "question_alignment.jsonl").open("a", encoding="utf-8") as handle:
+                handle.write(json.dumps({"question_id": qid, **alignment}) + "\n")
             alt_qid = partners.get(qid)
             model.model.diagnostic_alternative_question_ids = (
                 torch.tensor(model.processor.tokenizer.encode(records[alt_qid]["question"],
@@ -326,16 +390,22 @@ def main() -> int:
                        question_type=baseline_by_id[qid]["question_type"],
                        alternate_question_id=alt_qid)
             detail_rows.append(row)
+            with (args.output_dir / "forward_rows.jsonl").open("a", encoding="utf-8") as handle:
+                handle.write(json.dumps(row, allow_nan=False) + "\n")
             if index == 0:
                 original = {key: [item.clone() for item in value] if isinstance(value, list)
                             else value.clone() for key, value in probe.items()
-                            if key.startswith("map") or key == "condition"}
+                            if key.startswith(("map", "summary")) or key in {"condition", "layer_weights", "offset"}}
                 model.infer(image, prompt, max_new_tokens=1, temperature=0, question=record["question"])
                 repeat = model.model.last_forward_probe
                 deterministic = {
                     "condition_max_abs_difference": float((original["condition"] - repeat["condition"]).abs().max()),
                     **{f"map{layer}_max_abs_difference": float((original[f"map{layer}"][0]
                         - repeat[f"map{layer}"][0]).abs().max()) for layer in (5, 11, 17)},
+                    **{f"summary{layer}_max_abs_difference": float((original[f"summary{layer}"]
+                        - repeat[f"summary{layer}"]).abs().max()) for layer in (5, 11, 17)},
+                    **{f"{key}_max_abs_difference": float((original[key] - repeat[key]).abs().max())
+                       for key in ("layer_weights", "offset")},
                 }
                 if any(value > 1e-6 for value in deterministic.values()):
                     raise RuntimeError(f"Same-image/same-question V0 forward is not deterministic: {deterministic}")
@@ -348,6 +418,10 @@ def main() -> int:
         "count": len(detail_rows), "same_image_question_pairs": len(partners) // 2,
         "same_question_determinism": deterministic,
         "statistics": numeric_summary(detail_rows),
+        "by_answer_type": {label: numeric_summary([r for r in detail_rows if r["answer_type"] == label])
+                           for label in ("yes/no", "free-form")},
+        "where_statistics": numeric_summary([r for r in detail_rows if r["question_type"] == "where"]),
+        "mask_policy": MASK_POLICY,
         "measurement_note": "text excludes b1; condition includes value LayerNorm/projection and beta; first-batch hook pre-clipping, optimizer-step callback after clipping",
     })
     model.model.diagnostic_capture = False
@@ -365,6 +439,13 @@ def main() -> int:
                    "--v0-intervention", mode, "--output-dir", str(output)]
         print("[V0_INTERVENTION] " + " ".join(command), flush=True)
         subprocess.run(command, check=True)
+        summary = load_json(output / "pathvqa_summary.json")
+        if (summary.get("v0_question_mask_policy") != MASK_POLICY
+            or summary.get("v0_intervention") != mode
+            or any(summary.get(k) != baseline_summary.get(k) for k in
+                   ("checkpoint", "base_model", "data_root", "split", "max_new_tokens",
+                    "temperature", "answer_mode", "instruction"))):
+            raise RuntimeError(f"Intervention protocol differs from repaired baseline: {mode}")
         comparisons = load_json(output / "pathvqa_comparisons.json")
         details = load_json(output / "pathvqa_details.json")
         if len(comparisons) != len(baseline) or len(details) != len(baseline) or any(

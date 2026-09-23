@@ -36,6 +36,10 @@ BACKEND_SPECS = {
         "slake/grasp_prompt_tuning_interface.py",
         "GRASPModelInterface",
     ),
+    "visual-selection-offset": (
+        "slake/visual_selection_offset_interface.py",
+        "VisualSelectionOffsetInterface",
+    ),
     "cocoop-style": (
         "slake/cocoop_prompt_tuning_interface.py",
         "CoCoOpStyleModelInterface",

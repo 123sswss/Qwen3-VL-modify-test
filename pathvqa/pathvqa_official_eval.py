@@ -67,6 +67,10 @@ def run_timing_warmup(
         return
     record = records[0]
     prompt = build_prompt(str(record["question"]), instruction)
+    raw_question_kwargs = (
+        {"question": str(record["question"])}
+        if getattr(model, "requires_raw_question", False) else {}
+    )
     for index in range(1, runs + 1):
         image = store.load_image(dict(record))
         try:
@@ -75,6 +79,7 @@ def run_timing_warmup(
                 prompt,
                 max_new_tokens=max_new_tokens,
                 temperature=temperature,
+                **raw_question_kwargs,
             )
         finally:
             image.close()
@@ -289,6 +294,10 @@ def run_inference(
             continue
 
         prompt = build_prompt(str(record["question"]), instruction)
+        raw_question_kwargs = (
+            {"question": str(record["question"])}
+            if getattr(model, "requires_raw_question", False) else {}
+        )
         image = None
         try:
             image = store.load_image(record)
@@ -301,6 +310,7 @@ def run_inference(
                 prompt,
                 max_new_tokens=max_new_tokens,
                 temperature=temperature,
+                **raw_question_kwargs,
             )
             request_seconds = time.perf_counter() - request_started_at
             row = {

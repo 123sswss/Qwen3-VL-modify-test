@@ -82,7 +82,7 @@ class _Base(nn.Module):
         inputs = self.embedding(input_ids)
         value = self.model.visual(pixel_values, image_grid_thw)
         inputs = inputs.clone()
-        inputs[:, 20] = value
+        inputs[:, 20 : 20 + value.shape[0]] = value
         return self.model.language_model(inputs_embeds=inputs)
 
 
@@ -107,13 +107,15 @@ class VisualSelectionOffsetTest(unittest.TestCase):
         self.assertAlmostEqual(float(model.visual_s8.std()), 0.02, delta=0.002)
         self.assertAlmostEqual(float(model.visual_av10.std()), 0.02, delta=0.002)
         ids = torch.tensor([[11, 12, 13, 14, 15]])
-        question_mask = torch.tensor([[False, True, True, False, False]])
+        question_mask = torch.tensor([[False, False, True, True, False]])
         labels = torch.tensor([[-100, -100, -100, -100, 15]])
-        pixels = torch.randn(4, 1024)
+        # Two post-merger visual tokens are necessary: with only one, all
+        # spatial maps collapse to probability 1 and Q/K gradients are zero.
+        pixels = torch.randn(8, 1024)
         output = model(
             input_ids=ids, attention_mask=torch.ones_like(ids),
             pixel_values=pixels,
-            image_grid_thw=torch.tensor([[1, 2, 2]]),
+            image_grid_thw=torch.tensor([[1, 2, 4]]),
             labels=labels, question_mask=question_mask,
         )
         output.loss.backward()
@@ -131,7 +133,7 @@ class VisualSelectionOffsetTest(unittest.TestCase):
         changed_answer[0, -1] = 16
         model(
             input_ids=changed_answer, attention_mask=torch.ones_like(ids),
-            pixel_values=pixels, image_grid_thw=torch.tensor([[1, 2, 2]]),
+            pixel_values=pixels, image_grid_thw=torch.tensor([[1, 2, 4]]),
             labels=labels, question_mask=question_mask,
         )
         for name, value in first_condition.items():

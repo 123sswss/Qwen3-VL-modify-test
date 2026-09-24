@@ -1,5 +1,9 @@
 # QDPT 返修计划：优先解决多随机种子稳定性
 
+> **2026-09-24 最高优先级：V1 loss/梯度累积归一化审计。** 当前已在服务器运行的`pathvqa_v1_visual_selection_prefix_p20_seed44`（输出目录后缀`_20260924_1`）保持原提交和训练配置，完成epoch3与原定Validation；标记为“梯度累积归一化偏差版本”，不覆盖日志。服务器报告Torch2.8.0+cu128、Transformers5.0.0、Accelerate1.12.0，直接forward首批loss3.89144063。先用同一logits和扩展labels核对因果错位有效token平均CE，再在固定参数、相同16个microbatch及末尾实际3个microbatch的窗口中，对照手工等权microbatch均值、现有Trainer路径、仅设置`model_accepts_loss_kwargs=False`的候选路径，核对裁剪前梯度范数和方向，不执行optimizer step。数值通过后才安排单独的修正复跑；不手工再除16、不改Accelerate累积配置、不改为token加权窗口目标。另逐一审计历史V0、CoCoOp、Static P20、QDPT、LoRA的实际运行版本和loss路径；旧结果在未核实前只列风险，不批量宣布失效。数值诊断与后续训练结果按项目规则补两份账本。
+
+> **审计配置补充：** 当前V1训练提交为`4636416ee99768c667377f0c66b5809daf48ffcd`，完整输出为`pathvqa/outputs/visual_selection_prefix/pathvqa_v1_visual_selection_prefix_p20_seed44_20260924_1`。本地已追到V0、CoCoOp、Static P20、QDPT的`forward(**kwargs)`封装和Trainer继承路径，说明在Transformers 5.0.0下有同类风险，但这些旧run当时的实际库版本尚未证实；LoRA采用PEFT包装，尤其不能按Prompt封装推断。数值脚本在V1完成后只读检查其checkpoint，并从各历史`train_report.json`/`train.log`提取明确记录的版本和提交；没有版本证据就标记未知，不能把诊断时的当前环境版本追溯到旧run。修正复跑须等待上述全窗口、末尾不足16步窗口和手工CE复核通过，且须由用户明确授权该次服务器训练。
+
 > **当前优先项（2026-09-24）：修复V1首跑误杀并重跑同一配置。** `pathvqa_v1_visual_selection_prefix_p20_seed44` 首次在49/1845步被BF16反算增量的固定0.01阈值错误中止，无checkpoint和Validation分数；这是监控口径问题。仅移除错误阈值、保留该值为描述性日志及有效的有限值/注入范围检查，不改V1前向计算、初始化、优化器或总预算。重新从step0运行model seed44/data seed42、3 epochs、固定epoch3完整Validation，仍不扫配置、不补seed、不跑Test。对照修复V0 56.7503、CoCoOp 57.4053、Static P20 54.8650。
 
 > **V0 v2诊断状态：** 修复后正常基线56.7503；`offset_off`49.2251、`condition_off`51.9412已经写入两份账本。128样本前向探针统计尚未收到，不阻塞已获授权的V1单次实验；未来若回传，再据实补录。

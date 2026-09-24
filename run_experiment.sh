@@ -34,6 +34,7 @@ if [ "$RUN_TARGET" = "pathvqa_visual_selection_offset_v0_seed44" ] || \
    [ "$RUN_TARGET" = "pathvqa_v1_visual_selection_prefix_p20_seed44" ] || \
    [ "$RUN_TARGET" = "pathvqa_v1_loss_scaling_audit" ] || \
    [ "$RUN_TARGET" = "pathvqa_v1_visual_selection_prefix_p20_norm_fixed_seed44" ] || \
+   [ "$RUN_TARGET" = "pathvqa_v1_norm_fixed_seed44_diagnostic" ] || \
    [ "$RUN_TARGET" = "pathvqa_v0_seed44_epoch3_diagnostic" ] || \
    [ "$RUN_TARGET" = "pathvqa_v0_seed44_mask_fixed_validation" ]; then
   SHUTDOWN_ON_EXIT=0
@@ -4229,6 +4230,28 @@ run_pathvqa_v1_loss_corrected_seed44() {
   echo "[PATHVQA_V1_LOSS_CORRECTED_DONE] output=$output_dir test_evaluation=false other_seeds=false"
 }
 
+run_pathvqa_v1_norm_fixed_seed44_diagnostic() {
+  local experiment_name="pathvqa_v1_norm_fixed_seed44_diagnostic"
+  local output_dir
+  output_dir="$(available_output_dir "$PATHVQA_V1_OUTPUT_ROOT/diagnostics" "${experiment_name}_${RUN_DATE}")"
+  local corrected="$PATHVQA_V1_OUTPUT_ROOT/pathvqa_v1_visual_selection_prefix_p20_norm_fixed_seed44_20260924"
+  local original="$PATHVQA_V1_OUTPUT_ROOT/pathvqa_v1_visual_selection_prefix_p20_seed44_20260924_1"
+  echo "[PATHVQA_V1_DIAGNOSTIC_CONFIG] checkpoint=$corrected/checkpoints/epoch_3 output=$output_dir training=false test=false other_seeds=false git_commit=$(git -C "$ROOT_DIR" rev-parse HEAD)"
+  (
+    cd "$ROOT_DIR" || exit 1
+    python -m diagnostics.diagnose_pathvqa_v1_norm_fixed \
+      --data-root "$PATHVQA_DATA_ROOT" --cache-dir "$PATHVQA_CACHE_ROOT" \
+      --base-model "$MODEL_PATH" --checkpoint "$corrected/checkpoints/epoch_3" \
+      --normal-eval "$corrected/eval_validation/epoch_3" \
+      --original-v1-eval "$original/eval_validation/epoch_3" \
+      --v0-eval "$PATHVQA_V0_OUTPUT_ROOT/diagnostics/pathvqa_v0_seed44_mask_fixed_validation_20260923_1/mask_fixed_normal" \
+      --cocoop-eval "$PATHVQA_COCOOP_OUTPUT_ROOT/pathvqa_cocoop_style_p20_h160_seed44_20260909/eval_validation/epoch_3" \
+      --static-eval "$PATHVQA_PROMPT_OUTPUT_ROOT/pathvqa_prompt_tuning_len20_seed44_20260827/eval_validation/epoch_3" \
+      --output-dir "$output_dir"
+  ) || return 1
+  echo "[PATHVQA_V1_DIAGNOSTIC_DONE] output=$output_dir"
+}
+
 run_pathvqa_visual_selection_offset_v0_seed44() {
   local experiment_name="pathvqa_v0_visual_selection_offset_seed44"
   local output_dir
@@ -4351,6 +4374,9 @@ case "$RUN_TARGET" in
     ;;
   pathvqa_v1_visual_selection_prefix_p20_norm_fixed_seed44)
     run_pathvqa_v1_loss_corrected_seed44 || failures=$((failures + 1))
+    ;;
+  pathvqa_v1_norm_fixed_seed44_diagnostic)
+    run_pathvqa_v1_norm_fixed_seed44_diagnostic || failures=$((failures + 1))
     ;;
   train)
     run_train_dataset || failures=$((failures + 1))

@@ -322,3 +322,9 @@ This file is the concise experiment memory shared by the user and Codex. The com
 - 完整16步窗口裁剪前原Trainer梯度为手工等权microbatch参照的**15.9949倍**；尾部实际3步为**2.9981倍**。只设`model_accepts_loss_kwargs=False`分别为**1.0001/0.9999倍**，方向近乎一致，数值门槛全部通过。原V1 57.5491分保留“梯度累积归一化偏差版本”标记；不等于参数更新被放大16倍。
 - 独立诊断目录：`pathvqa/outputs/visual_selection_prefix/diagnostics/pathvqa_v1_loss_scaling_audit_20260924`。历史V0、CoCoOp、Static P20、QDPT、LoRA的实际运行版本/损失路径表未包含在用户贴出的日志中，仍待读取JSON；不能推定旧成绩全部受影响。受审计结果保护的单独修正入口已经准备，但未启动，匹配seed44修正复跑须另行授权。
 - 用户随后提供`audit_summary.md`：审计实际提交`e42ae4608bcbb93137b3c9e410a565f03800237e`、运行环境PyTorch2.8.0+cu128/Transformers5.0.0/Accelerate1.12.0；历史五项seed44产物均未提取到当时提交和库版本，因此损失归一化协议均为**证据不足**，不能追认全体受影响。表中“PEFT wrapper or source unavailable”对四种Prompt方法只是缺失源码证据的占位文字；只有LoRA训练入口明确使用PEFT。
+
+## 2026-09-24 V1归一化修正复跑完成
+
+- `pathvqa_v1_visual_selection_prefix_p20_norm_fixed_seed44`，PathVQA seed44/data seed42、3 epochs固定epoch3 Validation：**58.57 Overall /90.2080 Yes-No /27.03 Free-form**，where66.7482；图像簇95%CI[57.07,60.05]。Overall/Free-form为终端两位精度，完整summary待提取。配置参数1,864,963。
+- 唯一计划训练改动为`model_accepts_loss_kwargs=False`。对原V1偏差版本Overall约+1.02、Yes/No+0.80、Free-form约+1.25、where+3.9120；对CoCoOp Overall约+1.16，对修复V0约+1.82。本次配对CI未提供，不能沿用旧V1的CI；旧基线归一化协议未知，不能据此宣称结构显著胜出或多seed稳定。旧57.5491保留偏差标记。
+- 输出：`pathvqa/outputs/visual_selection_prefix/pathvqa_v1_visual_selection_prefix_p20_norm_fixed_seed44_20260924`，预测和summary在`eval_validation/epoch_3`。TTFT0.084144s，TPOT0.035596s/token；最终训练耗时、显存、提交及诊断待补。下一步仅从已有产物提取精确分数、配对比较和训练记录，不自动增加训练或Test。

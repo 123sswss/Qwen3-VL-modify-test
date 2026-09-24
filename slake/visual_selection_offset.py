@@ -399,8 +399,9 @@ class VisualSelectionOffsetModel(nn.Module):
 
     def _condition(self, question: torch.Tensor, valid: torch.Tensor, grid: torch.Tensor,
                    probe: dict[str, Any] | None = None):
-        if set(self._features) != {*LAYERS, "value"}:
-            raise RuntimeError(f"V0 expected layers {LAYERS} and native Value, got {set(self._features)}")
+        features = getattr(self, "diagnostic_condition_features", None) or self._features
+        if set(features) != {*LAYERS, "value"}:
+            raise RuntimeError(f"V0 expected layers {LAYERS} and native Value, got {set(features)}")
         x = self.text_projection(question)
         x = x * valid.unsqueeze(-1)
         conv = self.question_pointwise(torch.nn.functional.gelu(self.question_depthwise(x.transpose(1, 2))))
@@ -418,16 +419,16 @@ class VisualSelectionOffsetModel(nn.Module):
         if any(int(h) % 2 or int(w) % 2 for _, h, w in grid.tolist()):
             raise RuntimeError("visual height and width must each be divisible by spatial merge size")
         value_counts = [n // 4 for n in patches]
-        if self._features["value"].shape[0] != sum(value_counts):
+        if features["value"].shape[0] != sum(value_counts):
             raise RuntimeError("native Value length does not match post-merger image geometry")
         values = torch.split(
-            self._features["value"].to(device=question.device, dtype=torch.float32),
+            features["value"].to(device=question.device, dtype=torch.float32),
             value_counts, dim=0,
         )
         blocks = []
         diagnostics: dict[str, torch.Tensor] = {}
         for li, layer in enumerate(LAYERS):
-            h_all = self._features[layer]
+            h_all = features[layer]
             if h_all.shape[0] != sum(patches):
                 raise RuntimeError(f"ViT layer {layer} contains unexpected prompt/padding tokens")
             segments = torch.split(h_all.to(device=question.device, dtype=torch.float32), patches, dim=0)
@@ -440,6 +441,8 @@ class VisualSelectionOffsetModel(nn.Module):
                 logits = (keys * q[b]).sum(dim=-1) / math.sqrt(QUESTION_WIDTH)
                 patch_prob = logits.softmax(dim=0)
                 merged_prob = patch_prob.reshape(-1, 4).sum(dim=1)
+                if getattr(self, "diagnostic_uniform_maps", False):
+                    merged_prob = torch.full_like(merged_prob, 1.0 / merged_prob.numel())
                 if merged_prob.shape[0] != value.shape[0] or not torch.allclose(
                     merged_prob.sum(), merged_prob.new_tensor(1.0), atol=1e-4
                 ):

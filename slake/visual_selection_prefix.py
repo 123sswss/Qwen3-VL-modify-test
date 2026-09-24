@@ -107,6 +107,13 @@ class VisualSelectionPrefixModel(nn.Module):
         self.first_backward_gradients: dict[str, float] = {}
         self._first_grad_handles = []
         self.last_injection_audit: dict[str, Any] | None = None
+        # Read-only diagnostics; unset in training and ordinary V1 inference.
+        self.diagnostic_question_ids: torch.Tensor | None = None
+        self.diagnostic_uniform_maps = False
+        self.diagnostic_condition_features: dict[int | str, torch.Tensor] | None = None
+        self.diagnostic_capture_features = False
+        self.diagnostic_probe: dict[str, Any] | None = None
+        self.diagnostic_prefill_calls = 0
         self._install_capture_hooks()
         self._install_first_backward_hooks()
         self._audit_parameters()
@@ -175,6 +182,10 @@ class VisualSelectionPrefixModel(nn.Module):
         self._expected_visual_segments = int(grid[:, 0].sum())
         self._expected_visual_patches = int(grid.prod(dim=1).sum())
         question, valid = self._question_embeddings(source_ids, source_mask)
+        if self.diagnostic_question_ids is not None:
+            donor = self.diagnostic_question_ids.to(source_ids.device)
+            donor_mask = torch.ones_like(donor, dtype=torch.bool)
+            question, valid = self._question_embeddings(donor, donor_mask)
         embeddings = self.get_input_embeddings()
         language = self.base_model.model.language_model
         prefill_done = False
@@ -192,8 +203,20 @@ class VisualSelectionPrefixModel(nn.Module):
             inputs = kwargs.get("inputs_embeds")
             if inputs is None or inputs.shape[:2] != ids.shape or inputs.shape[1] < 20:
                 raise RuntimeError("V1 prefill inputs_embeds shape mismatch")
-            condition, map_debug = self._condition(question, valid, grid)
+            if self.diagnostic_capture_features and self.diagnostic_probe is not None:
+                self.diagnostic_probe["features"] = {
+                    key: value.detach().float().cpu().clone()
+                    for key, value in self._features.items()
+                }
+                self.diagnostic_probe["grid"] = grid.detach().cpu().clone()
+            condition, map_debug = self._condition(
+                question, valid, grid, probe=self.diagnostic_probe,
+            )
             shift = self.prefix_output(torch.relu(condition))
+            if self.diagnostic_probe is not None:
+                self.diagnostic_probe["shift"] = shift.detach().float().cpu().clone()
+                self.diagnostic_probe["condition"] = condition.detach().float().cpu().clone()
+                self.diagnostic_probe["p20_rms"] = float(self.p20.detach().float().square().mean().sqrt())
             prompt = inputs[:, :20] + shift[:, None, :].to(inputs.dtype)
             kwargs = dict(kwargs)
             kwargs["inputs_embeds"] = torch.cat((prompt, inputs[:, 20:]), dim=1)
@@ -225,6 +248,7 @@ class VisualSelectionPrefixModel(nn.Module):
                 "native_embeddings_unchanged": True,
             }
             prefill_done = True
+            self.diagnostic_prefill_calls += 1
             return args, kwargs
 
         embedding_hook = embeddings.register_forward_hook(replace_p20)

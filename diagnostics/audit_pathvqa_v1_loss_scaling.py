@@ -115,7 +115,8 @@ def historical_provenance(output_root: Path) -> dict[str, dict]:
         wrapper_at_commit = row.get("source_at_training_commit", {}).get(HISTORICAL_SOURCE[family][1], {})
         row["forward_signature_evidence"] = (
             "forward(**kwargs)" if wrapper_at_commit.get("forward_var_kwargs")
-            else "PEFT wrapper or source unavailable; requires historical runtime inspection"
+            else "PEFT wrapper; historical runtime signature unverified" if family == "lora"
+            else "training-commit wrapper source unavailable; no PEFT inference"
         )
         row["loss_kwargs_support_at_runtime"] = "unknown_without_recorded_Trainer_attribute_or_exact_runtime_behavior"
         row["num_items_reaches_loss_denominator"] = "unknown_without_historical_runtime_evidence"

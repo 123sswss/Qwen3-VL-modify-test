@@ -315,3 +315,10 @@ This file is the concise experiment memory shared by the user and Codex. The com
 - 对修复V0 +0.7988，配对CI[-0.0652,1.6414]；对CoCoOp +0.1438，CI[-0.6944,0.9793]；对Static P20 +2.6841，CI[1.7788,3.5726]。静态基线收益明确；尚不能宣称优于V0或CoCoOp，也不能以CI跨0宣称等效。where相对V0/CoCoOp分别+3.4230/+5.1345，仅为分项点估计。参数约为CoCoOp的2.14倍，未建立参数效率优势。
 - 本次保持已发现的归一化偏差跑完：TF5.0.0/Accelerate1.12.0，直接forward loss3.8914；累积16步缺少平均，日志及裁剪前梯度约放大16倍，非参数更新16倍。手工CE、全窗口/尾窗口梯度数值复核及旧基线实际版本审计仍待完成，不提前归因于架构或宣称稳定性。暂不启动修正重训、Test或其他seed。
 - 输出：`pathvqa/outputs/visual_selection_prefix/pathvqa_v1_visual_selection_prefix_p20_seed44_20260924_1`，checkpoint `checkpoints/epoch_3`，预测/summary在`eval_validation/epoch_3`。TTFT0.083398s，TPOT0.035026s/token，28.55token/s；训练耗时/峰值显存待补，不将历史耗时差异当作受控性能比较。
+
+## 2026-09-24 V1梯度累积归一化只读数值复核通过
+
+- `pathvqa_v1_loss_scaling_audit`用原seed44 epoch3 checkpoint与PathVQA训练样本，不重训、不评估、不更新参数。加P20后的同一logits/labels手工因果CE与模型loss均为**1.68652809**（12有效token）；传入窗口`num_items_in_batch=228`后loss不变。
+- 完整16步窗口裁剪前原Trainer梯度为手工等权microbatch参照的**15.9949倍**；尾部实际3步为**2.9981倍**。只设`model_accepts_loss_kwargs=False`分别为**1.0001/0.9999倍**，方向近乎一致，数值门槛全部通过。原V1 57.5491分保留“梯度累积归一化偏差版本”标记；不等于参数更新被放大16倍。
+- 独立诊断目录：`pathvqa/outputs/visual_selection_prefix/diagnostics/pathvqa_v1_loss_scaling_audit_20260924`。历史V0、CoCoOp、Static P20、QDPT、LoRA的实际运行版本/损失路径表未包含在用户贴出的日志中，仍待读取JSON；不能推定旧成绩全部受影响。受审计结果保护的单独修正入口已经准备，但未启动，匹配seed44修正复跑须另行授权。
+- 用户随后提供`audit_summary.md`：审计实际提交`e42ae4608bcbb93137b3c9e410a565f03800237e`、运行环境PyTorch2.8.0+cu128/Transformers5.0.0/Accelerate1.12.0；历史五项seed44产物均未提取到当时提交和库版本，因此损失归一化协议均为**证据不足**，不能追认全体受影响。表中“PEFT wrapper or source unavailable”对四种Prompt方法只是缺失源码证据的占位文字；只有LoRA训练入口明确使用PEFT。

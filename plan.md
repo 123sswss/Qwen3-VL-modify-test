@@ -1,6 +1,8 @@
 # QDPT 返修计划：优先解决多随机种子稳定性
 
-> **当前执行项：恢复V0 v2只读诊断（本地实现完成，待用户服务器运行）。** 正常基线已完成：56.7503 Overall /89.5040 Yes-No /24.0906 Free-form /59.4132 where；固定预测目录为`pathvqa/outputs/visual_selection_offset/diagnostics/pathvqa_v0_seed44_mask_fixed_validation_20260923_1/mask_fixed_normal`。`pathvqa_v0_seed44_epoch3_diagnostic`先做128条前向诊断（含16对同图不同问题），独立审计真实问题条件源、prefill写入位置与字符区间对应，统一v2协议；通过后只运行`offset_off`和`condition_off`完整Validation。比较复用上述正常预测，报告四项指标、双方独占正确数及图像簇配对CI。输出进入新的`pathvqa_v0_seed44_epoch3_diagnostic_v2_*`目录，不覆盖历史产物。不重训、不改结构/初始化/学习率、不加Norm/gate、不跑Test/其他seed、不自动关机。结果回传后立即补两份账本并停止；本次按既有用户偏好不执行测试套件。
+> **当前优先项（2026-09-24）：V1 问题引导视觉选择＋条件化前置 P20。** 单次 `pathvqa_v1_visual_selection_prefix_p20_seed44`，PathVQA model seed44/data seed42、3 epochs、固定 epoch3 完整 Validation。保留 V0 问题条件提取、三层地图/共同 Value 和 Visual18；删除真实问题 token 偏移，只以共享的 `Linear(192,2560)(ReLU(c))` 调整原有 P20，不增加 token。预期 1,864,963 可训练参数。只做本地语法检查；服务器真实 batch 预检通过后训练/评估，不扫配置、不补 seed、不跑 Test。对照修复 V0 56.7503、CoCoOp 57.4053、Static P20 54.8650。下方 V0 v2 诊断仍待结果回传，但不阻塞 V1。
+
+> **V0 v2诊断状态：** 修复后正常基线56.7503；`offset_off`49.2251、`condition_off`51.9412已经写入两份账本。128样本前向探针统计尚未收到，不阻塞已获授权的V1单次实验；未来若回传，再据实补录。
 
 > **2026-09-23 V0问题mask修复v2（已实现，待服务器正常Validation）：** v1已证明边界token虽然位置数一致，但完整prompt会把训练的末尾问号ID30改分词为跨换行ID5267，因此“目标位置ID必须等于训练ID”本身不可成立。v2将条件源与注入位置显式拆开：条件分支始终读取独立分词的真实问题ID，严格复现训练来源；偏移写入完整prefill中与问题字符范围相交的位置，且两边token数必须一一对应，否则立即失败。完整生成prompt和解码协议不变。下一步仍只用原seed44 epoch3 checkpoint运行正常PathVQA Validation并与旧55.6479预测作图像簇配对比较；不运行`offset_off`/`condition_off`、不训练、不评估Test或其他seed。目标仍为`pathvqa_v0_seed44_mask_fixed_validation`。
 

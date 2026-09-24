@@ -299,3 +299,8 @@ This file is the concise experiment memory shared by the user and Codex. The com
 - 同一seed44 epoch3 checkpoint、不重训，采用`standalone_training_source_with_prefill_overlap_targets_v2`得到 **56.7503 Overall /89.5040 Yes-No /24.0906 Free-form**，where59.4132。相对旧mask结果55.6479，Overall **+1.1024**，配对独占正确202/133，按图像簇配对95%差值CI[+0.4775,+1.7333]；Free-form **+2.3612**，Yes/No-0.16。来源为用户提供JSON，本任务未独立拉取服务器产物。
 - 当前正常V0基线更新为56.7503，旧值保留作实现历史。相对Static P20 seed44高1.8853、相对CoCoOp-style seed44低0.6550，尚无针对这两个基线的新配对统计。已确认推理接口曾造成实质性损失，尚未验证公共偏移退化、视觉定位机制或稳定性；不能据此直接加Norm或重训。输出：`pathvqa/outputs/visual_selection_offset/diagnostics/pathvqa_v0_seed44_mask_fixed_validation_20260923_1`；两项关闭干预仍无结果。
 - 用户已授权恢复128条前向诊断及两项关闭干预，配对基线固定为上述修复后预测，统一v2协议，跳过正常基线重跑。代码准备完成，服务器结果仍待回传；不能提前判断公共偏移、条件净收益或是否值得补救训练。
+
+### 2026-09-23 V0修复mask后两项推理关闭干预
+
+- 同一seed44 epoch3、完整Validation、修复后正常基线56.7503：`offset_off`为49.2251（-7.5252，配对95%差值CI[-8.4364,-6.5907]），Free-form13.9438（-10.1468）、where37.8973（-21.5159）；`condition_off`为51.9412（-4.8091，CI[-5.5663,-4.0373]），Free-form17.3261（-6.7645）、where42.7873（-16.6259）。完整分项和独占正确数见账本。
+- 当前checkpoint明显依赖偏移和视觉条件，但这不是重训消融，不能把分差当作可加的模块贡献，也不能证明问题引导定位正确。公共偏移即使存在也可能有用，关闭结果不排除其表达不足。暂不直接加Norm或重训，先读取已安排的小样本探针。结果来自用户消息，实际干预输出目录、提交号与探针统计尚未提供，本轮未运行实验。

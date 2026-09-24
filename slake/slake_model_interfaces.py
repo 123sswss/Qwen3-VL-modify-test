@@ -40,6 +40,10 @@ BACKEND_SPECS = {
         "slake/visual_selection_offset_interface.py",
         "VisualSelectionOffsetInterface",
     ),
+    "visual-selection-prefix": (
+        "slake/visual_selection_prefix_interface.py",
+        "VisualSelectionPrefixInterface",
+    ),
     "cocoop-style": (
         "slake/cocoop_prompt_tuning_interface.py",
         "CoCoOpStyleModelInterface",

@@ -199,10 +199,13 @@ class VisualSelectionPrefixModel(nn.Module):
             kwargs["inputs_embeds"] = torch.cat((prompt, inputs[:, 20:]), dim=1)
             if not torch.equal(kwargs["inputs_embeds"][:, 20:], inputs[:, 20:]):
                 raise RuntimeError("V1 modified native chat embeddings")
+            if shift.shape != (inputs.shape[0], inputs.shape[-1]) or not bool(torch.isfinite(shift).all()):
+                raise RuntimeError("V1 shared P20 shift is malformed or nonfinite")
             actual_delta = prompt.float() - inputs[:, :20].float()
             shared_delta_error = (actual_delta - actual_delta[:, :1]).abs().max()
-            if float(shared_delta_error) > 0.01:
-                raise RuntimeError(f"V1 shared shift exceeds bf16 tolerance: {float(shared_delta_error)}")
+            # The same shift is broadcast to all 20 positions above. In bf16,
+            # subtracting different rounded P20 bases does not recover exactly
+            # the same increment; this is a diagnostic, never a failure gate.
             p_rms = self.p20.square().mean().sqrt().clamp_min(1e-8)
             s_rms = shift.square().mean().sqrt()
             self.debug_context = {
@@ -218,7 +221,7 @@ class VisualSelectionPrefixModel(nn.Module):
                 self.first_batch_diagnostics = {k: float(v.float()) for k, v in self.debug_context.items()}
             self.last_injection_audit = {
                 "prefix_only": True, "positions": 20,
-                "max_shared_delta_error": float(shared_delta_error),
+                "max_effective_delta_spread_bf16": float(shared_delta_error),
                 "native_embeddings_unchanged": True,
             }
             prefill_done = True

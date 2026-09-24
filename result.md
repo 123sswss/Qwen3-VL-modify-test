@@ -304,3 +304,7 @@ This file is the concise experiment memory shared by the user and Codex. The com
 
 - 同一seed44 epoch3、完整Validation、修复后正常基线56.7503：`offset_off`为49.2251（-7.5252，配对95%差值CI[-8.4364,-6.5907]），Free-form13.9438（-10.1468）、where37.8973（-21.5159）；`condition_off`为51.9412（-4.8091，CI[-5.5663,-4.0373]），Free-form17.3261（-6.7645）、where42.7873（-16.6259）。完整分项和独占正确数见账本。
 - 当前checkpoint明显依赖偏移和视觉条件，但这不是重训消融，不能把分差当作可加的模块贡献，也不能证明问题引导定位正确。公共偏移即使存在也可能有用，关闭结果不排除其表达不足。暂不直接加Norm或重训，先读取已安排的小样本探针。结果来自用户消息，实际干预输出目录、提交号与探针统计尚未提供，本轮未运行实验。
+
+### 2026-09-24 V1 seed44首次训练在3%停止
+
+- `pathvqa_v1_visual_selection_prefix_p20_seed44`（PathVQA、model seed44/data seed42、提交`807cc9b`）在49/1845步、约4分49秒触发监控断言，未保存checkpoint，未评估Validation/Test，Overall等分数不存在。原因是把不同P20基底经BF16舍入后的“反算增量”强行要求几乎相同；实际共享偏移在算术上仍由同一个shift广播。只移除这个无效阈值、保留诊断值与有效检查；配置不变，需从头重跑。输出：`/root/autodl-tmp/Qwen3-VL-modify-test/pathvqa/outputs/visual_selection_prefix/pathvqa_v1_visual_selection_prefix_p20_seed44_20260924`。

@@ -1,6 +1,6 @@
 # QDPT 返修计划：优先解决多随机种子稳定性
 
-> **当前优先项（2026-09-24）：V1 问题引导视觉选择＋条件化前置 P20。** 单次 `pathvqa_v1_visual_selection_prefix_p20_seed44`，PathVQA model seed44/data seed42、3 epochs、固定 epoch3 完整 Validation。保留 V0 问题条件提取、三层地图/共同 Value 和 Visual18；删除真实问题 token 偏移，只以共享的 `Linear(192,2560)(ReLU(c))` 调整原有 P20，不增加 token。预期 1,864,963 可训练参数。只做本地语法检查；服务器真实 batch 预检通过后训练/评估，不扫配置、不补 seed、不跑 Test。对照修复 V0 56.7503、CoCoOp 57.4053、Static P20 54.8650。下方 V0 v2 诊断仍待结果回传，但不阻塞 V1。
+> **当前优先项（2026-09-24）：修复V1首跑误杀并重跑同一配置。** `pathvqa_v1_visual_selection_prefix_p20_seed44` 首次在49/1845步被BF16反算增量的固定0.01阈值错误中止，无checkpoint和Validation分数；这是监控口径问题。仅移除错误阈值、保留该值为描述性日志及有效的有限值/注入范围检查，不改V1前向计算、初始化、优化器或总预算。重新从step0运行model seed44/data seed42、3 epochs、固定epoch3完整Validation，仍不扫配置、不补seed、不跑Test。对照修复V0 56.7503、CoCoOp 57.4053、Static P20 54.8650。
 
 > **V0 v2诊断状态：** 修复后正常基线56.7503；`offset_off`49.2251、`condition_off`51.9412已经写入两份账本。128样本前向探针统计尚未收到，不阻塞已获授权的V1单次实验；未来若回传，再据实补录。
 

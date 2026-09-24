@@ -151,8 +151,6 @@ def real_batch_preflight(model, dataset, collator, output_dir: Path) -> None:
         "injection": model.last_injection_audit,
         "question_policy": "independent_raw_question_ids_no_prefill_write_mapping",
     }
-    if audit["injection"]["max_shared_delta_error"] > 0.01:
-        raise RuntimeError("V1 real batch P20 offsets differ")
     with (output_dir / "v1_real_batch_preflight.json").open("w", encoding="utf-8") as handle:
         json.dump(audit, handle, indent=2)
     print("[V1_REAL_BATCH_PREFLIGHT] " + json.dumps(audit, ensure_ascii=False))

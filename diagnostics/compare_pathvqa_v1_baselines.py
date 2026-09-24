@@ -13,6 +13,7 @@ from diagnostics.compare_pathvqa_conditioning_mismatches import compare_variant,
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--v1-eval", type=Path, required=True)
+    parser.add_argument("--original-v1-eval", type=Path)
     parser.add_argument("--v0-eval", type=Path, required=True)
     parser.add_argument("--cocoop-eval", type=Path, required=True)
     parser.add_argument("--static-eval", type=Path, required=True)
@@ -25,11 +26,15 @@ def main() -> int:
     variant_rows = load_json(variant_path)
     summary = load_json(summary_path)
     results = {}
-    for name, baseline in (
+    baselines = []
+    if args.original_v1_eval is not None:
+        baselines.append(("original_v1_normalization_deviation_seed44", args.original_v1_eval))
+    baselines.extend((
         ("repaired_v0", args.v0_eval),
         ("cocoop_style_seed44", args.cocoop_eval),
         ("static_p20_seed44", args.static_eval),
-    ):
+    ))
+    for name, baseline in baselines:
         path = baseline / "pathvqa_comparisons.json"
         if not path.is_file():
             results[name] = {"status": "predictions_missing", "path": str(path)}

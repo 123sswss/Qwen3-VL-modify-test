@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import importlib.metadata
 import json
 import math
 import random
@@ -200,6 +201,15 @@ def main() -> int:
     parser.add_argument("--correct-loss-accumulation", action="store_true",
                         help="Use Trainer's equal-microbatch mean loss scaling; guarded by the read-only audit launcher")
     args = parser.parse_args()
+    print("[V1_RUNTIME] " + json.dumps({
+        "experiment": args.experiment_name,
+        "git_commit": subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True,
+                                     text=True, check=False).stdout.strip(),
+        "torch": torch.__version__,
+        "transformers": importlib.metadata.version("transformers"),
+        "accelerate": importlib.metadata.version("accelerate"),
+        "correct_loss_accumulation": args.correct_loss_accumulation,
+    }, sort_keys=True), flush=True)
     seed, data_seed = 44, 42
     random.seed(seed)
     np.random.seed(seed)
@@ -250,6 +260,8 @@ def main() -> int:
         # each microbatch loss by the actual accumulation-window size.
         # Do not also divide manually or change Accelerate's accumulation.
         trainer.model_accepts_loss_kwargs = False
+        if trainer.model_accepts_loss_kwargs is not False or trainer.args.gradient_accumulation_steps != 16 or trainer.accelerator.gradient_accumulation_steps != 1:
+            raise RuntimeError("V1 corrected accumulation runtime does not match the audited path")
     print(f"[V1_LOSS_ACCUMULATION] corrected={args.correct_loss_accumulation} "
           f"trainer_model_accepts_loss_kwargs={trainer.model_accepts_loss_kwargs} "
           f"trainer_steps={trainer.args.gradient_accumulation_steps} "
@@ -270,6 +282,13 @@ def main() -> int:
             ["git", "rev-parse", "HEAD"], capture_output=True, text=True,
             check=False,
         ).stdout.strip(),
+        "runtime_versions": {
+            "torch": torch.__version__,
+            "transformers": importlib.metadata.version("transformers"),
+            "accelerate": importlib.metadata.version("accelerate"),
+        },
+        "trainer_model_accepts_loss_kwargs": trainer.model_accepts_loss_kwargs,
+        "accelerator_gradient_accumulation_steps": trainer.accelerator.gradient_accumulation_steps,
         "loss_accumulation_protocol": (
             "equal_microbatch_mean_trainer_normalized" if args.correct_loss_accumulation
             else "original_unmodified_trainer_protocol"

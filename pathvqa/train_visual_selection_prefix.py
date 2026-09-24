@@ -197,6 +197,8 @@ def main() -> int:
     parser.add_argument("--data-root", type=Path, default=Path("/root/autodl-tmp/dataset/pathVQA"))
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--experiment-name", required=True)
+    parser.add_argument("--correct-loss-accumulation", action="store_true",
+                        help="Use Trainer's equal-microbatch mean loss scaling; guarded by the read-only audit launcher")
     args = parser.parse_args()
     seed, data_seed = 44, 42
     random.seed(seed)
@@ -243,6 +245,15 @@ def main() -> int:
         processing_class=processor,
         callbacks=[V1AuditCallback(args.output_dir, processor)],
     )
+    if args.correct_loss_accumulation:
+        # Qwen's mean-token CE ignores num_items_in_batch. Let Trainer divide
+        # each microbatch loss by the actual accumulation-window size.
+        # Do not also divide manually or change Accelerate's accumulation.
+        trainer.model_accepts_loss_kwargs = False
+    print(f"[V1_LOSS_ACCUMULATION] corrected={args.correct_loss_accumulation} "
+          f"trainer_model_accepts_loss_kwargs={trainer.model_accepts_loss_kwargs} "
+          f"trainer_steps={trainer.args.gradient_accumulation_steps} "
+          f"accelerate_steps={trainer.accelerator.gradient_accumulation_steps}")
     result = trainer.train()
     checkpoint = args.output_dir / "checkpoints" / "epoch_3"
     if not checkpoint.is_dir():
@@ -259,6 +270,10 @@ def main() -> int:
             ["git", "rev-parse", "HEAD"], capture_output=True, text=True,
             check=False,
         ).stdout.strip(),
+        "loss_accumulation_protocol": (
+            "equal_microbatch_mean_trainer_normalized" if args.correct_loss_accumulation
+            else "original_unmodified_trainer_protocol"
+        ),
         "optimizer": {
             "type": "AdamW", "weight_decay": 0.0, "betas": [0.9, 0.999],
             "eps": 1e-8, "scheduler": "linear", "warmup_ratio": 0.03,

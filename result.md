@@ -308,3 +308,10 @@ This file is the concise experiment memory shared by the user and Codex. The com
 ### 2026-09-24 V1 seed44首次训练在3%停止
 
 - `pathvqa_v1_visual_selection_prefix_p20_seed44`（PathVQA、model seed44/data seed42、提交`807cc9b`）在49/1845步、约4分49秒触发监控断言，未保存checkpoint，未评估Validation/Test，Overall等分数不存在。原因是把不同P20基底经BF16舍入后的“反算增量”强行要求几乎相同；实际共享偏移在算术上仍由同一个shift广播。只移除这个无效阈值、保留诊断值与有效检查；配置不变，需从头重跑。输出：`/root/autodl-tmp/Qwen3-VL-modify-test/pathvqa/outputs/visual_selection_prefix/pathvqa_v1_visual_selection_prefix_p20_seed44_20260924`。
+
+## 2026-09-24 V1前置条件P20完成（梯度累积归一化偏差版本）
+
+- `pathvqa_v1_visual_selection_prefix_p20_seed44`，PathVQA seed44/data seed42、3 epochs固定epoch3 Validation：**57.5491 Overall /89.4080 Yes-No /25.78 Free-form**，where62.8362，图像簇95%CI[56.03,58.96]；参数1,864,963。用户回传结果，未独立拉取服务器产物。
+- 对修复V0 +0.7988，配对CI[-0.0652,1.6414]；对CoCoOp +0.1438，CI[-0.6944,0.9793]；对Static P20 +2.6841，CI[1.7788,3.5726]。静态基线收益明确；尚不能宣称优于V0或CoCoOp，也不能以CI跨0宣称等效。where相对V0/CoCoOp分别+3.4230/+5.1345，仅为分项点估计。参数约为CoCoOp的2.14倍，未建立参数效率优势。
+- 本次保持已发现的归一化偏差跑完：TF5.0.0/Accelerate1.12.0，直接forward loss3.8914；累积16步缺少平均，日志及裁剪前梯度约放大16倍，非参数更新16倍。手工CE、全窗口/尾窗口梯度数值复核及旧基线实际版本审计仍待完成，不提前归因于架构或宣称稳定性。暂不启动修正重训、Test或其他seed。
+- 输出：`pathvqa/outputs/visual_selection_prefix/pathvqa_v1_visual_selection_prefix_p20_seed44_20260924_1`，checkpoint `checkpoints/epoch_3`，预测/summary在`eval_validation/epoch_3`。TTFT0.083398s，TPOT0.035026s/token，28.55token/s；训练耗时/峰值显存待补，不将历史耗时差异当作受控性能比较。

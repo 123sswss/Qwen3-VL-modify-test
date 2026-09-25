@@ -35,6 +35,7 @@ if [ "$RUN_TARGET" = "pathvqa_visual_selection_offset_v0_seed44" ] || \
    [ "$RUN_TARGET" = "pathvqa_v1_loss_scaling_audit" ] || \
    [ "$RUN_TARGET" = "pathvqa_v1_visual_selection_prefix_p20_norm_fixed_seed44" ] || \
    [ "$RUN_TARGET" = "pathvqa_v1_visual_selection_prefix_p20_norm_fixed_seed45" ] || \
+   [ "$RUN_TARGET" = "pathvqa_v1_visual_selection_prefix_p20_norm_fixed_seed46" ] || \
    [ "$RUN_TARGET" = "pathvqa_v1_norm_fixed_seed44_diagnostic" ] || \
    [ "$RUN_TARGET" = "pathvqa_v0_seed44_epoch3_diagnostic" ] || \
    [ "$RUN_TARGET" = "pathvqa_v0_seed44_mask_fixed_validation" ]; then
@@ -4268,6 +4269,43 @@ run_pathvqa_v1_loss_corrected_seed45() {
   echo "[PATHVQA_V1_LOSS_CORRECTED_DONE] output=$output_dir test_evaluation=false other_seeds=false"
 }
 
+run_pathvqa_v1_loss_corrected_seed46() {
+  local audit_json="${PATHVQA_V1_LOSS_AUDIT_JSON:-$PATHVQA_V1_OUTPUT_ROOT/diagnostics/pathvqa_v1_loss_scaling_audit_20260924/v1_loss_scaling_audit.json}"
+  if [ ! -f "$audit_json" ]; then
+    echo "[ERR] V1 loss-scaling audit JSON missing: $audit_json; no training started." >&2
+    return 1
+  fi
+  if ! python -c 'import importlib.metadata,json,sys,torch; d=json.load(open(sys.argv[1],encoding="utf-8")); assert d["passed"] is True and d["training_commit"]=="4636416ee99768c667377f0c66b5809daf48ffcd"; assert all(all(d["windows"][str(k)]["numeric_checks"].values()) for k in (16,3)); assert d["versions"]["torch"]==torch.__version__; assert d["versions"]["transformers"]==importlib.metadata.version("transformers"); assert d["versions"]["accelerate"]==importlib.metadata.version("accelerate"); print("[V1_NORM_FIXED_PREFLIGHT] audit_passed=True versions_match=True full16_and_tail3=True")' "$audit_json"; then
+    echo "[ERR] V1 loss audit failed or runtime versions changed; no training started." >&2
+    return 1
+  fi
+  local experiment_name="pathvqa_v1_visual_selection_prefix_p20_norm_fixed_seed46"
+  local output_dir
+  output_dir="$(available_output_dir "$PATHVQA_V1_OUTPUT_ROOT" "${experiment_name}_${RUN_DATE}")"
+  mkdir -p "$output_dir/eval_validation/epoch_3"
+  echo "[PATHVQA_V1_LOSS_CORRECTED_CONFIG] experiment=$experiment_name audit=$audit_json git_commit=$(git -C "$ROOT_DIR" rev-parse HEAD) model_seed=46 data_seed=42 batch=2 accumulation=16 epochs=3 output=$output_dir"
+  (
+    cd "$ROOT_DIR" || exit 1
+    python -m pathvqa.train_visual_selection_prefix \
+      --model-path "$MODEL_PATH" --data-root "$PATHVQA_DATA_ROOT" \
+      --output-dir "$output_dir" --experiment-name "$experiment_name" \
+      --model-seed 46 --correct-loss-accumulation \
+      2>&1 | tee "$output_dir/train.log"
+  ) || return 1
+  local checkpoint="$output_dir/checkpoints/epoch_3"
+  [ -f "$checkpoint/visual_selection_prefix.pt" ] || return 1
+  (
+    cd "$ROOT_DIR" || exit 1
+    python -m pathvqa.pathvqa_official_eval \
+      --backend visual-selection-prefix --base-model "$MODEL_PATH" \
+      --checkpoint "$checkpoint" --data-root "$PATHVQA_DATA_ROOT" \
+      --cache-dir "$PATHVQA_CACHE_ROOT" --split validation \
+      --output-dir "$output_dir/eval_validation/epoch_3" \
+      2>&1 | tee "$output_dir/eval_validation_epoch_3.log"
+  ) || return 1
+  echo "[PATHVQA_V1_LOSS_CORRECTED_DONE] output=$output_dir test_evaluation=false other_seeds=false"
+}
+
 run_pathvqa_v1_norm_fixed_seed44_diagnostic() {
   local experiment_name="pathvqa_v1_norm_fixed_seed44_diagnostic"
   local output_dir
@@ -4415,6 +4453,9 @@ case "$RUN_TARGET" in
     ;;
   pathvqa_v1_visual_selection_prefix_p20_norm_fixed_seed45)
     run_pathvqa_v1_loss_corrected_seed45 || failures=$((failures + 1))
+    ;;
+  pathvqa_v1_visual_selection_prefix_p20_norm_fixed_seed46)
+    run_pathvqa_v1_loss_corrected_seed46 || failures=$((failures + 1))
     ;;
   pathvqa_v1_norm_fixed_seed44_diagnostic)
     run_pathvqa_v1_norm_fixed_seed44_diagnostic || failures=$((failures + 1))

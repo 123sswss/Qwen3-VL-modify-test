@@ -39,7 +39,6 @@ if [ "$RUN_TARGET" = "pathvqa_visual_selection_offset_v0_seed44" ] || \
    [ "$RUN_TARGET" = "pathvqa_v1_visual_selection_prefix_p20_norm_fixed_seed45" ] || \
    [ "$RUN_TARGET" = "pathvqa_v1_visual_selection_prefix_p20_norm_fixed_seed46" ] || \
    [ "$RUN_TARGET" = "pathvqa_v2_layer_mix_prefix_p20_norm_fixed_seed44" ] || \
-   [ "$RUN_TARGET" = "pathvqa_v3_postvisual_prefix_p20_norm_fixed_seed44" ] || \
    [ "$RUN_TARGET" = "pathvqa_v1_norm_fixed_seed44_diagnostic" ] || \
    [ "$RUN_TARGET" = "pathvqa_v0_seed44_epoch3_diagnostic" ] || \
    [ "$RUN_TARGET" = "pathvqa_v0_seed44_mask_fixed_validation" ]; then

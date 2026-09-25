@@ -356,3 +356,9 @@ This file is the concise experiment memory shared by the user and Codex. The com
 
 - seed46固定epoch3 PathVQA Validation **57.58 Overall /90.1760 Yes-No /25.08 Free-form**，where64.5477，图像簇CI[56.15,58.99]；输出`pathvqa/outputs/visual_selection_prefix/pathvqa_v1_visual_selection_prefix_p20_norm_fixed_seed46_20260925`，预测/summary在`eval_validation/epoch_3`。Overall/Free-form为终端两位精度，精确summary待补。
 - seeds44/45/46约58.57/57.17/57.58，Overall **57.77 +/-0.72样本标准差**，极差1.40；Free-form约25.85 +/-1.04。旧QDPT59.15 +/-1.75：参数少76.1%、均值低约1.38、观察到的波动较小，不能称不扣分稳定化。CoCoOp历史56.31 +/-1.14：当前三seed点估计均更高，但历史协议未知。V1可作为下一轮固定参照；不自动加训练或Test。
+
+## 2026-09-25 V2逐位置三层混合seed44：未见收益
+
+- `pathvqa_v2_layer_mix_prefix_p20_norm_fixed_seed44`，PathVQA seed44/data seed42、固定epoch3 Validation：58.0764 Overall、90.3040 Yes-No、25.9413 Free-form、where64.0587，配置参数1,865,023。相对同seed修正V1分别-0.4953/+0.0960/-1.0849/-2.6895。Overall配对CI[-1.2189,0.2228]，Free-form[-2.2284,0.0608]；全部已提供分项CI均跨0，未证明等效或显著退化。
+- 保留V1，不自动补seed或调alpha；本次没有证据支持用逐位置层混合替换共享偏移。不能泛化为更高自由度都无用。最终alpha/梯度与有效偏移诊断未提供，不推断系数是否学开。
+- 输出`pathvqa/outputs/visual_layer_mix_prefix/pathvqa_v2_layer_mix_prefix_p20_norm_fixed_seed44_20260925`，预测/summary在`eval_validation/epoch_3`。TTFT0.050350s、TPOT0.016425s/token；无Test/其他seed。

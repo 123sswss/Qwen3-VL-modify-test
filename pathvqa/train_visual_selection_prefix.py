@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Single V1 seed44 PathVQA train with a real-batch preflight."""
+"""Single V1 PathVQA train with a real-batch preflight."""
 
 from __future__ import annotations
 
@@ -185,7 +185,7 @@ def construct_with_v0_initialization_audit(base, seed: int, output_dir: Path):
     ]
     if mismatches:
         raise RuntimeError(f"V1/V0 common initial values differ: {mismatches}")
-    audit = {"reference": "fresh_V0_seed44", "equal": True, "tensor_count": len(common)}
+    audit = {"reference": f"fresh_V0_seed{seed}", "equal": True, "tensor_count": len(common)}
     with (output_dir / "v1_shared_initialization_audit.json").open("w", encoding="utf-8") as handle:
         json.dump(audit, handle, indent=2)
     print("[V1_SHARED_INITIALIZATION_AUDIT] " + json.dumps(audit))
@@ -198,6 +198,7 @@ def main() -> int:
     parser.add_argument("--data-root", type=Path, default=Path("/root/autodl-tmp/dataset/pathVQA"))
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--experiment-name", required=True)
+    parser.add_argument("--model-seed", type=int, default=44)
     parser.add_argument("--correct-loss-accumulation", action="store_true",
                         help="Use Trainer's equal-microbatch mean loss scaling; guarded by the read-only audit launcher")
     args = parser.parse_args()
@@ -210,7 +211,7 @@ def main() -> int:
         "accelerate": importlib.metadata.version("accelerate"),
         "correct_loss_accumulation": args.correct_loss_accumulation,
     }, sort_keys=True), flush=True)
-    seed, data_seed = 44, 42
+    seed, data_seed = args.model_seed, 42
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)

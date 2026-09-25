@@ -351,3 +351,8 @@ This file is the concise experiment memory shared by the user and Codex. The com
 - `pathvqa_v1_visual_selection_prefix_p20_norm_fixed_seed45`，PathVQA data seed42、固定epoch3 Validation：57.17 Overall、88.9920 Yes/No、25.43 Free-form、where63.5697，图像簇95%CI[55.67,58.58]。Overall/Free-form为两位终端精度，精确summary待补。输出`pathvqa/outputs/visual_selection_prefix/pathvqa_v1_visual_selection_prefix_p20_norm_fixed_seed45_20260925`，预测/summary在`eval_validation/epoch_3`。
 - 与seed44组成两seed均值约57.87、分差约1.40；旧QDPT对应均值59.0350、分差3.4830。参数减少约76.1%，均值也低约1.16，不能称不扣分稳定化；仅两seed尚不足以确认方差改善。两次均较同seed历史CoCoOp点估计更高（seed45约+0.77），但旧协议未知、seed45配对未做。
 - seed45 TTFT0.049916s、TPOT0.016547s/token，比seed44快很多；先查GPU/运行时/注意力后端/生成与计时设置，不归因于seed。下一候选为原样seed46，但本次未启动或新增授权；无Test。
+
+## 2026-09-25 修正V1 seed46及三seed汇总
+
+- seed46固定epoch3 PathVQA Validation **57.58 Overall /90.1760 Yes-No /25.08 Free-form**，where64.5477，图像簇CI[56.15,58.99]；输出`pathvqa/outputs/visual_selection_prefix/pathvqa_v1_visual_selection_prefix_p20_norm_fixed_seed46_20260925`，预测/summary在`eval_validation/epoch_3`。Overall/Free-form为终端两位精度，精确summary待补。
+- seeds44/45/46约58.57/57.17/57.58，Overall **57.77 +/-0.72样本标准差**，极差1.40；Free-form约25.85 +/-1.04。旧QDPT59.15 +/-1.75：参数少76.1%、均值低约1.38、观察到的波动较小，不能称不扣分稳定化。CoCoOp历史56.31 +/-1.14：当前三seed点估计均更高，但历史协议未知。V1可作为下一轮固定参照；不自动加训练或Test。

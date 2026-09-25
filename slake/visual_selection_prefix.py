@@ -151,6 +151,9 @@ class VisualSelectionPrefixModel(nn.Module):
     def get_input_embeddings(self):
         return self.base_model.get_input_embeddings()
 
+    def _prefix_shift(self, condition: torch.Tensor) -> torch.Tensor:
+        return self.prefix_output(torch.relu(condition))
+
     def _expand(self, batch: dict[str, Any]):
         batch = dict(batch)
         ids = batch.pop("input_ids")
@@ -213,27 +216,34 @@ class VisualSelectionPrefixModel(nn.Module):
             condition, map_debug = self._condition(
                 question, valid, grid, probe=self.diagnostic_probe,
             )
-            shift = self.prefix_output(torch.relu(condition))
+            shift = self._prefix_shift(condition)
+            if shift.ndim == 2 and shift.shape == (inputs.shape[0], inputs.shape[-1]):
+                applied_shift = shift[:, None, :]
+            elif shift.ndim == 3 and shift.shape == inputs[:, :20].shape:
+                applied_shift = shift
+            else:
+                raise RuntimeError("conditional P20 shift has invalid shape")
             if self.diagnostic_probe is not None:
                 self.diagnostic_probe["shift"] = shift.detach().float().cpu().clone()
                 self.diagnostic_probe["condition"] = condition.detach().float().cpu().clone()
                 self.diagnostic_probe["p20_rms"] = float(self.p20.detach().float().square().mean().sqrt())
-            prompt = inputs[:, :20] + shift[:, None, :].to(inputs.dtype)
+            prompt = inputs[:, :20] + applied_shift.to(inputs.dtype)
             kwargs = dict(kwargs)
             kwargs["inputs_embeds"] = torch.cat((prompt, inputs[:, 20:]), dim=1)
             if not torch.equal(kwargs["inputs_embeds"][:, 20:], inputs[:, 20:]):
                 raise RuntimeError("V1 modified native chat embeddings")
-            if shift.shape != (inputs.shape[0], inputs.shape[-1]) or not bool(torch.isfinite(shift).all()):
-                raise RuntimeError("V1 shared P20 shift is malformed or nonfinite")
+            if not bool(torch.isfinite(shift).all()):
+                raise RuntimeError("conditional P20 shift is nonfinite")
             actual_delta = prompt.float() - inputs[:, :20].float()
             shared_delta_error = (actual_delta - actual_delta[:, :1]).abs().max()
             # The same shift is broadcast to all 20 positions above. In bf16,
             # subtracting different rounded P20 bases does not recover exactly
             # the same increment; this is a diagnostic, never a failure gate.
             p_rms = self.p20.square().mean().sqrt().clamp_min(1e-8)
-            s_rms = shift.square().mean().sqrt()
+            s_rms = applied_shift.square().mean().sqrt()
             self.debug_context = {
                 **map_debug,
+                **getattr(self, "_prefix_shift_debug", {}),
                 "question_rms": question[valid].square().mean().sqrt().detach(),
                 "condition_rms": condition.square().mean().sqrt().detach(),
                 "native_value_rms": self._features["value"].float().square().mean().sqrt().detach(),

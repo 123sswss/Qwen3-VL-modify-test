@@ -203,12 +203,13 @@ class VisualSelectionPrefixModel(nn.Module):
             inputs = kwargs.get("inputs_embeds")
             if inputs is None or inputs.shape[:2] != ids.shape or inputs.shape[1] < 20:
                 raise RuntimeError("V1 prefill inputs_embeds shape mismatch")
-            if self.diagnostic_capture_features and self.diagnostic_probe is not None:
-                self.diagnostic_probe["features"] = {
-                    key: value.detach().float().cpu().clone()
-                    for key, value in self._features.items()
-                }
+            if self.diagnostic_probe is not None:
                 self.diagnostic_probe["grid"] = grid.detach().cpu().clone()
+                if self.diagnostic_capture_features:
+                    self.diagnostic_probe["features"] = {
+                        key: value.detach().float().cpu().clone()
+                        for key, value in self._features.items()
+                    }
             condition, map_debug = self._condition(
                 question, valid, grid, probe=self.diagnostic_probe,
             )

@@ -328,3 +328,7 @@ This file is the concise experiment memory shared by the user and Codex. The com
 - `pathvqa_v1_visual_selection_prefix_p20_norm_fixed_seed44`，PathVQA seed44/data seed42、3 epochs固定epoch3 Validation：**58.57 Overall /90.2080 Yes-No /27.03 Free-form**，where66.7482；图像簇95%CI[57.07,60.05]。Overall/Free-form为终端两位精度，完整summary待提取。配置参数1,864,963。
 - 唯一计划训练改动为`model_accepts_loss_kwargs=False`。对原V1偏差版本Overall约+1.02、Yes/No+0.80、Free-form约+1.25、where+3.9120；对CoCoOp Overall约+1.16，对修复V0约+1.82。本次配对CI未提供，不能沿用旧V1的CI；旧基线归一化协议未知，不能据此宣称结构显著胜出或多seed稳定。旧57.5491保留偏差标记。
 - 输出：`pathvqa/outputs/visual_selection_prefix/pathvqa_v1_visual_selection_prefix_p20_norm_fixed_seed44_20260924`，预测和summary在`eval_validation/epoch_3`。TTFT0.084144s，TPOT0.035596s/token；最终训练耗时、显存、提交及诊断待补。下一步仅从已有产物提取精确分数、配对比较和训练记录，不自动增加训练或Test。
+
+## 2026-09-25 V1修正版本只读诊断预检失败
+
+- `pathvqa_v1_norm_fixed_seed44_diagnostic`在均匀地图小样本预检读取`p["grid"]`时因诊断元数据未写入而停止（`KeyError`）。可能已经完成正常预测核对、基线配对和128题探针，但用户未提供其数值；三项完整Validation干预均未完成，没有新分数。原V1修正版本约58.57分不变。失败输出位于`pathvqa/outputs/visual_selection_prefix/diagnostics/pathvqa_v1_norm_fixed_seed44_diagnostic_*`，具体后缀未从回传信息确认。现仅补齐探针网格记录，保留原预检门槛后重跑；不重训、不跑Test或其他seed。

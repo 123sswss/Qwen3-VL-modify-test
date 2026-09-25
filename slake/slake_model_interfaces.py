@@ -44,6 +44,10 @@ BACKEND_SPECS = {
         "slake/visual_selection_prefix_interface.py",
         "VisualSelectionPrefixInterface",
     ),
+    "visual-selection-postvisual": (
+        "slake/visual_selection_postvisual_interface.py",
+        "VisualSelectionPostvisualInterface",
+    ),
     "visual-selection-layer-mix": (
         "slake/visual_selection_layer_mix_interface.py",
         "VisualSelectionLayerMixInterface",

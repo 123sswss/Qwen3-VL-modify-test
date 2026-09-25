@@ -307,7 +307,7 @@ class PathVQADataset(Dataset):
             labels = torch.full_like(input_ids, -100)
             mmrl_gating_mask = attention_mask.bool()
 
-        return {
+        result = {
             "input_ids": input_ids,
             "attention_mask": attention_mask,
             "pixel_values": pixel_values,
@@ -321,6 +321,9 @@ class PathVQADataset(Dataset):
             "images_per_sample": 1,
             "is_mm": 1,
         }
+        if "prompt_mask" in inputs:
+            result["prompt_mask"] = inputs["prompt_mask"].squeeze(0).bool()
+        return result
 
 
 class PathVQAStage1Dataset(Dataset):
@@ -430,6 +433,7 @@ class PathVQADataCollator:
             "attention_mask": 0,
             "labels": -100,
             "mmrl_gating_mask": False,
+            "prompt_mask": False,
         }
         batch = {}
         for key in features[0]:

@@ -362,3 +362,8 @@ This file is the concise experiment memory shared by the user and Codex. The com
 - `pathvqa_v2_layer_mix_prefix_p20_norm_fixed_seed44`，PathVQA seed44/data seed42、固定epoch3 Validation：58.0764 Overall、90.3040 Yes-No、25.9413 Free-form、where64.0587，配置参数1,865,023。相对同seed修正V1分别-0.4953/+0.0960/-1.0849/-2.6895。Overall配对CI[-1.2189,0.2228]，Free-form[-2.2284,0.0608]；全部已提供分项CI均跨0，未证明等效或显著退化。
 - 保留V1，不自动补seed或调alpha；本次没有证据支持用逐位置层混合替换共享偏移。不能泛化为更高自由度都无用。最终alpha/梯度与有效偏移诊断未提供，不推断系数是否学开。
 - 输出`pathvqa/outputs/visual_layer_mix_prefix/pathvqa_v2_layer_mix_prefix_p20_norm_fixed_seed44_20260925`，预测/summary在`eval_validation/epoch_3`。TTFT0.050350s、TPOT0.016425s/token；无Test/其他seed。
+
+## 2026-09-25 V2 alpha只读审计
+
+- 已完成V2 seed44 epoch3 checkpoint及93条既有日志读取，无前向或新评分。alpha相对1的RMS变化0.0136534、最大0.03317368；三列位置std约0.00913/0.00499/0.01084，W加权位置映射差异R=0.0094413683（约0.944%）。alpha有梯度且在变化，但只形成弱的位置差异；40.352%是微小变化中的位置分量占比，不是输出贡献。
+- 未保存c/b_l/逐位置偏移，不能恢复样本级差异。不能从此证明强分工无用，也不能断言加大学习率会涨分；仅本次配置未充分形成强分工且没有性能收益。保留V1，不追加训练。输出位于V2运行目录`diagnostics/alpha_readonly_20260925_213130`；原V2 58.0764分不变。

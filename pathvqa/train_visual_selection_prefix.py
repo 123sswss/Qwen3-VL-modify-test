@@ -56,10 +56,13 @@ class RawQuestionCollator:
             [torch.ones_like(ids, dtype=torch.bool) for ids in source],
             batch_first=True, padding_value=False,
         )
-        return {key: batch[key] for key in (
+        keys = (
             "input_ids", "attention_mask", "pixel_values", "image_grid_thw",
             "labels", "question_source_ids", "question_source_mask",
-        )}
+        )
+        if "prompt_mask" in batch:
+            keys += ("prompt_mask",)
+        return {key: batch[key] for key in keys}
 
 
 class V1Trainer(Trainer):

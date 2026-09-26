@@ -113,6 +113,38 @@ def select_records(store, split: str, comparison_by_id=None):
                       "selected_images": len({row["image_id"] for row in selected})}
 
 
+def records_from_manifest(store, split: str, manifest_rows, comparison_by_id=None):
+    by_id = {str(row["question_id"]): row for row in store.samples}
+    selected = []
+    for saved in manifest_rows:
+        qid = str(saved["question_id"])
+        if qid not in by_id:
+            raise KeyError(f"Manifest {split} question is absent from current data: {qid}")
+        record = dict(by_id[qid])
+        for key in ("question", "answer"):
+            if str(record[key]) != str(saved[key]):
+                raise ValueError(f"Manifest {split} metadata differs at {qid}: {key}")
+        group = str(saved["stratum"])
+        if group != stratum(record):
+            raise ValueError(f"Manifest {split} stratum differs at {qid}")
+        image_id = (str(comparison_by_id[qid]["image_id"])
+                    if comparison_by_id is not None else fingerprint_for(store, record))
+        if image_id != str(saved["image_id"]):
+            raise ValueError(f"Manifest {split} image differs at {qid}")
+        selected.append({**record, "image_id": image_id, "stratum": group})
+    expected = sum(QUOTAS.values())
+    counts = Counter(row["stratum"] for row in selected)
+    if len(selected) != expected or counts != Counter(QUOTAS):
+        raise ValueError(f"Manifest {split} quotas differ: count={len(selected)} strata={dict(counts)}")
+    if len({row["question_id"] for row in selected}) != expected:
+        raise ValueError(f"Manifest {split} contains duplicate question IDs")
+    return selected, {
+        "seed": 42, "quotas": QUOTAS, "shortages": {key: 0 for key in QUOTAS},
+        "policy": "reused_exact_question_ids_from_supplied_manifest",
+        "selected_images": len({row["image_id"] for row in selected}),
+    }
+
+
 def answer_frequency(train_records):
     return Counter(normalize_pathvqa_answer(row["answer"]) for row in train_records)
 
@@ -440,6 +472,7 @@ def main() -> int:
     parser.add_argument("--validation-eval", type=Path, required=True)
     parser.add_argument("--train-run-root", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
+    parser.add_argument("--sample-manifest", type=Path)
     args = parser.parse_args()
     args.output_dir.mkdir(parents=True, exist_ok=False)
     runtime = {"git_commit": subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True,
@@ -454,8 +487,17 @@ def main() -> int:
         raise ValueError("Complete saved Validation comparisons required")
     validation_by_id = {str(row["question_id"]): row for row in validation_comparisons}
     frequencies = answer_frequency(train_store.samples)
-    train_rows, train_sampling = select_records(train_store, "train")
-    validation_rows, val_sampling = select_records(validation_store, "validation", validation_by_id)
+    manifest_digest = None
+    if args.sample_manifest is not None:
+        manifest_digest = hashlib.sha256(args.sample_manifest.read_bytes()).hexdigest()
+        source_manifest = load_json(args.sample_manifest)
+        train_rows, train_sampling = records_from_manifest(
+            train_store, "train", source_manifest["train"])
+        validation_rows, val_sampling = records_from_manifest(
+            validation_store, "validation", source_manifest["validation"], validation_by_id)
+    else:
+        train_rows, train_sampling = select_records(train_store, "train")
+        validation_rows, val_sampling = select_records(validation_store, "validation", validation_by_id)
     add_background(train_rows, frequencies)
     add_background(validation_rows, frequencies)
     overlap = overlap_audit(train_rows, validation_rows)
@@ -522,6 +564,9 @@ def main() -> int:
     payload = {"runtime": runtime, "scope": {"training": False, "parameter_update": False,
                                                "test_evaluation": False,
                                                "validation_generation_reused": True},
+               "source_sample_manifest": ({"path": str(args.sample_manifest),
+                                            "sha256": manifest_digest}
+                                           if args.sample_manifest is not None else None),
                "sampling": {"train": train_sampling, "validation": val_sampling},
                "overlap": overlap, "summary": summary,
                "training_trajectory": trajectory,

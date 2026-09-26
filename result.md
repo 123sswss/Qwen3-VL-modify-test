@@ -372,3 +372,9 @@ This file is the concise experiment memory shared by the user and Codex. The com
 
 - 固定epoch3 PathVQA Validation58.2361 Overall、90.5920 Yes-No、25.9732 Free-form、where64.7922；对V1分别-0.3355/+0.3840/-1.0530/-1.9560。Overall配对CI[-1.0751,0.3930]，Free-form[-2.1592,0.0313]；所有已给区间跨0，不能称等效或不丢分。参数1,864,963，训练6477.7823s，峰值25010671104bytes，提交e4662ca2fb0872bee13d2babd7de1346c4fd1799，精确输出路径待补。
 - 保留V1，暂不补V3 seed/扫位置。前置Prompt的读取限制未被证实为性能瓶颈；问题错配仍证明既有模型依赖条件，但不能证明重训后该条件必要，也不能直接指导改哪里。下一步不凭解释缺口继续堆接口改动。
+
+## 2026-09-26 V1 seed44拟合检查：开放回答在Train也欠拟合
+
+- 固定seed42分层抽样Train/Validation各256题，非官方Overall。抽样总准确率61.7188/53.1250，Yes/No96.8750/87.5000，what25.0000/20.8333，where75.0000/64.5833，other31.2500/6.2500。what训练集仅25%，说明开放识别并非只在Validation泛化失败。答案正文题目等权CE为Train/Validation0.9572/1.2061，模板CE约0.05，错误主要不在结束符。
+- 频次影响强：Train中出现1/2-5/6-20/21+次的答案，抽样Train准确率仅2.70/8.33/33.33/84.18%，Validation为0/0/15.38/74.86%。有实质内容错误，也有`due to trauma`之类语义接近但精确匹配失分；措辞问题不足以解释Train what的低分。两split无重叠图像，但37组规范化问答文本重复。
+- 训练日志epoch平均loss 0.8822→0.7100→0.6490，末20%均0.6389，未反弹；但缺少早期Validation checkpoint，不能仅据loss保证延长会涨分。唯一优先建议：保持结构与监督不变，做一次从头5 epochs的归一化V1 seed44受控实验，并用完整Validation+同一拟合探针判断。尚未授权，未启动。输出`pathvqa/outputs/visual_selection_prefix/diagnostics/pathvqa_v1_norm_fixed_seed44_fit_audit_20260926`。

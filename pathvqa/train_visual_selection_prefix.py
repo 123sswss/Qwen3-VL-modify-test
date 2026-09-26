@@ -85,9 +85,10 @@ class V1Trainer(Trainer):
 
 
 class V1AuditCallback(TrainerCallback):
-    def __init__(self, output_dir: Path, processor) -> None:
+    def __init__(self, output_dir: Path, processor, save_epochs: tuple[int, ...]) -> None:
         self.output_dir = output_dir
         self.processor = processor
+        self.save_epochs = frozenset(save_epochs)
         self.step_path = output_dir / "v1_diagnostics.jsonl"
 
     def on_pre_optimizer_step(self, args, state, control, **kwargs):
@@ -107,11 +108,12 @@ class V1AuditCallback(TrainerCallback):
         return control
 
     def on_epoch_end(self, args, state, control, **kwargs):
-        if state.is_world_process_zero and int(round(float(state.epoch or 0))) == 3:
-            checkpoint = self.output_dir / "checkpoints" / "epoch_3"
+        epoch = int(round(float(state.epoch or 0)))
+        if state.is_world_process_zero and epoch in self.save_epochs:
+            checkpoint = self.output_dir / "checkpoints" / f"epoch_{epoch}"
             kwargs["model"].save_v1(checkpoint)
             self.processor.save_pretrained(checkpoint)
-            print(f"[V1_EPOCH3_CHECKPOINT] {checkpoint}")
+            print(f"[V1_EPOCH_CHECKPOINT] epoch={epoch} path={checkpoint}")
         return control
 
 
@@ -202,9 +204,16 @@ def main() -> int:
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--experiment-name", required=True)
     parser.add_argument("--model-seed", type=int, default=44)
+    parser.add_argument("--epochs", type=int, default=3)
+    parser.add_argument("--save-epochs", type=int, nargs="+")
     parser.add_argument("--correct-loss-accumulation", action="store_true",
                         help="Use Trainer's equal-microbatch mean loss scaling; guarded by the read-only audit launcher")
     args = parser.parse_args()
+    if args.epochs <= 0:
+        raise ValueError("--epochs must be positive")
+    save_epochs = tuple(sorted(set(args.save_epochs or [args.epochs])))
+    if any(epoch <= 0 or epoch > args.epochs for epoch in save_epochs):
+        raise ValueError(f"save epochs must be within [1,{args.epochs}]: {save_epochs}")
     print("[V1_RUNTIME] " + json.dumps({
         "experiment": args.experiment_name,
         "git_commit": subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True,
@@ -213,6 +222,8 @@ def main() -> int:
         "transformers": importlib.metadata.version("transformers"),
         "accelerate": importlib.metadata.version("accelerate"),
         "correct_loss_accumulation": args.correct_loss_accumulation,
+        "epochs": args.epochs,
+        "save_epochs": save_epochs,
     }, sort_keys=True), flush=True)
     seed, data_seed = args.model_seed, 42
     random.seed(seed)
@@ -247,7 +258,7 @@ def main() -> int:
     trainer = V1Trainer(
         model=model,
         args=TrainingArguments(
-            output_dir=str(args.output_dir / "trainer"), num_train_epochs=3,
+            output_dir=str(args.output_dir / "trainer"), num_train_epochs=args.epochs,
             per_device_train_batch_size=2, gradient_accumulation_steps=16,
             learning_rate=1e-4, weight_decay=0.0, warmup_ratio=0.03,
             lr_scheduler_type="linear", max_grad_norm=1.0, logging_steps=20,
@@ -257,7 +268,7 @@ def main() -> int:
         ),
         train_dataset=dataset, data_collator=collator,
         processing_class=processor,
-        callbacks=[V1AuditCallback(args.output_dir, processor)],
+        callbacks=[V1AuditCallback(args.output_dir, processor, save_epochs)],
     )
     if args.correct_loss_accumulation:
         # Qwen's mean-token CE ignores num_items_in_batch. Let Trainer divide
@@ -271,13 +282,19 @@ def main() -> int:
           f"trainer_steps={trainer.args.gradient_accumulation_steps} "
           f"accelerate_steps={trainer.accelerator.gradient_accumulation_steps}")
     result = trainer.train()
-    checkpoint = args.output_dir / "checkpoints" / "epoch_3"
-    if not checkpoint.is_dir():
-        raise RuntimeError("V1 epoch3 checkpoint not saved")
+    missing_checkpoints = [
+        str(args.output_dir / "checkpoints" / f"epoch_{epoch}")
+        for epoch in save_epochs
+        if not (args.output_dir / "checkpoints" / f"epoch_{epoch}").is_dir()
+    ]
+    if missing_checkpoints:
+        raise RuntimeError(f"V1 requested checkpoints not saved: {missing_checkpoints}")
+    checkpoint = args.output_dir / "checkpoints" / f"epoch_{args.epochs}"
     report = {
         "experiment": args.experiment_name, "method": "visual_selection_prefix_p20_v1",
         "dataset": "PathVQA", "model_seed": seed, "data_seed": data_seed,
-        "epochs": 3, "trainable_parameters": counts,
+        "epochs": args.epochs, "saved_epochs": list(save_epochs),
+        "trainable_parameters": counts,
         "total_trainable_parameters": sum(counts.values()),
         "train_metrics": result.metrics,
         "peak_gpu_memory_bytes": torch.cuda.max_memory_allocated() if torch.cuda.is_available() else None,
@@ -306,7 +323,9 @@ def main() -> int:
     }
     with (args.output_dir / "train_report.json").open("w", encoding="utf-8") as handle:
         json.dump(report, handle, indent=2, default=str)
-    print(f"[V1_TRAIN_DONE] checkpoint={checkpoint} runtime={result.metrics.get('train_runtime')} peak_gpu_bytes={report['peak_gpu_memory_bytes']}")
+    print(f"[V1_TRAIN_DONE] epochs={args.epochs} saved_epochs={save_epochs} "
+          f"checkpoint={checkpoint} runtime={result.metrics.get('train_runtime')} "
+          f"peak_gpu_bytes={report['peak_gpu_memory_bytes']}")
     return 0
 
 

@@ -10,5 +10,7 @@
 - Treat the Windows workspace as the only source of truth: edit and test locally, commit and push locally, then update the AutoDL checkout only with a fast-forward pull.
 - Before any server-side Git pull, run `source /etc/network_turbo`; the standard sync command is `source /etc/network_turbo; git pull --ff-only`.
 - Do not edit source files or start experiments on the server unless the user explicitly authorizes that specific run.
+- The user must personally execute every operation that uses, initializes, reserves, inspects, or otherwise involves a GPU. This includes training, evaluation, inference, model forward/backward passes, CUDA diagnostics, and GPU process or status commands. The assistant must never launch these operations; it may only prepare the implementation and provide the exact command for the user to run. An authorization to implement or run an experiment does not override this execution boundary unless the user explicitly updates this rule in `AGENTS.md`.
+- The assistant may execute operations that are guaranteed not to use a GPU, including CPU-only file inspection, source editing, syntax checks, Git operations, log reading, result extraction, and offline statistics over existing artifacts.
 - Add every completed experiment to both records: keep the full exact record in `EXPERIMENT_RESULTS.md` and the concise conclusion in `result.md`.
 - Add, remove, or reschedule planned experiments in `plan.md`.

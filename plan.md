@@ -1,3 +1,7 @@
+> **2026-09-26 当前已授权并已实现：五轮V1 seed45复现，由用户亲自运行。** 唯一训练变量为model seed44->45；data seed42、V1结构、1,864,963参数、各组LR、batch2/累积16、AdamW、裁剪1、`model_accepts_loss_kwargs=False`、5 epochs、3% warmup+线性衰减到新终点、保存epoch3/4/5及固定epoch5完整Validation均与五轮seed44一致。独立实验`pathvqa_v1_norm_fixed_5ep_seed45`；与旧三轮seed45做10000次seed42图像簇配对比较，并用同一固定256+256清单分别审计三轮/五轮seed45的生成准确率和答案正文CE。不跑Test、不补其他seed、不自动调参。所有GPU操作由用户执行，助手只提供命令。
+
+> **2026-09-26 五轮V1 seed44已完成。** 固定epoch5 Overall59.3386，对三轮+0.7669，CI[0,1.5370]；where+5.6235、what+0.0785。保存五轮单seed候选与三轮三seed参照，不混算。拟合探针输出manifest因新增来源元数据而文件SHA变化，但比较器已逐项核对两侧各256题的question ID、问题、答案、图像ID和分层，样本内容一致。下一训练为上方已授权的原样5ep seed45。所有涉及GPU的操作只能由用户本人执行。
+
 > **2026-09-26 当前授权：归一化修正 V1 seed44 5-epoch 训练对照。** 从头训练，唯一实验变量是总预算3→5 epochs，3% warmup+线性衰减到新终点；保持修正V1架构、初始化、各组LR、batch2/累积16、AdamW、裁剪1、监督/生成及`model_accepts_loss_kwargs=False`。独立实验`pathvqa_v1_norm_fixed_5ep_seed44`，保存epoch3/4/5，固定epoch5为主结果；对原3-epoch V1做10000次seed42图像簇配对比较，并显式复用SHA256为`5ba0ae68...dfda930`的旧256+256样本清单比较生成准确率与答案正文CE。本地实现、检查、提交推送后已授权服务器运行；完成后停止，不加seed/Test/自动调参。
 
 > **2026-09-26 V1 seed44 小规模拟合检查已完成。** Train/Validation各分层256题（不是官方Overall）为61.7188/53.1250；what仅25.0000/20.8333，where75.0000/64.5833，Yes/No96.8750/87.5000。开放回答在Train也明显欠拟合，罕见答案训练题尤差；同时epoch平均loss 0.8822→0.7100→0.6490，末20%均0.6389，未见反弹。唯一优先候选是保持V1结构/监督不变，做一次更长训练的单seed受控实验（建议5 epochs）；尚未授权，不自动启动。详细记录见两份账本，下文待执行状态为历史。

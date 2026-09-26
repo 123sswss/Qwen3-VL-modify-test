@@ -378,3 +378,9 @@ This file is the concise experiment memory shared by the user and Codex. The com
 - 固定seed42分层抽样Train/Validation各256题，非官方Overall。抽样总准确率61.7188/53.1250，Yes/No96.8750/87.5000，what25.0000/20.8333，where75.0000/64.5833，other31.2500/6.2500。what训练集仅25%，说明开放识别并非只在Validation泛化失败。答案正文题目等权CE为Train/Validation0.9572/1.2061，模板CE约0.05，错误主要不在结束符。
 - 频次影响强：Train中出现1/2-5/6-20/21+次的答案，抽样Train准确率仅2.70/8.33/33.33/84.18%，Validation为0/0/15.38/74.86%。有实质内容错误，也有`due to trauma`之类语义接近但精确匹配失分；措辞问题不足以解释Train what的低分。两split无重叠图像，但37组规范化问答文本重复。
 - 训练日志epoch平均loss 0.8822→0.7100→0.6490，末20%均0.6389，未反弹；但缺少早期Validation checkpoint，不能仅据loss保证延长会涨分。唯一优先建议：保持结构与监督不变，做一次从头5 epochs的归一化V1 seed44受控实验，并用完整Validation+同一拟合探针判断。尚未授权，未启动。输出`pathvqa/outputs/visual_selection_prefix/diagnostics/pathvqa_v1_norm_fixed_seed44_fit_audit_20260926`。
+
+## 2026-09-26 V1五轮seed44：59.3386
+
+- `pathvqa_v1_norm_fixed_5ep_seed44`固定epoch5 Validation59.3386 Overall、90.8800 Yes/No、27.8877 Free-form、what22.0565、where72.3716；参数仍1,864,963。对三轮+0.7669（配对CI[0,1.5370]），Yes/No+0.6720、Free-form+0.8615、what仅+0.0785、where+5.6235（探索性CI[1.4706,9.7561]）。净增48题，其中where23题，不能称what或长尾已解决。主结果不是挑最高checkpoint。
+- 拟合探针Train正文CE0.957240->0.794073，Validation1.206112->1.137455；分层准确率61.7188->62.5、53.125->56.6406，不是官方Overall。新输出manifest因记录来源元数据而文件SHA变化，但比较器已逐项核对两侧各256题的question ID、问题、答案、图像ID和分层，确认样本内容一致。
+- 输出`pathvqa/outputs/visual_selection_prefix/pathvqa_v1_norm_fixed_5ep_seed44_20260926_2`，主checkpoint `checkpoints/epoch_5`，完整预测/summary在`eval_validation/epoch_5`，拟合审计`fit_audit_epoch_5`。下一候选为原样5ep seed45，不自动启动；GPU操作一律由用户亲自执行。

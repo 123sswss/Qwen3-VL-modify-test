@@ -21,6 +21,7 @@ def main() -> int:
     parser.add_argument("--three-epoch-audit", type=Path, required=True)
     parser.add_argument("--five-epoch-audit", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--experiment", default="pathvqa_v1_norm_fixed_5ep_seed44")
     args = parser.parse_args()
     old, new = load(args.three_epoch_audit), load(args.five_epoch_audit)
     results = {}
@@ -66,7 +67,7 @@ def main() -> int:
                 f"delta={row['body_ce_question_equal_delta']:+.6f}", flush=True,
             )
     payload = {
-        "experiment": "pathvqa_v1_norm_fixed_5ep_seed44",
+        "experiment": args.experiment,
         "sample_identity": "exact_question_ids_from_epoch3_sample_manifest",
         "splits": results,
     }

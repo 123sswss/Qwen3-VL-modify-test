@@ -17,6 +17,10 @@ def main() -> int:
     parser.add_argument("--three-epoch-eval", type=Path, required=True)
     parser.add_argument("--five-epoch-eval", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--experiment", default="pathvqa_v1_norm_fixed_5ep_seed44")
+    parser.add_argument(
+        "--baseline", default="pathvqa_v1_visual_selection_prefix_p20_norm_fixed_seed44"
+    )
     args = parser.parse_args()
     baseline = load_json(args.three_epoch_eval / "pathvqa_comparisons.json")
     variant = load_json(args.five_epoch_eval / "pathvqa_comparisons.json")
@@ -60,8 +64,8 @@ def main() -> int:
             f"ci={metrics['clustered_paired_delta_ci']}", flush=True,
         )
     payload = {
-        "experiment": "pathvqa_v1_norm_fixed_5ep_seed44",
-        "baseline": "pathvqa_v1_visual_selection_prefix_p20_norm_fixed_seed44",
+        "experiment": args.experiment,
+        "baseline": args.baseline,
         "bootstrap": {"unit": "image_id", "iterations": 10000, "seed": 42},
         "validation_summary": summary, "groups": results,
     }

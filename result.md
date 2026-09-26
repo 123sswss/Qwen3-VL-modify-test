@@ -384,3 +384,8 @@ This file is the concise experiment memory shared by the user and Codex. The com
 - `pathvqa_v1_norm_fixed_5ep_seed44`固定epoch5 Validation59.3386 Overall、90.8800 Yes/No、27.8877 Free-form、what22.0565、where72.3716；参数仍1,864,963。对三轮+0.7669（配对CI[0,1.5370]），Yes/No+0.6720、Free-form+0.8615、what仅+0.0785、where+5.6235（探索性CI[1.4706,9.7561]）。净增48题，其中where23题，不能称what或长尾已解决。主结果不是挑最高checkpoint。
 - 拟合探针Train正文CE0.957240->0.794073，Validation1.206112->1.137455；分层准确率61.7188->62.5、53.125->56.6406，不是官方Overall。新输出manifest因记录来源元数据而文件SHA变化，但比较器已逐项核对两侧各256题的question ID、问题、答案、图像ID和分层，确认样本内容一致。
 - 输出`pathvqa/outputs/visual_selection_prefix/pathvqa_v1_norm_fixed_5ep_seed44_20260926_2`，主checkpoint `checkpoints/epoch_5`，完整预测/summary在`eval_validation/epoch_5`，拟合审计`fit_audit_epoch_5`。下一候选为原样5ep seed45，不自动启动；GPU操作一律由用户亲自执行。
+
+## 2026-09-26 五轮V1 seed45成绩节选
+
+- 按当前授权实验上下文归属`pathvqa_v1_norm_fixed_5ep_seed45`，用户JSON为58.5077 Overall、90.4320 Yes/No、26.6752 Free-form；节选未含seed/输出路径，完整summary身份和配对统计待补。较三轮seed45约+1.34/+1.44/+1.25。
+- 若上述身份确认，五轮seed44/45均值58.9232、分差0.8309，两seed均提高；建议下一候选原样五轮seed46，尚未授权启动。无额外参数，增加训练成本，不宣称两seed已证明稳定性。

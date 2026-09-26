@@ -1,3 +1,7 @@
+> **2026-09-26 当前已授权并已实现：五轮V1 seed46复现，由用户亲自运行。** 在五轮seed45入口上仅将model seed改为46；data seed42、结构和1,864,963参数、初始化规则、各组LR、batch2/累积16、AdamW、裁剪1、`model_accepts_loss_kwargs=False`、5 epochs、3% warmup+线性衰减、保存epoch3/4/5及固定epoch5完整Validation全部不变。独立目标`pathvqa_v1_norm_fixed_5ep_seed46`；与旧三轮seed46做10000次seed42图像簇配对比较，并复用同一固定256+256清单分别审计三轮/五轮seed46。不跑Test、不补其他seed、不自动调参；所有GPU操作由用户执行。
+
+> **2026-09-26 五轮seed45成绩节选已回传。** 按当前实验上下文为58.5077 Overall、90.4320 Yes/No、26.6752 Free-form；完整身份/精确输出路径及配对统计待补。五轮44/45均值58.9232、分差0.8309。下一候选原样五轮seed46，尚未授权；GPU操作均由用户执行。
+
 > **2026-09-26 当前已授权并已实现：五轮V1 seed45复现，由用户亲自运行。** 唯一训练变量为model seed44->45；data seed42、V1结构、1,864,963参数、各组LR、batch2/累积16、AdamW、裁剪1、`model_accepts_loss_kwargs=False`、5 epochs、3% warmup+线性衰减到新终点、保存epoch3/4/5及固定epoch5完整Validation均与五轮seed44一致。独立实验`pathvqa_v1_norm_fixed_5ep_seed45`；与旧三轮seed45做10000次seed42图像簇配对比较，并用同一固定256+256清单分别审计三轮/五轮seed45的生成准确率和答案正文CE。不跑Test、不补其他seed、不自动调参。所有GPU操作由用户执行，助手只提供命令。
 
 > **2026-09-26 五轮V1 seed44已完成。** 固定epoch5 Overall59.3386，对三轮+0.7669，CI[0,1.5370]；where+5.6235、what+0.0785。保存五轮单seed候选与三轮三seed参照，不混算。拟合探针输出manifest因新增来源元数据而文件SHA变化，但比较器已逐项核对两侧各256题的question ID、问题、答案、图像ID和分层，样本内容一致。下一训练为上方已授权的原样5ep seed45。所有涉及GPU的操作只能由用户本人执行。

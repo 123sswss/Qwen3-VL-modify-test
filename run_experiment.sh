@@ -40,6 +40,7 @@ if [ "$RUN_TARGET" = "pathvqa_visual_selection_offset_v0_seed44" ] || \
    [ "$RUN_TARGET" = "pathvqa_v1_visual_selection_prefix_p20_norm_fixed_seed46" ] || \
    [ "$RUN_TARGET" = "pathvqa_v2_layer_mix_prefix_p20_norm_fixed_seed44" ] || \
    [ "$RUN_TARGET" = "pathvqa_v1_norm_fixed_seed44_diagnostic" ] || \
+   [ "$RUN_TARGET" = "pathvqa_v1_norm_fixed_seed44_fit_audit" ] || \
    [ "$RUN_TARGET" = "pathvqa_v0_seed44_epoch3_diagnostic" ] || \
    [ "$RUN_TARGET" = "pathvqa_v0_seed44_mask_fixed_validation" ]; then
   SHUTDOWN_ON_EXIT=0
@@ -4424,6 +4425,33 @@ run_pathvqa_v1_norm_fixed_seed44_diagnostic() {
   echo "[PATHVQA_V1_DIAGNOSTIC_DONE] output=$output_dir"
 }
 
+run_pathvqa_v1_norm_fixed_seed44_fit_audit() {
+  local experiment_name="pathvqa_v1_norm_fixed_seed44_fit_audit"
+  local run_root="$PATHVQA_V1_OUTPUT_ROOT/pathvqa_v1_visual_selection_prefix_p20_norm_fixed_seed44_20260924"
+  local checkpoint="$run_root/checkpoints/epoch_3"
+  local validation_eval="$run_root/eval_validation/epoch_3"
+  mkdir -p "$PATHVQA_V1_OUTPUT_ROOT/diagnostics"
+  if [ ! -f "$checkpoint/visual_selection_prefix.pt" ] || \
+     [ ! -f "$validation_eval/pathvqa_comparisons.json" ]; then
+    echo "[ERR] V1 seed44 checkpoint or complete saved Validation comparisons missing; no diagnostic started." >&2
+    return 1
+  fi
+  local output_dir
+  output_dir="$(available_output_dir "$PATHVQA_V1_OUTPUT_ROOT/diagnostics" "${experiment_name}_${RUN_DATE}")"
+  echo "[PATHVQA_V1_FIT_AUDIT_CONFIG] checkpoint=$checkpoint train_sample=256 validation_sample=256 seed=42 training=false test=false output=$output_dir git_commit=$(git -C "$ROOT_DIR" rev-parse HEAD)"
+  (
+    cd "$ROOT_DIR" || exit 1
+    python -m diagnostics.diagnose_pathvqa_v1_fit \
+      --model-path "$MODEL_PATH" --checkpoint "$checkpoint" \
+      --data-root "$PATHVQA_DATA_ROOT" --cache-dir "$PATHVQA_CACHE_ROOT" \
+      --validation-eval "$validation_eval" --train-run-root "$run_root" \
+      --output-dir "$output_dir" \
+      2>&1 | tee "${output_dir}.log"
+  ) || return 1
+  [ -f "$output_dir/fit_audit.json" ] || return 1
+  echo "[PATHVQA_V1_FIT_AUDIT_DONE] output=$output_dir training=false test=false"
+}
+
 run_pathvqa_visual_selection_offset_v0_seed44() {
   local experiment_name="pathvqa_v0_visual_selection_offset_seed44"
   local output_dir
@@ -4561,6 +4589,9 @@ case "$RUN_TARGET" in
     ;;
   pathvqa_v1_norm_fixed_seed44_diagnostic)
     run_pathvqa_v1_norm_fixed_seed44_diagnostic || failures=$((failures + 1))
+    ;;
+  pathvqa_v1_norm_fixed_seed44_fit_audit)
+    run_pathvqa_v1_norm_fixed_seed44_fit_audit || failures=$((failures + 1))
     ;;
   train)
     run_train_dataset || failures=$((failures + 1))

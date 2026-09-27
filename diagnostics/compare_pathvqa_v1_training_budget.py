@@ -27,6 +27,10 @@ def main() -> int:
     parser.add_argument(
         "--baseline", default="pathvqa_v1_visual_selection_prefix_p20_norm_fixed_seed44"
     )
+    parser.add_argument(
+        "--all-question-types", action="store_true",
+        help="Also report exploratory paired metrics for every question_type",
+    )
     args = parser.parse_args()
     baseline = load_json(args.three_epoch_eval / "pathvqa_comparisons.json")
     variant = load_json(args.five_epoch_eval / "pathvqa_comparisons.json")
@@ -55,6 +59,16 @@ def main() -> int:
         "what": [(a, b) for a, b in paired if str(a["question_type"]) == "what"],
         "where": [(a, b) for a, b in paired if str(a["question_type"]) == "where"],
     }
+    if args.all_question_types:
+        for question_type in sorted({str(a["question_type"]) for a, _ in paired}):
+            key = f"question_type:{question_type}"
+            if question_type in {"what", "where"}:
+                # Preserve the established short keys without duplicating work.
+                continue
+            groups[key] = [
+                (a, b) for a, b in paired
+                if str(a["question_type"]) == question_type
+            ]
     results = {}
     for name, rows in groups.items():
         old, new = [a for a, _ in rows], [b for _, b in rows]

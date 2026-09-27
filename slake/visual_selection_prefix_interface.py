@@ -13,6 +13,9 @@ from transformers import AutoModelForImageTextToText, AutoProcessor
 from slake.visual_selection_prefix import CONFIG_NAME, VisualSelectionPrefixModel
 from slake.visual_selection_prefix_visual20 import VisualSelectionPrefixVisual20Model
 from slake.visual_selection_prefix_deep5 import VisualSelectionPrefixDeep5Model
+from slake.visual_selection_prefix_deep20_split_lr import (
+    VisualSelectionPrefixDeep20SplitLRModel,
+)
 
 try:
     from generation_timing import generate_with_timing
@@ -39,6 +42,8 @@ class VisualSelectionPrefixInterface:
             model_class = VisualSelectionPrefixVisual20Model
         elif method == VisualSelectionPrefixDeep5Model.method_name:
             model_class = VisualSelectionPrefixDeep5Model
+        elif method == VisualSelectionPrefixDeep20SplitLRModel.method_name:
+            model_class = VisualSelectionPrefixDeep20SplitLRModel
         else:
             model_class = VisualSelectionPrefixModel
         self.model = model_class(base, init_seed=int(config["init_seed"]))

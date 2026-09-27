@@ -33,6 +33,11 @@ from slake.visual_selection_prefix_deep5 import (
     EXPECTED_TRAINABLE_DEEP5,
     VisualSelectionPrefixDeep5Model,
 )
+from slake.visual_selection_prefix_deep20_split_lr import (
+    DEEP_VISUAL_TOKENS_PER_GROUP,
+    EXPECTED_TRAINABLE_DEEP20_SPLIT_LR,
+    VisualSelectionPrefixDeep20SplitLRModel,
+)
 
 
 class RawQuestionDataset(Dataset):
@@ -91,7 +96,10 @@ class V1Trainer(Trainer):
             "question_context": 1e-4, "maps": 1e-4,
             "layer_condition": 1e-4, "prefix_output": 1e-4,
         }
-        if "visual_deep_prompts" in groups:
+        if "visual_deep_low_prompts" in groups:
+            rates["visual_deep_low_prompts"] = 3e-5
+            rates["visual_deep_high_prompts"] = 1e-4
+        elif "visual_deep_prompts" in groups:
             rates["visual_deep_prompts"] = 1e-4
         elif "visual_prompt20" in groups:
             rates["visual_prompt20"] = 1e-4
@@ -193,7 +201,7 @@ def construct_with_v0_initialization_audit(
     base, seed: int, output_dir: Path, *, visual_prompt_mode: str = "split18",
 ):
     """Compare every shared trainable tensor against fresh same-seed V0."""
-    if visual_prompt_mode == "deep5_l16_23" and len(base.model.visual.blocks) != 24:
+    if visual_prompt_mode in {"deep5_l16_23", "deep20_split_lr_l16_23"} and len(base.model.visual.blocks) != 24:
         raise ValueError(
             "Deep5 experiment requires exactly 24 visual blocks before any "
             f"experiment modules are constructed; found {len(base.model.visual.blocks)}"
@@ -214,6 +222,7 @@ def construct_with_v0_initialization_audit(
         "split18": VisualSelectionPrefixModel,
         "unified20": VisualSelectionPrefixVisual20Model,
         "deep5_l16_23": VisualSelectionPrefixDeep5Model,
+        "deep20_split_lr_l16_23": VisualSelectionPrefixDeep20SplitLRModel,
     }
     model_class = model_classes[visual_prompt_mode]
     model = model_class(base, init_seed=seed)
@@ -223,6 +232,8 @@ def construct_with_v0_initialization_audit(
         and not name.startswith("prefix_output.")
         and name != "visual_prompt20"
         and not name.startswith("visual_deep_prompts.")
+        and not name.startswith("visual_deep_low_prompts.")
+        and not name.startswith("visual_deep_high_prompts.")
     }
     visual_prompt_audit = None
     if visual_prompt_mode == "unified20":
@@ -248,6 +259,25 @@ def construct_with_v0_initialization_audit(
                 parameter.numel() for parameter in model.visual_deep_prompts
             ),
             "independent_per_layer": True,
+            "lifetime": "single_block_insert_then_remove",
+            "extra_rng": "private_cpu_generator",
+            "global_rng_unchanged": True,
+        }
+    elif visual_prompt_mode == "deep20_split_lr_l16_23":
+        common.pop("visual_s8")
+        common.pop("visual_av10")
+        visual_prompt_audit = {
+            "backbone_blocks": len(base.model.visual.blocks),
+            "layers": list(DEEP_VISUAL_LAYERS),
+            "tokens_per_group_per_layer": DEEP_VISUAL_TOKENS_PER_GROUP,
+            "prompt_order": "low10_then_high10",
+            "low_parameter_count": sum(
+                parameter.numel() for parameter in model.visual_deep_low_prompts
+            ),
+            "high_parameter_count": sum(
+                parameter.numel() for parameter in model.visual_deep_high_prompts
+            ),
+            "independent_per_layer_and_group": True,
             "lifetime": "single_block_insert_then_remove",
             "extra_rng": "private_cpu_generator",
             "global_rng_unchanged": True,
@@ -282,7 +312,10 @@ def main() -> int:
     parser.add_argument("--save-epochs", type=int, nargs="+")
     parser.add_argument(
         "--visual-prompt-mode",
-        choices=("split18", "unified20", "deep5_l16_23"),
+        choices=(
+            "split18", "unified20", "deep5_l16_23",
+            "deep20_split_lr_l16_23",
+        ),
         default="split18",
     )
     parser.add_argument(
@@ -332,6 +365,7 @@ def main() -> int:
         "split18": EXPECTED_TRAINABLE,
         "unified20": EXPECTED_TRAINABLE_VISUAL20,
         "deep5_l16_23": EXPECTED_TRAINABLE_DEEP5,
+        "deep20_split_lr_l16_23": EXPECTED_TRAINABLE_DEEP20_SPLIT_LR,
     }[args.visual_prompt_mode]
     if sum(counts.values()) != expected_trainable:
         raise RuntimeError("V1 parameter total changed")

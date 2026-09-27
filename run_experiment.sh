@@ -4547,6 +4547,96 @@ run_pathvqa_v1_visual18_uniform_lr3e5_norm_fixed_5ep_seed44() {
   echo "[PATHVQA_V1_VISUAL18_LOW_LR_DONE] output=$output_dir primary_epoch=5 baseline=59.3386 test_evaluation=false other_seeds=false"
 }
 
+run_pathvqa_v1_deep_visual20_split_lr_l16_23_norm_fixed_5ep_seed44() {
+  local audit_json="${PATHVQA_V1_LOSS_AUDIT_JSON:-$PATHVQA_V1_OUTPUT_ROOT/diagnostics/pathvqa_v1_loss_scaling_audit_20260924/v1_loss_scaling_audit.json}"
+  local baseline_run="$PATHVQA_V1_OUTPUT_ROOT/pathvqa_v1_norm_fixed_5ep_seed44_20260926_2"
+  local baseline_eval="$baseline_run/eval_validation/epoch_5"
+  local deep5_run="$PATHVQA_V1_OUTPUT_ROOT/pathvqa_v1_deep_visual5_l16_23_norm_fixed_5ep_seed44_20260927"
+  local deep5_eval="$deep5_run/eval_validation/epoch_5"
+  if [ ! -f "$audit_json" ]; then
+    echo "[ERR] V1 loss-scaling audit JSON missing: $audit_json; no training started." >&2
+    return 1
+  fi
+  if ! python -c 'import importlib.metadata,json,sys,torch; d=json.load(open(sys.argv[1],encoding="utf-8")); assert d["passed"] is True and d["training_commit"]=="4636416ee99768c667377f0c66b5809daf48ffcd"; assert all(all(d["windows"][str(k)]["numeric_checks"].values()) for k in (16,3)); assert d["versions"]["torch"]==torch.__version__; assert d["versions"]["transformers"]==importlib.metadata.version("transformers"); assert d["versions"]["accelerate"]==importlib.metadata.version("accelerate"); print("[V1_DEEP20_SPLIT_LR_NORM_PREFLIGHT] audit_passed=True versions_match=True full16_and_tail3=True")' "$audit_json"; then
+    echo "[ERR] V1 loss audit failed or runtime versions changed; no training started." >&2
+    return 1
+  fi
+  if [ ! -f "$baseline_eval/pathvqa_comparisons.json" ] \
+     || [ ! -f "$baseline_eval/pathvqa_summary.json" ]; then
+    echo "[ERR] Five-epoch V1 seed44 baseline predictions are missing: $baseline_eval" >&2
+    return 1
+  fi
+  if [ ! -f "$deep5_eval/pathvqa_comparisons.json" ] \
+     || [ ! -f "$deep5_eval/pathvqa_summary.json" ]; then
+    echo "[ERR] Deep5 seed44 comparison predictions are missing: $deep5_eval" >&2
+    return 1
+  fi
+  if ! python -c 'import json,sys; base=json.load(open(sys.argv[1],encoding="utf-8")); deep5=json.load(open(sys.argv[2],encoding="utf-8")); assert abs(float(base["overall_accuracy"])-59.3386)<0.0001; assert abs(float(deep5["overall_accuracy"])-58.2042)<0.0001; print("[V1_DEEP20_SPLIT_LR_BASELINES] v1=59.3386 deep5=58.2042")' "$baseline_eval/pathvqa_summary.json" "$deep5_eval/pathvqa_summary.json"; then
+    echo "[ERR] V1 or Deep5 baseline identity/score mismatch; no training started." >&2
+    return 1
+  fi
+  local experiment_name="pathvqa_v1_deep_visual20_split_lr_l16_23_norm_fixed_5ep_seed44"
+  local output_dir
+  output_dir="$(available_output_dir "$PATHVQA_V1_OUTPUT_ROOT" "${experiment_name}_${RUN_DATE}")"
+  mkdir -p "$output_dir/eval_validation/epoch_5"
+  echo "[PATHVQA_V1_DEEP20_SPLIT_LR_CONFIG] experiment=$experiment_name git_commit=$(git -C "$ROOT_DIR" rev-parse HEAD) final_exploration=true model_seed=44 data_seed=42 backbone_blocks_required=24 visual_layers_code_indexes=16,17,18,19,20,21,22,23 tokens_per_layer=10_low_then_10_high low_lr=3e-5 high_lr=1e-4 optimizer_groups=separate visual_init=Normal_0_0.02 insertion=per_layer_insert_remove_no_carry expected_trainable=2010371 epochs=5 save_epochs=3,4,5 primary_epoch=5 warmup_ratio=0.03 scheduler=linear_to_epoch5 model_accepts_loss_kwargs=false output=$output_dir"
+  (
+    cd "$ROOT_DIR" || exit 1
+    python -m pathvqa.train_visual_selection_prefix \
+      --model-path "$MODEL_PATH" --data-root "$PATHVQA_DATA_ROOT" \
+      --output-dir "$output_dir" --experiment-name "$experiment_name" \
+      --model-seed 44 --epochs 5 --save-epochs 3 4 5 \
+      --visual-prompt-mode deep20_split_lr_l16_23 \
+      --correct-loss-accumulation \
+      2>&1 | tee "$output_dir/train.log"
+  ) || return 1
+  local epoch
+  for epoch in 3 4 5; do
+    [ -f "$output_dir/checkpoints/epoch_${epoch}/visual_selection_prefix.pt" ] \
+      || { echo "[ERR] V1 Deep20 split-LR checkpoint missing: epoch_$epoch" >&2; return 1; }
+  done
+  if ! python -c 'import json,sys; d=json.load(open(sys.argv[1],encoding="utf-8")); assert d["model_seed"]==44 and d["data_seed"]==42; assert d["visual_prompt_mode"]=="deep20_split_lr_l16_23"; assert d["epochs"]==5 and d["saved_epochs"]==[3,4,5]; assert d["total_trainable_parameters"]==2010371; assert d["trainable_parameters"]["visual_deep_low_prompts"]==81920 and d["trainable_parameters"]["visual_deep_high_prompts"]==81920; assert "visual_s8" not in d["trainable_parameters"] and "visual_av10" not in d["trainable_parameters"] and "visual_deep_prompts" not in d["trainable_parameters"]; rates=d["optimizer"]["group_learning_rates"]; assert rates["visual_deep_low_prompts"]==3e-5 and rates["visual_deep_high_prompts"]==1e-4; assert d["trainer_model_accepts_loss_kwargs"] is False; assert d["optimizer"]["warmup_ratio"]==0.03 and d["optimizer"]["scheduler"]=="linear"; print("[V1_DEEP20_SPLIT_LR_TRAIN_REPORT_AUDIT] seed=44 total=2010371 low=81920@3e-5 high=81920@1e-4 epochs=5 saved=3,4,5 normalized=True")' "$output_dir/train_report.json"; then
+    echo "[ERR] V1 Deep20 split-LR train report does not attest the requested protocol." >&2
+    return 1
+  fi
+  local checkpoint="$output_dir/checkpoints/epoch_5"
+  (
+    cd "$ROOT_DIR" || exit 1
+    python -m pathvqa.pathvqa_official_eval \
+      --backend visual-selection-prefix --base-model "$MODEL_PATH" \
+      --checkpoint "$checkpoint" --data-root "$PATHVQA_DATA_ROOT" \
+      --cache-dir "$PATHVQA_CACHE_ROOT" --split validation \
+      --output-dir "$output_dir/eval_validation/epoch_5" \
+      2>&1 | tee "$output_dir/eval_validation_epoch_5.log"
+  ) || return 1
+  (
+    cd "$ROOT_DIR" || exit 1
+    python -m diagnostics.compare_pathvqa_v1_training_budget \
+      --baseline-eval "$baseline_eval" \
+      --variant-eval "$output_dir/eval_validation/epoch_5" \
+      --experiment "$experiment_name" \
+      --baseline pathvqa_v1_norm_fixed_5ep_seed44 \
+      --all-question-types \
+      --output "$output_dir/paired_deep20_split_lr_vs_v1_5ep_seed44.json" \
+      2>&1 | tee "$output_dir/paired_deep20_split_lr_vs_v1_5ep_seed44.log" \
+      || exit 1
+    python -m diagnostics.compare_pathvqa_v1_training_budget \
+      --baseline-eval "$deep5_eval" \
+      --variant-eval "$output_dir/eval_validation/epoch_5" \
+      --experiment "$experiment_name" \
+      --baseline pathvqa_v1_deep_visual5_l16_23_norm_fixed_5ep_seed44 \
+      --all-question-types \
+      --output "$output_dir/paired_deep20_split_lr_vs_deep5_seed44.json" \
+      2>&1 | tee "$output_dir/paired_deep20_split_lr_vs_deep5_seed44.log"
+  ) || return 1
+  local score
+  score="$(python -c 'import json,sys;print(json.load(open(sys.argv[1],encoding="utf-8"))["overall_accuracy"])' "$output_dir/eval_validation/epoch_5/pathvqa_summary.json")" || return 1
+  printf 'experiment\tseed\tprotocol\tvalidation_epoch\tvalidation_accuracy\tcheckpoint\n' > "$output_dir/selected_result.tsv"
+  printf '%s\t44\tfixed_epoch5_validation\t5\t%s\t%s\n' "$experiment_name" "$score" "$checkpoint" >> "$output_dir/selected_result.tsv"
+  cat "$output_dir/selected_result.tsv"
+  echo "[PATHVQA_V1_DEEP20_SPLIT_LR_DONE] output=$output_dir primary_epoch=5 baselines=v1_59.3386,deep5_58.2042 final_exploration=true test_evaluation=false other_seeds=false"
+}
+
 run_pathvqa_v1_norm_fixed_5ep_seed() {
   local model_seed="$1"
   if [ "$model_seed" != "45" ] && [ "$model_seed" != "46" ]; then
@@ -5001,6 +5091,9 @@ case "$RUN_TARGET" in
     ;;
   pathvqa_v1_visual18_uniform_lr3e5_norm_fixed_5ep_seed44)
     run_pathvqa_v1_visual18_uniform_lr3e5_norm_fixed_5ep_seed44 || failures=$((failures + 1))
+    ;;
+  pathvqa_v1_deep_visual20_split_lr_l16_23_norm_fixed_5ep_seed44)
+    run_pathvqa_v1_deep_visual20_split_lr_l16_23_norm_fixed_5ep_seed44 || failures=$((failures + 1))
     ;;
   pathvqa_v1_norm_fixed_5ep_seed45)
     run_pathvqa_v1_norm_fixed_5ep_seed 45 || failures=$((failures + 1))

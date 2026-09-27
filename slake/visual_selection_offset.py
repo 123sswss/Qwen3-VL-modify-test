@@ -146,7 +146,15 @@ class _Visual18Block(nn.Module):
             raise RuntimeError("Visual18 segment lengths do not match ViT tokens")
         if len(lengths) != owner._expected_visual_segments or sum(lengths) != owner._expected_visual_patches:
             raise RuntimeError("Visual18 segments are not one native sequence per image/frame")
-        if self.prompt_slot is not None:
+        if self.prompt_slot is not None and hasattr(owner, "visual_deep_low_prompts"):
+            prompt_source = torch.cat(
+                (
+                    owner.visual_deep_low_prompts[self.prompt_slot],
+                    owner.visual_deep_high_prompts[self.prompt_slot],
+                ),
+                dim=0,
+            )
+        elif self.prompt_slot is not None:
             prompt_source = owner.visual_deep_prompts[self.prompt_slot]
         elif hasattr(owner, "visual_prompt20"):
             prompt_source = owner.visual_prompt20

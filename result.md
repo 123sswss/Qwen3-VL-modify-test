@@ -407,3 +407,7 @@ This file is the concise experiment memory shared by the user and Codex. The com
 ### 2026-09-27：深层逐层5未改善，原Visual18继续保留
 - `pathvqa_v1_deep_visual5_l16_23_norm_fixed_5ep_seed44`，固定epoch5 PathVQA：58.2042 Overall /89.5680 Yes-No /26.9304 Free-form；what21.1538、where70.4156。对原五轮seed44 Overall-1.1344，配对95%CI[-1.9743,-0.2986]；Yes-No-1.3120，CI[-2.2705,-0.3537]；Free-form-0.9572，CI[-2.3604,0.3932]。输出`pathvqa/outputs/visual_selection_prefix/pathvqa_v1_deep_visual5_l16_23_norm_fixed_5ep_seed44_20260927`。
 - 预期Yes-No收益未出现，不自动叠加；两次布局替换失败支持保留原8+10配置，但不能证明18的特殊性或分组机制。原版与两替代方案的学习率/布局仍有混杂，且单checkpoint配对区间不涵盖训练seed方差。原五轮V1仍为主候选；无新增GPU运行。
+
+### 2026-09-27：原18统一低LR消融失败，损失集中在Yes/No
+- `pathvqa_v1_visual18_uniform_lr3e5_norm_fixed_5ep_seed44`，PathVQA固定epoch5，唯一预定改动Av10 LR1e-4->3e-5。Overall57.9805 /Yes-No88.5760 /Free-form27.4729；what22.0565、where68.2152。对原五轮V1 Overall-1.3580，配对CI[-2.1509,-0.5695]；Yes-No-2.3040，CI[-3.2434,-1.3479]；Free-form-0.4148，CI跨零。净少85题，其中72道Yes/No；what净分相同但双方各143独占正确，行为并未相同。输出`pathvqa/outputs/visual_selection_prefix/pathvqa_v1_visual18_uniform_lr3e5_norm_fixed_5ep_seed44_20260927`。
+- 保留原两档LR有直接同布局对照依据，但只适用于当前seed、五轮和3e-5对照；不能证明分组语义职责、所有统一LR都差或18数量特殊。统一高LR旧对照使用20个，仍有数量混杂。现有结果不保证深层10+10有效，不自动启动新实验。

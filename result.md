@@ -395,3 +395,7 @@ This file is the concise experiment memory shared by the user and Codex. The com
 - 按已授权seed46计划归属，回传58.7314 Overall、90.3360 Yes/No、27.2176 Free-form、where68.7042，图像簇CI[57.2346,60.0702]；精确输出路径/运行身份/配对及拟合结果待完整报告。
 - 五轮44/45/46为59.3386/58.5077/58.7314，Overall **58.8592 +/-0.4299样本标准差**，range0.8309；Free-form27.2602 +/-0.6074。三个seed均比三轮提高。参数仍1,864,963，不是1M；压到1M保分尚未验证。
 - 对历史旧Sandwich均值低0.2930、参数少76.1%、观察波动较小，但训练预算和历史协议有差异；旧all-after为58.9658 +/-0.4799也应列出。三seed不证明统计等效或普遍稳定。本轮未启动新训练/Test。
+
+## 2026-09-27 Visual20首次启动失败（无训练）
+
+- `pathvqa_v1_visual20_lr1e4_norm_fixed_5ep_seed44`在模型构造审计阶段因子类删除`visual_s8/visual_av10`后仍调用父类参数分组而报`AttributeError`；尚未进入真实batch预检、训练或评估，无分数。已改为子类直接返回Visual20参数组；实验定义不变，须由用户重新执行。

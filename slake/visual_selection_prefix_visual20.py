@@ -107,11 +107,22 @@ class VisualSelectionPrefixVisual20Model(VisualSelectionPrefixModel):
     def trainable_parameter_groups(self) -> dict[str, list[nn.Parameter]]:
         if not getattr(self, "_visual20_ready", False):
             return super().trainable_parameter_groups()
-        groups = super().trainable_parameter_groups()
-        groups.pop("visual_s8", None)
-        groups.pop("visual_av10", None)
-        groups["visual_prompt20"] = [self.visual_prompt20]
-        return groups
+        return {
+            "p20": [self.p20],
+            "visual_prompt20": [self.visual_prompt20],
+            "question_context": list(self.text_projection.parameters())
+            + list(self.question_depthwise.parameters())
+            + list(self.question_pointwise.parameters())
+            + list(self.question_norm.parameters())
+            + list(self.question_pool.parameters()),
+            "maps": list(self.query_heads.parameters())
+            + list(self.key_norms.parameters())
+            + list(self.key_heads.parameters()),
+            "layer_condition": list(self.layer_gate.parameters())
+            + list(self.value_norms.parameters())
+            + list(self.value_blocks.parameters()),
+            "prefix_output": list(self.prefix_output.parameters()),
+        }
 
     def _audit_parameters(self) -> dict[str, int]:
         if not getattr(self, "_visual20_ready", False):

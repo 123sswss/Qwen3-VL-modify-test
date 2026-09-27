@@ -76,6 +76,12 @@ class RawQuestionCollator:
 
 
 class V1Trainer(Trainer):
+    def __init__(self, *args, visual_av10_learning_rate: float = 1e-4, **kwargs):
+        self.visual_av10_learning_rate = float(visual_av10_learning_rate)
+        if self.visual_av10_learning_rate not in (3e-5, 1e-4):
+            raise ValueError("V1 Visual18 Av10 learning rate must be 3e-5 or 1e-4")
+        super().__init__(*args, **kwargs)
+
     def create_optimizer(self):
         if self.optimizer is not None:
             return self.optimizer
@@ -91,7 +97,7 @@ class V1Trainer(Trainer):
             rates["visual_prompt20"] = 1e-4
         else:
             rates["visual_s8"] = 3e-5
-            rates["visual_av10"] = 1e-4
+            rates["visual_av10"] = self.visual_av10_learning_rate
         if set(rates) != set(groups):
             raise RuntimeError(f"V1 optimizer/group mismatch: rates={set(rates)} groups={set(groups)}")
         self.configured_group_learning_rates = dict(rates)
@@ -279,6 +285,10 @@ def main() -> int:
         choices=("split18", "unified20", "deep5_l16_23"),
         default="split18",
     )
+    parser.add_argument(
+        "--visual-av10-learning-rate", type=float, choices=(3e-5, 1e-4), default=1e-4,
+        help="Av10 optimizer LR for the original split18 layout; S8 remains 3e-5",
+    )
     parser.add_argument("--correct-loss-accumulation", action="store_true",
                         help="Use Trainer's equal-microbatch mean loss scaling; guarded by the read-only audit launcher")
     args = parser.parse_args()
@@ -287,6 +297,8 @@ def main() -> int:
     save_epochs = tuple(sorted(set(args.save_epochs or [args.epochs])))
     if any(epoch <= 0 or epoch > args.epochs for epoch in save_epochs):
         raise ValueError(f"save epochs must be within [1,{args.epochs}]: {save_epochs}")
+    if args.visual_prompt_mode != "split18" and args.visual_av10_learning_rate != 1e-4:
+        raise ValueError("--visual-av10-learning-rate only applies to split18")
     print("[V1_RUNTIME] " + json.dumps({
         "experiment": args.experiment_name,
         "git_commit": subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True,
@@ -298,6 +310,7 @@ def main() -> int:
         "epochs": args.epochs,
         "save_epochs": save_epochs,
         "visual_prompt_mode": args.visual_prompt_mode,
+        "visual_av10_learning_rate": args.visual_av10_learning_rate,
     }, sort_keys=True), flush=True)
     seed, data_seed = args.model_seed, 42
     random.seed(seed)
@@ -338,6 +351,7 @@ def main() -> int:
         torch.cuda.reset_peak_memory_stats()
     trainer = V1Trainer(
         model=model,
+        visual_av10_learning_rate=args.visual_av10_learning_rate,
         args=TrainingArguments(
             output_dir=str(args.output_dir / "trainer"), num_train_epochs=args.epochs,
             per_device_train_batch_size=2, gradient_accumulation_steps=16,
@@ -377,6 +391,7 @@ def main() -> int:
         "dataset": "PathVQA", "model_seed": seed, "data_seed": data_seed,
         "epochs": args.epochs, "saved_epochs": list(save_epochs),
         "visual_prompt_mode": args.visual_prompt_mode,
+        "visual_av10_learning_rate": args.visual_av10_learning_rate,
         "trainable_parameters": counts,
         "total_trainable_parameters": sum(counts.values()),
         "train_metrics": result.metrics,

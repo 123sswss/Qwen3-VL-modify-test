@@ -403,3 +403,7 @@ This file is the concise experiment memory shared by the user and Codex. The com
 ### 2026-09-27：统一 Visual20 五轮 seed44 明确退步
 - `pathvqa_v1_visual20_lr1e4_norm_fixed_5ep_seed44`，PathVQA固定epoch5：Overall57.7249 / Yes-No90.5920 / Free-form24.9521；what20.4867、where59.6577。相对原五轮seed44：Overall-1.6137，图像簇配对95%CI[-2.4277,-0.8014]；Free-form-2.9355，CI[-4.2262,-1.6702]；where-12.7139。101道净损失中92道是开放回答。输出`pathvqa/outputs/visual_selection_prefix/pathvqa_v1_visual20_lr1e4_norm_fixed_5ep_seed44_20260927_1`。
 - 结论只适用于“18->20且前8行LR3e-5->1e-4”的联合修改，不能归因于20这个数量，也未证明原分组有语义分工。保留原五轮V1；建议先用18个统一1e-4拆分变量，再决定是否继续深层/叠加。候选尚未执行；所有GPU工作由用户完成。
+
+### 2026-09-27：深层逐层5未改善，原Visual18继续保留
+- `pathvqa_v1_deep_visual5_l16_23_norm_fixed_5ep_seed44`，固定epoch5 PathVQA：58.2042 Overall /89.5680 Yes-No /26.9304 Free-form；what21.1538、where70.4156。对原五轮seed44 Overall-1.1344，配对95%CI[-1.9743,-0.2986]；Yes-No-1.3120，CI[-2.2705,-0.3537]；Free-form-0.9572，CI[-2.3604,0.3932]。输出`pathvqa/outputs/visual_selection_prefix/pathvqa_v1_deep_visual5_l16_23_norm_fixed_5ep_seed44_20260927`。
+- 预期Yes-No收益未出现，不自动叠加；两次布局替换失败支持保留原8+10配置，但不能证明18的特殊性或分组机制。原版与两替代方案的学习率/布局仍有混杂，且单checkpoint配对区间不涵盖训练seed方差。原五轮V1仍为主候选；无新增GPU运行。

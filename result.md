@@ -399,3 +399,7 @@ This file is the concise experiment memory shared by the user and Codex. The com
 ## 2026-09-27 Visual20首次启动失败（无训练）
 
 - `pathvqa_v1_visual20_lr1e4_norm_fixed_5ep_seed44`在模型构造审计阶段因子类删除`visual_s8/visual_av10`后仍调用父类参数分组而报`AttributeError`；尚未进入真实batch预检、训练或评估，无分数。已改为子类直接返回Visual20参数组；实验定义不变，须由用户重新执行。
+
+### 2026-09-27：统一 Visual20 五轮 seed44 明确退步
+- `pathvqa_v1_visual20_lr1e4_norm_fixed_5ep_seed44`，PathVQA固定epoch5：Overall57.7249 / Yes-No90.5920 / Free-form24.9521；what20.4867、where59.6577。相对原五轮seed44：Overall-1.6137，图像簇配对95%CI[-2.4277,-0.8014]；Free-form-2.9355，CI[-4.2262,-1.6702]；where-12.7139。101道净损失中92道是开放回答。输出`pathvqa/outputs/visual_selection_prefix/pathvqa_v1_visual20_lr1e4_norm_fixed_5ep_seed44_20260927_1`。
+- 结论只适用于“18->20且前8行LR3e-5->1e-4”的联合修改，不能归因于20这个数量，也未证明原分组有语义分工。保留原五轮V1；建议先用18个统一1e-4拆分变量，再决定是否继续深层/叠加。候选尚未执行；所有GPU工作由用户完成。

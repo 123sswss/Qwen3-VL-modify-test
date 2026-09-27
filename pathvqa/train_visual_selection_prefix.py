@@ -27,6 +27,12 @@ from slake.visual_selection_prefix_visual20 import (
     EXPECTED_TRAINABLE_VISUAL20,
     VisualSelectionPrefixVisual20Model,
 )
+from slake.visual_selection_prefix_deep5 import (
+    DEEP_VISUAL_LAYERS,
+    DEEP_VISUAL_TOKENS_PER_LAYER,
+    EXPECTED_TRAINABLE_DEEP5,
+    VisualSelectionPrefixDeep5Model,
+)
 
 
 class RawQuestionDataset(Dataset):
@@ -79,7 +85,9 @@ class V1Trainer(Trainer):
             "question_context": 1e-4, "maps": 1e-4,
             "layer_condition": 1e-4, "prefix_output": 1e-4,
         }
-        if "visual_prompt20" in groups:
+        if "visual_deep_prompts" in groups:
+            rates["visual_deep_prompts"] = 1e-4
+        elif "visual_prompt20" in groups:
             rates["visual_prompt20"] = 1e-4
         else:
             rates["visual_s8"] = 3e-5
@@ -179,6 +187,11 @@ def construct_with_v0_initialization_audit(
     base, seed: int, output_dir: Path, *, visual_prompt_mode: str = "split18",
 ):
     """Compare every shared trainable tensor against fresh same-seed V0."""
+    if visual_prompt_mode == "deep5_l16_23" and len(base.model.visual.blocks) != 24:
+        raise ValueError(
+            "Deep5 experiment requires exactly 24 visual blocks before any "
+            f"experiment modules are constructed; found {len(base.model.visual.blocks)}"
+        )
     cpu_rng = torch.random.get_rng_state()
     cuda_rng = torch.cuda.get_rng_state_all() if torch.cuda.is_available() else []
     reference = VisualSelectionOffsetModel(base, init_seed=seed)
@@ -191,17 +204,19 @@ def construct_with_v0_initialization_audit(
     torch.random.set_rng_state(cpu_rng)
     if cuda_rng:
         torch.cuda.set_rng_state_all(cuda_rng)
-    model_class = (
-        VisualSelectionPrefixVisual20Model
-        if visual_prompt_mode == "unified20"
-        else VisualSelectionPrefixModel
-    )
+    model_classes = {
+        "split18": VisualSelectionPrefixModel,
+        "unified20": VisualSelectionPrefixVisual20Model,
+        "deep5_l16_23": VisualSelectionPrefixDeep5Model,
+    }
+    model_class = model_classes[visual_prompt_mode]
     model = model_class(base, init_seed=seed)
     actual = {
         name: parameter for name, parameter in model.named_parameters()
         if parameter.requires_grad
         and not name.startswith("prefix_output.")
         and name != "visual_prompt20"
+        and not name.startswith("visual_deep_prompts.")
     }
     visual_prompt_audit = None
     if visual_prompt_mode == "unified20":
@@ -213,6 +228,21 @@ def construct_with_v0_initialization_audit(
         visual_prompt_audit = {
             "first18_equal_to_baseline_s8_av10": True,
             "extra_rows": 2,
+            "extra_rng": "private_cpu_generator",
+            "global_rng_unchanged": True,
+        }
+    elif visual_prompt_mode == "deep5_l16_23":
+        common.pop("visual_s8")
+        common.pop("visual_av10")
+        visual_prompt_audit = {
+            "backbone_blocks": len(base.model.visual.blocks),
+            "layers": list(DEEP_VISUAL_LAYERS),
+            "tokens_per_layer": DEEP_VISUAL_TOKENS_PER_LAYER,
+            "parameter_count": sum(
+                parameter.numel() for parameter in model.visual_deep_prompts
+            ),
+            "independent_per_layer": True,
+            "lifetime": "single_block_insert_then_remove",
             "extra_rng": "private_cpu_generator",
             "global_rng_unchanged": True,
         }
@@ -245,7 +275,9 @@ def main() -> int:
     parser.add_argument("--epochs", type=int, default=3)
     parser.add_argument("--save-epochs", type=int, nargs="+")
     parser.add_argument(
-        "--visual-prompt-mode", choices=("split18", "unified20"), default="split18",
+        "--visual-prompt-mode",
+        choices=("split18", "unified20", "deep5_l16_23"),
+        default="split18",
     )
     parser.add_argument("--correct-loss-accumulation", action="store_true",
                         help="Use Trainer's equal-microbatch mean loss scaling; guarded by the read-only audit launcher")
@@ -283,11 +315,11 @@ def main() -> int:
         base, seed, args.output_dir, visual_prompt_mode=args.visual_prompt_mode,
     )
     counts = model._audit_parameters()
-    expected_trainable = (
-        EXPECTED_TRAINABLE_VISUAL20
-        if args.visual_prompt_mode == "unified20"
-        else EXPECTED_TRAINABLE
-    )
+    expected_trainable = {
+        "split18": EXPECTED_TRAINABLE,
+        "unified20": EXPECTED_TRAINABLE_VISUAL20,
+        "deep5_l16_23": EXPECTED_TRAINABLE_DEEP5,
+    }[args.visual_prompt_mode]
     if sum(counts.values()) != expected_trainable:
         raise RuntimeError("V1 parameter total changed")
     dataset = RawQuestionDataset(PathVQADataset(

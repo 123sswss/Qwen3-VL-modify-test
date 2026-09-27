@@ -113,9 +113,13 @@ def locate_question_mask(
 class _Visual18Block(nn.Module):
     """Insert S8 + A_v10 before block 17 and strip them after one block call."""
 
-    def __init__(self, block: nn.Module, owner: "VisualSelectionOffsetModel") -> None:
+    def __init__(
+        self, block: nn.Module, owner: "VisualSelectionOffsetModel",
+        *, prompt_slot: int | None = None,
+    ) -> None:
         super().__init__()
         self.block = block
+        self.prompt_slot = prompt_slot
         object.__setattr__(self, "_owner_ref", weakref.ref(owner))
 
     @staticmethod
@@ -142,7 +146,9 @@ class _Visual18Block(nn.Module):
             raise RuntimeError("Visual18 segment lengths do not match ViT tokens")
         if len(lengths) != owner._expected_visual_segments or sum(lengths) != owner._expected_visual_patches:
             raise RuntimeError("Visual18 segments are not one native sequence per image/frame")
-        if hasattr(owner, "visual_prompt20"):
+        if self.prompt_slot is not None:
+            prompt_source = owner.visual_deep_prompts[self.prompt_slot]
+        elif hasattr(owner, "visual_prompt20"):
             prompt_source = owner.visual_prompt20
         else:
             prompt_source = torch.cat((owner.visual_s8, owner.visual_av10), dim=0)

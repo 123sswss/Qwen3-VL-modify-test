@@ -142,9 +142,11 @@ class _Visual18Block(nn.Module):
             raise RuntimeError("Visual18 segment lengths do not match ViT tokens")
         if len(lengths) != owner._expected_visual_segments or sum(lengths) != owner._expected_visual_patches:
             raise RuntimeError("Visual18 segments are not one native sequence per image/frame")
-        prompt = torch.cat((owner.visual_s8, owner.visual_av10), dim=0).to(
-            device=hidden.device, dtype=hidden.dtype
-        )
+        if hasattr(owner, "visual_prompt20"):
+            prompt_source = owner.visual_prompt20
+        else:
+            prompt_source = torch.cat((owner.visual_s8, owner.visual_av10), dim=0)
+        prompt = prompt_source.to(device=hidden.device, dtype=hidden.dtype)
         count = prompt.shape[0]
         expanded = torch.cat(
             [torch.cat((prompt, chunk), dim=0) for chunk in torch.split(hidden, lengths)],

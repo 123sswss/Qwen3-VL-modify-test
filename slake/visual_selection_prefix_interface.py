@@ -11,6 +11,7 @@ from PIL import Image
 from transformers import AutoModelForImageTextToText, AutoProcessor
 
 from slake.visual_selection_prefix import CONFIG_NAME, VisualSelectionPrefixModel
+from slake.visual_selection_prefix_visual20 import VisualSelectionPrefixVisual20Model
 
 try:
     from generation_timing import generate_with_timing
@@ -32,7 +33,12 @@ class VisualSelectionPrefixInterface:
             base_model_path, torch_dtype=torch.bfloat16,
             device_map="auto", trust_remote_code=True,
         )
-        self.model = VisualSelectionPrefixModel(base, init_seed=int(config["init_seed"]))
+        model_class = (
+            VisualSelectionPrefixVisual20Model
+            if config.get("method") == VisualSelectionPrefixVisual20Model.method_name
+            else VisualSelectionPrefixModel
+        )
+        self.model = model_class(base, init_seed=int(config["init_seed"]))
         self.model.load_v1(checkpoint)
         self.model.eval()
         self.device = next(base.parameters()).device

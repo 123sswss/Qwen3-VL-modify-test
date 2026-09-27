@@ -23,6 +23,10 @@ from transformers import (
 from pathvqa.data_pipeline import PathVQADataCollator, PathVQADataset
 from slake.visual_selection_offset import VisualSelectionOffsetModel
 from slake.visual_selection_prefix import EXPECTED_TRAINABLE, VisualSelectionPrefixModel
+from slake.visual_selection_prefix_visual20 import (
+    EXPECTED_TRAINABLE_VISUAL20,
+    VisualSelectionPrefixVisual20Model,
+)
 
 
 class RawQuestionDataset(Dataset):
@@ -69,12 +73,20 @@ class V1Trainer(Trainer):
     def create_optimizer(self):
         if self.optimizer is not None:
             return self.optimizer
+        groups = self.model.trainable_parameter_groups()
         rates = {
-            "p20": 0.3, "visual_s8": 3e-5, "visual_av10": 1e-4,
+            "p20": 0.3,
             "question_context": 1e-4, "maps": 1e-4,
             "layer_condition": 1e-4, "prefix_output": 1e-4,
         }
-        groups = self.model.trainable_parameter_groups()
+        if "visual_prompt20" in groups:
+            rates["visual_prompt20"] = 1e-4
+        else:
+            rates["visual_s8"] = 3e-5
+            rates["visual_av10"] = 1e-4
+        if set(rates) != set(groups):
+            raise RuntimeError(f"V1 optimizer/group mismatch: rates={set(rates)} groups={set(groups)}")
+        self.configured_group_learning_rates = dict(rates)
         self.model._audit_parameters()
         self.optimizer = torch.optim.AdamW([
             {"params": groups[name], "lr": lr, "weight_decay": 0.0, "group_name": name}
@@ -163,7 +175,9 @@ def real_batch_preflight(model, dataset, collator, output_dir: Path) -> None:
     model.zero_grad(set_to_none=True)
 
 
-def construct_with_v0_initialization_audit(base, seed: int, output_dir: Path):
+def construct_with_v0_initialization_audit(
+    base, seed: int, output_dir: Path, *, visual_prompt_mode: str = "split18",
+):
     """Compare every shared trainable tensor against fresh same-seed V0."""
     cpu_rng = torch.random.get_rng_state()
     cuda_rng = torch.cuda.get_rng_state_all() if torch.cuda.is_available() else []
@@ -177,11 +191,31 @@ def construct_with_v0_initialization_audit(base, seed: int, output_dir: Path):
     torch.random.set_rng_state(cpu_rng)
     if cuda_rng:
         torch.cuda.set_rng_state_all(cuda_rng)
-    model = VisualSelectionPrefixModel(base, init_seed=seed)
+    model_class = (
+        VisualSelectionPrefixVisual20Model
+        if visual_prompt_mode == "unified20"
+        else VisualSelectionPrefixModel
+    )
+    model = model_class(base, init_seed=seed)
     actual = {
         name: parameter for name, parameter in model.named_parameters()
-        if parameter.requires_grad and not name.startswith("prefix_output.")
+        if parameter.requires_grad
+        and not name.startswith("prefix_output.")
+        and name != "visual_prompt20"
     }
+    visual_prompt_audit = None
+    if visual_prompt_mode == "unified20":
+        expected_visual18 = torch.cat(
+            (common.pop("visual_s8"), common.pop("visual_av10")), dim=0,
+        )
+        if not torch.equal(expected_visual18, model.visual_prompt20[:18].detach().cpu()):
+            raise RuntimeError("V1 Visual20 first18 rows differ from baseline S8+Av10 initialization")
+        visual_prompt_audit = {
+            "first18_equal_to_baseline_s8_av10": True,
+            "extra_rows": 2,
+            "extra_rng": "private_cpu_generator",
+            "global_rng_unchanged": True,
+        }
     if set(common) != set(actual):
         raise RuntimeError(f"V1/V0 common initialization names differ: {set(common) ^ set(actual)}")
     mismatches = [
@@ -190,7 +224,11 @@ def construct_with_v0_initialization_audit(base, seed: int, output_dir: Path):
     ]
     if mismatches:
         raise RuntimeError(f"V1/V0 common initial values differ: {mismatches}")
-    audit = {"reference": f"fresh_V0_seed{seed}", "equal": True, "tensor_count": len(common)}
+    audit = {
+        "reference": f"fresh_V0_seed{seed}", "equal": True,
+        "tensor_count": len(common), "visual_prompt_mode": visual_prompt_mode,
+        "visual_prompt": visual_prompt_audit,
+    }
     with (output_dir / "v1_shared_initialization_audit.json").open("w", encoding="utf-8") as handle:
         json.dump(audit, handle, indent=2)
     print("[V1_SHARED_INITIALIZATION_AUDIT] " + json.dumps(audit))
@@ -206,6 +244,9 @@ def main() -> int:
     parser.add_argument("--model-seed", type=int, default=44)
     parser.add_argument("--epochs", type=int, default=3)
     parser.add_argument("--save-epochs", type=int, nargs="+")
+    parser.add_argument(
+        "--visual-prompt-mode", choices=("split18", "unified20"), default="split18",
+    )
     parser.add_argument("--correct-loss-accumulation", action="store_true",
                         help="Use Trainer's equal-microbatch mean loss scaling; guarded by the read-only audit launcher")
     args = parser.parse_args()
@@ -224,6 +265,7 @@ def main() -> int:
         "correct_loss_accumulation": args.correct_loss_accumulation,
         "epochs": args.epochs,
         "save_epochs": save_epochs,
+        "visual_prompt_mode": args.visual_prompt_mode,
     }, sort_keys=True), flush=True)
     seed, data_seed = args.model_seed, 42
     random.seed(seed)
@@ -237,9 +279,16 @@ def main() -> int:
         device_map="auto", trust_remote_code=True,
     )
     base.config.use_cache = False
-    model = construct_with_v0_initialization_audit(base, seed, args.output_dir)
+    model = construct_with_v0_initialization_audit(
+        base, seed, args.output_dir, visual_prompt_mode=args.visual_prompt_mode,
+    )
     counts = model._audit_parameters()
-    if sum(counts.values()) != EXPECTED_TRAINABLE:
+    expected_trainable = (
+        EXPECTED_TRAINABLE_VISUAL20
+        if args.visual_prompt_mode == "unified20"
+        else EXPECTED_TRAINABLE
+    )
+    if sum(counts.values()) != expected_trainable:
         raise RuntimeError("V1 parameter total changed")
     dataset = RawQuestionDataset(PathVQADataset(
         processor=processor, data_root=args.data_root, split="train",
@@ -291,9 +340,11 @@ def main() -> int:
         raise RuntimeError(f"V1 requested checkpoints not saved: {missing_checkpoints}")
     checkpoint = args.output_dir / "checkpoints" / f"epoch_{args.epochs}"
     report = {
-        "experiment": args.experiment_name, "method": "visual_selection_prefix_p20_v1",
+        "experiment": args.experiment_name,
+        "method": getattr(model, "method_name", "visual_selection_prefix_p20_v1"),
         "dataset": "PathVQA", "model_seed": seed, "data_seed": data_seed,
         "epochs": args.epochs, "saved_epochs": list(save_epochs),
+        "visual_prompt_mode": args.visual_prompt_mode,
         "trainable_parameters": counts,
         "total_trainable_parameters": sum(counts.values()),
         "train_metrics": result.metrics,
@@ -319,6 +370,7 @@ def main() -> int:
             "eps": 1e-8, "scheduler": "linear", "warmup_ratio": 0.03,
             "max_grad_norm": 1.0, "per_device_batch_size": 2,
             "gradient_accumulation_steps": 16,
+            "group_learning_rates": trainer.configured_group_learning_rates,
         },
     }
     with (args.output_dir / "train_report.json").open("w", encoding="utf-8") as handle:

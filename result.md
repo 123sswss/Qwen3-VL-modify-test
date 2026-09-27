@@ -389,3 +389,9 @@ This file is the concise experiment memory shared by the user and Codex. The com
 
 - 按当前授权实验上下文归属`pathvqa_v1_norm_fixed_5ep_seed45`，用户JSON为58.5077 Overall、90.4320 Yes/No、26.6752 Free-form；节选未含seed/输出路径，完整summary身份和配对统计待补。较三轮seed45约+1.34/+1.44/+1.25。
 - 若上述身份确认，五轮seed44/45均值58.9232、分差0.8309，两seed均提高；建议下一候选原样五轮seed46，尚未授权启动。无额外参数，增加训练成本，不宣称两seed已证明稳定性。
+
+## 2026-09-27 五轮V1 seed46及三seed汇总
+
+- 按已授权seed46计划归属，回传58.7314 Overall、90.3360 Yes/No、27.2176 Free-form、where68.7042，图像簇CI[57.2346,60.0702]；精确输出路径/运行身份/配对及拟合结果待完整报告。
+- 五轮44/45/46为59.3386/58.5077/58.7314，Overall **58.8592 +/-0.4299样本标准差**，range0.8309；Free-form27.2602 +/-0.6074。三个seed均比三轮提高。参数仍1,864,963，不是1M；压到1M保分尚未验证。
+- 对历史旧Sandwich均值低0.2930、参数少76.1%、观察波动较小，但训练预算和历史协议有差异；旧all-after为58.9658 +/-0.4799也应列出。三seed不证明统计等效或普遍稳定。本轮未启动新训练/Test。

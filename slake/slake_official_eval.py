@@ -453,6 +453,10 @@ def run_timing_warmup(
         return
     record = records[0]
     prompt = build_prompt(record, instruction)
+    raw_question_kwargs = (
+        {"question": str(record["_slake_question"])}
+        if getattr(model, "requires_raw_question", False) else {}
+    )
     for index in range(1, runs + 1):
         with Image.open(record["_slake_image_path"]) as image_file:
             image = image_file.convert("RGB")
@@ -461,6 +465,7 @@ def run_timing_warmup(
             prompt,
             max_new_tokens=max_new_tokens,
             temperature=temperature,
+            **raw_question_kwargs,
         )
         print(f"[SLAKE_TIMING_WARMUP {index}/{runs}] complete")
 
@@ -513,6 +518,10 @@ def run_inference(
             continue
 
         prompt = build_prompt(record, instruction)
+        raw_question_kwargs = (
+            {"question": str(record["_slake_question"])}
+            if getattr(model, "requires_raw_question", False) else {}
+        )
         try:
             with Image.open(record["_slake_image_path"]) as image_file:
                 image = image_file.convert("RGB")
@@ -524,6 +533,7 @@ def run_inference(
                 prompt,
                 max_new_tokens=max_new_tokens,
                 temperature=temperature,
+                **raw_question_kwargs,
             )
             request_total_seconds = time.perf_counter() - request_started_at
             answer = extract_generated_answer(raw_output, answer_mode)

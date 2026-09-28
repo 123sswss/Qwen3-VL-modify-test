@@ -9,6 +9,7 @@ SLAKE_OUTPUT_ROOT="${SLAKE_OUTPUT_ROOT:-$ROOT_DIR/slake/outputs/mmrl}"
 SLAKE_DYNAMIC_PROMPT_OUTPUT_ROOT="${SLAKE_DYNAMIC_PROMPT_OUTPUT_ROOT:-$ROOT_DIR/slake/outputs/dynamic_prompt}"
 SLAKE_GRASP_OUTPUT_ROOT="${SLAKE_GRASP_OUTPUT_ROOT:-$ROOT_DIR/slake/outputs/grasp}"
 SLAKE_LORA_OUTPUT_ROOT="${SLAKE_LORA_OUTPUT_ROOT:-$ROOT_DIR/slake/outputs/lora}"
+SLAKE_V1_OUTPUT_ROOT="${SLAKE_V1_OUTPUT_ROOT:-$ROOT_DIR/slake/outputs/visual_selection_prefix}"
 PATHVQA_DATA_ROOT="${PATHVQA_DATA_ROOT:-/root/autodl-tmp/dataset/pathVQA}"
 PATHVQA_CACHE_ROOT="${PATHVQA_CACHE_ROOT:-$PATHVQA_DATA_ROOT/.hf_cache}"
 PATHVQA_OUTPUT_ROOT="${PATHVQA_OUTPUT_ROOT:-$ROOT_DIR/pathvqa/outputs/mmrl}"
@@ -39,6 +40,7 @@ if [ "$RUN_TARGET" = "pathvqa_visual_selection_offset_v0_seed44" ] || \
    [ "$RUN_TARGET" = "pathvqa_v1_norm_fixed_5ep_seed44" ] || \
    [ "$RUN_TARGET" = "pathvqa_v1_norm_fixed_5ep_seed45" ] || \
    [ "$RUN_TARGET" = "pathvqa_v1_norm_fixed_5ep_seed46" ] || \
+   [ "$RUN_TARGET" = "slake_v1_norm_fixed_5ep_seeds44_45_46_test" ] || \
    [ "$RUN_TARGET" = "pathvqa_v1_visual20_lr1e4_norm_fixed_5ep_seed44" ] || \
    [ "$RUN_TARGET" = "pathvqa_v1_deep_visual5_l16_23_norm_fixed_5ep_seed44" ] || \
    [ "$RUN_TARGET" = "pathvqa_v1_visual18_uniform_lr3e5_norm_fixed_5ep_seed44" ] || \
@@ -52,7 +54,7 @@ if [ "$RUN_TARGET" = "pathvqa_visual_selection_offset_v0_seed44" ] || \
   SHUTDOWN_ON_EXIT=0
 fi
 
-mkdir -p "$OUTPUT_ROOT" "$SLAKE_OUTPUT_ROOT" "$SLAKE_DYNAMIC_PROMPT_OUTPUT_ROOT" "$SLAKE_GRASP_OUTPUT_ROOT" "$SLAKE_LORA_OUTPUT_ROOT" "$PATHVQA_OUTPUT_ROOT" "$PATHVQA_LORA_OUTPUT_ROOT" "$PATHVQA_BASE_OUTPUT_ROOT" "$PATHVQA_PROMPT_OUTPUT_ROOT" "$PATHVQA_COCOOP_OUTPUT_ROOT" "$PATHVQA_DYNAMIC_PROMPT_OUTPUT_ROOT" "$PATHVQA_GRASP_OUTPUT_ROOT" "$PATHVQA_V0_OUTPUT_ROOT" "$PATHVQA_V1_OUTPUT_ROOT" "$ELECTRICAL_QDPT_OUTPUT_ROOT" "$ELECTRICAL_GRASP_OUTPUT_ROOT" "$ELECTRICAL_PROMPT_OUTPUT_ROOT" "$ELECTRICAL_COCOOP_OUTPUT_ROOT"
+mkdir -p "$OUTPUT_ROOT" "$SLAKE_OUTPUT_ROOT" "$SLAKE_DYNAMIC_PROMPT_OUTPUT_ROOT" "$SLAKE_GRASP_OUTPUT_ROOT" "$SLAKE_LORA_OUTPUT_ROOT" "$SLAKE_V1_OUTPUT_ROOT" "$PATHVQA_OUTPUT_ROOT" "$PATHVQA_LORA_OUTPUT_ROOT" "$PATHVQA_BASE_OUTPUT_ROOT" "$PATHVQA_PROMPT_OUTPUT_ROOT" "$PATHVQA_COCOOP_OUTPUT_ROOT" "$PATHVQA_DYNAMIC_PROMPT_OUTPUT_ROOT" "$PATHVQA_GRASP_OUTPUT_ROOT" "$PATHVQA_V0_OUTPUT_ROOT" "$PATHVQA_V1_OUTPUT_ROOT" "$ELECTRICAL_QDPT_OUTPUT_ROOT" "$ELECTRICAL_GRASP_OUTPUT_ROOT" "$ELECTRICAL_PROMPT_OUTPUT_ROOT" "$ELECTRICAL_COCOOP_OUTPUT_ROOT"
 echo "[RUN_TARGET] selected=$RUN_TARGET positional=${1:-<unset>} env=${ENV_RUN_TARGET:-<unset>} mmrl_env=${MMRL_RUN_TARGET:-<unset>} shutdown_on_exit=$SHUTDOWN_ON_EXIT"
 
 cancel_shutdown_on_interrupt() {
@@ -4741,6 +4743,72 @@ run_pathvqa_v1_norm_fixed_5ep_seed() {
   echo "[PATHVQA_V1_5EP_REPLICATION_DONE] model_seed=$model_seed output=$output_dir primary_epoch=5 test_evaluation=false other_seeds=false"
 }
 
+run_slake_v1_norm_fixed_5ep_seed() {
+  local model_seed="$1"
+  if [ "$model_seed" != "44" ] && [ "$model_seed" != "45" ] && [ "$model_seed" != "46" ]; then
+    echo "[ERR] SLAKE V1 model seed must be 44, 45, or 46; got: $model_seed" >&2
+    return 1
+  fi
+  local audit_json="${PATHVQA_V1_LOSS_AUDIT_JSON:-$PATHVQA_V1_OUTPUT_ROOT/diagnostics/pathvqa_v1_loss_scaling_audit_20260924/v1_loss_scaling_audit.json}"
+  if [ ! -f "$audit_json" ]; then
+    echo "[ERR] V1 loss-scaling audit JSON missing: $audit_json; no training started." >&2
+    return 1
+  fi
+  if ! python -c 'import importlib.metadata,json,sys,torch; d=json.load(open(sys.argv[1],encoding="utf-8")); assert d["passed"] is True and d["training_commit"]=="4636416ee99768c667377f0c66b5809daf48ffcd"; assert all(all(d["windows"][str(k)]["numeric_checks"].values()) for k in (16,3)); assert d["versions"]["torch"]==torch.__version__; assert d["versions"]["transformers"]==importlib.metadata.version("transformers"); assert d["versions"]["accelerate"]==importlib.metadata.version("accelerate"); print("[SLAKE_V1_NORM_PREFLIGHT] audit_passed=True versions_match=True full16_and_tail3=True")' "$audit_json"; then
+    echo "[ERR] V1 loss audit failed or runtime versions changed; no training started." >&2
+    return 1
+  fi
+  local experiment_name="slake_v1_norm_fixed_5ep_seed${model_seed}"
+  local output_dir
+  output_dir="$(available_output_dir "$SLAKE_V1_OUTPUT_ROOT" "${experiment_name}_${RUN_DATE}")"
+  mkdir -p "$output_dir/eval_test/epoch_5"
+  echo "[SLAKE_V1_5EP_CONFIG] experiment=$experiment_name git_commit=$(git -C "$ROOT_DIR" rev-parse HEAD) model_seed=$model_seed data_seed=42 dataset=slake train_split=train eval_split=test eval_language=all batch=2 accumulation=16 epochs=5 save_epochs=3,4,5 primary_epoch=5 visual_prompt=layer17_S8_lr3e-5_plus_Av10_lr1e-4 warmup_ratio=0.03 scheduler=linear_to_epoch5 model_accepts_loss_kwargs=false trainable=1864963 output=$output_dir"
+  (
+    cd "$ROOT_DIR" || exit 1
+    python -m pathvqa.train_visual_selection_prefix \
+      --dataset slake --model-path "$MODEL_PATH" --data-root "$SLAKE_DATA_ROOT" \
+      --output-dir "$output_dir" --experiment-name "$experiment_name" \
+      --model-seed "$model_seed" --epochs 5 --save-epochs 3 4 5 \
+      --visual-prompt-mode split18 --visual-av10-learning-rate 1e-4 \
+      --correct-loss-accumulation \
+      2>&1 | tee "$output_dir/train.log"
+  ) || return 1
+  local epoch
+  for epoch in 3 4 5; do
+    [ -f "$output_dir/checkpoints/epoch_${epoch}/visual_selection_prefix.pt" ] \
+      || { echo "[ERR] SLAKE V1 seed${model_seed} requested checkpoint missing: epoch_$epoch" >&2; return 1; }
+  done
+  if ! python -c 'import json,sys; d=json.load(open(sys.argv[1],encoding="utf-8")); expected=int(sys.argv[2]); assert d["dataset"]=="SLAKE" and d["train_split"]=="train" and d["languages"]=="all"; assert d["model_seed"]==expected and d["data_seed"]==42; assert d["epochs"]==5 and d["saved_epochs"]==[3,4,5]; assert d["visual_prompt_mode"]=="split18" and d["visual_av10_learning_rate"]==1e-4; assert d["total_trainable_parameters"]==1864963; assert d["trainer_model_accepts_loss_kwargs"] is False; assert d["optimizer"]["gradient_accumulation_steps"]==16 and d["optimizer"]["warmup_ratio"]==0.03 and d["optimizer"]["scheduler"]=="linear"; rates=d["optimizer"]["group_learning_rates"]; assert rates["visual_s8"]==3e-5 and rates["visual_av10"]==1e-4; print(f"[SLAKE_V1_TRAIN_REPORT_AUDIT] model_seed={expected} dataset=SLAKE train_split=train language=all epochs=5 saved_epochs=3,4,5 trainable=1864963 normalized=True")' "$output_dir/train_report.json" "$model_seed"; then
+    echo "[ERR] SLAKE V1 seed${model_seed} train report does not attest the requested unchanged V1 protocol." >&2
+    return 1
+  fi
+  local checkpoint="$output_dir/checkpoints/epoch_5"
+  (
+    cd "$ROOT_DIR" || exit 1
+    python -m slake.slake_official_eval \
+      --backend visual-selection-prefix --base-model "$MODEL_PATH" \
+      --checkpoint "$checkpoint" --questions "$SLAKE_DATA_ROOT/test.json" \
+      --image-root "$SLAKE_DATA_ROOT/imgs" --language all --expected-split test \
+      --output-dir "$output_dir/eval_test/epoch_5" \
+      2>&1 | tee "$output_dir/eval_test_epoch_5.log"
+  ) || return 1
+  local score
+  score="$(python -c 'import json,sys;print(json.load(open(sys.argv[1],encoding="utf-8"))["overall_accuracy"])' "$output_dir/eval_test/epoch_5/slake_summary.json")" || return 1
+  printf 'experiment\tseed\tprotocol\ttest_epoch\ttest_accuracy\tcheckpoint\n' > "$output_dir/selected_result.tsv"
+  printf '%s\t%s\tfixed_epoch5_test\t5\t%s\t%s\n' "$experiment_name" "$model_seed" "$score" "$checkpoint" >> "$output_dir/selected_result.tsv"
+  cat "$output_dir/selected_result.tsv"
+  echo "[SLAKE_V1_5EP_SEED_DONE] model_seed=$model_seed output=$output_dir primary_epoch=5 validation_evaluation=false test_evaluation=true"
+}
+
+run_slake_v1_norm_fixed_5ep_seeds44_45_46_test() {
+  local model_seed
+  for model_seed in 44 45 46; do
+    echo "[SLAKE_V1_SERIAL] starting_seed=$model_seed order=44,45,46"
+    run_slake_v1_norm_fixed_5ep_seed "$model_seed" || return 1
+  done
+  echo "[SLAKE_V1_THREE_SEED_DONE] seeds=44,45,46 protocol=fixed_epoch5_test validation_evaluation=false"
+}
+
 run_pathvqa_v1_loss_corrected_seed45() {
   local audit_json="${PATHVQA_V1_LOSS_AUDIT_JSON:-$PATHVQA_V1_OUTPUT_ROOT/diagnostics/pathvqa_v1_loss_scaling_audit_20260924/v1_loss_scaling_audit.json}"
   if [ ! -f "$audit_json" ]; then
@@ -5100,6 +5168,9 @@ case "$RUN_TARGET" in
     ;;
   pathvqa_v1_norm_fixed_5ep_seed46)
     run_pathvqa_v1_norm_fixed_5ep_seed 46 || failures=$((failures + 1))
+    ;;
+  slake_v1_norm_fixed_5ep_seeds44_45_46_test)
+    run_slake_v1_norm_fixed_5ep_seeds44_45_46_test || failures=$((failures + 1))
     ;;
   pathvqa_v1_visual_selection_prefix_p20_norm_fixed_seed45)
     run_pathvqa_v1_loss_corrected_seed45 || failures=$((failures + 1))

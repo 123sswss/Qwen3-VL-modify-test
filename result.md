@@ -411,3 +411,7 @@ This file is the concise experiment memory shared by the user and Codex. The com
 ### 2026-09-27：原18统一低LR消融失败，损失集中在Yes/No
 - `pathvqa_v1_visual18_uniform_lr3e5_norm_fixed_5ep_seed44`，PathVQA固定epoch5，唯一预定改动Av10 LR1e-4->3e-5。Overall57.9805 /Yes-No88.5760 /Free-form27.4729；what22.0565、where68.2152。对原五轮V1 Overall-1.3580，配对CI[-2.1509,-0.5695]；Yes-No-2.3040，CI[-3.2434,-1.3479]；Free-form-0.4148，CI跨零。净少85题，其中72道Yes/No；what净分相同但双方各143独占正确，行为并未相同。输出`pathvqa/outputs/visual_selection_prefix/pathvqa_v1_visual18_uniform_lr3e5_norm_fixed_5ep_seed44_20260927`。
 - 保留原两档LR有直接同布局对照依据，但只适用于当前seed、五轮和3e-5对照；不能证明分组语义职责、所有统一LR都差或18数量特殊。统一高LR旧对照使用20个，仍有数量混杂。现有结果不保证深层10+10有效，不自动启动新实验。
+
+### 2026-09-28：最后一次深层10+10失败，探索结束
+- `pathvqa_v1_deep_visual20_split_lr_l16_23_norm_fixed_5ep_seed44`，PathVQA固定epoch5：Overall57.2935 /Yes-No89.4720 /Free-form25.2074，what20.7221、where60.8802。对原五轮V1 Overall-2.0451，配对95%CI[-2.8918,-1.2314]；对Deep5 Overall-0.9107，CI[-1.6792,-0.1459]，Free-form-1.7230，CI[-2.9941,-0.4504]。输出`pathvqa/outputs/visual_selection_prefix/pathvqa_v1_deep_visual20_split_lr_l16_23_norm_fixed_5ep_seed44_20260928`，完整原始结果及双对照记在主账本。
+- 深层双LR配置未能挽救性能，不支持将原两档LR机械扩展到八层。保留原五轮V1（1,864,963参数，已有三seed58.8592±0.4299）；8+10只是已测配置中的经验选择，未证明数量特殊或两组语义分工。按用户约定探索到此结束，不追加实验/seed/Test/压缩。账本留本地，不单独提交推送。

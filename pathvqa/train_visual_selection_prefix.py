@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Single V1 PathVQA train with a real-batch preflight."""
+"""Single V1 train with a real-batch preflight for PathVQA or SLAKE."""
 
 from __future__ import annotations
 
@@ -21,6 +21,7 @@ from transformers import (
 )
 
 from pathvqa.data_pipeline import PathVQADataCollator, PathVQADataset
+from slake.data_pipeline import SLAKEDataCollator, SLAKEDataset
 from slake.visual_selection_offset import VisualSelectionOffsetModel
 from slake.visual_selection_prefix import EXPECTED_TRAINABLE, VisualSelectionPrefixModel
 from slake.visual_selection_prefix_visual20 import (
@@ -41,7 +42,7 @@ from slake.visual_selection_prefix_deep20_split_lr import (
 
 
 class RawQuestionDataset(Dataset):
-    def __init__(self, source: PathVQADataset, tokenizer) -> None:
+    def __init__(self, source: Dataset, tokenizer) -> None:
         self.source = source
         self.tokenizer = tokenizer
 
@@ -59,8 +60,8 @@ class RawQuestionDataset(Dataset):
 
 
 class RawQuestionCollator:
-    def __init__(self, processor) -> None:
-        self.base = PathVQADataCollator(processor)
+    def __init__(self, processor, base_collator=None) -> None:
+        self.base = base_collator or PathVQADataCollator(processor)
 
     def __call__(self, features):
         features = [dict(row) for row in features]
@@ -303,6 +304,7 @@ def construct_with_v0_initialization_audit(
 
 def main() -> int:
     parser = argparse.ArgumentParser()
+    parser.add_argument("--dataset", choices=("pathvqa", "slake"), default="pathvqa")
     parser.add_argument("--model-path", type=Path, default=Path("/root/autodl-tmp/model"))
     parser.add_argument("--data-root", type=Path, default=Path("/root/autodl-tmp/dataset/pathVQA"))
     parser.add_argument("--output-dir", type=Path, required=True)
@@ -334,6 +336,7 @@ def main() -> int:
         raise ValueError("--visual-av10-learning-rate only applies to split18")
     print("[V1_RUNTIME] " + json.dumps({
         "experiment": args.experiment_name,
+        "dataset": args.dataset,
         "git_commit": subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True,
                                      text=True, check=False).stdout.strip(),
         "torch": torch.__version__,
@@ -369,12 +372,38 @@ def main() -> int:
     }[args.visual_prompt_mode]
     if sum(counts.values()) != expected_trainable:
         raise RuntimeError("V1 parameter total changed")
-    dataset = RawQuestionDataset(PathVQADataset(
-        processor=processor, data_root=args.data_root, split="train",
-        ce_enabled=True, seed=data_seed, deterministic_sampling=True,
-        max_length=2048,
-    ), processor.tokenizer)
-    collator = RawQuestionCollator(processor)
+    if args.dataset == "pathvqa":
+        source_dataset = PathVQADataset(
+            processor=processor, data_root=args.data_root, split="train",
+            ce_enabled=True, seed=data_seed, deterministic_sampling=True,
+            max_length=2048,
+        )
+        base_collator = PathVQADataCollator(processor)
+        dataset_name = "PathVQA"
+        split_manifest = None
+    else:
+        split_manifest = args.data_root / "train.json"
+        source_dataset = SLAKEDataset(
+            processor=processor,
+            questions_path=str(split_manifest),
+            image_root=str(args.data_root / "imgs"),
+            languages=None,
+            base_types=None,
+            splits=("train",),
+            ce_enabled=True,
+            seed=data_seed,
+            deterministic_sampling=True,
+            max_length=2048,
+        )
+        base_collator = SLAKEDataCollator(processor)
+        dataset_name = "SLAKE"
+    dataset = RawQuestionDataset(source_dataset, processor.tokenizer)
+    collator = RawQuestionCollator(processor, base_collator=base_collator)
+    print(
+        f"[V1_DATASET] dataset={dataset_name} split=train languages=all "
+        f"samples={len(dataset)} manifest={split_manifest} data_seed={data_seed}",
+        flush=True,
+    )
     # Preserve training RNG after the mandatory real-batch audit.
     cpu_rng = torch.random.get_rng_state()
     cuda_rng = torch.cuda.get_rng_state_all() if torch.cuda.is_available() else []
@@ -422,7 +451,9 @@ def main() -> int:
     report = {
         "experiment": args.experiment_name,
         "method": getattr(model, "method_name", "visual_selection_prefix_p20_v1"),
-        "dataset": "PathVQA", "model_seed": seed, "data_seed": data_seed,
+        "dataset": dataset_name, "model_seed": seed, "data_seed": data_seed,
+        "train_split": "train", "languages": "all",
+        "train_manifest": str(split_manifest) if split_manifest is not None else None,
         "epochs": args.epochs, "saved_epochs": list(save_epochs),
         "visual_prompt_mode": args.visual_prompt_mode,
         "visual_av10_learning_rate": args.visual_av10_learning_rate,

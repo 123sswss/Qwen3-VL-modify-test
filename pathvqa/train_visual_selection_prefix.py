@@ -25,6 +25,10 @@ from RSVQA.data_pipeline import RSVQADataCollator, RSVQALRDataset
 from slake.data_pipeline import SLAKEDataCollator, SLAKEDataset
 from slake.visual_selection_offset import VisualSelectionOffsetModel
 from slake.visual_selection_prefix import EXPECTED_TRAINABLE, VisualSelectionPrefixModel
+from slake.visual_selection_prefix_direct import (
+    EXPECTED_TRAINABLE_DIRECT,
+    VisualSelectionPrefixDirectModel,
+)
 from slake.visual_selection_prefix_visual20 import (
     EXPECTED_TRAINABLE_VISUAL20,
     VisualSelectionPrefixVisual20Model,
@@ -96,8 +100,12 @@ class V1Trainer(Trainer):
         rates = {
             "p20": 0.3,
             "question_context": 1e-4, "maps": 1e-4,
-            "layer_condition": 1e-4, "prefix_output": 1e-4,
+            "layer_condition": 1e-4,
         }
+        if "alpha" in groups:
+            rates["alpha"] = 1e-4
+        else:
+            rates["prefix_output"] = 1e-4
         if "visual_deep_low_prompts" in groups:
             rates["visual_deep_low_prompts"] = 3e-5
             rates["visual_deep_high_prompts"] = 1e-4
@@ -167,6 +175,9 @@ def real_batch_preflight(
         key: value.to(device=device, dtype=torch.bfloat16 if value.is_floating_point() else value.dtype)
         for key, value in batch.items()
     }
+    alpha_calibration = None
+    if hasattr(model, "calibrate_alpha_from_first_batch"):
+        alpha_calibration = model.calibrate_alpha_from_first_batch(moved)
     model.train()
     output = model(**moved)
     if output.loss is None or not bool(torch.isfinite(output.loss)):
@@ -183,11 +194,16 @@ def real_batch_preflight(
             raise RuntimeError(f"V1 real batch has inactive {name} branch")
     required = (
         "text_projection.weight", "question_depthwise.weight", "question_pointwise.weight",
-        "question_pool.weight", "layer_gate.weight", "prefix_output.weight",
+        "question_pool.weight", "layer_gate.weight",
     ) + tuple(
-        f"{prefix}.{i}.weight"
-        for prefix in ("query_heads", "key_heads", "value_blocks") for i in range(3)
+        f"{prefix}.{i}.weight" for prefix in ("query_heads", "key_heads") for i in range(3)
     )
+    if "alpha" in groups:
+        required += ("alpha",) + tuple(f"value_norms.{i}.weight" for i in range(3))
+    else:
+        required += ("prefix_output.weight",) + tuple(
+            f"value_blocks.{i}.weight" for i in range(3)
+        )
     inactive = [name for name in required if model.first_backward_gradients.get(name, 0) <= 0]
     if inactive:
         raise RuntimeError(f"V1 real batch inactive parameters: {inactive}")
@@ -198,6 +214,7 @@ def real_batch_preflight(
         "parameter_gradient_norms": model.first_backward_gradients,
         "forward": model.first_batch_diagnostics,
         "injection": model.last_injection_audit,
+        "alpha_calibration": alpha_calibration,
         "question_policy": "independent_raw_question_ids_no_prefill_write_mapping",
     }
     with (output_dir / "v1_real_batch_preflight.json").open("w", encoding="utf-8") as handle:
@@ -229,6 +246,7 @@ def construct_with_v0_initialization_audit(
         torch.cuda.set_rng_state_all(cuda_rng)
     model_classes = {
         "split18": VisualSelectionPrefixModel,
+        "direct_summary": VisualSelectionPrefixDirectModel,
         "unified20": VisualSelectionPrefixVisual20Model,
         "deep5_l16_23": VisualSelectionPrefixDeep5Model,
         "deep20_split_lr_l16_23": VisualSelectionPrefixDeep20SplitLRModel,
@@ -239,13 +257,23 @@ def construct_with_v0_initialization_audit(
         name: parameter for name, parameter in model.named_parameters()
         if parameter.requires_grad
         and not name.startswith("prefix_output.")
+        and name != "alpha"
         and name != "visual_prompt20"
         and not name.startswith("visual_deep_prompts.")
         and not name.startswith("visual_deep_low_prompts.")
         and not name.startswith("visual_deep_high_prompts.")
     }
     visual_prompt_audit = None
-    if visual_prompt_mode == "unified20":
+    if visual_prompt_mode == "direct_summary":
+        for name in tuple(common):
+            if name.startswith("value_blocks."):
+                common.pop(name)
+        visual_prompt_audit = {
+            "layout": "unchanged_split18",
+            "removed": ["value_blocks", "prefix_output"],
+            "added": "scalar_alpha_calibrated_on_first_train_batch",
+        }
+    elif visual_prompt_mode == "unified20":
         expected_visual18 = torch.cat(
             (common.pop("visual_s8"), common.pop("visual_av10")), dim=0,
         )
@@ -328,7 +356,7 @@ def main() -> int:
         "--visual-prompt-mode",
         choices=(
             "split18", "unified20", "deep5_l16_23",
-            "deep20_split_lr_l16_23",
+            "deep20_split_lr_l16_23", "direct_summary",
         ),
         default="split18",
     )
@@ -383,6 +411,7 @@ def main() -> int:
     counts = model._audit_parameters()
     expected_trainable = {
         "split18": EXPECTED_TRAINABLE,
+        "direct_summary": EXPECTED_TRAINABLE_DIRECT,
         "unified20": EXPECTED_TRAINABLE_VISUAL20,
         "deep5_l16_23": EXPECTED_TRAINABLE_DEEP5,
         "deep20_split_lr_l16_23": EXPECTED_TRAINABLE_DEEP20_SPLIT_LR,
@@ -506,6 +535,7 @@ def main() -> int:
         "trainable_parameters": counts,
         "total_trainable_parameters": sum(counts.values()),
         "train_metrics": result.metrics,
+        "alpha_calibration": getattr(model, "alpha_calibration_audit", None),
         "peak_gpu_memory_bytes": torch.cuda.max_memory_allocated() if torch.cuda.is_available() else None,
         "preflight": str(args.output_dir / "v1_real_batch_preflight.json"),
         "git_commit": subprocess.run(

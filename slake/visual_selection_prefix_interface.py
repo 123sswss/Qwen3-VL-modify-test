@@ -11,6 +11,7 @@ from PIL import Image
 from transformers import AutoModelForImageTextToText, AutoProcessor
 
 from slake.visual_selection_prefix import CONFIG_NAME, VisualSelectionPrefixModel
+from slake.visual_selection_prefix_direct import VisualSelectionPrefixDirectModel
 from slake.visual_selection_prefix_visual20 import VisualSelectionPrefixVisual20Model
 from slake.visual_selection_prefix_deep5 import VisualSelectionPrefixDeep5Model
 from slake.visual_selection_prefix_deep20_split_lr import (
@@ -38,7 +39,9 @@ class VisualSelectionPrefixInterface:
             device_map="auto", trust_remote_code=True,
         )
         method = config.get("method")
-        if method == VisualSelectionPrefixVisual20Model.method_name:
+        if method == VisualSelectionPrefixDirectModel.method_name:
+            model_class = VisualSelectionPrefixDirectModel
+        elif method == VisualSelectionPrefixVisual20Model.method_name:
             model_class = VisualSelectionPrefixVisual20Model
         elif method == VisualSelectionPrefixDeep5Model.method_name:
             model_class = VisualSelectionPrefixDeep5Model

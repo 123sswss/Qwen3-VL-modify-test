@@ -25,6 +25,7 @@ PATHVQA_GRASP_OUTPUT_ROOT="${PATHVQA_GRASP_OUTPUT_ROOT:-$ROOT_DIR/pathvqa/output
 PATHVQA_V0_OUTPUT_ROOT="${PATHVQA_V0_OUTPUT_ROOT:-$ROOT_DIR/pathvqa/outputs/visual_selection_offset}"
 PATHVQA_V1_OUTPUT_ROOT="${PATHVQA_V1_OUTPUT_ROOT:-$ROOT_DIR/pathvqa/outputs/visual_selection_prefix}"
 PATHVQA_V1_DIRECT_OUTPUT_ROOT="${PATHVQA_V1_DIRECT_OUTPUT_ROOT:-$ROOT_DIR/pathvqa/outputs/visual_selection_prefix_direct}"
+PATHVQA_V1B_OUTPUT_ROOT="${PATHVQA_V1B_OUTPUT_ROOT:-$ROOT_DIR/pathvqa/outputs/visual_selection_prefix_evidence}"
 PATHVQA_V2_OUTPUT_ROOT="${PATHVQA_V2_OUTPUT_ROOT:-$ROOT_DIR/pathvqa/outputs/visual_layer_mix_prefix}"
 PATHVQA_V3_OUTPUT_ROOT="${PATHVQA_V3_OUTPUT_ROOT:-$ROOT_DIR/pathvqa/outputs/visual_postvisual_prefix}"
 ELECTRICAL_DATA_ROOT="${ELECTRICAL_DATA_ROOT:-/root/autodl-tmp/dataset}"
@@ -37,12 +38,15 @@ RUN_TARGET="${1:-${ENV_RUN_TARGET:-${MMRL_RUN_TARGET:-all}}}"
 RUN_DATE="${MMRL_RUN_DATE:-$(date +%Y%m%d)}"
 SEED="${MMRL_FIXED_SEED:-44}"
 SHUTDOWN_ON_EXIT="${MMRL_SHUTDOWN_ON_EXIT:-0}"
+RUN_STATUS_OUTPUT_DIR=""
+RUN_STAGE="launcher"
 if [ "$RUN_TARGET" = "pathvqa_visual_selection_offset_v0_seed44" ] || \
    [ "$RUN_TARGET" = "pathvqa_v1_visual_selection_prefix_p20_seed44" ] || \
    [ "$RUN_TARGET" = "pathvqa_v1_loss_scaling_audit" ] || \
    [ "$RUN_TARGET" = "pathvqa_v1_visual_selection_prefix_p20_norm_fixed_seed44" ] || \
    [ "$RUN_TARGET" = "pathvqa_v1_norm_fixed_5ep_seed44" ] || \
    [ "$RUN_TARGET" = "pathvqa_v1_direct_summary_norm_fixed_5ep_seed44" ] || \
+   [ "$RUN_TARGET" = "pathvqa_v1b_evidence_token_norm_fixed_5ep_seed44" ] || \
    [ "$RUN_TARGET" = "pathvqa_v1_norm_fixed_5ep_seed45" ] || \
    [ "$RUN_TARGET" = "pathvqa_v1_norm_fixed_5ep_seed46" ] || \
    [ "$RUN_TARGET" = "slake_v1_norm_fixed_5ep_seeds44_45_46_test" ] || \
@@ -61,8 +65,11 @@ if [ "$RUN_TARGET" = "pathvqa_visual_selection_offset_v0_seed44" ] || \
    [ "$RUN_TARGET" = "pathvqa_v0_seed44_mask_fixed_validation" ]; then
   SHUTDOWN_ON_EXIT=0
 fi
+if [ "$RUN_TARGET" = "pathvqa_v1b_evidence_token_norm_fixed_5ep_seed44_shutdown" ]; then
+  SHUTDOWN_ON_EXIT=1
+fi
 
-mkdir -p "$OUTPUT_ROOT" "$SLAKE_OUTPUT_ROOT" "$SLAKE_DYNAMIC_PROMPT_OUTPUT_ROOT" "$SLAKE_GRASP_OUTPUT_ROOT" "$SLAKE_LORA_OUTPUT_ROOT" "$SLAKE_V1_OUTPUT_ROOT" "$RSVQA_OUTPUT_ROOT" "$PATHVQA_OUTPUT_ROOT" "$PATHVQA_LORA_OUTPUT_ROOT" "$PATHVQA_BASE_OUTPUT_ROOT" "$PATHVQA_PROMPT_OUTPUT_ROOT" "$PATHVQA_COCOOP_OUTPUT_ROOT" "$PATHVQA_DYNAMIC_PROMPT_OUTPUT_ROOT" "$PATHVQA_GRASP_OUTPUT_ROOT" "$PATHVQA_V0_OUTPUT_ROOT" "$PATHVQA_V1_OUTPUT_ROOT" "$PATHVQA_V1_DIRECT_OUTPUT_ROOT" "$ELECTRICAL_QDPT_OUTPUT_ROOT" "$ELECTRICAL_GRASP_OUTPUT_ROOT" "$ELECTRICAL_PROMPT_OUTPUT_ROOT" "$ELECTRICAL_COCOOP_OUTPUT_ROOT"
+mkdir -p "$OUTPUT_ROOT" "$SLAKE_OUTPUT_ROOT" "$SLAKE_DYNAMIC_PROMPT_OUTPUT_ROOT" "$SLAKE_GRASP_OUTPUT_ROOT" "$SLAKE_LORA_OUTPUT_ROOT" "$SLAKE_V1_OUTPUT_ROOT" "$RSVQA_OUTPUT_ROOT" "$PATHVQA_OUTPUT_ROOT" "$PATHVQA_LORA_OUTPUT_ROOT" "$PATHVQA_BASE_OUTPUT_ROOT" "$PATHVQA_PROMPT_OUTPUT_ROOT" "$PATHVQA_COCOOP_OUTPUT_ROOT" "$PATHVQA_DYNAMIC_PROMPT_OUTPUT_ROOT" "$PATHVQA_GRASP_OUTPUT_ROOT" "$PATHVQA_V0_OUTPUT_ROOT" "$PATHVQA_V1_OUTPUT_ROOT" "$PATHVQA_V1_DIRECT_OUTPUT_ROOT" "$PATHVQA_V1B_OUTPUT_ROOT" "$ELECTRICAL_QDPT_OUTPUT_ROOT" "$ELECTRICAL_GRASP_OUTPUT_ROOT" "$ELECTRICAL_PROMPT_OUTPUT_ROOT" "$ELECTRICAL_COCOOP_OUTPUT_ROOT"
 echo "[RUN_TARGET] selected=$RUN_TARGET positional=${1:-<unset>} env=${ENV_RUN_TARGET:-<unset>} mmrl_env=${MMRL_RUN_TARGET:-<unset>} shutdown_on_exit=$SHUTDOWN_ON_EXIT"
 
 cancel_shutdown_on_interrupt() {
@@ -74,8 +81,24 @@ cancel_shutdown_on_interrupt() {
 
 shutdown_on_exit() {
   local exit_code=$?
+  if [ -n "$RUN_STATUS_OUTPUT_DIR" ]; then
+    mkdir -p "$RUN_STATUS_OUTPUT_DIR"
+    printf '%s\tfinal\t%s\t%s\n' "$(date --iso-8601=seconds)" "$RUN_STAGE" "$exit_code" >> "$RUN_STATUS_OUTPUT_DIR/run_stage_status.tsv"
+    printf '{"target":"%s","final_stage":"%s","exit_code":%s,"finished_at":"%s"}\n' \
+      "$RUN_TARGET" "$RUN_STAGE" "$exit_code" "$(date --iso-8601=seconds)" > "$RUN_STATUS_OUTPUT_DIR/run_exit_status.json"
+  fi
   if [ "$SHUTDOWN_ON_EXIT" != "1" ]; then
     return "$exit_code"
+  fi
+  if [ "$RUN_TARGET" = "pathvqa_v1b_evidence_token_norm_fixed_5ep_seed44_shutdown" ]; then
+    local shutdown_log="${RUN_STATUS_OUTPUT_DIR:-$PATHVQA_V1B_OUTPUT_ROOT}/shutdown.log"
+    echo "[EXIT] V1B串行入口结束，exit_code=$exit_code；记录完成后安排1分钟后关机。" | tee -a "$shutdown_log"
+    /usr/bin/shutdown -h +1 >> "$shutdown_log" 2>&1
+    local shutdown_code=$?
+    printf '%s\tshutdown_schedule\texit_code\t%s\n' "$(date --iso-8601=seconds)" "$shutdown_code" >> "$shutdown_log"
+    sync
+    trap - EXIT
+    exit "$exit_code"
   fi
   echo "[EXIT] 脚本退出，exit_code=$exit_code"
   echo "[EXIT] 600 秒后自动关机；按 Ctrl+C 可取消。"
@@ -1657,6 +1680,18 @@ find_completed_qdpt_sandwich_run() {
       | cut -f2-
   )
   return 1
+}
+
+record_run_stage() {
+  local stage="$1"
+  local status="${2:-started}"
+  local code="${3:-0}"
+  RUN_STAGE="$stage"
+  if [ -n "$RUN_STATUS_OUTPUT_DIR" ]; then
+    mkdir -p "$RUN_STATUS_OUTPUT_DIR"
+    printf '%s\t%s\t%s\t%s\n' "$(date --iso-8601=seconds)" "$stage" "$status" "$code" \
+      >> "$RUN_STATUS_OUTPUT_DIR/run_stage_status.tsv"
+  fi
 }
 
 find_completed_pathvqa_qdpt_frozen_static_p20_run() {
@@ -4408,6 +4443,108 @@ run_pathvqa_v1_direct_summary_norm_fixed_5ep_seed44() {
   echo "[PATHVQA_V1_DIRECT_DONE] output=$output_dir primary_epoch=5 baseline=59.3386 test_evaluation=false other_seeds=false"
 }
 
+run_pathvqa_v1b_evidence_token_norm_fixed_5ep_seed44() {
+  local experiment_name="pathvqa_v1b_evidence_token_norm_fixed_5ep_seed44"
+  local output_dir
+  output_dir="$(available_output_dir "$PATHVQA_V1B_OUTPUT_ROOT" "${experiment_name}_${RUN_DATE}")"
+  mkdir -p "$output_dir/eval_validation/epoch_5"
+  RUN_STATUS_OUTPUT_DIR="$output_dir"
+  record_run_stage "prechecks" "started" 0
+  local audit_json="${PATHVQA_V1_LOSS_AUDIT_JSON:-$PATHVQA_V1_OUTPUT_ROOT/diagnostics/pathvqa_v1_loss_scaling_audit_20260924/v1_loss_scaling_audit.json}"
+  local baseline_run="${PATHVQA_V1_5EP_BASELINE_RUN:-$PATHVQA_V1_OUTPUT_ROOT/pathvqa_v1_norm_fixed_5ep_seed44_20260926_2}"
+  local baseline_eval="$baseline_run/eval_validation/epoch_5"
+  local v1a_run="${PATHVQA_V1A_RUN:-$PATHVQA_V1_DIRECT_OUTPUT_ROOT/pathvqa_v1_direct_summary_norm_fixed_5ep_seed44_20260929}"
+  local v1a_eval="$v1a_run/eval_validation/epoch_5"
+  if [ ! -f "$audit_json" ]; then
+    echo "[ERR] V1 loss-scaling audit missing: $audit_json" | tee "$output_dir/precheck_error.log" >&2
+    record_run_stage "prechecks" "failed" 1
+    return 1
+  fi
+  if ! python -c 'import importlib.metadata,json,sys,torch; d=json.load(open(sys.argv[1],encoding="utf-8")); assert d["passed"] is True and d["training_commit"]=="4636416ee99768c667377f0c66b5809daf48ffcd"; assert all(all(d["windows"][str(k)]["numeric_checks"].values()) for k in (16,3)); assert d["versions"]["torch"]==torch.__version__; assert d["versions"]["transformers"]==importlib.metadata.version("transformers"); assert d["versions"]["accelerate"]==importlib.metadata.version("accelerate"); print("[V1B_NORM_PREFLIGHT] passed=True versions_match=True")' "$audit_json" 2>&1 | tee "$output_dir/loss_audit_precheck.log"; then
+    record_run_stage "prechecks" "failed" 1
+    return 1
+  fi
+  if [ ! -f "$baseline_eval/pathvqa_comparisons.json" ] || [ ! -f "$baseline_eval/pathvqa_summary.json" ]; then
+    echo "[ERR] Original five-epoch V1 baseline missing: $baseline_eval" | tee "$output_dir/precheck_error.log" >&2
+    record_run_stage "prechecks" "failed" 1
+    return 1
+  fi
+  if ! python -c 'import json,sys; d=json.load(open(sys.argv[1],encoding="utf-8")); assert abs(float(d["overall_accuracy"])-59.3386)<0.0001; assert abs(float(d["yes_no_accuracy"])-90.88)<0.0001; assert abs(float(d["free_form_accuracy"])-27.8877)<0.0001; print("[V1B_BASELINE] overall=59.3386 yes_no=90.8800 free_form=27.8877")' "$baseline_eval/pathvqa_summary.json" 2>&1 | tee "$output_dir/baseline_precheck.log"; then
+    record_run_stage "prechecks" "failed" 1
+    return 1
+  fi
+  record_run_stage "prechecks" "completed" 0
+  echo "[PATHVQA_V1B_CONFIG] experiment=$experiment_name git_commit=$(git -C "$ROOT_DIR" rev-parse HEAD) model_seed=44 data_seed=42 layout=P20_then_one_dynamic_evidence_then_native_chat evidence_formula=original_V1_prefix_output_relu_condition trainable=1864963 batch=2 accumulation=16 epochs=5 save_epochs=3,4,5 primary_epoch=5 model_accepts_loss_kwargs=false shutdown_on_exit=$SHUTDOWN_ON_EXIT output=$output_dir" | tee "$output_dir/config.log"
+  record_run_stage "gpu_preflight_and_training" "started" 0
+  (
+    cd "$ROOT_DIR" || exit 1
+    python -m pathvqa.train_visual_selection_prefix \
+      --model-path "$MODEL_PATH" --data-root "$PATHVQA_DATA_ROOT" \
+      --cache-dir "$PATHVQA_CACHE_ROOT" \
+      --output-dir "$output_dir" --experiment-name "$experiment_name" \
+      --model-seed 44 --epochs 5 --save-epochs 3 4 5 \
+      --visual-prompt-mode evidence_token --correct-loss-accumulation \
+      2>&1 | tee "$output_dir/train.log"
+  ) || { record_run_stage "gpu_preflight_and_training" "failed" 1; return 1; }
+  record_run_stage "gpu_preflight_and_training" "completed" 0
+  local epoch
+  for epoch in 3 4 5; do
+    [ -f "$output_dir/checkpoints/epoch_${epoch}/visual_selection_prefix.pt" ] \
+      || { echo "[ERR] V1B checkpoint missing: epoch_$epoch" >&2; record_run_stage "checkpoint_audit" "failed" 1; return 1; }
+  done
+  if ! python -c 'import json,sys; d=json.load(open(sys.argv[1],encoding="utf-8")); p=json.load(open(sys.argv[2],encoding="utf-8")); g=json.load(open(sys.argv[3],encoding="utf-8")); assert d["epochs"]==5 and d["saved_epochs"]==[3,4,5] and d["visual_prompt_mode"]=="evidence_token"; assert d["total_trainable_parameters"]==1864963 and d["trainer_model_accepts_loss_kwargs"] is False; assert d["trainable_parameters"]["prefix_output"]==494080 and "alpha" not in d["trainable_parameters"]; assert p["injection"]["layout"]=="P20_then_one_evidence_then_native_chat" and p["injection"]["prefix_tokens"]==21; assert p["injection"]["p20_unchanged_by_dynamic_branch"] is True and p["injection"]["native_embeddings_unchanged"] is True; assert g["single_prefill_injection"] is True and g["kv_cache_reused_without_reinjection"] is True and g["roundtrip_equal"] is True; print("[V1B_TRAIN_REPORT_AUDIT] total=1864963 prefix=20+1 full_head=True normalized=True cache_roundtrip=True")' "$output_dir/train_report.json" "$output_dir/v1_real_batch_preflight.json" "$output_dir/v1b_generation_preflight.json" 2>&1 | tee "$output_dir/train_report_audit.log"; then
+    record_run_stage "checkpoint_audit" "failed" 1
+    return 1
+  fi
+  record_run_stage "checkpoint_audit" "completed" 0
+  local checkpoint="$output_dir/checkpoints/epoch_5"
+  record_run_stage "validation" "started" 0
+  (
+    cd "$ROOT_DIR" || exit 1
+    python -m pathvqa.pathvqa_official_eval \
+      --backend visual-selection-prefix --base-model "$MODEL_PATH" \
+      --checkpoint "$checkpoint" --data-root "$PATHVQA_DATA_ROOT" \
+      --cache-dir "$PATHVQA_CACHE_ROOT" --split validation \
+      --output-dir "$output_dir/eval_validation/epoch_5" \
+      2>&1 | tee "$output_dir/eval_validation_epoch_5.log"
+  ) || { record_run_stage "validation" "failed" 1; return 1; }
+  record_run_stage "validation" "completed" 0
+  record_run_stage "paired_vs_v1" "started" 0
+  (
+    cd "$ROOT_DIR" || exit 1
+    python -m diagnostics.compare_pathvqa_v1_training_budget \
+      --baseline-eval "$baseline_eval" \
+      --variant-eval "$output_dir/eval_validation/epoch_5" \
+      --experiment "$experiment_name" \
+      --baseline pathvqa_v1_norm_fixed_5ep_seed44 \
+      --all-question-types \
+      --output "$output_dir/paired_vs_v1_5ep.json" \
+      2>&1 | tee "$output_dir/paired_vs_v1_5ep.log"
+  ) || { record_run_stage "paired_vs_v1" "failed" 1; return 1; }
+  record_run_stage "paired_vs_v1" "completed" 0
+  if [ -f "$v1a_eval/pathvqa_comparisons.json" ] && [ -f "$v1a_eval/pathvqa_summary.json" ]; then
+    record_run_stage "paired_vs_v1a" "started" 0
+    (
+      cd "$ROOT_DIR" || exit 1
+      python -m diagnostics.compare_pathvqa_v1_training_budget \
+        --baseline-eval "$v1a_eval" \
+        --variant-eval "$output_dir/eval_validation/epoch_5" \
+        --experiment "$experiment_name" \
+        --baseline pathvqa_v1a_direct_summary_norm_fixed_5ep_seed44 \
+        --all-question-types \
+        --output "$output_dir/paired_v1b_vs_v1a.json" \
+        2>&1 | tee "$output_dir/paired_v1b_vs_v1a.log"
+    ) || { record_run_stage "paired_vs_v1a" "failed" 1; return 1; }
+    record_run_stage "paired_vs_v1a" "completed" 0
+  else
+    printf 'V1A comparison skipped: missing %s\n' "$v1a_eval" | tee "$output_dir/paired_v1b_vs_v1a_skipped.log"
+    record_run_stage "paired_vs_v1a" "skipped_missing_artifacts" 0
+  fi
+  record_run_stage "completed" "completed" 0
+  cat "$output_dir/eval_validation/epoch_5/pathvqa_summary.json"
+  echo "[PATHVQA_V1B_DONE] output=$output_dir primary_epoch=5 baseline=59.3386 v1a_comparison=$([ -f "$output_dir/paired_v1b_vs_v1a.json" ] && echo completed || echo skipped) test_evaluation=false other_seeds=false"
+}
+
 run_pathvqa_v1_visual20_lr1e4_norm_fixed_5ep_seed44() {
   local audit_json="${PATHVQA_V1_LOSS_AUDIT_JSON:-$PATHVQA_V1_OUTPUT_ROOT/diagnostics/pathvqa_v1_loss_scaling_audit_20260924/v1_loss_scaling_audit.json}"
   local baseline_run="$PATHVQA_V1_OUTPUT_ROOT/pathvqa_v1_norm_fixed_5ep_seed44_20260926_2"
@@ -5316,6 +5453,9 @@ case "$RUN_TARGET" in
     ;;
   pathvqa_v1_direct_summary_norm_fixed_5ep_seed44)
     run_pathvqa_v1_direct_summary_norm_fixed_5ep_seed44 || failures=$((failures + 1))
+    ;;
+  pathvqa_v1b_evidence_token_norm_fixed_5ep_seed44|pathvqa_v1b_evidence_token_norm_fixed_5ep_seed44_shutdown)
+    run_pathvqa_v1b_evidence_token_norm_fixed_5ep_seed44 || failures=$((failures + 1))
     ;;
   pathvqa_v1_visual20_lr1e4_norm_fixed_5ep_seed44)
     run_pathvqa_v1_visual20_lr1e4_norm_fixed_5ep_seed44 || failures=$((failures + 1))

@@ -20,7 +20,8 @@ from transformers import (
     TrainingArguments,
 )
 
-from pathvqa.data_pipeline import PathVQADataCollator, PathVQADataset
+from pathvqa.data_pipeline import PathVQADataCollator, PathVQADataset, PathVQAParquetStore
+from pathvqa.pathvqa_official_eval import build_prompt
 from RSVQA.data_pipeline import RSVQADataCollator, RSVQALRDataset
 from slake.data_pipeline import SLAKEDataCollator, SLAKEDataset
 from slake.visual_selection_offset import VisualSelectionOffsetModel
@@ -29,6 +30,11 @@ from slake.visual_selection_prefix_direct import (
     EXPECTED_TRAINABLE_DIRECT,
     VisualSelectionPrefixDirectModel,
 )
+from slake.visual_selection_prefix_evidence import (
+    TOTAL_PREFIX_TOKENS,
+    VisualSelectionPrefixEvidenceModel,
+)
+from slake.visual_selection_prefix_interface import VisualSelectionPrefixInterface
 from slake.visual_selection_prefix_visual20 import (
     EXPECTED_TRAINABLE_VISUAL20,
     VisualSelectionPrefixVisual20Model,
@@ -223,6 +229,71 @@ def real_batch_preflight(
     model.zero_grad(set_to_none=True)
 
 
+def v1b_generation_roundtrip_preflight(
+    model, processor, data_root: Path, cache_dir: Path, output_dir: Path,
+) -> None:
+    """Verify one evidence-token prefill, KV reuse, and checkpoint reload."""
+    store = PathVQAParquetStore(data_root, "validation", cache_dir=cache_dir)
+    row = dict(store.samples[0])
+    image = store.load_image(row)
+    try:
+        interface = VisualSelectionPrefixInterface.__new__(VisualSelectionPrefixInterface)
+        interface.processor = processor
+        inputs = interface.prepare_inputs(
+            image, build_prompt(str(row["question"]), None), question=str(row["question"]),
+        )
+    finally:
+        image.close()
+    native_length = int(inputs["input_ids"].shape[1])
+    device = next(model.base_model.parameters()).device
+    moved = {
+        key: value.to(
+            device=device,
+            dtype=torch.bfloat16 if value.is_floating_point() else value.dtype,
+        )
+        for key, value in inputs.items()
+    }
+    old_cache = model.base_model.config.use_cache
+    was_training = model.training
+    model.base_model.config.use_cache = True
+    model.eval()
+    try:
+        def greedy():
+            before = model.diagnostic_prefill_calls
+            with torch.inference_mode():
+                output = model.generate(
+                    **moved, max_new_tokens=8, do_sample=False, use_cache=True,
+                )
+            if model.diagnostic_prefill_calls - before != 1:
+                raise RuntimeError("V1B did not inject exactly once during cached generation")
+            return output[:, native_length + TOTAL_PREFIX_TOKENS:].detach().cpu()
+
+        first = greedy()
+        checkpoint = output_dir / "preflight_v1b_roundtrip"
+        model.save_v1(checkpoint)
+        with torch.no_grad():
+            model.p20[0, 0].add_(1.0)
+        model.load_v1(checkpoint)
+        second = greedy()
+        if not torch.equal(first, second):
+            raise RuntimeError("V1B save/reload changed greedy generation")
+    finally:
+        model.base_model.config.use_cache = old_cache
+        model.train(was_training)
+    report = {
+        "question_id": row["question_id"],
+        "prefix_tokens": TOTAL_PREFIX_TOKENS,
+        "layout": "P20_then_one_evidence_then_native_chat",
+        "single_prefill_injection": True,
+        "kv_cache_reused_without_reinjection": True,
+        "roundtrip_equal": True,
+        "generated_tokens": first[0].tolist(),
+    }
+    with (output_dir / "v1b_generation_preflight.json").open("w", encoding="utf-8") as handle:
+        json.dump(report, handle, ensure_ascii=False, indent=2)
+    print("[V1B_GENERATION_PREFLIGHT] " + json.dumps(report, ensure_ascii=False), flush=True)
+
+
 def construct_with_v0_initialization_audit(
     base, seed: int, output_dir: Path, *, visual_prompt_mode: str = "split18",
 ):
@@ -234,11 +305,19 @@ def construct_with_v0_initialization_audit(
         )
     cpu_rng = torch.random.get_rng_state()
     cuda_rng = torch.cuda.get_rng_state_all() if torch.cuda.is_available() else []
-    reference = VisualSelectionOffsetModel(base, init_seed=seed)
+    reference = (
+        VisualSelectionPrefixModel(base, init_seed=seed)
+        if visual_prompt_mode == "evidence_token"
+        else VisualSelectionOffsetModel(base, init_seed=seed)
+    )
     common = {
         name: parameter.detach().cpu().clone()
         for name, parameter in reference.named_parameters()
-        if parameter.requires_grad and not name.startswith(("offset_down.", "offset_up."))
+        if parameter.requires_grad
+        and (
+            visual_prompt_mode == "evidence_token"
+            or not name.startswith(("offset_down.", "offset_up."))
+        )
     }
     base.model.visual.blocks[17] = base.model.visual.blocks[17].block
     torch.random.set_rng_state(cpu_rng)
@@ -247,6 +326,7 @@ def construct_with_v0_initialization_audit(
     model_classes = {
         "split18": VisualSelectionPrefixModel,
         "direct_summary": VisualSelectionPrefixDirectModel,
+        "evidence_token": VisualSelectionPrefixEvidenceModel,
         "unified20": VisualSelectionPrefixVisual20Model,
         "deep5_l16_23": VisualSelectionPrefixDeep5Model,
         "deep20_split_lr_l16_23": VisualSelectionPrefixDeep20SplitLRModel,
@@ -256,7 +336,7 @@ def construct_with_v0_initialization_audit(
     actual = {
         name: parameter for name, parameter in model.named_parameters()
         if parameter.requires_grad
-        and not name.startswith("prefix_output.")
+        and (visual_prompt_mode == "evidence_token" or not name.startswith("prefix_output."))
         and name != "alpha"
         and name != "visual_prompt20"
         and not name.startswith("visual_deep_prompts.")
@@ -328,7 +408,10 @@ def construct_with_v0_initialization_audit(
     if mismatches:
         raise RuntimeError(f"V1/V0 common initial values differ: {mismatches}")
     audit = {
-        "reference": f"fresh_V0_seed{seed}", "equal": True,
+        "reference": (
+            f"fresh_V1_seed{seed}" if visual_prompt_mode == "evidence_token"
+            else f"fresh_V0_seed{seed}"
+        ), "equal": True,
         "tensor_count": len(common), "visual_prompt_mode": visual_prompt_mode,
         "visual_prompt": visual_prompt_audit,
     }
@@ -345,6 +428,7 @@ def main() -> int:
     )
     parser.add_argument("--model-path", type=Path, default=Path("/root/autodl-tmp/model"))
     parser.add_argument("--data-root", type=Path, default=Path("/root/autodl-tmp/dataset/pathVQA"))
+    parser.add_argument("--cache-dir", type=Path)
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--experiment-name", required=True)
     parser.add_argument("--model-seed", type=int, default=44)
@@ -356,7 +440,7 @@ def main() -> int:
         "--visual-prompt-mode",
         choices=(
             "split18", "unified20", "deep5_l16_23",
-            "deep20_split_lr_l16_23", "direct_summary",
+            "deep20_split_lr_l16_23", "direct_summary", "evidence_token",
         ),
         default="split18",
     )
@@ -412,6 +496,7 @@ def main() -> int:
     expected_trainable = {
         "split18": EXPECTED_TRAINABLE,
         "direct_summary": EXPECTED_TRAINABLE_DIRECT,
+        "evidence_token": EXPECTED_TRAINABLE,
         "unified20": EXPECTED_TRAINABLE_VISUAL20,
         "deep5_l16_23": EXPECTED_TRAINABLE_DEEP5,
         "deep20_split_lr_l16_23": EXPECTED_TRAINABLE_DEEP20_SPLIT_LR,
@@ -470,6 +555,13 @@ def main() -> int:
     real_batch_preflight(
         model, dataset, collator, args.output_dir, batch_size=args.batch_size,
     )
+    if args.visual_prompt_mode == "evidence_token":
+        if args.dataset != "pathvqa":
+            raise ValueError("V1B generation roundtrip is defined only for PathVQA")
+        v1b_generation_roundtrip_preflight(
+            model, processor, args.data_root,
+            args.cache_dir or (args.data_root / ".hf_cache"), args.output_dir,
+        )
     torch.random.set_rng_state(cpu_rng)
     if cuda_rng:
         torch.cuda.set_rng_state_all(cuda_rng)

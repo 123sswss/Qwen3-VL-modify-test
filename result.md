@@ -423,3 +423,10 @@ This file is the concise experiment memory shared by the user and Codex. The com
 ### 2026-09-29：RSVQA-LR未训练基座Test基线
 - `rsvqa_lr_base_qwen3vl_test`完整10,004题/100图：OA57.5770、AA58.8947；rural/urban69.0000、presence63.0457、count29.8948、comparison73.6382，图像簇95%CI[56.3944,58.7048]。输出`RSVQA/outputs/rsvqa_lr_base_qwen3vl_test_20260929`。
 - OA按全部题加权，AA是四题型准确率的等权宏平均；类型分布不均且Count最低，因此二者不同。该结果是不训练、不加载checkpoint的固定跨域参照，不提供seed稳定性证据。
+
+### 2026-09-29：RSVQA-LR V1完成，方案A为负消融
+- RSVQA `rsvqa_v1_norm_fixed_5ep_b4a8_seed44`：固定epoch5 Test OA85.0360/AA86.0812，四类92.0000/91.0998/69.1211/92.1039，100图簇CI[83.8016,86.2155]；对基座OA+27.4590、AA+27.1865。输出`RSVQA/outputs/visual_selection_prefix/rsvqa_v1_norm_fixed_5ep_b4a8_seed44_20260929`。这是适配收益，静态/CoCoOp与LoRA同协议比较尚无结果；Count按区间评分。
+- A `pathvqa_v1_direct_summary_norm_fixed_5ep_seed44`：固定epoch5 Validation55.9035/89.1200/22.7824，对原五轮Overall-3.4351，CI[-4.2897,-2.5828]；Free-form-5.1053，CI[-6.5820,-3.6907]。约0.879M参数直接摘要偏移不能保住原分数，支持原读写映射相对该替代方案的价值，不证明所有投影参数不可压缩。alpha校准/训练日志待补。输出`pathvqa/outputs/visual_selection_prefix_direct/pathvqa_v1_direct_summary_norm_fixed_5ep_seed44_20260929`。B结果未回传，不据A推断B。
+
+### 2026-09-29：消融命名与V1B实现状态
+- 上述879,364参数的去瓶颈共享偏移方案正式简称 **V1A**。V1B已实现但尚无运行结果：完整保留原V1条件头与1,864,963参数，只把生成向量作为第21个独立前缀token，序列为`[P20;b;原chat]`，不再给P20加偏移。A/B同时存在映射与注入接口差异，后续分数差不能解释为单因素效果。

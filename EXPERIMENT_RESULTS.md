@@ -1677,6 +1677,13 @@ pathvqa_v1_deep_visual20_split_lr_l16_23_norm_fixed_5ep_seed44  44      fixed_ep
 ```
 </details>
 
+### 2026-09-29 - V1A naming correction and V1B implementation prepared
+
+- Explicit naming correction: completed experiment `pathvqa_v1_direct_summary_norm_fixed_5ep_seed44` (879,364 trainable parameters) is now called **V1A**. This adds a name only; its recorded architecture, score, diagnostics and output path are unchanged.
+- Prepared, not yet run: **V1B** experiment `pathvqa_v1b_evidence_token_norm_fixed_5ep_seed44`, PathVQA model seed44/data seed42, five epochs with fixed epoch5 Validation. Controlled change versus the normalized five-epoch V1 is only the injection interface: the original full condition head still produces `b=W ReLU(c)+d`, but the sequence becomes `[P20; b; native chat]`; P20 is no longer shifted. Trainable parameter budget remains 1,864,963. There is no score or output path yet.
+- V1B preflight is specified to audit 21 prefix positions, attention/labels, mRoPE, visual masks, DeepStack alignment, native embedding preservation, finite evidence-token RMS, all branch gradients, single prefill injection, KV-cache reuse and checkpoint roundtrip. Normal and explicit auto-shutdown launch targets are separate. The shutdown target records stage status and final exit code before scheduling shutdown and records a failed shutdown call.
+- Planned comparisons: V1B versus original five-epoch V1 seed44 (59.3386) with image-cluster paired bootstrap 10,000/seed42, and V1B versus V1A when both artifacts are present. V1A versus V1B is not a single-factor comparison because both mapping and injection interface differ. No Test or other seed is scheduled.
+
 ### 2026-09-28 - SLAKE normalized V1 five-epoch three-seed results received
 
 - Associated with implemented plan target `slake_v1_norm_fixed_5ep_seeds44_45_46_test`: frozen normalized V1,1,864,963 trainable parameters, model seeds44/45/46 and data seed42, official all-language SLAKE Test, fixed epoch5, no Validation/checkpoint selection. Association is based on plan plus user context; pasted scores do not include exact per-run names, timestamped output paths, sample counts, executing commit, runtime or audits. These provenance fields remain pending and must not be invented. Controlled change versus final PathVQA V1 is dataset/evaluator migration; old QDPT comparisons also differ in architecture and3vs5-epoch protocol.
@@ -1700,3 +1707,140 @@ pathvqa_v1_deep_visual20_split_lr_l16_23_norm_fixed_5ep_seed44  44      fixed_ep
 - Result: **OA 57.5770**, **AA 58.8947**. Per type: rural/urban 69.0000, presence 63.0457, count 29.8948, comparison 73.6382. Image-clustered OA 95% CI [56.3944,58.7048],100 clusters.
 - Output: `/root/autodl-tmp/Qwen3-VL-modify-test/RSVQA/outputs/rsvqa_lr_base_qwen3vl_test_20260929`; predictions `rsvqa_predictions.json`, summary `rsvqa_summary.json`. No checkpoint, training, Test selection, extra seed, or assistant-started GPU operation was involved. Runtime/timing breakdown was not included in the returned excerpt.
 - Interpretation: OA and AA differ because the four question types are imbalanced. Count has the lowest accuracy; its sample frequency affects OA but its weight in AA is exactly one quarter. This is the fixed zero-training reference for later matched RSVQA methods, not evidence about adaptation stability.
+
+### 2026-09-29 - RSVQA-LR frozen V1 throughput configuration seed44 completed
+
+- Exact experiment `rsvqa_v1_norm_fixed_5ep_b4a8_seed44`; RSVQA-LR official-layout train57,223 active questions, fixed epoch5 Test10,004 questions/100 images; model seed44/data seed42. Frozen V1 structure1,864,963 planned/audited parameters, microbatch4/accumulation8 versus original2/16 with same effective32; other intended five-epoch protocol unchanged. Executing commit/runtime/memory/init audit not supplied. No Validation evaluation or other seeds.
+- Test OA85.0360, AA86.0812; rural_urban92.0000,presence91.0998,count69.1211,comp92.1039. Image-cluster95%OA CI[83.8016,86.2155],100clusters; bootstrap iterations/seed absent from returned excerpt. Count scoring uses official interval mapping, not exact object-count accuracy.
+- Compared with frozen base OA57.5770/AA58.8947, descriptive gains +27.4590 OA/+27.1865 AA; type gains +23.0000/+28.0541/+39.2263/+18.4657 respectively. No paired deltas supplied. Large adaptation gain is not attribution to question-guided maps versus static/CoCoOp, nor evidence of superiority over LoRA; same-protocol trained baselines pending.
+- Output `/root/autodl-tmp/Qwen3-VL-modify-test/RSVQA/outputs/visual_selection_prefix/rsvqa_v1_norm_fixed_5ep_b4a8_seed44_20260929`; checkpoint intended`checkpoints/epoch_5`; supplied predictions/summary`eval_test/epoch_5/rsvqa_predictions.json` and`rsvqa_summary.json`. Keep b4a8 identity, do not relabel as b2a16.
+
+### 2026-09-29 - PathVQA ablation A: direct summary shared offset completed
+
+- Exact experiment `pathvqa_v1_direct_summary_norm_fixed_5ep_seed44`; model seed44/data seed42, five epochs/fixed epoch5 Validation. Replaces three2560->64 projections and192->2560 head/ReLU with alpha-weighted sum of per-layer normalized summaries, keeping P20 shared-offset interface, layer maps/gates and Visual18. Expected879,364 trainable parameters versus1,864,963 (-52.8482%); actual parameter audit, initial/final alpha and calibration/gradient trajectories not in supplied attachment. Executing commit/train runtime/peak memory also absent. No Test/other seeds.
+- Overall55.9035 /Yes-No89.1200 /Free-form22.7824. Against five-epoch originalV1: Overall-3.4351 CI[-4.2897443186618425,-2.5828465737491957]; Free-form-5.1053 CI[-6.581954810677049,-3.6907327575009874]; Yes-No-1.7600 CI[-2.7104807981805163,-0.8038361777048676]. Net215 fewer correct,160 Free-form and55 Yes-No. Full exact scores, subgroup paired CIs, paths, evaluation settings and timing preserved verbatim below.
+- Interpretation: the tested direct normalized-summary/scalar replacement does not preserve original accuracy at half the parameters; supports learned read/write mapping over this specific alternative under the five-epoch seed44 shared-offset protocol. Does not prove that64-dimensional per-layer bottlenecks, ReLU or all985,600 projection parameters are individually necessary/minimal; transformation/capacity/optimization change jointly. Calibration and alpha dynamics remain unverified from this excerpt. Ablation B independent-token result not yet supplied; do not infer it from A or assume it completed. No additional experiment launched.
+
+<details>
+<summary>Complete user-supplied ablation A output</summary>
+
+```text
+========== PathVQA Evaluation ==========
+Overall Accuracy: 55.90
+Yes/No Accuracy: 89.12
+Free-form Accuracy: 22.78
+Per Question Type: {'how': 11.6279, 'other': 0.0, 'what': 18.0926, 'when': 0.0, 'where': 57.9462, 'why': 4.7619, 'yes/no': 89.12}
+Image-clustered 95% CI: [54.41, 57.27] clusters=832
+TTFT: {'count': 6259, 'mean': 0.050185, 'p50': 0.048934, 'p95': 0.056477, 'min': 0.036452, 'max': 0.423827}
+TPOT: 0.020707 s/token, 48.292 token/s
+Request Latency: {'count': 6259, 'mean': 0.105241, 'p50': 0.089042, 'p95': 0.175882, 'min': 0.061358, 'max': 0.690515}
+Predictions: /root/autodl-tmp/Qwen3-VL-modify-test/pathvqa/outputs/visual_selection_prefix_direct/pathvqa_v1_direct_summary_norm_fixed_5ep_seed44_20260929/eval_validation/epoch_5/pathvqa_predictions.json
+Summary: /root/autodl-tmp/Qwen3-VL-modify-test/pathvqa/outputs/visual_selection_prefix_direct/pathvqa_v1_direct_summary_norm_fixed_5ep_seed44_20260929/eval_validation/epoch_5/pathvqa_summary.json
+[PATHVQA_PAIRED_COMPARISON] group=overall n=6259 clusters=832 baseline=59.3386 variant=55.9035 delta=-3.4351 variant_only=245 baseline_only=460 ci={'confidence_level': 0.95, 'lower': -4.2897443186618425, 'upper': -2.5828465737491957, 'iterations': 10000, 'seed': 42, 'image_clusters': 832}
+[PATHVQA_PAIRED_COMPARISON] group=yes_no n=3125 clusters=810 baseline=90.8800 variant=89.1200 delta=-1.7600 variant_only=98 baseline_only=153 ci={'confidence_level': 0.95, 'lower': -2.7104807981805163, 'upper': -0.8038361777048676, 'iterations': 10000, 'seed': 42, 'image_clusters': 810}
+[PATHVQA_PAIRED_COMPARISON] group=free_form n=3134 clusters=821 baseline=27.8877 variant=22.7824 delta=-5.1053 variant_only=147 baseline_only=307 ci={'confidence_level': 0.95, 'lower': -6.581954810677049, 'upper': -3.6907327575009874, 'iterations': 10000, 'seed': 42, 'image_clusters': 821}
+[PATHVQA_PAIRED_COMPARISON] group=what n=2548 clusters=817 baseline=22.0565 variant=18.0926 delta=-3.9639 variant_only=119 baseline_only=220 ci={'confidence_level': 0.95, 'lower': -5.47518025902624, 'upper': -2.4549290372075183, 'iterations': 10000, 'seed': 42, 'image_clusters': 817}
+[PATHVQA_PAIRED_COMPARISON] group=where n=409 clusters=408 baseline=72.3716 variant=57.9462 delta=-14.4254 variant_only=22 baseline_only=81 ci={'confidence_level': 0.95, 'lower': -19.024390243902438, 'upper': -9.803921568627452, 'iterations': 10000, 'seed': 42, 'image_clusters': 408}
+[PATHVQA_PAIRED_COMPARISON] group=question_type:how n=129 clusters=104 baseline=10.8527 variant=11.6279 delta=+0.7752 variant_only=5 baseline_only=4 ci={'confidence_level': 0.95, 'lower': -4.065040650406504, 'upper': 6.015037593984962, 'iterations': 10000, 'seed': 42, 'image_clusters': 104}
+[PATHVQA_PAIRED_COMPARISON] group=question_type:other n=14 clusters=8 baseline=14.2857 variant=0.0000 delta=-14.2857 variant_only=0 baseline_only=2 ci={'confidence_level': 0.95, 'lower': -33.333333333333336, 'upper': 0.0, 'iterations': 10000, 'seed': 42, 'image_clusters': 8}
+[PATHVQA_PAIRED_COMPARISON] group=question_type:when n=13 clusters=12 baseline=0.0000 variant=0.0000 delta=+0.0000 variant_only=0 baseline_only=0 ci={'confidence_level': 0.95, 'lower': 0.0, 'upper': 0.0, 'iterations': 10000, 'seed': 42, 'image_clusters': 12}
+[PATHVQA_PAIRED_COMPARISON] group=question_type:why n=21 clusters=20 baseline=0.0000 variant=4.7619 delta=+4.7619 variant_only=1 baseline_only=0 ci={'confidence_level': 0.95, 'lower': 0.0, 'upper': 15.0, 'iterations': 10000, 'seed': 42, 'image_clusters': 20}
+[PATHVQA_PAIRED_COMPARISON] group=question_type:yes/no n=3125 clusters=810 baseline=90.8800 variant=89.1200 delta=-1.7600 variant_only=98 baseline_only=153 ci={'confidence_level': 0.95, 'lower': -2.7104807981805163, 'upper': -0.8038361777048676, 'iterations': 10000, 'seed': 42, 'image_clusters': 810}
+{
+  "count": 6259,
+  "overall_accuracy": 55.9035,
+  "yes_no_accuracy": 89.12,
+  "free_form_accuracy": 22.7824,
+  "per_answer_type_accuracy": {
+    "free-form": 22.7824,
+    "yes/no": 89.12
+  },
+  "per_question_type_accuracy": {
+    "how": 11.6279,
+    "other": 0.0,
+    "what": 18.0926,
+    "when": 0.0,
+    "where": 57.9462,
+    "why": 4.7619,
+    "yes/no": 89.12
+  },
+  "free_form_question_type_macro_accuracy": 15.4048,
+  "clustered_bootstrap": {
+    "point_estimate": 55.9035,
+    "confidence_level": 0.95,
+    "lower": 54.41,
+    "upper": 57.2657,
+    "iterations": 2000,
+    "seed": 42,
+    "image_clusters": 832
+  },
+  "backend": "visual-selection-prefix",
+  "base_model": "/root/autodl-tmp/model",
+  "checkpoint": "/root/autodl-tmp/Qwen3-VL-modify-test/pathvqa/outputs/visual_selection_prefix_direct/pathvqa_v1_direct_summary_norm_fixed_5ep_seed44_20260929/checkpoints/epoch_5",
+  "v0_intervention": "normal",
+  "v0_question_mask_policy": "independent_raw_question_ids_no_prefill_write_mapping",
+  "question_source_policy": "independent_raw_question_ids_no_prefill_write_mapping",
+  "dynamic_prompt_component_checkpoint": null,
+  "dynamic_prompt_components": [],
+  "data_root": "/root/autodl-tmp/dataset/pathVQA",
+  "split": "validation",
+  "max_new_tokens": 32,
+  "temperature": 0.0,
+  "answer_mode": "raw",
+  "instruction": "short-answer",
+  "partial_evaluation": false,
+  "timing": {
+    "methodology": {
+      "warmup_runs_excluded": 3,
+      "ttft": "generate start to first generated-token logits ready",
+      "tpot": "token-count-weighted interval between later token logits",
+      "request": "model interface call including preprocessing and decoding",
+      "timing_methods": {
+        "cuda-events-logits-ready-v2": 6259
+      }
+    },
+    "successful_requests": 6259,
+    "model_timed_requests": 6259,
+    "generated_tokens": 18356,
+    "subsequent_tokens": 12097,
+    "ttft_seconds": {
+      "count": 6259,
+      "mean": 0.050185,
+      "p50": 0.048934,
+      "p95": 0.056477,
+      "min": 0.036452,
+      "max": 0.423827
+    },
+    "tpot_per_request_seconds": {
+      "count": 6259,
+      "mean": 0.020747,
+      "p50": 0.020327,
+      "p95": 0.021885,
+      "min": 0.019391,
+      "max": 0.094406
+    },
+    "tpot_weighted_seconds": 0.020707,
+    "decode_tokens_per_second": 48.292,
+    "generation_seconds": {
+      "count": 6259,
+      "mean": 0.090412,
+      "p50": 0.070994,
+      "p95": 0.159819,
+      "min": 0.056041,
+      "max": 0.671988
+    },
+    "request_seconds": {
+      "count": 6259,
+      "mean": 0.105241,
+      "p50": 0.089042,
+      "p95": 0.175882,
+      "min": 0.061358,
+      "max": 0.690515
+    },
+    "model_generated_tokens_per_second": 32.438,
+    "end_to_end_generated_tokens_per_second": 27.867
+  }
+}[PATHVQA_V1_DIRECT_DONE] output=/root/autodl-tmp/Qwen3-VL-modify-test/pathvqa/outputs/visual_selection_prefix_direct/pathvqa_v1_direct_summary_norm_fixed_5ep_seed44_20260929 primary_epoch=5 baseline=59.3386 test_evaluation=false other_seeds=false
+[DONE] 已完成实验目标: pathvqa_v1_direct_summary_norm_fixed_5ep_seed44
+```
+</details>

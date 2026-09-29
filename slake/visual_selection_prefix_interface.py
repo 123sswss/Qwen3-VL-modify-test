@@ -12,6 +12,7 @@ from transformers import AutoModelForImageTextToText, AutoProcessor
 
 from slake.visual_selection_prefix import CONFIG_NAME, VisualSelectionPrefixModel
 from slake.visual_selection_prefix_direct import VisualSelectionPrefixDirectModel
+from slake.visual_selection_prefix_evidence import VisualSelectionPrefixEvidenceModel
 from slake.visual_selection_prefix_visual20 import VisualSelectionPrefixVisual20Model
 from slake.visual_selection_prefix_deep5 import VisualSelectionPrefixDeep5Model
 from slake.visual_selection_prefix_deep20_split_lr import (
@@ -39,7 +40,9 @@ class VisualSelectionPrefixInterface:
             device_map="auto", trust_remote_code=True,
         )
         method = config.get("method")
-        if method == VisualSelectionPrefixDirectModel.method_name:
+        if method == VisualSelectionPrefixEvidenceModel.method_name:
+            model_class = VisualSelectionPrefixEvidenceModel
+        elif method == VisualSelectionPrefixDirectModel.method_name:
             model_class = VisualSelectionPrefixDirectModel
         elif method == VisualSelectionPrefixVisual20Model.method_name:
             model_class = VisualSelectionPrefixVisual20Model
@@ -52,6 +55,7 @@ class VisualSelectionPrefixInterface:
         self.model = model_class(base, init_seed=int(config["init_seed"]))
         self.model.load_v1(checkpoint)
         self.model.eval()
+        self.prefix_tokens = int(config.get("prefix_tokens", 20))
         self.device = next(base.parameters()).device
         self.last_generation_timing = None
         print(f"[V1_INTERFACE] checkpoint={checkpoint} parameters={self.model._audit_parameters()}")
@@ -98,6 +102,6 @@ class VisualSelectionPrefixInterface:
             kwargs["temperature"] = temperature
         with torch.inference_mode():
             output, self.last_generation_timing = generate_with_timing(self.model, moved, kwargs)
-        self.last_generation_timing["generated_token_count"] -= 20
-        generated = output[:, original_length + 20:]
+        self.last_generation_timing["generated_token_count"] -= self.prefix_tokens
+        generated = output[:, original_length + self.prefix_tokens:]
         return self.processor.batch_decode(generated, skip_special_tokens=True)[0].strip()

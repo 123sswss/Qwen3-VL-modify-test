@@ -153,9 +153,15 @@ class V1AuditCallback(TrainerCallback):
         return control
 
 
-def real_batch_preflight(model, dataset, collator, output_dir: Path) -> None:
+def real_batch_preflight(
+    model, dataset, collator, output_dir: Path, batch_size: int = 2,
+) -> None:
     """Fail before training if the actual image/question batch cannot train V1."""
-    batch = collator([dataset[0], dataset[1]])
+    if batch_size < 1 or len(dataset) < batch_size:
+        raise ValueError(
+            f"Invalid real-batch preflight size={batch_size} dataset={len(dataset)}"
+        )
+    batch = collator([dataset[index] for index in range(batch_size)])
     device = next(model.base_model.parameters()).device
     moved = {
         key: value.to(device=device, dtype=torch.bfloat16 if value.is_floating_point() else value.dtype)
@@ -187,6 +193,7 @@ def real_batch_preflight(model, dataset, collator, output_dir: Path) -> None:
         raise RuntimeError(f"V1 real batch inactive parameters: {inactive}")
     audit = {
         "loss": float(output.loss.detach()), "parameter_counts": model._audit_parameters(),
+        "batch_size": batch_size,
         "group_gradient_norms": grad_norms,
         "parameter_gradient_norms": model.first_backward_gradients,
         "forward": model.first_batch_diagnostics,
@@ -315,6 +322,8 @@ def main() -> int:
     parser.add_argument("--model-seed", type=int, default=44)
     parser.add_argument("--epochs", type=int, default=3)
     parser.add_argument("--save-epochs", type=int, nargs="+")
+    parser.add_argument("--batch-size", type=int, default=2)
+    parser.add_argument("--gradient-accumulation", type=int, default=16)
     parser.add_argument(
         "--visual-prompt-mode",
         choices=(
@@ -332,6 +341,8 @@ def main() -> int:
     args = parser.parse_args()
     if args.epochs <= 0:
         raise ValueError("--epochs must be positive")
+    if args.batch_size <= 0 or args.gradient_accumulation <= 0:
+        raise ValueError("--batch-size and --gradient-accumulation must be positive")
     save_epochs = tuple(sorted(set(args.save_epochs or [args.epochs])))
     if any(epoch <= 0 or epoch > args.epochs for epoch in save_epochs):
         raise ValueError(f"save epochs must be within [1,{args.epochs}]: {save_epochs}")
@@ -350,6 +361,9 @@ def main() -> int:
         "save_epochs": save_epochs,
         "visual_prompt_mode": args.visual_prompt_mode,
         "visual_av10_learning_rate": args.visual_av10_learning_rate,
+        "batch_size": args.batch_size,
+        "gradient_accumulation": args.gradient_accumulation,
+        "effective_batch_size": args.batch_size * args.gradient_accumulation,
     }, sort_keys=True), flush=True)
     seed, data_seed = args.model_seed, 42
     random.seed(seed)
@@ -424,7 +438,9 @@ def main() -> int:
     # Preserve training RNG after the mandatory real-batch audit.
     cpu_rng = torch.random.get_rng_state()
     cuda_rng = torch.cuda.get_rng_state_all() if torch.cuda.is_available() else []
-    real_batch_preflight(model, dataset, collator, args.output_dir)
+    real_batch_preflight(
+        model, dataset, collator, args.output_dir, batch_size=args.batch_size,
+    )
     torch.random.set_rng_state(cpu_rng)
     if cuda_rng:
         torch.cuda.set_rng_state_all(cuda_rng)
@@ -434,7 +450,8 @@ def main() -> int:
         visual_av10_learning_rate=args.visual_av10_learning_rate,
         args=TrainingArguments(
             output_dir=str(args.output_dir / "trainer"), num_train_epochs=args.epochs,
-            per_device_train_batch_size=2, gradient_accumulation_steps=16,
+            per_device_train_batch_size=args.batch_size,
+            gradient_accumulation_steps=args.gradient_accumulation,
             learning_rate=1e-4, weight_decay=0.0, warmup_ratio=0.03,
             lr_scheduler_type="linear", max_grad_norm=1.0, logging_steps=20,
             save_strategy="no", bf16=True, gradient_checkpointing=False,
@@ -450,7 +467,11 @@ def main() -> int:
         # each microbatch loss by the actual accumulation-window size.
         # Do not also divide manually or change Accelerate's accumulation.
         trainer.model_accepts_loss_kwargs = False
-        if trainer.model_accepts_loss_kwargs is not False or trainer.args.gradient_accumulation_steps != 16 or trainer.accelerator.gradient_accumulation_steps != 1:
+        if (
+            trainer.model_accepts_loss_kwargs is not False
+            or trainer.args.gradient_accumulation_steps != args.gradient_accumulation
+            or trainer.accelerator.gradient_accumulation_steps != 1
+        ):
             raise RuntimeError("V1 corrected accumulation runtime does not match the audited path")
     print(f"[V1_LOSS_ACCUMULATION] corrected={args.correct_loss_accumulation} "
           f"trainer_model_accepts_loss_kwargs={trainer.model_accepts_loss_kwargs} "
@@ -505,8 +526,9 @@ def main() -> int:
         "optimizer": {
             "type": "AdamW", "weight_decay": 0.0, "betas": [0.9, 0.999],
             "eps": 1e-8, "scheduler": "linear", "warmup_ratio": 0.03,
-            "max_grad_norm": 1.0, "per_device_batch_size": 2,
-            "gradient_accumulation_steps": 16,
+            "max_grad_norm": 1.0, "per_device_batch_size": args.batch_size,
+            "gradient_accumulation_steps": args.gradient_accumulation,
+            "effective_batch_size": args.batch_size * args.gradient_accumulation,
             "group_learning_rates": trainer.configured_group_learning_rates,
         },
     }

@@ -1,3 +1,5 @@
+> **2026-09-29 RSVQA-LR V1吞吐版已实现，等待用户运行。** 因用户实测32GB RTX5090仅约14,948MB显存、GPU峰值约47%，新增独立目标`rsvqa_v1_norm_fixed_5ep_b4a8_seed44`：microbatch2->4、累积16->8，有效batch仍32，epochs仍5，其余结构、初始化、学习率、调度、数据顺序与固定epoch5 Test均不变。真实batch预检同步扩大为4，先检查显存和梯度；该配置预期减少microbatch调度但并非逐位等价优化轨迹，结果须保留独立实验名。原batch2/累积16目标与产物不覆盖；GPU运行由用户执行，不自动关机。
+
 > **2026-09-29 RSVQA-LR归一化五轮V1 seed44已实现，等待用户亲自运行。** 只做数据集迁移：原五轮V1结构、1,864,963参数、model seed44/data seed42、batch2/累积16、两档Visual18学习率、3% warmup线性衰减和`model_accepts_loss_kwargs=False`均不变。使用官方Train 57,223题从头训练，保存epoch3/4/5并固定epoch5完整Test；训练监督原始发布答案，Count评估再映射官方区间。训练与推理共享题型短答prompt，但条件分支只读原始真实问题。GPU预检/训练/Test只由用户启动，不自动关机，不补其他seed。
 
 > **2026-09-29 RSVQA-LR规范化接口及基座Test已完成。** `rsvqa_lr_base_qwen3vl_test`在完整Test 10,004题/100图上得到OA57.5770、AA58.8947；四类为rural/urban69.0000、presence63.0457、count29.8948、comparison73.6382，图像簇95%CI[56.3944,58.7048]。这是不训练、不加载checkpoint的固定参照；`RSVQA/`的数据record契约和官方区间评分继续作为后续训练/评估唯一接口。结果已写两份账本，账本修改留本地随下一次相关代码提交，不单独提交。

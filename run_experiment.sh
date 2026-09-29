@@ -46,6 +46,7 @@ if [ "$RUN_TARGET" = "pathvqa_visual_selection_offset_v0_seed44" ] || \
    [ "$RUN_TARGET" = "slake_v1_norm_fixed_5ep_seeds44_45_46_test" ] || \
    [ "$RUN_TARGET" = "rsvqa_lr_base_qwen3vl_test" ] || \
    [ "$RUN_TARGET" = "rsvqa_v1_norm_fixed_5ep_seed44" ] || \
+   [ "$RUN_TARGET" = "rsvqa_v1_norm_fixed_5ep_b4a8_seed44" ] || \
    [ "$RUN_TARGET" = "pathvqa_v1_visual20_lr1e4_norm_fixed_5ep_seed44" ] || \
    [ "$RUN_TARGET" = "pathvqa_v1_deep_visual5_l16_23_norm_fixed_5ep_seed44" ] || \
    [ "$RUN_TARGET" = "pathvqa_v1_visual18_uniform_lr3e5_norm_fixed_5ep_seed44" ] || \
@@ -4837,6 +4838,13 @@ run_rsvqa_lr_base_qwen3vl_test() {
 }
 
 run_rsvqa_v1_norm_fixed_5ep_seed44() {
+  local batch_size="${1:-2}"
+  local accumulation="${2:-16}"
+  local experiment_name="${3:-rsvqa_v1_norm_fixed_5ep_seed44}"
+  if [ $((batch_size * accumulation)) -ne 32 ]; then
+    echo "[ERR] RSVQA-LR V1 requires effective batch 32; batch=$batch_size accumulation=$accumulation" >&2
+    return 2
+  fi
   local audit_json="${PATHVQA_V1_LOSS_AUDIT_JSON:-$PATHVQA_V1_OUTPUT_ROOT/diagnostics/pathvqa_v1_loss_scaling_audit_20260924/v1_loss_scaling_audit.json}"
   if [ ! -f "$audit_json" ]; then
     echo "[ERR] RSVQA-LR V1 requires the established loss-normalization audit: $audit_json" >&2
@@ -4846,11 +4854,10 @@ run_rsvqa_v1_norm_fixed_5ep_seed44() {
     echo "[ERR] RSVQA-LR V1 runtime differs from the audited normalized path; no training started." >&2
     return 1
   fi
-  local experiment_name="rsvqa_v1_norm_fixed_5ep_seed44"
   local output_dir
   output_dir="$(available_output_dir "$RSVQA_V1_OUTPUT_ROOT" "${experiment_name}_${RUN_DATE}")"
   mkdir -p "$output_dir/eval_test/epoch_5"
-  echo "[RSVQA_V1_CONFIG] experiment=$experiment_name git_commit=$(git -C "$ROOT_DIR" rev-parse HEAD) dataset=RSVQA-LR model_seed=44 data_seed=42 train_split=train eval_split=test batch=2 accumulation=16 epochs=5 save_epochs=3,4,5 primary_epoch=5 visual_prompt=layer17_S8_lr3e-5_plus_Av10_lr1e-4 trainable=1864963 answer_supervision=raw_release_answer count_evaluation=official_range_numbers model_accepts_loss_kwargs=false output=$output_dir"
+  echo "[RSVQA_V1_CONFIG] experiment=$experiment_name git_commit=$(git -C "$ROOT_DIR" rev-parse HEAD) dataset=RSVQA-LR model_seed=44 data_seed=42 train_split=train eval_split=test batch=$batch_size accumulation=$accumulation effective_batch=32 epochs=5 save_epochs=3,4,5 primary_epoch=5 visual_prompt=layer17_S8_lr3e-5_plus_Av10_lr1e-4 trainable=1864963 answer_supervision=raw_release_answer count_evaluation=official_range_numbers model_accepts_loss_kwargs=false output=$output_dir"
   (
     cd "$ROOT_DIR" || exit 1
     python -m RSVQA.audit_dataset \
@@ -4863,6 +4870,7 @@ run_rsvqa_v1_norm_fixed_5ep_seed44() {
       --dataset rsvqa_lr --model-path "$MODEL_PATH" --data-root "$RSVQA_DATA_ROOT" \
       --output-dir "$output_dir" --experiment-name "$experiment_name" \
       --model-seed 44 --epochs 5 --save-epochs 3 4 5 \
+      --batch-size "$batch_size" --gradient-accumulation "$accumulation" \
       --visual-prompt-mode split18 --visual-av10-learning-rate 1e-4 \
       --correct-loss-accumulation \
       2>&1 | tee "$output_dir/train.log"
@@ -4872,7 +4880,7 @@ run_rsvqa_v1_norm_fixed_5ep_seed44() {
     [ -f "$output_dir/checkpoints/epoch_${epoch}/visual_selection_prefix.pt" ] \
       || { echo "[ERR] RSVQA-LR V1 checkpoint missing: epoch_$epoch" >&2; return 1; }
   done
-  if ! python -c 'import json,sys; d=json.load(open(sys.argv[1],encoding="utf-8")); assert d["dataset"]=="RSVQA-LR" and d["train_split"]=="train"; assert d["model_seed"]==44 and d["data_seed"]==42; assert d["epochs"]==5 and d["saved_epochs"]==[3,4,5]; assert d["visual_prompt_mode"]=="split18" and d["visual_av10_learning_rate"]==1e-4; assert d["total_trainable_parameters"]==1864963; assert d["trainer_model_accepts_loss_kwargs"] is False; assert d["answer_supervision"]=="raw_release_answer_evaluated_with_official_count_ranges"; rates=d["optimizer"]["group_learning_rates"]; assert rates["visual_s8"]==3e-5 and rates["visual_av10"]==1e-4; print("[RSVQA_V1_TRAIN_REPORT_AUDIT] dataset=RSVQA-LR seed=44 epochs=5 saved=3,4,5 trainable=1864963 normalized=True")' "$output_dir/train_report.json"; then
+  if ! python -c 'import json,sys; d=json.load(open(sys.argv[1],encoding="utf-8")); batch=int(sys.argv[2]); accum=int(sys.argv[3]); assert d["dataset"]=="RSVQA-LR" and d["train_split"]=="train"; assert d["model_seed"]==44 and d["data_seed"]==42; assert d["epochs"]==5 and d["saved_epochs"]==[3,4,5]; assert d["visual_prompt_mode"]=="split18" and d["visual_av10_learning_rate"]==1e-4; assert d["total_trainable_parameters"]==1864963; assert d["trainer_model_accepts_loss_kwargs"] is False; assert d["answer_supervision"]=="raw_release_answer_evaluated_with_official_count_ranges"; opt=d["optimizer"]; assert opt["per_device_batch_size"]==batch and opt["gradient_accumulation_steps"]==accum and opt["effective_batch_size"]==32; rates=opt["group_learning_rates"]; assert rates["visual_s8"]==3e-5 and rates["visual_av10"]==1e-4; print(f"[RSVQA_V1_TRAIN_REPORT_AUDIT] dataset=RSVQA-LR seed=44 batch={batch} accumulation={accum} effective_batch=32 epochs=5 saved=3,4,5 trainable=1864963 normalized=True")' "$output_dir/train_report.json" "$batch_size" "$accumulation"; then
     echo "[ERR] RSVQA-LR V1 train report does not attest the requested protocol." >&2
     return 1
   fi
@@ -5262,6 +5270,9 @@ case "$RUN_TARGET" in
     ;;
   rsvqa_v1_norm_fixed_5ep_seed44)
     run_rsvqa_v1_norm_fixed_5ep_seed44 || failures=$((failures + 1))
+    ;;
+  rsvqa_v1_norm_fixed_5ep_b4a8_seed44)
+    run_rsvqa_v1_norm_fixed_5ep_seed44 4 8 rsvqa_v1_norm_fixed_5ep_b4a8_seed44 || failures=$((failures + 1))
     ;;
   pathvqa_v1_visual_selection_prefix_p20_norm_fixed_seed45)
     run_pathvqa_v1_loss_corrected_seed45 || failures=$((failures + 1))

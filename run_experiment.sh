@@ -13,6 +13,7 @@ SLAKE_V1_OUTPUT_ROOT="${SLAKE_V1_OUTPUT_ROOT:-$ROOT_DIR/slake/outputs/visual_sel
 RSVQA_DATA_ROOT="${RSVQA_DATA_ROOT:-/root/autodl-tmp/dataset/RSVQA/6344334}"
 RSVQA_OUTPUT_ROOT="${RSVQA_OUTPUT_ROOT:-$ROOT_DIR/RSVQA/outputs}"
 RSVQA_V1_OUTPUT_ROOT="${RSVQA_V1_OUTPUT_ROOT:-$RSVQA_OUTPUT_ROOT/visual_selection_prefix}"
+RSVQA_LORA_OUTPUT_ROOT="${RSVQA_LORA_OUTPUT_ROOT:-$RSVQA_OUTPUT_ROOT/lora}"
 PATHVQA_DATA_ROOT="${PATHVQA_DATA_ROOT:-/root/autodl-tmp/dataset/pathVQA}"
 PATHVQA_CACHE_ROOT="${PATHVQA_CACHE_ROOT:-$PATHVQA_DATA_ROOT/.hf_cache}"
 PATHVQA_OUTPUT_ROOT="${PATHVQA_OUTPUT_ROOT:-$ROOT_DIR/pathvqa/outputs/mmrl}"
@@ -54,6 +55,7 @@ if [ "$RUN_TARGET" = "pathvqa_visual_selection_offset_v0_seed44" ] || \
    [ "$RUN_TARGET" = "rsvqa_lr_base_qwen3vl_test" ] || \
    [ "$RUN_TARGET" = "rsvqa_v1_norm_fixed_5ep_seed44" ] || \
    [ "$RUN_TARGET" = "rsvqa_v1_norm_fixed_5ep_b4a8_seed44" ] || \
+   [ "$RUN_TARGET" = "rsvqa_lr_lora_full_model_attention_r8_b4a8_seed44" ] || \
    [ "$RUN_TARGET" = "pathvqa_v1_visual20_lr1e4_norm_fixed_5ep_seed44" ] || \
    [ "$RUN_TARGET" = "pathvqa_v1_deep_visual5_l16_23_norm_fixed_5ep_seed44" ] || \
    [ "$RUN_TARGET" = "pathvqa_v1_visual18_uniform_lr3e5_norm_fixed_5ep_seed44" ] || \
@@ -66,7 +68,10 @@ if [ "$RUN_TARGET" = "pathvqa_visual_selection_offset_v0_seed44" ] || \
    [ "$RUN_TARGET" = "pathvqa_v0_seed44_mask_fixed_validation" ]; then
   SHUTDOWN_ON_EXIT=0
 fi
-mkdir -p "$OUTPUT_ROOT" "$SLAKE_OUTPUT_ROOT" "$SLAKE_DYNAMIC_PROMPT_OUTPUT_ROOT" "$SLAKE_GRASP_OUTPUT_ROOT" "$SLAKE_LORA_OUTPUT_ROOT" "$SLAKE_V1_OUTPUT_ROOT" "$RSVQA_OUTPUT_ROOT" "$PATHVQA_OUTPUT_ROOT" "$PATHVQA_LORA_OUTPUT_ROOT" "$PATHVQA_BASE_OUTPUT_ROOT" "$PATHVQA_PROMPT_OUTPUT_ROOT" "$PATHVQA_COCOOP_OUTPUT_ROOT" "$PATHVQA_DYNAMIC_PROMPT_OUTPUT_ROOT" "$PATHVQA_GRASP_OUTPUT_ROOT" "$PATHVQA_V0_OUTPUT_ROOT" "$PATHVQA_V1_OUTPUT_ROOT" "$PATHVQA_V1_DIRECT_OUTPUT_ROOT" "$PATHVQA_V1B_OUTPUT_ROOT" "$ELECTRICAL_QDPT_OUTPUT_ROOT" "$ELECTRICAL_GRASP_OUTPUT_ROOT" "$ELECTRICAL_PROMPT_OUTPUT_ROOT" "$ELECTRICAL_COCOOP_OUTPUT_ROOT"
+if [ "$RUN_TARGET" = "pathvqa_v1b_then_rsvqa_lora_r8_b4a8_shutdown" ]; then
+  SHUTDOWN_ON_EXIT=1
+fi
+mkdir -p "$OUTPUT_ROOT" "$SLAKE_OUTPUT_ROOT" "$SLAKE_DYNAMIC_PROMPT_OUTPUT_ROOT" "$SLAKE_GRASP_OUTPUT_ROOT" "$SLAKE_LORA_OUTPUT_ROOT" "$SLAKE_V1_OUTPUT_ROOT" "$RSVQA_OUTPUT_ROOT" "$RSVQA_LORA_OUTPUT_ROOT" "$PATHVQA_OUTPUT_ROOT" "$PATHVQA_LORA_OUTPUT_ROOT" "$PATHVQA_BASE_OUTPUT_ROOT" "$PATHVQA_PROMPT_OUTPUT_ROOT" "$PATHVQA_COCOOP_OUTPUT_ROOT" "$PATHVQA_DYNAMIC_PROMPT_OUTPUT_ROOT" "$PATHVQA_GRASP_OUTPUT_ROOT" "$PATHVQA_V0_OUTPUT_ROOT" "$PATHVQA_V1_OUTPUT_ROOT" "$PATHVQA_V1_DIRECT_OUTPUT_ROOT" "$PATHVQA_V1B_OUTPUT_ROOT" "$ELECTRICAL_QDPT_OUTPUT_ROOT" "$ELECTRICAL_GRASP_OUTPUT_ROOT" "$ELECTRICAL_PROMPT_OUTPUT_ROOT" "$ELECTRICAL_COCOOP_OUTPUT_ROOT"
 echo "[RUN_TARGET] selected=$RUN_TARGET positional=${1:-<unset>} env=${ENV_RUN_TARGET:-<unset>} mmrl_env=${MMRL_RUN_TARGET:-<unset>} shutdown_on_exit=$SHUTDOWN_ON_EXIT"
 
 cancel_shutdown_on_interrupt() {
@@ -86,6 +91,16 @@ shutdown_on_exit() {
   fi
   if [ "$SHUTDOWN_ON_EXIT" != "1" ]; then
     return "$exit_code"
+  fi
+  if [ "$RUN_TARGET" = "pathvqa_v1b_then_rsvqa_lora_r8_b4a8_shutdown" ]; then
+    local shutdown_log="${RUN_STATUS_OUTPUT_DIR:-$RSVQA_OUTPUT_ROOT}/shutdown.log"
+    echo "[EXIT] V1B+RSVQA LoRA串行入口结束，exit_code=$exit_code；产物已落盘，安排1分钟后关机。" | tee -a "$shutdown_log"
+    /usr/bin/shutdown -h +1 >> "$shutdown_log" 2>&1
+    local shutdown_code=$?
+    printf '%s\tshutdown_schedule\texit_code\t%s\n' "$(date --iso-8601=seconds)" "$shutdown_code" >> "$shutdown_log"
+    sync
+    trap - EXIT
+    exit "$exit_code"
   fi
   echo "[EXIT] 脚本退出，exit_code=$exit_code"
   echo "[EXIT] 600 秒后自动关机；按 Ctrl+C 可取消。"
@@ -5096,6 +5111,99 @@ run_rsvqa_v1_norm_fixed_5ep_seed44() {
   echo "[RSVQA_V1_DONE] output=$output_dir primary_epoch=5 validation_evaluation=false test_evaluation=true other_seeds=false"
 }
 
+run_rsvqa_lora_full_model_attention_r8_b4a8_seed44() {
+  local experiment_name="rsvqa_lr_lora_full_model_attention_r8_b4a8_seed44"
+  local output_dir
+  output_dir="$(available_output_dir "$RSVQA_LORA_OUTPUT_ROOT" "${experiment_name}_${RUN_DATE}")"
+  mkdir -p "$output_dir/eval_test/epoch_3"
+  RUN_STATUS_OUTPUT_DIR="$output_dir"
+  record_run_stage "dataset_audit" "started" 0
+  echo "[RSVQA_LORA_CONFIG] experiment=$experiment_name git_commit=$(git -C "$ROOT_DIR" rev-parse HEAD) dataset=RSVQA-LR model_seed=44 data_seed=42 train_split=train eval_split=test target=visual24_qkv_proj+language36_qkvo rank=8 alpha=16 dropout=0.05 expected_trainable=7077888 batch=4 accumulation=8 effective_batch=32 epochs=3 primary_epoch=3 learning_rate=1e-4 warmup=0.03 scheduler=linear max_grad_norm=1 model_accepts_loss_kwargs=false shutdown_on_exit=$SHUTDOWN_ON_EXIT output=$output_dir" | tee "$output_dir/config.log"
+  (
+    cd "$ROOT_DIR" || exit 1
+    python -m RSVQA.audit_dataset \
+      --data-root "$RSVQA_DATA_ROOT" \
+      --output "$output_dir/rsvqa_dataset_audit.json"
+  ) || { record_run_stage "dataset_audit" "failed" 1; return 1; }
+  record_run_stage "dataset_audit" "completed" 0
+  record_run_stage "training" "started" 0
+  (
+    cd "$ROOT_DIR" || exit 1
+    python -m pathvqa.train_visual_lora \
+      --dataset rsvqa_lr \
+      --data-root "$RSVQA_DATA_ROOT" \
+      --model-path "$MODEL_PATH" \
+      --output-dir "$output_dir" \
+      --experiment-name "$experiment_name" \
+      --target-scope full_model \
+      --last-n-vision-layers 24 \
+      --rank 8 \
+      --expected-trainable-parameters 7077888 \
+      --epochs 3 \
+      --seed 44 \
+      --data-seed 42 \
+      --learning-rate 1e-4 \
+      --batch-size 4 \
+      --gradient-accumulation 8 \
+      --dataloader-workers 2 \
+      --max-length 2048 \
+      --correct-loss-accumulation \
+      2>&1 | tee "$output_dir/train.log"
+  ) || { record_run_stage "training" "failed" 1; return 1; }
+  record_run_stage "training" "completed" 0
+  if ! python -c 'import json,sys; d=json.load(open(sys.argv[1],encoding="utf-8")); assert d["dataset"]=="rsvqa_lr" and d["target_scope"]=="full_model_attention"; assert d["rank"]==8 and d["alpha"]==16 and d["dropout"]==0.05; assert d["epochs"]==3 and d["per_device_train_batch_size"]==4 and d["gradient_accumulation_steps"]==8 and d["effective_batch_size"]==32; assert d["parameter_counts"]["trainable"]==7077888 and d["trainer_model_accepts_loss_kwargs"] is False; print("[RSVQA_LORA_TRAIN_REPORT_AUDIT] pass=True trainable=7077888 batch=4 accumulation=8 effective_batch=32 normalized=True")' "$output_dir/train_report.json" 2>&1 | tee "$output_dir/train_report_audit.log"; then
+    record_run_stage "checkpoint_audit" "failed" 1
+    return 1
+  fi
+  local checkpoint="$output_dir/checkpoints/epoch_3"
+  [ -d "$checkpoint" ] || { echo "[ERR] RSVQA LoRA checkpoint missing: $checkpoint" >&2; record_run_stage "checkpoint_audit" "failed" 1; return 1; }
+  record_run_stage "checkpoint_audit" "completed" 0
+  record_run_stage "test_evaluation" "started" 0
+  (
+    cd "$ROOT_DIR" || exit 1
+    python -m RSVQA.rsvqa_lr_official_eval \
+      --data-root "$RSVQA_DATA_ROOT" --split test \
+      --backend lora --base-model "$MODEL_PATH" \
+      --checkpoint "$checkpoint" --output-dir "$output_dir/eval_test/epoch_3" \
+      --bootstrap-iterations 10000 --bootstrap-seed 42 --overwrite \
+      2>&1 | tee "$output_dir/eval_test_epoch_3.log"
+  ) || { record_run_stage "test_evaluation" "failed" 1; return 1; }
+  local summary="$output_dir/eval_test/epoch_3/rsvqa_summary.json"
+  if ! python -c 'import json,sys; d=json.load(open(sys.argv[1],encoding="utf-8")); assert d["dataset"]=="RSVQA-LR" and d["split"]=="test" and d["backend"]=="lora"; assert d["count"]==10004 and d["partial_evaluation"] is False; print("[RSVQA_LORA_RESULT] overall=%.4f average=%.4f per_type=%s" % (d["overall_accuracy"],d["average_accuracy"],d["per_question_type_accuracy"]))' "$summary"; then
+    record_run_stage "test_evaluation" "failed_summary_audit" 1
+    return 1
+  fi
+  record_run_stage "test_evaluation" "completed" 0
+  record_run_stage "completed" "completed" 0
+  echo "[RSVQA_LORA_DONE] output=$output_dir primary_epoch=3 validation_evaluation=false test_evaluation=true other_seeds=false"
+}
+
+run_pathvqa_v1b_then_rsvqa_lora_r8_b4a8_shutdown() {
+  local serial_dir
+  serial_dir="$(available_output_dir "$RSVQA_OUTPUT_ROOT/serial" "pathvqa_v1b_then_rsvqa_lora_r8_b4a8_${RUN_DATE}")"
+  mkdir -p "$serial_dir"
+  RUN_STATUS_OUTPUT_DIR="$serial_dir"
+  echo "[SERIAL_CONFIG] order=1:pathvqa_v1b_evidence_token_norm_fixed_5ep_seed44,2:rsvqa_lr_lora_full_model_attention_r8_b4a8_seed44 fail_fast=true shutdown_after_exit=true output=$serial_dir" | tee "$serial_dir/config.log"
+  record_run_stage "v1b" "started" 0
+  if ! run_pathvqa_v1b_evidence_token_norm_fixed_5ep_seed44; then
+    RUN_STATUS_OUTPUT_DIR="$serial_dir"
+    record_run_stage "v1b" "failed" 1
+    return 1
+  fi
+  RUN_STATUS_OUTPUT_DIR="$serial_dir"
+  record_run_stage "v1b" "completed" 0
+  record_run_stage "rsvqa_lora" "started" 0
+  if ! run_rsvqa_lora_full_model_attention_r8_b4a8_seed44; then
+    RUN_STATUS_OUTPUT_DIR="$serial_dir"
+    record_run_stage "rsvqa_lora" "failed" 1
+    return 1
+  fi
+  RUN_STATUS_OUTPUT_DIR="$serial_dir"
+  record_run_stage "rsvqa_lora" "completed" 0
+  record_run_stage "completed" "completed" 0
+  echo "[SERIAL_DONE] order=V1B_then_RSVQA_LoRA shutdown_after_exit=true output=$serial_dir"
+}
+
 run_pathvqa_v1_loss_corrected_seed45() {
   local audit_json="${PATHVQA_V1_LOSS_AUDIT_JSON:-$PATHVQA_V1_OUTPUT_ROOT/diagnostics/pathvqa_v1_loss_scaling_audit_20260924/v1_loss_scaling_audit.json}"
   if [ ! -f "$audit_json" ]; then
@@ -5476,6 +5584,12 @@ case "$RUN_TARGET" in
     ;;
   rsvqa_v1_norm_fixed_5ep_b4a8_seed44)
     run_rsvqa_v1_norm_fixed_5ep_seed44 4 8 rsvqa_v1_norm_fixed_5ep_b4a8_seed44 || failures=$((failures + 1))
+    ;;
+  rsvqa_lr_lora_full_model_attention_r8_b4a8_seed44)
+    run_rsvqa_lora_full_model_attention_r8_b4a8_seed44 || failures=$((failures + 1))
+    ;;
+  pathvqa_v1b_then_rsvqa_lora_r8_b4a8_shutdown)
+    run_pathvqa_v1b_then_rsvqa_lora_r8_b4a8_shutdown || failures=$((failures + 1))
     ;;
   pathvqa_v1_visual_selection_prefix_p20_norm_fixed_seed45)
     run_pathvqa_v1_loss_corrected_seed45 || failures=$((failures + 1))

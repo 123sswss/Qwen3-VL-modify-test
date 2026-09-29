@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Single V1 train with a real-batch preflight for PathVQA or SLAKE."""
+"""Single V1 train with a real-batch preflight for PathVQA, SLAKE, or RSVQA-LR."""
 
 from __future__ import annotations
 
@@ -21,6 +21,7 @@ from transformers import (
 )
 
 from pathvqa.data_pipeline import PathVQADataCollator, PathVQADataset
+from RSVQA.data_pipeline import RSVQADataCollator, RSVQALRDataset
 from slake.data_pipeline import SLAKEDataCollator, SLAKEDataset
 from slake.visual_selection_offset import VisualSelectionOffsetModel
 from slake.visual_selection_prefix import EXPECTED_TRAINABLE, VisualSelectionPrefixModel
@@ -304,7 +305,9 @@ def construct_with_v0_initialization_audit(
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--dataset", choices=("pathvqa", "slake"), default="pathvqa")
+    parser.add_argument(
+        "--dataset", choices=("pathvqa", "slake", "rsvqa_lr"), default="pathvqa"
+    )
     parser.add_argument("--model-path", type=Path, default=Path("/root/autodl-tmp/model"))
     parser.add_argument("--data-root", type=Path, default=Path("/root/autodl-tmp/dataset/pathVQA"))
     parser.add_argument("--output-dir", type=Path, required=True)
@@ -381,7 +384,7 @@ def main() -> int:
         base_collator = PathVQADataCollator(processor)
         dataset_name = "PathVQA"
         split_manifest = None
-    else:
+    elif args.dataset == "slake":
         split_manifest = args.data_root / "train.json"
         source_dataset = SLAKEDataset(
             processor=processor,
@@ -397,6 +400,20 @@ def main() -> int:
         )
         base_collator = SLAKEDataCollator(processor)
         dataset_name = "SLAKE"
+    else:
+        source_dataset = RSVQALRDataset(
+            processor=processor,
+            data_root=args.data_root,
+            split="train",
+            ce_enabled=True,
+            seed=data_seed,
+            deterministic_sampling=True,
+            max_length=2048,
+            enforce_official_counts=True,
+        )
+        base_collator = RSVQADataCollator(processor)
+        dataset_name = "RSVQA-LR"
+        split_manifest = Path(source_dataset.manifest["source_files"]["questions"])
     dataset = RawQuestionDataset(source_dataset, processor.tokenizer)
     collator = RawQuestionCollator(processor, base_collator=base_collator)
     print(
@@ -454,6 +471,14 @@ def main() -> int:
         "dataset": dataset_name, "model_seed": seed, "data_seed": data_seed,
         "train_split": "train", "languages": "all",
         "train_manifest": str(split_manifest) if split_manifest is not None else None,
+        "answer_supervision": (
+            "raw_release_answer_evaluated_with_official_count_ranges"
+            if args.dataset == "rsvqa_lr" else "dataset_native_answer"
+        ),
+        "question_prompt_policy": (
+            "question_type_specific_short_answer_v1_with_raw_question_condition_source"
+            if args.dataset == "rsvqa_lr" else "dataset_native"
+        ),
         "epochs": args.epochs, "saved_epochs": list(save_epochs),
         "visual_prompt_mode": args.visual_prompt_mode,
         "visual_av10_learning_rate": args.visual_av10_learning_rate,

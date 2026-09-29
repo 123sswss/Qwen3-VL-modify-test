@@ -23,3 +23,12 @@ The full base-model Test run is exposed through
 `bash run_experiment.sh rsvqa_lr_base_qwen3vl_test`.  It evaluates all 10,004
 official Test questions; `--limit` results are explicitly marked partial and
 must not be reported as official scores.
+
+The normalized five-epoch V1 training run is exposed through
+`bash run_experiment.sh rsvqa_v1_norm_fixed_5ep_seed44`.  It trains on the
+57,223 active Train questions with model seed 44/data seed 42, saves epochs
+3/4/5, and evaluates the fixed epoch-5 checkpoint on the complete Test split.
+Training supervises the release's raw answers (including raw integer counts),
+while evaluation maps count predictions and references to the official ranges.
+The LLM sees the same type-specific short-answer prompt in training and
+generation; the V1 condition branch receives only the raw question.

@@ -419,3 +419,7 @@ This file is the concise experiment memory shared by the user and Codex. The com
 ### 2026-09-28：新版V1 SLAKE三seed完成（运行路径待补）
 - 按当前冻结五轮V1全语言Test计划关联，seed44/45/46为75.55/76.31/78.37，Overall76.7433±1.4591，range2.82；CLOSED83.6967±1.7956、OPEN72.1267±1.3102、KVQA57.4267±2.5506、VQA79.5667±1.2994、EN77.6967±0.3790、ZH75.7667±2.5950。精确实验输出路径、样本数、执行commit与时间待补，不虚构。
 - 对历史最终Sandwich旧QDPT76.95±0.44，均值约-0.21，参数7.805M->1.865M下降76.11%，但观测seed波动更大，不能声称跨数据集稳定性改善或已证明性能等价。ZH/KVQA波动大且子集可能重叠，不作独立原因归因。保留全部三seed，不因Test结果重开调参；已有跨数据集/基线/消融补证据计划继续。
+
+### 2026-09-29：RSVQA-LR未训练基座Test基线
+- `rsvqa_lr_base_qwen3vl_test`完整10,004题/100图：OA57.5770、AA58.8947；rural/urban69.0000、presence63.0457、count29.8948、comparison73.6382，图像簇95%CI[56.3944,58.7048]。输出`RSVQA/outputs/rsvqa_lr_base_qwen3vl_test_20260929`。
+- OA按全部题加权，AA是四题型准确率的等权宏平均；类型分布不均且Count最低，因此二者不同。该结果是不训练、不加载checkpoint的固定跨域参照，不提供seed稳定性证据。

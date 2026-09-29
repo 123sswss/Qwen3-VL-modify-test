@@ -38,13 +38,14 @@ def _canonical_split(split: str) -> str:
 
 def _discover_file(data_root: Path, split: str, kind: str) -> Path:
     candidates: List[Path] = []
+    split_names = ("val", "validation") if split == "val" else (split,)
     for path in data_root.rglob("*.json"):
         name = path.name.lower()
-        if f"split_{split}_" in name and kind in name:
+        if any(f"split_{value}_" in name for value in split_names) and kind in name:
             candidates.append(path.resolve())
     if len(candidates) != 1:
         raise FileNotFoundError(
-            f"Expected exactly one *split_{split}_*{kind}*.json under "
+            f"Expected exactly one {split_names} split {kind} JSON under "
             f"{data_root}, found {len(candidates)}: {[str(x) for x in candidates]}"
         )
     return candidates[0]
@@ -204,3 +205,38 @@ def load_rsvqa_lr_split(
         "official_counts_enforced": enforce_official_counts,
     }
     return records, manifest
+
+
+def audit_rsvqa_lr_splits(data_root: Path | str) -> Dict[str, Any]:
+    """Validate all official splits and prove their active IDs are disjoint."""
+
+    records_by_split: Dict[str, List[Dict[str, Any]]] = {}
+    manifests: Dict[str, Dict[str, Any]] = {}
+    for split in ("train", "val", "test"):
+        records, manifest = load_rsvqa_lr_split(
+            data_root,
+            split,
+            enforce_official_counts=True,
+            require_images=True,
+        )
+        records_by_split[split] = records
+        manifests[split] = manifest
+    for left_index, left in enumerate(("train", "val", "test")):
+        for right in ("train", "val", "test")[left_index + 1:]:
+            for field in ("image_id", "question_id", "answer_id"):
+                left_ids = {str(row[field]) for row in records_by_split[left]}
+                right_ids = {str(row[field]) for row in records_by_split[right]}
+                overlap = sorted(left_ids & right_ids)
+                if overlap:
+                    raise ValueError(
+                        f"RSVQA-LR active {field} overlap between {left}/{right}: "
+                        f"{overlap[:10]}"
+                    )
+    return {
+        "dataset": "RSVQA-LR",
+        "splits": manifests,
+        "active_ids_pairwise_disjoint": True,
+        "total_active_images": sum(item["active_images"] for item in manifests.values()),
+        "total_active_questions": sum(item["active_questions"] for item in manifests.values()),
+        "total_active_answers": sum(item["active_answers"] for item in manifests.values()),
+    }

@@ -12,6 +12,7 @@ SLAKE_LORA_OUTPUT_ROOT="${SLAKE_LORA_OUTPUT_ROOT:-$ROOT_DIR/slake/outputs/lora}"
 SLAKE_V1_OUTPUT_ROOT="${SLAKE_V1_OUTPUT_ROOT:-$ROOT_DIR/slake/outputs/visual_selection_prefix}"
 RSVQA_DATA_ROOT="${RSVQA_DATA_ROOT:-/root/autodl-tmp/dataset/RSVQA/6344334}"
 RSVQA_OUTPUT_ROOT="${RSVQA_OUTPUT_ROOT:-$ROOT_DIR/RSVQA/outputs}"
+RSVQA_V1_OUTPUT_ROOT="${RSVQA_V1_OUTPUT_ROOT:-$RSVQA_OUTPUT_ROOT/visual_selection_prefix}"
 PATHVQA_DATA_ROOT="${PATHVQA_DATA_ROOT:-/root/autodl-tmp/dataset/pathVQA}"
 PATHVQA_CACHE_ROOT="${PATHVQA_CACHE_ROOT:-$PATHVQA_DATA_ROOT/.hf_cache}"
 PATHVQA_OUTPUT_ROOT="${PATHVQA_OUTPUT_ROOT:-$ROOT_DIR/pathvqa/outputs/mmrl}"
@@ -44,6 +45,7 @@ if [ "$RUN_TARGET" = "pathvqa_visual_selection_offset_v0_seed44" ] || \
    [ "$RUN_TARGET" = "pathvqa_v1_norm_fixed_5ep_seed46" ] || \
    [ "$RUN_TARGET" = "slake_v1_norm_fixed_5ep_seeds44_45_46_test" ] || \
    [ "$RUN_TARGET" = "rsvqa_lr_base_qwen3vl_test" ] || \
+   [ "$RUN_TARGET" = "rsvqa_v1_norm_fixed_5ep_seed44" ] || \
    [ "$RUN_TARGET" = "pathvqa_v1_visual20_lr1e4_norm_fixed_5ep_seed44" ] || \
    [ "$RUN_TARGET" = "pathvqa_v1_deep_visual5_l16_23_norm_fixed_5ep_seed44" ] || \
    [ "$RUN_TARGET" = "pathvqa_v1_visual18_uniform_lr3e5_norm_fixed_5ep_seed44" ] || \
@@ -4834,6 +4836,64 @@ run_rsvqa_lr_base_qwen3vl_test() {
   echo "[RSVQA_BASE_DONE] output=$output_dir training=false test_evaluation=true"
 }
 
+run_rsvqa_v1_norm_fixed_5ep_seed44() {
+  local audit_json="${PATHVQA_V1_LOSS_AUDIT_JSON:-$PATHVQA_V1_OUTPUT_ROOT/diagnostics/pathvqa_v1_loss_scaling_audit_20260924/v1_loss_scaling_audit.json}"
+  if [ ! -f "$audit_json" ]; then
+    echo "[ERR] RSVQA-LR V1 requires the established loss-normalization audit: $audit_json" >&2
+    return 1
+  fi
+  if ! python -c 'import importlib.metadata,json,sys,torch; d=json.load(open(sys.argv[1],encoding="utf-8")); assert d["passed"] is True; assert all(all(d["windows"][str(k)]["numeric_checks"].values()) for k in (16,3)); assert d["versions"]["torch"]==torch.__version__; assert d["versions"]["transformers"]==importlib.metadata.version("transformers"); assert d["versions"]["accelerate"]==importlib.metadata.version("accelerate"); print("[RSVQA_V1_NORM_PREFLIGHT] audit_passed=True versions_match=True full16_and_tail3=True")' "$audit_json"; then
+    echo "[ERR] RSVQA-LR V1 runtime differs from the audited normalized path; no training started." >&2
+    return 1
+  fi
+  local experiment_name="rsvqa_v1_norm_fixed_5ep_seed44"
+  local output_dir
+  output_dir="$(available_output_dir "$RSVQA_V1_OUTPUT_ROOT" "${experiment_name}_${RUN_DATE}")"
+  mkdir -p "$output_dir/eval_test/epoch_5"
+  echo "[RSVQA_V1_CONFIG] experiment=$experiment_name git_commit=$(git -C "$ROOT_DIR" rev-parse HEAD) dataset=RSVQA-LR model_seed=44 data_seed=42 train_split=train eval_split=test batch=2 accumulation=16 epochs=5 save_epochs=3,4,5 primary_epoch=5 visual_prompt=layer17_S8_lr3e-5_plus_Av10_lr1e-4 trainable=1864963 answer_supervision=raw_release_answer count_evaluation=official_range_numbers model_accepts_loss_kwargs=false output=$output_dir"
+  (
+    cd "$ROOT_DIR" || exit 1
+    python -m RSVQA.audit_dataset \
+      --data-root "$RSVQA_DATA_ROOT" \
+      --output "$output_dir/rsvqa_dataset_audit.json"
+  ) || return 1
+  (
+    cd "$ROOT_DIR" || exit 1
+    python -m pathvqa.train_visual_selection_prefix \
+      --dataset rsvqa_lr --model-path "$MODEL_PATH" --data-root "$RSVQA_DATA_ROOT" \
+      --output-dir "$output_dir" --experiment-name "$experiment_name" \
+      --model-seed 44 --epochs 5 --save-epochs 3 4 5 \
+      --visual-prompt-mode split18 --visual-av10-learning-rate 1e-4 \
+      --correct-loss-accumulation \
+      2>&1 | tee "$output_dir/train.log"
+  ) || return 1
+  local epoch
+  for epoch in 3 4 5; do
+    [ -f "$output_dir/checkpoints/epoch_${epoch}/visual_selection_prefix.pt" ] \
+      || { echo "[ERR] RSVQA-LR V1 checkpoint missing: epoch_$epoch" >&2; return 1; }
+  done
+  if ! python -c 'import json,sys; d=json.load(open(sys.argv[1],encoding="utf-8")); assert d["dataset"]=="RSVQA-LR" and d["train_split"]=="train"; assert d["model_seed"]==44 and d["data_seed"]==42; assert d["epochs"]==5 and d["saved_epochs"]==[3,4,5]; assert d["visual_prompt_mode"]=="split18" and d["visual_av10_learning_rate"]==1e-4; assert d["total_trainable_parameters"]==1864963; assert d["trainer_model_accepts_loss_kwargs"] is False; assert d["answer_supervision"]=="raw_release_answer_evaluated_with_official_count_ranges"; rates=d["optimizer"]["group_learning_rates"]; assert rates["visual_s8"]==3e-5 and rates["visual_av10"]==1e-4; print("[RSVQA_V1_TRAIN_REPORT_AUDIT] dataset=RSVQA-LR seed=44 epochs=5 saved=3,4,5 trainable=1864963 normalized=True")' "$output_dir/train_report.json"; then
+    echo "[ERR] RSVQA-LR V1 train report does not attest the requested protocol." >&2
+    return 1
+  fi
+  local checkpoint="$output_dir/checkpoints/epoch_5"
+  (
+    cd "$ROOT_DIR" || exit 1
+    python -m RSVQA.rsvqa_lr_official_eval \
+      --data-root "$RSVQA_DATA_ROOT" --split test \
+      --backend visual-selection-prefix --base-model "$MODEL_PATH" \
+      --checkpoint "$checkpoint" --output-dir "$output_dir/eval_test/epoch_5" \
+      --overwrite \
+      2>&1 | tee "$output_dir/eval_test_epoch_5.log"
+  ) || return 1
+  local summary="$output_dir/eval_test/epoch_5/rsvqa_summary.json"
+  if ! python -c 'import json,sys; d=json.load(open(sys.argv[1],encoding="utf-8")); assert d["dataset"]=="RSVQA-LR" and d["split"]=="test" and d["backend"]=="visual-selection-prefix"; assert d["count"]==10004 and d["partial_evaluation"] is False; print("[RSVQA_V1_RESULT] overall=%.4f average=%.4f per_type=%s" % (d["overall_accuracy"],d["average_accuracy"],d["per_question_type_accuracy"]))' "$summary"; then
+    echo "[ERR] RSVQA-LR V1 Test summary audit failed: $summary" >&2
+    return 1
+  fi
+  echo "[RSVQA_V1_DONE] output=$output_dir primary_epoch=5 validation_evaluation=false test_evaluation=true other_seeds=false"
+}
+
 run_pathvqa_v1_loss_corrected_seed45() {
   local audit_json="${PATHVQA_V1_LOSS_AUDIT_JSON:-$PATHVQA_V1_OUTPUT_ROOT/diagnostics/pathvqa_v1_loss_scaling_audit_20260924/v1_loss_scaling_audit.json}"
   if [ ! -f "$audit_json" ]; then
@@ -5199,6 +5259,9 @@ case "$RUN_TARGET" in
     ;;
   rsvqa_lr_base_qwen3vl_test)
     run_rsvqa_lr_base_qwen3vl_test || failures=$((failures + 1))
+    ;;
+  rsvqa_v1_norm_fixed_5ep_seed44)
+    run_rsvqa_v1_norm_fixed_5ep_seed44 || failures=$((failures + 1))
     ;;
   pathvqa_v1_visual_selection_prefix_p20_norm_fixed_seed45)
     run_pathvqa_v1_loss_corrected_seed45 || failures=$((failures + 1))

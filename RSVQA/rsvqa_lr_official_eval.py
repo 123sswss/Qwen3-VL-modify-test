@@ -12,24 +12,13 @@ from typing import Any, Dict, Mapping, Sequence
 from .data import load_rsvqa_lr_split
 from .metric import evaluate_rsvqa_predictions
 from .model_interfaces import BACKEND_SPECS, load_rsvqa_model_interface
-
-
-DEFAULT_INSTRUCTIONS = {
-    "count": "Answer with only an integer, without explanation.",
-    "presence": "Answer only yes or no.",
-    "rural_urban": "Answer only rural or urban.",
-    "comp": "Answer with only the final short answer, without explanation.",
-}
+from .prompts import build_prompt
 
 
 def write_json(path: Path, payload: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8") as handle:
         json.dump(payload, handle, ensure_ascii=False, indent=2)
-
-
-def build_prompt(record: Mapping[str, Any]) -> str:
-    return f"{record['question']}\n{DEFAULT_INSTRUCTIONS[record['question_type']]}"
 
 
 def extract_answer(raw_output: Any) -> str:
@@ -84,8 +73,17 @@ def run_inference(
         if hasattr(model, "last_generation_timing"):
             model.last_generation_timing = None
         request_started = time.perf_counter()
+        raw_question_kwargs = (
+            {"question": str(record["question"])}
+            if getattr(model, "requires_raw_question", False)
+            else {}
+        )
         raw_output = model.infer(
-            image, prompt, max_new_tokens=max_new_tokens, temperature=0.0
+            image,
+            prompt,
+            max_new_tokens=max_new_tokens,
+            temperature=0.0,
+            **raw_question_kwargs,
         )
         request_seconds = time.perf_counter() - request_started
         row = {

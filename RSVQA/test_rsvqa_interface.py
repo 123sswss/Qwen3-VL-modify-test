@@ -7,6 +7,7 @@ from pathlib import Path
 
 from RSVQA.data import load_rsvqa_lr_split
 from RSVQA.metric import evaluate_rsvqa_predictions, normalize_rsvqa_answer
+from RSVQA.prompts import build_prompt
 
 
 class RSVQAInterfaceTest(unittest.TestCase):
@@ -55,6 +56,15 @@ class RSVQAInterfaceTest(unittest.TestCase):
         }
         for value, target in expected.items():
             self.assertEqual(normalize_rsvqa_answer(value, "count"), target)
+
+    def test_training_and_inference_share_short_answer_prompt(self) -> None:
+        prompt = build_prompt(
+            {"question": "How many roads are there?", "question_type": "count"}
+        )
+        self.assertEqual(
+            prompt,
+            "How many roads are there?\nAnswer with only an integer, without explanation.",
+        )
 
 
 if __name__ == "__main__":

@@ -1,4 +1,6 @@
-> **2026-09-29 RSVQA-LR规范化推理接口已实现，等待用户亲自运行基座Test。** 本地新增`RSVQA/`包：官方三表各自`active=true`过滤、严格ID/反向ID/图像路径/官方样本数审计、可供后续训练复用的统一record契约，以及基座/既有后端统一加载接口。评分复现官方LR `range_numbers=True`计数区间，报告四题型、OA、AA和图像簇CI；`rsvqa_lr_base_qwen3vl_test`固定完整Test 10,004题且不训练、不加载checkpoint。已完成CPU伪数据关联与指标边界测试、Python语法检查；未运行模型/GPU，也未获得分数。GPU推理由用户在服务器fast-forward pull后亲自启动，结果回传后再记入两份账本。
+> **2026-09-29 RSVQA-LR归一化五轮V1 seed44已实现，等待用户亲自运行。** 只做数据集迁移：原五轮V1结构、1,864,963参数、model seed44/data seed42、batch2/累积16、两档Visual18学习率、3% warmup线性衰减和`model_accepts_loss_kwargs=False`均不变。使用官方Train 57,223题从头训练，保存epoch3/4/5并固定epoch5完整Test；训练监督原始发布答案，Count评估再映射官方区间。训练与推理共享题型短答prompt，但条件分支只读原始真实问题。GPU预检/训练/Test只由用户启动，不自动关机，不补其他seed。
+
+> **2026-09-29 RSVQA-LR规范化接口及基座Test已完成。** `rsvqa_lr_base_qwen3vl_test`在完整Test 10,004题/100图上得到OA57.5770、AA58.8947；四类为rural/urban69.0000、presence63.0457、count29.8948、comparison73.6382，图像簇95%CI[56.3944,58.7048]。这是不训练、不加载checkpoint的固定参照；`RSVQA/`的数据record契约和官方区间评分继续作为后续训练/评估唯一接口。结果已写两份账本，账本修改留本地随下一次相关代码提交，不单独提交。
 
 > **2026-09-29 用户纠正并锁定CoCoOp基线：不加Visual18。** 已核对主账本2026-09-09 PathVQA CoCoOp-style P20/H160及slake/cocoop_prompt_tuning.py：仅P20与2560->160->2560 Meta-Net可训练，总873,120参数；原生post-merger视觉token均值生成共享P20偏移，无视觉Prompt、无问题条件。RSVQA沿用这个方法定义及原P20/Meta-Net学习率0.3/3e-4，不擅自加模块。下方助手建议CoCoOp+Visual18明确撤回，不实施。四组固定为原始Qwen3-VL、静态Visual18+P20、原CoCoOp-style（无Visual18）、完整V1；共同五轮与归一化/评分协议按既定计划。
 

@@ -47,6 +47,7 @@ if [ "$RUN_TARGET" = "pathvqa_visual_selection_offset_v0_seed44" ] || \
    [ "$RUN_TARGET" = "pathvqa_v1_norm_fixed_5ep_seed44" ] || \
    [ "$RUN_TARGET" = "pathvqa_v1_direct_summary_norm_fixed_5ep_seed44" ] || \
    [ "$RUN_TARGET" = "pathvqa_v1b_evidence_token_norm_fixed_5ep_seed44" ] || \
+   [ "$RUN_TARGET" = "pathvqa_v1b_evidence_token_norm_fixed_5ep_seed44_shutdown" ] || \
    [ "$RUN_TARGET" = "pathvqa_v1_norm_fixed_5ep_seed45" ] || \
    [ "$RUN_TARGET" = "pathvqa_v1_norm_fixed_5ep_seed46" ] || \
    [ "$RUN_TARGET" = "slake_v1_norm_fixed_5ep_seeds44_45_46_test" ] || \
@@ -65,10 +66,6 @@ if [ "$RUN_TARGET" = "pathvqa_visual_selection_offset_v0_seed44" ] || \
    [ "$RUN_TARGET" = "pathvqa_v0_seed44_mask_fixed_validation" ]; then
   SHUTDOWN_ON_EXIT=0
 fi
-if [ "$RUN_TARGET" = "pathvqa_v1b_evidence_token_norm_fixed_5ep_seed44_shutdown" ]; then
-  SHUTDOWN_ON_EXIT=1
-fi
-
 mkdir -p "$OUTPUT_ROOT" "$SLAKE_OUTPUT_ROOT" "$SLAKE_DYNAMIC_PROMPT_OUTPUT_ROOT" "$SLAKE_GRASP_OUTPUT_ROOT" "$SLAKE_LORA_OUTPUT_ROOT" "$SLAKE_V1_OUTPUT_ROOT" "$RSVQA_OUTPUT_ROOT" "$PATHVQA_OUTPUT_ROOT" "$PATHVQA_LORA_OUTPUT_ROOT" "$PATHVQA_BASE_OUTPUT_ROOT" "$PATHVQA_PROMPT_OUTPUT_ROOT" "$PATHVQA_COCOOP_OUTPUT_ROOT" "$PATHVQA_DYNAMIC_PROMPT_OUTPUT_ROOT" "$PATHVQA_GRASP_OUTPUT_ROOT" "$PATHVQA_V0_OUTPUT_ROOT" "$PATHVQA_V1_OUTPUT_ROOT" "$PATHVQA_V1_DIRECT_OUTPUT_ROOT" "$PATHVQA_V1B_OUTPUT_ROOT" "$ELECTRICAL_QDPT_OUTPUT_ROOT" "$ELECTRICAL_GRASP_OUTPUT_ROOT" "$ELECTRICAL_PROMPT_OUTPUT_ROOT" "$ELECTRICAL_COCOOP_OUTPUT_ROOT"
 echo "[RUN_TARGET] selected=$RUN_TARGET positional=${1:-<unset>} env=${ENV_RUN_TARGET:-<unset>} mmrl_env=${MMRL_RUN_TARGET:-<unset>} shutdown_on_exit=$SHUTDOWN_ON_EXIT"
 
@@ -89,16 +86,6 @@ shutdown_on_exit() {
   fi
   if [ "$SHUTDOWN_ON_EXIT" != "1" ]; then
     return "$exit_code"
-  fi
-  if [ "$RUN_TARGET" = "pathvqa_v1b_evidence_token_norm_fixed_5ep_seed44_shutdown" ]; then
-    local shutdown_log="${RUN_STATUS_OUTPUT_DIR:-$PATHVQA_V1B_OUTPUT_ROOT}/shutdown.log"
-    echo "[EXIT] V1B串行入口结束，exit_code=$exit_code；记录完成后安排1分钟后关机。" | tee -a "$shutdown_log"
-    /usr/bin/shutdown -h +1 >> "$shutdown_log" 2>&1
-    local shutdown_code=$?
-    printf '%s\tshutdown_schedule\texit_code\t%s\n' "$(date --iso-8601=seconds)" "$shutdown_code" >> "$shutdown_log"
-    sync
-    trap - EXIT
-    exit "$exit_code"
   fi
   echo "[EXIT] 脚本退出，exit_code=$exit_code"
   echo "[EXIT] 600 秒后自动关机；按 Ctrl+C 可取消。"
@@ -5455,6 +5442,9 @@ case "$RUN_TARGET" in
     run_pathvqa_v1_direct_summary_norm_fixed_5ep_seed44 || failures=$((failures + 1))
     ;;
   pathvqa_v1b_evidence_token_norm_fixed_5ep_seed44|pathvqa_v1b_evidence_token_norm_fixed_5ep_seed44_shutdown)
+    if [ "$RUN_TARGET" = "pathvqa_v1b_evidence_token_norm_fixed_5ep_seed44_shutdown" ]; then
+      echo "[V1B_SHUTDOWN_CANCELLED] 旧_shutdown别名已保留兼容，但本次及今后均不会自动关机。"
+    fi
     run_pathvqa_v1b_evidence_token_norm_fixed_5ep_seed44 || failures=$((failures + 1))
     ;;
   pathvqa_v1_visual20_lr1e4_norm_fixed_5ep_seed44)

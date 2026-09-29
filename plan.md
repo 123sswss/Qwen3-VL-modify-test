@@ -1,4 +1,6 @@
-> **2026-09-29 V1B独立证据token消融已实现，等待用户亲自运行。** 命名固定：已完成的879,364参数去瓶颈共享偏移为V1A；新V1B保留原V1全部1,864,963参数及初始化/学习率，把`b=prefix_output(ReLU(c))`从P20广播偏移改为序列`[P20;b;原chat]`。第21前缀位置attention有效、label=-100，不进入独立问题条件源；预检强制核对mRoPE、视觉mask、DeepStack、原生embedding不变、完整条件分支梯度、单次prefill注入与KV-cache/save-load一致。普通目标不关机；显式目标`pathvqa_v1b_evidence_token_norm_fixed_5ep_seed44_shutdown`无论成功失败都先落盘阶段状态/退出码，再安排1分钟后关机并记录关机调用返回码。固定seed44/data42、五轮、epoch5 Validation，配对原V1，并在V1A产物存在时补B对A；两者同时改变映射与接口，不作单因素归因。GPU全由用户启动，不跑Test/其他seed/额外配置。
+> **2026-09-29 RSVQA-LR full-attention LoRA-r8已排期，V1B自动关机已取消。** 新LoRA仅做单独seed44实验：官方Train从头训练3 epochs，ViT 24层qkv/proj与LLM 36层q/k/v/o共192个目标，r8/alpha16/dropout0.05/LR1e-4，预计并强制核验7,077,888参数；microbatch2、累积16、有效batch32、3% warmup线性衰减、裁剪1，并显式`model_accepts_loss_kwargs=False`。固定epoch3完整Test，训练与推理为同一实验的两个阶段，不与V1B或其他实验串联。独立脚本无自动关机、无额外GPU冒烟；全部GPU操作由用户亲自启动。V1B普通目标继续保留；旧`_shutdown`别名仅兼容调用且强制不关机。
+
+> **2026-09-29 V1B独立证据token消融已实现，等待用户亲自运行（关机安排已取消）。** 命名固定：已完成的879,364参数去瓶颈共享偏移为V1A；新V1B保留原V1全部1,864,963参数及初始化/学习率，把`b=prefix_output(ReLU(c))`从P20广播偏移改为序列`[P20;b;原chat]`。第21前缀位置attention有效、label=-100，不进入独立问题条件源；预检强制核对mRoPE、视觉mask、DeepStack、原生embedding不变、完整条件分支梯度、单次prefill注入与KV-cache/save-load一致。固定seed44/data42、五轮、epoch5 Validation，配对原V1，并在V1A产物存在时补B对A；两者同时改变映射与接口，不作单因素归因。GPU全由用户启动，不跑Test/其他seed/额外配置。
 
 > **2026-09-29 两项结果已回传。** RSVQA-LR V1 b4a8 seed44固定epoch5 Test OA85.0360/AA86.0812，相对基座OA+27.4590；该运行完成不重复启动。PathVQA方案A去瓶颈保留偏移55.9035，对原五轮-3.4351且配对CI低于零，记为负消融，不自动调alpha或重训。方案B结果尚未回传；不得推断运行状态或补启动串行任务。继续收集已有约定的B与RSVQA静态/原CoCoOp结果；LoRA未新排期。
 

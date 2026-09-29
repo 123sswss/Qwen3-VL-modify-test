@@ -33,6 +33,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from pathvqa.data_pipeline import PathVQADataCollator, PathVQADataset
+from RSVQA.data_pipeline import RSVQADataCollator, RSVQALRDataset
 from pathvqa.throughput_benchmark import (
     ThroughputBenchmarkCallback,
     ThroughputTrainer,
@@ -68,8 +69,11 @@ MODEL_BATCH_KEYS = (
 
 
 class VisualLoRACollator:
-    def __init__(self, processor: Any) -> None:
-        self.base_collator = PathVQADataCollator(processor)
+    def __init__(self, processor: Any, dataset: str = "pathvqa") -> None:
+        collator_class = (
+            PathVQADataCollator if dataset == "pathvqa" else RSVQADataCollator
+        )
+        self.base_collator = collator_class(processor)
 
     def __call__(self, features: List[Dict[str, Any]]) -> Dict[str, Any]:
         batch = self.base_collator(features)
@@ -112,6 +116,11 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         default=Path("/root/autodl-tmp/dataset/pathVQA"),
     )
+    parser.add_argument(
+        "--dataset",
+        choices=("pathvqa", "rsvqa_lr"),
+        default="pathvqa",
+    )
     parser.add_argument("--cache-dir", type=Path)
     parser.add_argument(
         "--model-path",
@@ -139,6 +148,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--dataloader-workers", type=int, default=2)
     parser.add_argument("--max-length", type=int, default=2048)
     parser.add_argument("--expected-trainable-parameters", type=int)
+    parser.add_argument("--correct-loss-accumulation", action="store_true")
     parser.add_argument("--throughput-benchmark", action="store_true")
     parser.add_argument("--throughput-warmup-steps", type=int, default=20)
     parser.add_argument("--throughput-timed-steps", type=int, default=100)
@@ -440,17 +450,29 @@ def main() -> int:
         f"rank={args.rank} predicted_trainable={predicted_trainable}"
     )
 
-    dataset = PathVQADataset(
-        processor=processor,
-        data_root=data_root,
-        split="train",
-        cache_dir=cache_dir,
-        total_limit=None,
-        ce_enabled=True,
-        seed=args.data_seed,
-        deterministic_sampling=True,
-        max_length=args.max_length,
-    )
+    if args.dataset == "pathvqa":
+        dataset = PathVQADataset(
+            processor=processor,
+            data_root=data_root,
+            split="train",
+            cache_dir=cache_dir,
+            total_limit=None,
+            ce_enabled=True,
+            seed=args.data_seed,
+            deterministic_sampling=True,
+            max_length=args.max_length,
+        )
+    else:
+        dataset = RSVQALRDataset(
+            processor=processor,
+            data_root=data_root,
+            split="train",
+            ce_enabled=True,
+            seed=args.data_seed,
+            deterministic_sampling=True,
+            max_length=args.max_length,
+            enforce_official_counts=True,
+        )
     for parameter in model.parameters():
         parameter.requires_grad = False
     model.config.use_cache = False
@@ -518,6 +540,7 @@ def main() -> int:
         f"gradient_accumulation={args.gradient_accumulation} "
         f"rank={args.rank} alpha={lora_alpha} dropout={LORA_DROPOUT} "
         f"learning_rate={args.learning_rate} "
+        f"dataset={args.dataset} "
         f"trainable={parameter_counts['trainable']} total={parameter_counts['total']} "
         f"ratio={parameter_counts['trainable_ratio']:.6%}"
     )
@@ -573,11 +596,22 @@ def main() -> int:
         model=model,
         args=training_args,
         train_dataset=dataset,
-        data_collator=VisualLoRACollator(processor),
+        data_collator=VisualLoRACollator(processor, dataset=args.dataset),
         processing_class=processor,
         callbacks=callbacks,
         **trainer_kwargs,
     )
+    if args.correct_loss_accumulation:
+        trainer.model_accepts_loss_kwargs = False
+    print(
+        "[LORA_LOSS_ACCUMULATION] "
+        f"corrected={args.correct_loss_accumulation} "
+        f"trainer_model_accepts_loss_kwargs={trainer.model_accepts_loss_kwargs} "
+        f"trainer_accumulation={training_args.gradient_accumulation_steps} "
+        f"accelerate_accumulation={trainer.accelerator.gradient_accumulation_steps}"
+    )
+    if args.correct_loss_accumulation and trainer.model_accepts_loss_kwargs is not False:
+        raise RuntimeError("Failed to enable corrected loss accumulation")
     train_result = trainer.train()
     if not args.throughput_benchmark:
         trainer.save_metrics("train", train_result.metrics)
@@ -589,6 +623,7 @@ def main() -> int:
         "status": "pass",
         "experiment": args.experiment_name,
         "method": "lora",
+        "dataset": args.dataset,
         "target_scope": target_scope,
         "rank": args.rank,
         "alpha": lora_alpha,
@@ -599,6 +634,8 @@ def main() -> int:
         "learning_rate": args.learning_rate,
         "per_device_train_batch_size": args.batch_size,
         "gradient_accumulation_steps": args.gradient_accumulation,
+        "effective_batch_size": args.batch_size * args.gradient_accumulation,
+        "trainer_model_accepts_loss_kwargs": trainer.model_accepts_loss_kwargs,
         "selected_vision_layers_0based": selected_vision_layers,
         "selected_language_layers_0based": selected_language_layers,
         "target_modules": target_modules,

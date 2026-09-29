@@ -1,3 +1,13 @@
+> **2026-09-29 RSVQA-LR规范化推理接口已实现，等待用户亲自运行基座Test。** 本地新增`RSVQA/`包：官方三表各自`active=true`过滤、严格ID/反向ID/图像路径/官方样本数审计、可供后续训练复用的统一record契约，以及基座/既有后端统一加载接口。评分复现官方LR `range_numbers=True`计数区间，报告四题型、OA、AA和图像簇CI；`rsvqa_lr_base_qwen3vl_test`固定完整Test 10,004题且不训练、不加载checkpoint。已完成CPU伪数据关联与指标边界测试、Python语法检查；未运行模型/GPU，也未获得分数。GPU推理由用户在服务器fast-forward pull后亲自启动，结果回传后再记入两份账本。
+
+> **2026-09-29 用户纠正并锁定CoCoOp基线：不加Visual18。** 已核对主账本2026-09-09 PathVQA CoCoOp-style P20/H160及slake/cocoop_prompt_tuning.py：仅P20与2560->160->2560 Meta-Net可训练，总873,120参数；原生post-merger视觉token均值生成共享P20偏移，无视觉Prompt、无问题条件。RSVQA沿用这个方法定义及原P20/Meta-Net学习率0.3/3e-4，不擅自加模块。下方助手建议CoCoOp+Visual18明确撤回，不实施。四组固定为原始Qwen3-VL、静态Visual18+P20、原CoCoOp-style（无Visual18）、完整V1；共同五轮与归一化/评分协议按既定计划。
+
+> **2026-09-29 RSVQA-LR数据已由用户解压，拟定三训练四评估。** 用户回报服务器根`/root/autodl-tmp/dataset/RSVQA/6344334/`，Images_LR含772张256x256 RGB TIFF；split有效images/questions/answers分别Train572/57223/57223、Val100/10005/10005、Test100/10004/10004。只作用户回报，尚未全量复核。三个split文件均须先筛active=true再按ID关联并检查一致性；禁止把inactive其他split记录纳入训练，不用all_questions/all_answers重划分。实施前CPU全量校验图像ID跨split互斥、答案反向question_id、有效ID唯一、路径与评分计数类别。
+> 用户拟比较原始Qwen3-VL零训练、Visual18+P20静态、CoCoOp-style与冻结V1，共三训练四次完整评估。建议seed44/data42，五轮固定epoch5；零训练不插入随机Prompt。为视觉适配条件一致，建议CoCoOp-style也保留同Visual18并明确命名为该变体，使用全局视觉池化条件P20，不声称严格复现原CoCoOp或单变量隔离全部V1机制。该CoCoOp细节仍为本轮建议，待实施确认。不预排RSVQA LoRA；遥感部分定位为冻结骨干Prompt家族迁移验证，不声称此数据集上优于LoRA，也不依据最终Test是否好看来决定补对手。统一归一化/评分/输入协议，报告Overall、题型准确率和AA；所有GPU操作由用户执行，本次只更新计划。
+> **2026-09-28 用户安排明天补RSVQA-LR单seed跨域实验（计划日期2026-09-29）。** 默认model seed44/data seed42，沿用冻结归一化五轮V1及原Visual18两档学习率，固定epoch5；仅适配数据与官方评分，不扩展多seed/结构/LR搜索。实施前核验实际下载版本、图像级train/val/test划分、问题/答案处理和计数等评分口径，不凭清单推定数据已就绪。今天不启动；明天先准备与检查入口，再交付用户亲自运行全部GPU预检/训练/评估的命令。此为实验排期，不创建自动运行或提醒；本次不修改结果账本。
+
+> **2026-09-28 SLAKE V1三seed结果已回传，覆盖等待运行状态。** 按当前全语言Test固定epoch5计划，44/45/46为75.55/76.31/78.37，均值76.7433±1.4591；精确运行身份/路径/样本数待补。三seed不重复训练；保留冻结V1，不据Test重开调参。性能均值接近历史旧QDPT但观测seed波动增大，论文不可声称跨域稳定性普遍改善。继续既定电气、基线协议审计和核心消融补证据规划，未启动任何新GPU操作。
+
 > **2026-09-28 当前已实现，等待用户亲自运行：SLAKE固定V1三seed Test。** 完整冻结归一化修正五轮V1（P20、索引17 S8@3e-5+Av10@1e-4、5/11/17条件选择、共同Value与共享P20偏移，1,864,963参数），只将训练数据换为SLAKE官方train、评估换为全语言官方Test；model seeds44/45/46、data seed42严格串行，保存epoch3/4/5并固定epoch5，不跑Validation、不按Test挑checkpoint。新增目标`slake_v1_norm_fixed_5ep_seeds44_45_46_test`，任一seed失败即停止后续seed；GPU预检、训练与评估仅由用户启动，不自动关机。
 
 > **2026-09-28 新阶段：冻结结构，规划论文补实验。** 用户要求列出SLAKE、自建电气与消融清单；此前停止的是新结构涨分探索，本次只规划最终V1的跨数据集验证与证据补全。以下为建议矩阵，不恢复深层Prompt/数量/LR扫描；其中SLAKE固定V1三seed现已获授权并进入上方待运行状态。

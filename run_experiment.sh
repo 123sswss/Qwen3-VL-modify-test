@@ -10,6 +10,8 @@ SLAKE_DYNAMIC_PROMPT_OUTPUT_ROOT="${SLAKE_DYNAMIC_PROMPT_OUTPUT_ROOT:-$ROOT_DIR/
 SLAKE_GRASP_OUTPUT_ROOT="${SLAKE_GRASP_OUTPUT_ROOT:-$ROOT_DIR/slake/outputs/grasp}"
 SLAKE_LORA_OUTPUT_ROOT="${SLAKE_LORA_OUTPUT_ROOT:-$ROOT_DIR/slake/outputs/lora}"
 SLAKE_V1_OUTPUT_ROOT="${SLAKE_V1_OUTPUT_ROOT:-$ROOT_DIR/slake/outputs/visual_selection_prefix}"
+RSVQA_DATA_ROOT="${RSVQA_DATA_ROOT:-/root/autodl-tmp/dataset/RSVQA/6344334}"
+RSVQA_OUTPUT_ROOT="${RSVQA_OUTPUT_ROOT:-$ROOT_DIR/RSVQA/outputs}"
 PATHVQA_DATA_ROOT="${PATHVQA_DATA_ROOT:-/root/autodl-tmp/dataset/pathVQA}"
 PATHVQA_CACHE_ROOT="${PATHVQA_CACHE_ROOT:-$PATHVQA_DATA_ROOT/.hf_cache}"
 PATHVQA_OUTPUT_ROOT="${PATHVQA_OUTPUT_ROOT:-$ROOT_DIR/pathvqa/outputs/mmrl}"
@@ -41,6 +43,7 @@ if [ "$RUN_TARGET" = "pathvqa_visual_selection_offset_v0_seed44" ] || \
    [ "$RUN_TARGET" = "pathvqa_v1_norm_fixed_5ep_seed45" ] || \
    [ "$RUN_TARGET" = "pathvqa_v1_norm_fixed_5ep_seed46" ] || \
    [ "$RUN_TARGET" = "slake_v1_norm_fixed_5ep_seeds44_45_46_test" ] || \
+   [ "$RUN_TARGET" = "rsvqa_lr_base_qwen3vl_test" ] || \
    [ "$RUN_TARGET" = "pathvqa_v1_visual20_lr1e4_norm_fixed_5ep_seed44" ] || \
    [ "$RUN_TARGET" = "pathvqa_v1_deep_visual5_l16_23_norm_fixed_5ep_seed44" ] || \
    [ "$RUN_TARGET" = "pathvqa_v1_visual18_uniform_lr3e5_norm_fixed_5ep_seed44" ] || \
@@ -54,7 +57,7 @@ if [ "$RUN_TARGET" = "pathvqa_visual_selection_offset_v0_seed44" ] || \
   SHUTDOWN_ON_EXIT=0
 fi
 
-mkdir -p "$OUTPUT_ROOT" "$SLAKE_OUTPUT_ROOT" "$SLAKE_DYNAMIC_PROMPT_OUTPUT_ROOT" "$SLAKE_GRASP_OUTPUT_ROOT" "$SLAKE_LORA_OUTPUT_ROOT" "$SLAKE_V1_OUTPUT_ROOT" "$PATHVQA_OUTPUT_ROOT" "$PATHVQA_LORA_OUTPUT_ROOT" "$PATHVQA_BASE_OUTPUT_ROOT" "$PATHVQA_PROMPT_OUTPUT_ROOT" "$PATHVQA_COCOOP_OUTPUT_ROOT" "$PATHVQA_DYNAMIC_PROMPT_OUTPUT_ROOT" "$PATHVQA_GRASP_OUTPUT_ROOT" "$PATHVQA_V0_OUTPUT_ROOT" "$PATHVQA_V1_OUTPUT_ROOT" "$ELECTRICAL_QDPT_OUTPUT_ROOT" "$ELECTRICAL_GRASP_OUTPUT_ROOT" "$ELECTRICAL_PROMPT_OUTPUT_ROOT" "$ELECTRICAL_COCOOP_OUTPUT_ROOT"
+mkdir -p "$OUTPUT_ROOT" "$SLAKE_OUTPUT_ROOT" "$SLAKE_DYNAMIC_PROMPT_OUTPUT_ROOT" "$SLAKE_GRASP_OUTPUT_ROOT" "$SLAKE_LORA_OUTPUT_ROOT" "$SLAKE_V1_OUTPUT_ROOT" "$RSVQA_OUTPUT_ROOT" "$PATHVQA_OUTPUT_ROOT" "$PATHVQA_LORA_OUTPUT_ROOT" "$PATHVQA_BASE_OUTPUT_ROOT" "$PATHVQA_PROMPT_OUTPUT_ROOT" "$PATHVQA_COCOOP_OUTPUT_ROOT" "$PATHVQA_DYNAMIC_PROMPT_OUTPUT_ROOT" "$PATHVQA_GRASP_OUTPUT_ROOT" "$PATHVQA_V0_OUTPUT_ROOT" "$PATHVQA_V1_OUTPUT_ROOT" "$ELECTRICAL_QDPT_OUTPUT_ROOT" "$ELECTRICAL_GRASP_OUTPUT_ROOT" "$ELECTRICAL_PROMPT_OUTPUT_ROOT" "$ELECTRICAL_COCOOP_OUTPUT_ROOT"
 echo "[RUN_TARGET] selected=$RUN_TARGET positional=${1:-<unset>} env=${ENV_RUN_TARGET:-<unset>} mmrl_env=${MMRL_RUN_TARGET:-<unset>} shutdown_on_exit=$SHUTDOWN_ON_EXIT"
 
 cancel_shutdown_on_interrupt() {
@@ -4809,6 +4812,28 @@ run_slake_v1_norm_fixed_5ep_seeds44_45_46_test() {
   echo "[SLAKE_V1_THREE_SEED_DONE] seeds=44,45,46 protocol=fixed_epoch5_test validation_evaluation=false"
 }
 
+run_rsvqa_lr_base_qwen3vl_test() {
+  local experiment_name="rsvqa_lr_base_qwen3vl_test"
+  local output_dir
+  output_dir="$(available_output_dir "$RSVQA_OUTPUT_ROOT" "${experiment_name}_${RUN_DATE}")"
+  mkdir -p "$output_dir"
+  echo "[RSVQA_BASE_CONFIG] experiment=$experiment_name git_commit=$(git -C "$ROOT_DIR" rev-parse HEAD) dataset=RSVQA-LR split=test backend=base training=false expected_questions=10004 expected_images=100 count_metric=official_range_numbers output=$output_dir"
+  (
+    cd "$ROOT_DIR" || exit 1
+    python -m RSVQA.rsvqa_lr_official_eval \
+      --data-root "$RSVQA_DATA_ROOT" --split test \
+      --backend base --base-model "$MODEL_PATH" \
+      --output-dir "$output_dir" --overwrite \
+      2>&1 | tee "$output_dir/eval_test.log"
+  ) || return 1
+  local summary="$output_dir/rsvqa_summary.json"
+  if ! python -c 'import json,sys; d=json.load(open(sys.argv[1],encoding="utf-8")); assert d["dataset"]=="RSVQA-LR" and d["split"]=="test" and d["backend"]=="base"; assert d["count"]==10004 and d["data_manifest"]["active_images"]==100; assert d["partial_evaluation"] is False and d["checkpoint"] is None; print("[RSVQA_BASE_RESULT] overall=%.4f average=%.4f per_type=%s" % (d["overall_accuracy"],d["average_accuracy"],d["per_question_type_accuracy"]))' "$summary"; then
+    echo "[ERR] RSVQA-LR base summary audit failed: $summary" >&2
+    return 1
+  fi
+  echo "[RSVQA_BASE_DONE] output=$output_dir training=false test_evaluation=true"
+}
+
 run_pathvqa_v1_loss_corrected_seed45() {
   local audit_json="${PATHVQA_V1_LOSS_AUDIT_JSON:-$PATHVQA_V1_OUTPUT_ROOT/diagnostics/pathvqa_v1_loss_scaling_audit_20260924/v1_loss_scaling_audit.json}"
   if [ ! -f "$audit_json" ]; then
@@ -5171,6 +5196,9 @@ case "$RUN_TARGET" in
     ;;
   slake_v1_norm_fixed_5ep_seeds44_45_46_test)
     run_slake_v1_norm_fixed_5ep_seeds44_45_46_test || failures=$((failures + 1))
+    ;;
+  rsvqa_lr_base_qwen3vl_test)
+    run_rsvqa_lr_base_qwen3vl_test || failures=$((failures + 1))
     ;;
   pathvqa_v1_visual_selection_prefix_p20_norm_fixed_seed45)
     run_pathvqa_v1_loss_corrected_seed45 || failures=$((failures + 1))

@@ -415,3 +415,7 @@ This file is the concise experiment memory shared by the user and Codex. The com
 ### 2026-09-28：最后一次深层10+10失败，探索结束
 - `pathvqa_v1_deep_visual20_split_lr_l16_23_norm_fixed_5ep_seed44`，PathVQA固定epoch5：Overall57.2935 /Yes-No89.4720 /Free-form25.2074，what20.7221、where60.8802。对原五轮V1 Overall-2.0451，配对95%CI[-2.8918,-1.2314]；对Deep5 Overall-0.9107，CI[-1.6792,-0.1459]，Free-form-1.7230，CI[-2.9941,-0.4504]。输出`pathvqa/outputs/visual_selection_prefix/pathvqa_v1_deep_visual20_split_lr_l16_23_norm_fixed_5ep_seed44_20260928`，完整原始结果及双对照记在主账本。
 - 深层双LR配置未能挽救性能，不支持将原两档LR机械扩展到八层。保留原五轮V1（1,864,963参数，已有三seed58.8592±0.4299）；8+10只是已测配置中的经验选择，未证明数量特殊或两组语义分工。按用户约定探索到此结束，不追加实验/seed/Test/压缩。账本留本地，不单独提交推送。
+
+### 2026-09-28：新版V1 SLAKE三seed完成（运行路径待补）
+- 按当前冻结五轮V1全语言Test计划关联，seed44/45/46为75.55/76.31/78.37，Overall76.7433±1.4591，range2.82；CLOSED83.6967±1.7956、OPEN72.1267±1.3102、KVQA57.4267±2.5506、VQA79.5667±1.2994、EN77.6967±0.3790、ZH75.7667±2.5950。精确实验输出路径、样本数、执行commit与时间待补，不虚构。
+- 对历史最终Sandwich旧QDPT76.95±0.44，均值约-0.21，参数7.805M->1.865M下降76.11%，但观测seed波动更大，不能声称跨数据集稳定性改善或已证明性能等价。ZH/KVQA波动大且子集可能重叠，不作独立原因归因。保留全部三seed，不因Test结果重开调参；已有跨数据集/基线/消融补证据计划继续。

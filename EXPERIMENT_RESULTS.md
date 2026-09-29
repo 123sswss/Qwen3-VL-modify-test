@@ -1676,3 +1676,19 @@ pathvqa_v1_deep_visual20_split_lr_l16_23_norm_fixed_5ep_seed44  44      fixed_ep
 [DONE] 已完成实验目标: pathvqa_v1_deep_visual20_split_lr_l16_23_norm_fixed_5ep_seed44
 ```
 </details>
+
+### 2026-09-28 - SLAKE normalized V1 five-epoch three-seed results received
+
+- Associated with implemented plan target `slake_v1_norm_fixed_5ep_seeds44_45_46_test`: frozen normalized V1,1,864,963 trainable parameters, model seeds44/45/46 and data seed42, official all-language SLAKE Test, fixed epoch5, no Validation/checkpoint selection. Association is based on plan plus user context; pasted scores do not include exact per-run names, timestamped output paths, sample counts, executing commit, runtime or audits. These provenance fields remain pending and must not be invented. Controlled change versus final PathVQA V1 is dataset/evaluator migration; old QDPT comparisons also differ in architecture and3vs5-epoch protocol.
+
+| Seed | Overall | CLOSED | OPEN | KVQA | VQA | EN | ZH |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+|44|75.5500|82.6600|70.8300|55.4300|78.4900|77.2900|73.7700|
+|45|76.3100|82.6600|72.1000|56.5500|79.2000|77.7600|74.8300|
+|46|78.3700|85.7700|73.4500|60.3000|81.0100|78.0400|78.7000|
+|Mean|76.7433|83.6967|72.1267|57.4267|79.5667|77.6967|75.7667|
+|Sample SD|1.4591|1.7956|1.3102|2.5506|1.2994|0.3790|2.5950|
+
+- Means/sampleSD recomputed from supplied rounded scores and agree with supplied summary. Overall range2.82; EN range0.75,ZH4.93,KVQA4.87. These are overlapping partitions, so high ZH/KVQA variability does not independently identify a causal instability source. No paired predictions or CIs supplied. Do not select only seed46 or confuse its78.37 with historical Full Workspace seed44 same rounded score.
+- Historical final Sandwich QDPT SLAKE has76.74/76.65/77.46,mean76.95/sampleSD0.44396,7,805,184 parameters. New minus old mean-0.2067 points; parameter reduction76.1061%. Descriptively similar mean with substantially fewer parameters, but no equivalence/noninferiority claim and observed seedSD is higher, not improved. Historical3ep normalization/provenance differences preclude a clean one-factor comparison. KVQA mean62.17->57.4267 (-4.7433), VQA79.11->79.5667 (+0.4567), subject to old rounded means/protocol caveats. Historical LoRA81.82 remains higher than new mean by5.0767, not a new matched-protocol paired comparison.
+- Conclusion: cross-dataset utility/parameter-efficiency evidence, not cross-dataset stability improvement or universal LoRA parity. PathVQA reported58.8592+/-0.4299 and SLAKE76.7433+/-1.4591 must both be reported. Frozen configuration remains fixed; no new structure or hyperparameter search prompted by Test results. Next work is provenance and already planned baseline/electrical/ablation evidence, not extra SLAKE tuning. Assistant performed CPU-only reading/statistics/ledger edits.

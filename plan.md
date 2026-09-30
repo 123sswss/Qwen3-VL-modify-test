@@ -1,4 +1,10 @@
-## 2026-09-30 PathVQA LoRA-r2近似等参数预算对照：代码已准备、尚未运行
+> **2026-09-30 三项消融已完成：** C-static56.7343、C-qmap58.7314、C-noVisual57.9805，均seed44五轮Validation，完整记录见两份账本。原队列不重跑、不自动补seed；uniform仍延期至审稿要求。LoRA-r2代码准备状态不等于已运行，本轮未启动任何GPU工作。
+
+## 2026-09-30 LoRA-r2 OOM后重跑：batch1/累积32，待用户执行
+
+状态更正：下方原batch2准备记录对应运行已被用户执行并在837/3075步OOM。原运行无epoch5结果。独立脚本仍为`pathvqa/run_lora_full_model_attention_r2_norm_fixed_5ep_seed44.sh`，现在启动新实验`pathvqa_lora_full_model_attention_r2_norm_fixed_5ep_b1a32_seed44`，microbatch1/累积32、有效batch32；从头五轮，其余配置及固定epoch5 Validation、10000次seed42配对均不变。重跑尚未启动，所有GPU操作由用户执行；不加入消融队列，不自动关机或重试。保留原目录和历史记录。此条更新上方旧的LoRA-r2准备状态。
+
+## 2026-09-30 PathVQA LoRA-r2近似等参数预算对照：原batch2准备记录（后续OOM）
 
 独立实验`pathvqa_lora_full_model_attention_r2_norm_fixed_5ep_seed44`，不插入或更改当前C-static→C-qmap→C-noVisual队列。复用现有LoRA全attention训练器，24层ViT qkv/proj及36层LLM q/k/v/o，共192目标；标准r2/alpha4/dropout0.05、rsLoRA关闭，无Prompt。预计并强制审计1,769,472参数，比V1 1,864,963少约5.12%，仅称近似等参数预算。model44/data42，从头5轮、batch2/累积16、LR1e-4、原AdamW/clip1/3% warmup线性衰减、`model_accepts_loss_kwargs=False`；保存epoch3/4/5，仅固定epoch5完整Validation，对原五轮V1 59.3386做图像簇10000次seed42配对总体及题型统计。记录版本、执行提交、参数量、训练耗时和峰值显存；历史r8三轮/未知历史归一化仅作带协议差异标注的参考。独立脚本`pathvqa/run_lora_full_model_attention_r2_norm_fixed_5ep_seed44.sh`，输出`pathvqa/outputs/lora/`；GPU全部由用户执行，无自动关机、Test、其他seed或搜索。当前只实现与本地CPU静态检查，结果回传后再追加两份账本。
 

@@ -10,7 +10,7 @@ OUTPUT_ROOT="${PATHVQA_LORA_OUTPUT_ROOT:-$ROOT_DIR/pathvqa/outputs/lora}"
 V1_ROOT="${PATHVQA_V1_OUTPUT_ROOT:-$ROOT_DIR/pathvqa/outputs/visual_selection_prefix}"
 BASELINE_RUN="${PATHVQA_V1_5EP_BASELINE_RUN:-$V1_ROOT/pathvqa_v1_norm_fixed_5ep_seed44_20260926_2}"
 BASELINE_EVAL="$BASELINE_RUN/eval_validation/epoch_5"
-EXPERIMENT="pathvqa_lora_full_model_attention_r2_norm_fixed_5ep_seed44"
+EXPERIMENT="pathvqa_lora_full_model_attention_r2_norm_fixed_5ep_b1a32_seed44"
 RUN_DATE="${MMRL_RUN_DATE:-$(date +%Y%m%d)}"
 OUTPUT_DIR="$OUTPUT_ROOT/${EXPERIMENT}_${RUN_DATE}"
 INDEX=1
@@ -40,7 +40,7 @@ fi
 python -c 'import json,sys; d=json.load(open(sys.argv[1],encoding="utf-8")); assert d["split"]=="validation" and d["count"]==6259; assert abs(d["overall_accuracy"]-59.3386)<1e-4; print("[LORA_R2_BASELINE] fixed_V1_epoch5=59.3386")' \
   "$BASELINE_EVAL/pathvqa_summary.json" | tee "$OUTPUT_DIR/baseline_precheck.log"
 
-echo "[LORA_R2_CONFIG] experiment=$EXPERIMENT git_commit=$(git rev-parse HEAD) dataset=PathVQA model_seed=44 data_seed=42 rank=2 alpha=4 alpha_over_r=2 dropout=0.05 rslora=false target=visual24_qkv_proj+language36_qkvo target_modules=192 expected_trainable=1769472 budget=approximately_matched_to_V1_1864963 difference_percent=5.12 batch=2 accumulation=16 effective_batch=32 epochs=5 save_epochs=3,4,5 primary_epoch=5 learning_rate=1e-4 warmup=0.03 scheduler=linear clip=1 model_accepts_loss_kwargs=false auto_shutdown=false output=$OUTPUT_DIR" | tee "$OUTPUT_DIR/config.log"
+echo "[LORA_R2_CONFIG] experiment=$EXPERIMENT git_commit=$(git rev-parse HEAD) dataset=PathVQA model_seed=44 data_seed=42 rank=2 alpha=4 alpha_over_r=2 dropout=0.05 rslora=false target=visual24_qkv_proj+language36_qkvo target_modules=192 expected_trainable=1769472 budget=approximately_matched_to_V1_1864963 difference_percent=5.12 batch=1 accumulation=32 effective_batch=32 epochs=5 save_epochs=3,4,5 primary_epoch=5 learning_rate=1e-4 warmup=0.03 scheduler=linear clip=1 model_accepts_loss_kwargs=false auto_shutdown=false output=$OUTPUT_DIR" | tee "$OUTPUT_DIR/config.log"
 
 STAGE="training"
 python -m pathvqa.train_visual_lora \
@@ -49,7 +49,7 @@ python -m pathvqa.train_visual_lora \
   --target-scope full_model --last-n-vision-layers 24 --rank 2 \
   --expected-trainable-parameters 1769472 \
   --seed 44 --data-seed 42 --epochs 5 --save-epochs 3 4 5 \
-  --batch-size 2 --gradient-accumulation 16 --learning-rate 1e-4 \
+  --batch-size 1 --gradient-accumulation 32 --learning-rate 1e-4 \
   --max-length 2048 --dataloader-workers 2 --correct-loss-accumulation \
   2>&1 | tee "$OUTPUT_DIR/train.log"
 
@@ -66,7 +66,7 @@ assert d["dropout"]==0.05 and d["use_rslora"] is False and d["use_dora"] is Fals
 assert d["parameter_counts"]["trainable"]==1769472 and len(set(d["target_modules"]))==192
 assert d["selected_vision_layers_0based"]==list(range(24))
 assert d["selected_language_layers_0based"]==list(range(36))
-assert d["per_device_train_batch_size"]==2 and d["gradient_accumulation_steps"]==16
+assert d["per_device_train_batch_size"]==1 and d["gradient_accumulation_steps"]==32
 assert d["effective_batch_size"]==32 and d["learning_rate"]==1e-4
 assert d["trainer_model_accepts_loss_kwargs"] is False and d["accelerator_gradient_accumulation_steps"]==1
 for epoch in (3,4,5):

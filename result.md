@@ -1,5 +1,9 @@
 # Experiment Result Summary
 
+### 2026-09-30：LoRA-r2 batch2运行失败，batch1重跑待执行
+
+`pathvqa_lora_full_model_attention_r2_norm_fixed_5ep_seed44`（PathVQA seed44/data42）在837/3075步反向OOM，无epoch5成绩。用户确认输出后缀`_1`，精确完整路径未回传。改为microbatch1/累积32、有效batch32，从头运行独立`pathvqa_lora_full_model_attention_r2_norm_fixed_5ep_b1a32_seed44`，其余五轮配置不变；仅准备，不代启动GPU，不关机。不能把等效batch相同解释成完全相同优化轨迹。
+
 ## 2026-09-13 电气评估口径更正
 
 用户确认原评价将相同的18条缺图样本自动计对，并以972为分母。按954条有效样本重新计分，Static Prompt为663/954＝69.50%，CoCoOp-style为671/954＝70.34%，QDPT为681/954＝71.38%；QDPT分别高1.89、1.05个百分点。上述三个整数总数由原两位百分比与已确认的972分母重建，本轮未重新运行模型。LoRA以评估器输出`rank8: score=70.96 evaluated=954`为准，即677/954＝70.96%；旧70.69%及候选687/972属于抄录或统计口径混用。QDPT比LoRA多答对4题，高0.42个百分点。本次单种子结果的排序为Static Prompt < CoCoOp-style < LoRA < QDPT。以下历史记录保留，涉及原电气分数的结论以上述更正为准。
@@ -434,3 +438,8 @@ This file is the concise experiment memory shared by the user and Codex. The com
 ### 2026-09-30：V1B与RSVQA LoRA结果
 - V1B `pathvqa_v1b_evidence_token_norm_fixed_5ep_seed44`，固定epoch5 Validation：57.4533/90.0160/24.9840，Overall较原V1低1.8853，Free-form低2.9037；保留完整映射但改20+1独立token没有保住分数，暂保留原共享偏移。单seed、配对CI未回传，不泛化为所有插入方式无效。输出`pathvqa/outputs/visual_selection_prefix_evidence/pathvqa_v1b_evidence_token_norm_fixed_5ep_seed44_20260929`。
 - RSVQA LoRA `rsvqa_lr_lora_full_model_attention_r8_b4a8_seed44` Test OA87.0552/AA87.7162；四类92/91.6074/74.2789/92.9785。比V1 OA高2.0192，最大题型差在count（5.1578）。本地配置LoRA7,077,888参数、3epochs；V1 1,864,963参数、5epochs，参数少73.6509%，但不可表述同训练预算或精度持平。配对CI待补。输出`RSVQA/outputs/lora/rsvqa_lr_lora_full_model_attention_r8_b4a8_seed44_20260929`。
+
+### 2026-09-30：三项PathVQA消融完成
+- 同seed44/归一化五轮/固定epoch5 Validation：C-static 56.7343，较V1 -2.6042 CI[-3.4869,-1.7527]；C-qmap 58.7314，-0.6071 CI[-1.4307,0.1939]；C-noVisual 57.9805，-1.3580 CI[-2.1390,-0.5650]。三者输出均位于`pathvqa/outputs/visual_selection_prefix/ablations/pathvqa_v1_{c_static,c_qmap,c_no_visual}_norm_fixed_5ep_seed44_20260930`。
+- 动态整体与Visual18有当前seed上的总体收益；问题引导地图的总体收益未确定，where下降10.0244且该子组CI低于零。qmap仍有图像条件地图和问题条件层门控，不能写成无问题条件。where不等同空间定位正确；不宣称跨seed机制稳定。
+- Visual18仅18432参数，移除后Free-form低2.5526，80/85净损失来自开放回答，支持保留。uniform继续暂缓；完整分项、配对、成本及路径已记主账本。

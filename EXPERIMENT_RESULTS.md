@@ -1,5 +1,12 @@
 # MMRL Experiment Ledger
 
+## 2026-09-30 PathVQA LoRA-r2 batch2 OOM及batch1重跑准备
+
+- 失败实验：`pathvqa_lora_full_model_attention_r2_norm_fixed_5ep_seed44`，PathVQA，model seed44/data seed42，标准全attention rank2/alpha4，batch2/累积16，计划五轮固定epoch5 Validation。用户回传训练在837/3075步（27%，耗时1:06:37）反向CUDA OOM：申请1.19 GiB，GPU总31.36 GiB、空闲337 MiB，进程31.02 GiB，PyTorch已分配27.84 GiB、保留未分配2.53 GiB。最后已记录epoch1.334；无完成的epoch5成绩，Overall及分项均缺失，不能作为性能结果。
+- 用户确认失败运行是重启后的`_1`后缀。输出父目录`pathvqa/outputs/lora/`；精确日期及完整运行路径、实际执行提交与库版本未回传，不自行补造。对应本地准备代码提交65967a5，不等同已核实服务器执行提交。不能仅凭该日志判定泄漏、异常样本或碎片化。
+- 用户授权唯一配置变更为microbatch1/累积32，等效batch32；新实验`pathvqa_lora_full_model_attention_r2_norm_fixed_5ep_b1a32_seed44`，从头训练，独立目录，原产物保留。其余结构、初始化、学习率、优化器、归一化、五轮及固定epoch5协议不变。不额外加allocator配置或checkpointing。等效batch相同不保证随机性及等权microbatch目标下逐步轨迹完全相同。
+- 状态：代码准备，尚未运行；GPU由用户执行，不自动关机、不自动重试。结果回传后补记精确路径、成绩、配对统计与成本。
+
 ## 2026-09-13 correction: private electrical evaluation denominator
 
 The user, who authored the evaluator, confirmed that all methods automatically received credit for the same 18 samples with missing image-file associations. The previously recorded 70.06 / 70.88 / 71.91 percentages used all 972 samples, including these automatic credits; they are not accuracies over the 954 evaluated samples. Historical entries below are preserved.
@@ -1850,3 +1857,57 @@ Summary: /root/autodl-tmp/Qwen3-VL-modify-test/pathvqa/outputs/visual_selection_
 - PathVQA `pathvqa_v1b_evidence_token_norm_fixed_5ep_seed44`, model seed44/data seed42, fixed epoch5 Validation. Controlled change: keep full V1 condition head and 1,864,963 planned parameters; replace shared P20 offset with `[P20; b; native chat]`. Returned Overall57.4533, Yes/No90.0160, Free-form24.9840; question types how10.0775, other14.2857, what20.4082, when7.6923, where60.1467, why4.7619, yes/no90.0160. Image-cluster95%CI[55.9935,58.8549], 2000 iterations, bootstrap seed42,832 images. Output `/root/autodl-tmp/Qwen3-VL-modify-test/pathvqa/outputs/visual_selection_prefix_evidence/pathvqa_v1b_evidence_token_norm_fixed_5ep_seed44_20260929`. Versus original five-epoch V1: Overall-1.8853, Yes/No-0.8640, Free-form-2.9037, where-12.2249; paired CI not returned. Against V1A Overall+1.5498, but this changes both mapping and injection and is not a single-factor attribution. Supports retaining original interface for this configuration; does not establish all independent-token designs inferior. Runtime, actual parameter/init audit, commit and activation diagnostics not returned.
 - RSVQA-LR `rsvqa_lr_lora_full_model_attention_r8_b4a8_seed44`, seed44. Current local launcher defines data seed42, three epochs/fixed epoch3 Test, batch4/accumulation8, rank8/alpha16/dropout0.05, LR1e-4, 3% warmup/linear, normalized gradient accumulation, all24 visual attention blocks and36 language attention blocks, expected7,077,888 trainable parameters. These are locally checked configuration, not a returned server train_report. Test Overall87.0552, Average87.7162; rural_urban92.0000,presence91.6074,count74.2789,comp92.9785. Image-cluster95%CI[86.0184,88.0812],10000 iterations,bootstrap seed42,100clusters. Output `/root/autodl-tmp/Qwen3-VL-modify-test/RSVQA/outputs/lora/rsvqa_lr_lora_full_model_attention_r8_b4a8_seed44_20260929`. Versus V1 OA+2.0192, AA+1.6350; type differences0/+0.5076/+5.1578/+0.8746. Count uses interval accuracy. V1 expected1,864,963 parameters is26.3491% of LoRA (73.6509% fewer). V1 five epochs versus LoRA three: not equal training exposure; no paired CI, walltime or memory comparison supplied. Single seed does not support a stability comparison. No claim of V1 accuracy parity or superiority.
 - Status correction to prior pending entries: V1B and LoRA b4a8 now have returned results; do not rerun. No GPU operations performed here; no new experiment scheduled.
+
+### 2026-09-30 - PathVQA C-static / C-qmap / C-noVisual completed
+
+All three: model seed44/data seed42, normalized five-epoch training from scratch, fixed epoch5 Validation, original V1 seed44 comparator Overall59.3386/Yes-No90.8800/Free-form27.8877. User-returned paired image-cluster intervals below; planned bootstrap10000/seed42, runtime bootstrap metadata/commit and initialization audits not included in excerpt. No Test or additional seeds. Differences are reported values (rounding may differ from subtraction of displayed scores).
+
+| Experiment suffix (prefix pathvqa_v1_, suffix _norm_fixed_5ep_seed44) | Controlled change | Overall | Yes/No | Free-form | Parameters | Training seconds | Peak GPU GiB |
+|---|---|---:|---:|---:|---:|---:|---:|
+| c_static | Remove full dynamic branch; keep original P20+Visual18 |56.7343|88.9600|24.6011|69632|10531.2984|23.136|
+| c_qmap | Replace question-generated map queries with learned sample-independent queries; keep question-conditioned layer gates and all other branches |58.7314|90.8480|26.7071|1815811|10843.682|23.287|
+| c_no_visual | Remove Visual18 only; retain P20 and full dynamic branch |57.9805|90.7200|25.3350|1846531|10443.9421|22.108|
+
+Exact output roots:
+- `/root/autodl-tmp/Qwen3-VL-modify-test/pathvqa/outputs/visual_selection_prefix/ablations/pathvqa_v1_c_static_norm_fixed_5ep_seed44_20260930`
+- `/root/autodl-tmp/Qwen3-VL-modify-test/pathvqa/outputs/visual_selection_prefix/ablations/pathvqa_v1_c_qmap_norm_fixed_5ep_seed44_20260930`
+- `/root/autodl-tmp/Qwen3-VL-modify-test/pathvqa/outputs/visual_selection_prefix/ablations/pathvqa_v1_c_no_visual_norm_fixed_5ep_seed44_20260930`
+
+Question types in order how/other/what/when/where/why/yes-no:
+- c_static: 6.9767 / 7.1429 / 20.6436 / 0.0 / 57.4572 / 0.0 / 88.9600
+- c_qmap: 10.0775 / 14.2857 / 22.2135 / 0.0 / 62.3472 / 4.7619 / 90.8480
+- c_no_visual: 9.3023 / 7.1429 / 20.7221 / 0.0 / 61.6137 / 4.7619 / 90.7200
+
+All paired deltas = ablation minus V1; exclusive counts = ablation-only / V1-only:
+
+| Variant | Group | Delta | 95% CI | Exclusive counts |
+|---|---|---:|---|---|
+|c_static|overall|-2.6042|[-3.4869,-1.7527]|243/406|
+|c_static|yes_no|-1.9200|[-2.9478,-0.9328]|101/161|
+|c_static|free_form|-3.2865|[-4.6401,-1.9595]|142/245|
+|c_static|what|-1.4129|[-2.8298,0.0000]|120/156|
+|c_static|where|-14.9144|[-19.5122,-10.4878]|19/80|
+|c_static|how|-3.8760|[-10.3704,1.6670]|3/8|
+|c_static|other|-7.1429|[-23.0769,0.0000]|0/1|
+|c_static|when|0.0000|[0.0000,0.0000]|0/0|
+|c_static|why|0.0000|[0.0000,0.0000]|0/0|
+|c_qmap|overall|-0.6071|[-1.4307,0.1939]|281/319|
+|c_qmap|yes_no|-0.0320|[-0.9814,0.9300]|114/115|
+|c_qmap|free_form|-1.1806|[-2.5160,0.1566]|167/204|
+|c_qmap|what|+0.1570|[-1.1712,1.5103]|137/133|
+|c_qmap|where|-10.0244|[-14.5985,-5.3922]|26/67|
+|c_qmap|how|-0.7752|[-5.5118,3.6041]|3/4|
+|c_qmap|other|0.0000|[0.0000,0.0000]|0/0|
+|c_qmap|when|0.0000|[0.0000,0.0000]|0/0|
+|c_qmap|why|+4.7619|[0.0000,15.0000]|1/0|
+|c_no_visual|overall|-1.3580|[-2.1390,-0.5650]|251/336|
+|c_no_visual|yes_no|-0.1600|[-1.1034,0.7676]|112/117|
+|c_no_visual|free_form|-2.5526|[-3.8052,-1.3447]|139/219|
+|c_no_visual|what|-1.3344|[-2.6789,0.0000]|115/149|
+|c_no_visual|where|-10.7579|[-14.9510,-6.6015]|20/64|
+|c_no_visual|how|-1.5504|[-7.6337,3.4783]|3/5|
+|c_no_visual|other|-7.1429|[-23.0769,0.0000]|0/1|
+|c_no_visual|when|0.0000|[0.0000,0.0000]|0/0|
+|c_no_visual|why|+4.7619|[0.0000,15.0000]|1/0|
+
+`question_type:yes/no` duplicates the respective yes_no row exactly. Interpretation: full dynamic branch and Visual18 removal have negative overall paired intervals; qmap overall/Free-form intervals cross zero, while exploratory where interval is negative (41 net losses there vs38 overall). Learned fixed queries still produce image-dependent maps, and question dependence through layer gating remains. Thus no proof that all question conditioning is unnecessary or that original maps localize correctly. Visual18 removes only18432 parameters (~0.99% of V1) but costs1.3580 OA, mostly Free-form (80 of85 net errors); counts do not establish independently additive module effects. Paired intervals capture evaluation uncertainty, not training-seed variance. No new experiments scheduled; uniform remains deferred.

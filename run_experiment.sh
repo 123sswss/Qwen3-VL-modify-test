@@ -68,6 +68,9 @@ if [ "$RUN_TARGET" = "pathvqa_visual_selection_offset_v0_seed44" ] || \
    [ "$RUN_TARGET" = "pathvqa_v0_seed44_mask_fixed_validation" ]; then
   SHUTDOWN_ON_EXIT=0
 fi
+if [ "$RUN_TARGET" = "pathvqa_v1_c_ablations_static_qmap_noVisual_5ep_seed44" ]; then
+  SHUTDOWN_ON_EXIT=0
+fi
 if [ "$RUN_TARGET" = "pathvqa_v1b_then_rsvqa_lora_r8_b4a8_shutdown" ]; then
   SHUTDOWN_ON_EXIT=1
 fi
@@ -4445,6 +4448,130 @@ run_pathvqa_v1_direct_summary_norm_fixed_5ep_seed44() {
   echo "[PATHVQA_V1_DIRECT_DONE] output=$output_dir primary_epoch=5 baseline=59.3386 test_evaluation=false other_seeds=false"
 }
 
+run_pathvqa_v1_c_ablation() {
+  local mode="$1"
+  local expected="$2"
+  local experiment_name="pathvqa_v1_${mode}_norm_fixed_5ep_seed44"
+  local output_root="$PATHVQA_V1_OUTPUT_ROOT/ablations"
+  local baseline_run="${PATHVQA_V1_5EP_BASELINE_RUN:-$PATHVQA_V1_OUTPUT_ROOT/pathvqa_v1_norm_fixed_5ep_seed44_20260926_2}"
+  local baseline_eval="$baseline_run/eval_validation/epoch_5"
+  local audit_json="${PATHVQA_V1_LOSS_AUDIT_JSON:-$PATHVQA_V1_OUTPUT_ROOT/diagnostics/pathvqa_v1_loss_scaling_audit_20260924/v1_loss_scaling_audit.json}"
+  if [ ! -f "$baseline_eval/pathvqa_comparisons.json" ] || [ ! -f "$baseline_eval/pathvqa_summary.json" ] || [ ! -f "$audit_json" ]; then
+    echo "[ERR] C-ablation requires complete original V1 predictions and normalization audit before training: baseline=$baseline_eval audit=$audit_json" >&2
+    return 1
+  fi
+  (
+    cd "$ROOT_DIR" || exit 1
+    python -c 'import importlib.metadata,json,sys,torch; d=json.load(open(sys.argv[1],encoding="utf-8")); assert d["passed"] is True; assert all(all(d["windows"][str(k)]["numeric_checks"].values()) for k in (16,3)); assert d["versions"]["torch"]==torch.__version__; assert d["versions"]["transformers"]==importlib.metadata.version("transformers"); assert d["versions"]["accelerate"]==importlib.metadata.version("accelerate"); b=json.load(open(sys.argv[2],encoding="utf-8")); assert abs(b["overall_accuracy"]-59.3386)<1e-4; print("[C_ABLATION_PROTOCOL] normalization_audit_passed=True baseline=59.3386")' "$audit_json" "$baseline_eval/pathvqa_summary.json"
+  ) || return 1
+  local output_dir
+  # Reuse only complete runs whose saved training/preflight metadata attest
+  # this exact ablation and all controlled training settings.
+  output_dir="$(python - "$output_root" "$experiment_name" "$mode" "$expected" <<'PY'
+import json,sys
+from pathlib import Path
+root,experiment,mode,expected=Path(sys.argv[1]),sys.argv[2],sys.argv[3],int(sys.argv[4])
+for run in sorted(root.glob(experiment+"_*"), key=lambda p:p.stat().st_mtime, reverse=True):
+    try:
+        d=json.loads((run/"train_report.json").read_text(encoding="utf-8"))
+        p=json.loads((run/"v1_real_batch_preflight.json").read_text(encoding="utf-8"))
+        g=json.loads((run/"ablation_generation_preflight.json").read_text(encoding="utf-8"))
+        s=json.loads((run/"eval_validation/epoch_5/pathvqa_summary.json").read_text(encoding="utf-8"))
+        o=d["optimizer"]
+        assert d["experiment"]==experiment and d["dataset"]=="PathVQA"
+        assert d["model_seed"]==44 and d["data_seed"]==42 and d["epochs"]==5
+        assert d["visual_prompt_mode"]==mode and d["total_trainable_parameters"]==expected
+        assert d["trainer_model_accepts_loss_kwargs"] is False
+        assert o["per_device_batch_size"]==2 and o["gradient_accumulation_steps"]==16
+        assert o["warmup_ratio"]==0.03 and o["scheduler"]=="linear" and o["max_grad_norm"]==1.0
+        assert o["weight_decay"]==0.0 and o["betas"]==[0.9,0.999] and o["eps"]==1e-8
+        rates={"p20":0.3,"visual_s8":3e-5,"visual_av10":1e-4,"question_context":1e-4,"maps":1e-4,"layer_condition":1e-4,"prefix_output":1e-4}
+        assert o["group_learning_rates"]=={k:rates[k] for k in d["trainable_parameters"]}
+        assert p["ablation_path_audit"]["ablation_mode"]==mode and g["roundtrip_equal"] is True
+        assert s["split"]=="validation" and s["count"]==6259
+        assert (run/"checkpoints/epoch_5/visual_selection_prefix.pt").is_file()
+        assert (run/"eval_validation/epoch_5/pathvqa_comparisons.json").is_file()
+    except (OSError,ValueError,KeyError,AssertionError,TypeError):
+        continue
+    print(run)
+    break
+PY
+)" || return 1
+  if [ -n "$output_dir" ]; then
+    echo "[C_ABLATION_REUSE] mode=$mode output=$output_dir"
+  else
+    output_dir="$(available_output_dir "$output_root" "${experiment_name}_${RUN_DATE}")"
+    mkdir -p "$output_dir/eval_validation/epoch_5"
+    RUN_STATUS_OUTPUT_DIR="$output_dir"
+    record_run_stage "training_preflight" "started" 0
+    echo "[C_ABLATION_CONFIG] mode=$mode experiment=$experiment_name expected_trainable=$expected seed=44 data_seed=42 batch=2 accumulation=16 epochs=5 primary_epoch=5 model_accepts_loss_kwargs=false git_commit=$(git -C "$ROOT_DIR" rev-parse HEAD) output=$output_dir" | tee "$output_dir/config.log"
+    (
+      cd "$ROOT_DIR" || exit 1
+      python -m pathvqa.train_visual_selection_prefix \
+        --model-path "$MODEL_PATH" --data-root "$PATHVQA_DATA_ROOT" \
+        --cache-dir "$PATHVQA_CACHE_ROOT" --output-dir "$output_dir" \
+        --experiment-name "$experiment_name" --model-seed 44 \
+        --epochs 5 --save-epochs 3 4 5 --batch-size 2 --gradient-accumulation 16 \
+        --visual-prompt-mode "$mode" --correct-loss-accumulation \
+        2>&1 | tee "$output_dir/train.log"
+    ) || { record_run_stage "training_preflight" "failed" 1; return 1; }
+    record_run_stage "training_preflight" "completed" 0
+    if ! python -c 'import json,sys; d=json.load(open(sys.argv[1],encoding="utf-8")); g=json.load(open(sys.argv[2],encoding="utf-8")); assert d["visual_prompt_mode"]==sys.argv[3] and d["total_trainable_parameters"]==int(sys.argv[4]); assert d["epochs"]==5 and d["saved_epochs"]==[3,4,5] and d["model_seed"]==44 and d["data_seed"]==42; assert d["trainer_model_accepts_loss_kwargs"] is False; assert g["roundtrip_equal"] is True and g["single_prefill_injection"] is True and g["prefix_tokens"]==20' "$output_dir/train_report.json" "$output_dir/ablation_generation_preflight.json" "$mode" "$expected"; then
+      record_run_stage "checkpoint_audit" "failed" 1
+      return 1
+    fi
+    record_run_stage "validation" "started" 0
+    (
+      cd "$ROOT_DIR" || exit 1
+      python -m pathvqa.pathvqa_official_eval \
+        --backend visual-selection-prefix --base-model "$MODEL_PATH" \
+        --checkpoint "$output_dir/checkpoints/epoch_5" \
+        --data-root "$PATHVQA_DATA_ROOT" --cache-dir "$PATHVQA_CACHE_ROOT" \
+        --split validation --output-dir "$output_dir/eval_validation/epoch_5" \
+        2>&1 | tee "$output_dir/eval_validation_epoch_5.log"
+    ) || { record_run_stage "validation" "failed" 1; return 1; }
+    record_run_stage "validation" "completed" 0
+  fi
+  RUN_STATUS_OUTPUT_DIR="$output_dir"
+  record_run_stage "paired_statistics" "started" 0
+  (
+    cd "$ROOT_DIR" || exit 1
+    python -m diagnostics.compare_pathvqa_v1_training_budget \
+      --baseline-eval "$baseline_eval" --variant-eval "$output_dir/eval_validation/epoch_5" \
+      --experiment "$experiment_name" --baseline pathvqa_v1_norm_fixed_5ep_seed44 \
+      --all-question-types --output "$output_dir/paired_vs_v1_5ep.json" \
+      2>&1 | tee "$output_dir/paired_vs_v1_5ep.log"
+  ) || { record_run_stage "paired_statistics" "failed" 1; return 1; }
+  record_run_stage "completed" "completed" 0
+  echo "[C_ABLATION_DONE] mode=$mode output=$output_dir primary_epoch=5 test=false"
+}
+
+run_pathvqa_v1_c_ablations() {
+  local serial_dir
+  serial_dir="$(available_output_dir "$PATHVQA_V1_OUTPUT_ROOT/ablations/serial" "c_static_qmap_noVisual_${RUN_DATE}")"
+  mkdir -p "$serial_dir"
+  local mode expected
+  for mode in c_static c_qmap c_no_visual; do
+    case "$mode" in
+      c_static) expected=69632 ;;
+      c_qmap) expected=1815811 ;;
+      c_no_visual) expected=1846531 ;;
+    esac
+    RUN_STATUS_OUTPUT_DIR="$serial_dir"
+    record_run_stage "$mode" "started" 0
+    if ! run_pathvqa_v1_c_ablation "$mode" "$expected"; then
+      RUN_STATUS_OUTPUT_DIR="$serial_dir"
+      record_run_stage "$mode" "failed" 1
+      return 1
+    fi
+    printf '%s\t%s\n' "$mode" "$RUN_STATUS_OUTPUT_DIR" >> "$serial_dir/completed_outputs.tsv"
+    RUN_STATUS_OUTPUT_DIR="$serial_dir"
+    record_run_stage "$mode" "completed" 0
+  done
+  record_run_stage "completed" "completed" 0
+  echo "[C_ABLATION_SERIAL_DONE] output=$serial_dir auto_shutdown=false"
+}
+
 run_pathvqa_v1b_evidence_token_norm_fixed_5ep_seed44() {
   local experiment_name="pathvqa_v1b_evidence_token_norm_fixed_5ep_seed44"
   local output_dir
@@ -5590,6 +5717,9 @@ case "$RUN_TARGET" in
     ;;
   pathvqa_v1b_then_rsvqa_lora_r8_b4a8_shutdown)
     run_pathvqa_v1b_then_rsvqa_lora_r8_b4a8_shutdown || failures=$((failures + 1))
+    ;;
+  pathvqa_v1_c_ablations_static_qmap_noVisual_5ep_seed44)
+    run_pathvqa_v1_c_ablations || failures=$((failures + 1))
     ;;
   pathvqa_v1_visual_selection_prefix_p20_norm_fixed_seed45)
     run_pathvqa_v1_loss_corrected_seed45 || failures=$((failures + 1))

@@ -1,3 +1,23 @@
+## 2026-09-30 用户确定三项PathVQA消融
+
+实现状态：已准备串行目标`pathvqa_v1_c_ablations_static_qmap_noVisual_5ep_seed44`，等待用户亲自运行。顺序C-static→C-qmap→C-noVisual，失败即停、强制不关机。未找到现有完全匹配结果；运行时仍按完整产物与训练协议核验复用。独立名称`pathvqa_v1_c_static_norm_fixed_5ep_seed44`、`pathvqa_v1_c_qmap_norm_fixed_5ep_seed44`、`pathvqa_v1_c_no_visual_norm_fixed_5ep_seed44`，产物位于`pathvqa/outputs/visual_selection_prefix/ablations/`。参数69,632/1,815,811/1,846,531；C-qmap三条128维向量初始化为原query Linear的bias（Uniform[-1/sqrt128,+1/sqrt128]，即原query在u=0的输出），不加温度或尺度修正，共有参数和全局RNG保持原V1。保存epoch3/4/5、固定epoch5 Validation，按图像簇10000次seed42配对原59.3386。预检核验目标路径切断、保留分支梯度、原生embedding及20-token注入、缓存和保存重载一致；日志保留梯度、训练时间和峰值显存。结果尚未产生，用户回传后立即追加两份本地账本，不将代码准备记为已完成实验。
+
+本轮只准备C-static、C-qmap、C-noVisual，按此顺序串行，均model seed44/data seed42，归一化五轮、固定epoch5 Validation，从头训练，对照原V1 59.3386。C-static即静态Visual18+P20，同数据集同协议不重复命名跑两遍；不能以RSVQA结果替代PathVQA。C-qmap每层以独立、跨样本共享的可学习query向量替换原问题生成query，其余keys/maps/共同Value/问题层权重/映射/P20/Visual18保留；query尺度应按原实现初始化口径审计，不额外调温度。C-noVisual仅移除Visual18，保留原生5/11/17特征读取与完整动态分支。C-uniform延期至审稿要求；不补其他seed或Test。保留共有参数初值、数据顺序与原五轮优化协议，删除模块不扰动共有初始化；记录实际参数与单因素边界。提供串行失败即停入口，不自动重试，不继承旧任务自动关机设置；本轮未要求关机，默认关闭。所有GPU工作由用户亲自启动。此条覆盖上方旧建议优先级。
+
+## 2026-09-30 剩余论文补实验清单（规划，不自动运行）
+
+优先级更新：不再继续结构搜索，已有A/B及视觉布局负结果直接复用。以下覆盖旧矩阵的执行优先级，不删除历史。
+
+1. 先完成CPU协议/产物审计：PathVQA/SLAKE/电气各基线的归一化、split、epoch与精确运行身份；已有兼容产物复用，只列出确实缺失的重训项。补V1B对原V1、RSVQA V1对LoRA的图像簇配对CI。
+2. RSVQA补静态Visual18+P20和原CoCoOp-style（无Visual18），seed44，固定五轮、相同数据/评分/归一化；共2次训练。不据Test继续调参，不补RSVQA其他seed。
+3. PathVQA最终固定epoch5 V1 checkpoints seeds44/45/46做Test，仅评估不重训；明确当前58.8592均值来自Validation。主表基线经第1项审核后补齐，不混旧3轮未知协议和新5轮结果作纯架构归因。
+4. 核心消融统一PathVQA seed44、归一化五轮、固定epoch5 Validation，从头训练：C-static移除动态分支保留P20+Visual18；C-qmap以与问题无关的可学习query替换地图query，保留问题条件层门控；C-uniform三层地图固定均匀保留其余映射；C-noVisual移除Visual18保留动态分支。优先前两项，后两项补完整机制表；这不是推理时关模块。若已有同协议结果则复用。C-static/C-qmap追加45/46属于预定可选稳定性补证，不按掉分大小挑选。
+5. 电气补冻结V1，先seed47与历史主seed对应；先核验有效样本/设备场景划分与基线协议，再决定补48/49。不得复用缺图自动计正确口径。SLAKE V1三seed已完成，不重训；其基线按审计决定缺口。
+6. 效率表：先提取已有训练时长、峰值显存、参数量；不同时硬件/精度的延迟不横比，缺失且论文需要时由用户统一环境补测。
+7. 可选单层17（保留192维条件容量）、最终五轮checkpoint机制干预和定性图；不排新层数/Prompt数/学习率/瓶颈宽度搜索，不新增数据集。A/B不补多seed作为默认任务。
+
+> **2026-09-30 完成状态更新：** V1B seed44五轮Validation57.4533，RSVQA LoRA-r8 b4a8 seed44 Test87.0552，两项已记账，不重跑。保留原V1；未新增训练。LoRA本地配置三轮、V1五轮，比较须披露预算差异；现有预测可后续做配对图像簇CI，当前未回传。此条取代旧待运行状态。
+
 > **2026-09-29 RSVQA-LR full-attention LoRA-r8已排期，V1B自动关机已取消。** 新LoRA仅做单独seed44实验：官方Train从头训练3 epochs，ViT 24层qkv/proj与LLM 36层q/k/v/o共192个目标，r8/alpha16/dropout0.05/LR1e-4，预计并强制核验7,077,888参数；microbatch2、累积16、有效batch32、3% warmup线性衰减、裁剪1，并显式`model_accepts_loss_kwargs=False`。固定epoch3完整Test，训练与推理为同一实验的两个阶段，不与V1B或其他实验串联。独立脚本无自动关机、无额外GPU冒烟；全部GPU操作由用户亲自启动。V1B普通目标继续保留；旧`_shutdown`别名仅兼容调用且强制不关机。
 
 > **2026-09-29 V1B独立证据token消融已实现，等待用户亲自运行（关机安排已取消）。** 命名固定：已完成的879,364参数去瓶颈共享偏移为V1A；新V1B保留原V1全部1,864,963参数及初始化/学习率，把`b=prefix_output(ReLU(c))`从P20广播偏移改为序列`[P20;b;原chat]`。第21前缀位置attention有效、label=-100，不进入独立问题条件源；预检强制核对mRoPE、视觉mask、DeepStack、原生embedding不变、完整条件分支梯度、单次prefill注入与KV-cache/save-load一致。固定seed44/data42、五轮、epoch5 Validation，配对原V1，并在V1A产物存在时补B对A；两者同时改变映射与接口，不作单因素归因。GPU全由用户启动，不跑Test/其他seed/额外配置。

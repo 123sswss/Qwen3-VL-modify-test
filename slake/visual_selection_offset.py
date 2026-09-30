@@ -135,7 +135,7 @@ class _Visual18Block(nn.Module):
 
     def forward(self, *args: Any, **kwargs: Any) -> torch.Tensor:
         owner = self._owner_ref()
-        if owner is None or not owner._active:
+        if owner is None or not owner._active or getattr(owner, "skip_visual_prompt", False):
             return self.block(*args, **kwargs)
         hidden = kwargs.get("hidden_states", args[0] if args else None)
         cu = kwargs.get("cu_seqlens", args[1] if len(args) > 1 else None)

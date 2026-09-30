@@ -11,6 +11,7 @@ from PIL import Image
 from transformers import AutoModelForImageTextToText, AutoProcessor
 
 from slake.visual_selection_prefix import CONFIG_NAME, VisualSelectionPrefixModel
+from slake.visual_selection_prefix_ablation import ABLATION_CLASSES
 from slake.visual_selection_prefix_direct import VisualSelectionPrefixDirectModel
 from slake.visual_selection_prefix_evidence import VisualSelectionPrefixEvidenceModel
 from slake.visual_selection_prefix_visual20 import VisualSelectionPrefixVisual20Model
@@ -40,7 +41,9 @@ class VisualSelectionPrefixInterface:
             device_map="auto", trust_remote_code=True,
         )
         method = config.get("method")
-        if method == VisualSelectionPrefixEvidenceModel.method_name:
+        if config.get("ablation_mode") in ABLATION_CLASSES:
+            model_class = ABLATION_CLASSES[config["ablation_mode"]]
+        elif method == VisualSelectionPrefixEvidenceModel.method_name:
             model_class = VisualSelectionPrefixEvidenceModel
         elif method == VisualSelectionPrefixDirectModel.method_name:
             model_class = VisualSelectionPrefixDirectModel

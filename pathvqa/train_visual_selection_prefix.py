@@ -26,6 +26,7 @@ from RSVQA.data_pipeline import RSVQADataCollator, RSVQALRDataset
 from slake.data_pipeline import SLAKEDataCollator, SLAKEDataset
 from slake.visual_selection_offset import VisualSelectionOffsetModel
 from slake.visual_selection_prefix import EXPECTED_TRAINABLE, VisualSelectionPrefixModel
+from slake.visual_selection_prefix_ablation import ABLATION_CLASSES, EXPECTED_TOTALS
 from slake.visual_selection_prefix_direct import (
     EXPECTED_TRAINABLE_DIRECT,
     VisualSelectionPrefixDirectModel,
@@ -122,6 +123,8 @@ class V1Trainer(Trainer):
         else:
             rates["visual_s8"] = 3e-5
             rates["visual_av10"] = self.visual_av10_learning_rate
+        if getattr(self.model, "ablation_mode", None):
+            rates = {name: rates[name] for name in groups}
         if set(rates) != set(groups):
             raise RuntimeError(f"V1 optimizer/group mismatch: rates={set(rates)} groups={set(groups)}")
         self.configured_group_learning_rates = dict(rates)
@@ -210,9 +213,39 @@ def real_batch_preflight(
         required += ("prefix_output.weight",) + tuple(
             f"value_blocks.{i}.weight" for i in range(3)
         )
+    mode = getattr(model, "ablation_mode", None)
+    if mode == "c_static":
+        required = ("p20", "visual_s8", "visual_av10")
+    elif mode == "c_qmap":
+        required = tuple(name for name in required if not name.startswith("query_heads.")) + tuple(
+            f"query_heads.{i}.query" for i in range(3)
+        )
     inactive = [name for name in required if model.first_backward_gradients.get(name, 0) <= 0]
     if inactive:
         raise RuntimeError(f"V1 real batch inactive parameters: {inactive}")
+    path_audit = None
+    if mode:
+        path_audit = {"ablation_mode": mode, "native_embeddings_unchanged": model.last_injection_audit["native_embeddings_unchanged"]}
+        if mode == "c_static":
+            from slake.visual_selection_prefix_ablation import DYNAMIC_MODULES
+            if any(hasattr(model, name) for name in DYNAMIC_MODULES):
+                raise RuntimeError("C-static retains a dynamic module")
+            if float(model.debug_context["offset_rms"]) != 0:
+                raise RuntimeError("C-static applied a conditional offset")
+            path_audit["dynamic_modules_absent_and_offset_zero"] = True
+        elif mode == "c_qmap":
+            for head in model.query_heads:
+                zeros = head.query.new_zeros((2, 128), requires_grad=True)
+                if not torch.equal(head(zeros), head(zeros + 1)):
+                    raise RuntimeError("C-qmap query depends on question content")
+                if torch.autograd.grad(head(zeros).sum(), zeros, allow_unused=True)[0] is not None:
+                    raise RuntimeError("C-qmap retains question-to-query gradient")
+            path_audit["question_to_map_query_disconnected"] = True
+            path_audit["question_layer_gate_gradient_positive"] = model.first_backward_gradients["layer_gate.weight"] > 0
+        else:
+            if hasattr(model, "visual_s8") or hasattr(model, "visual_av10") or not model.skip_visual_prompt:
+                raise RuntimeError("C-noVisual retains visual Prompt injection")
+            path_audit["visual_prompt_parameters_absent_and_injection_bypassed"] = True
     audit = {
         "loss": float(output.loss.detach()), "parameter_counts": model._audit_parameters(),
         "batch_size": batch_size,
@@ -222,6 +255,7 @@ def real_batch_preflight(
         "injection": model.last_injection_audit,
         "alpha_calibration": alpha_calibration,
         "question_policy": "independent_raw_question_ids_no_prefill_write_mapping",
+        "ablation_path_audit": path_audit,
     }
     with (output_dir / "v1_real_batch_preflight.json").open("w", encoding="utf-8") as handle:
         json.dump(audit, handle, indent=2)
@@ -232,7 +266,7 @@ def real_batch_preflight(
 def v1b_generation_roundtrip_preflight(
     model, processor, data_root: Path, cache_dir: Path, output_dir: Path,
 ) -> None:
-    """Verify one evidence-token prefill, KV reuse, and checkpoint reload."""
+    """Verify one prefix prefill, KV reuse, and checkpoint reload."""
     store = PathVQAParquetStore(data_root, "validation", cache_dir=cache_dir)
     row = dict(store.samples[0])
     image = store.load_image(row)
@@ -265,39 +299,48 @@ def v1b_generation_roundtrip_preflight(
                     **moved, max_new_tokens=8, do_sample=False, use_cache=True,
                 )
             if model.diagnostic_prefill_calls - before != 1:
-                raise RuntimeError("V1B did not inject exactly once during cached generation")
-            return output[:, native_length + TOTAL_PREFIX_TOKENS:].detach().cpu()
+                raise RuntimeError("V1 prefix did not inject exactly once during cached generation")
+            prefix_tokens = 20 if getattr(model, "ablation_mode", None) else TOTAL_PREFIX_TOKENS
+            return output[:, native_length + prefix_tokens:].detach().cpu()
 
         first = greedy()
-        checkpoint = output_dir / "preflight_v1b_roundtrip"
+        checkpoint = output_dir / ("preflight_ablation_roundtrip" if getattr(model, "ablation_mode", None) else "preflight_v1b_roundtrip")
         model.save_v1(checkpoint)
         with torch.no_grad():
             model.p20[0, 0].add_(1.0)
         model.load_v1(checkpoint)
         second = greedy()
         if not torch.equal(first, second):
-            raise RuntimeError("V1B save/reload changed greedy generation")
+            raise RuntimeError("V1 prefix save/reload changed greedy generation")
     finally:
         model.base_model.config.use_cache = old_cache
         model.train(was_training)
     report = {
         "question_id": row["question_id"],
-        "prefix_tokens": TOTAL_PREFIX_TOKENS,
-        "layout": "P20_then_one_evidence_then_native_chat",
+        "prefix_tokens": 20 if getattr(model, "ablation_mode", None) else TOTAL_PREFIX_TOKENS,
+        "layout": "P20_then_native_chat" if getattr(model, "ablation_mode", None) else "P20_then_one_evidence_then_native_chat",
         "single_prefill_injection": True,
         "kv_cache_reused_without_reinjection": True,
         "roundtrip_equal": True,
         "generated_tokens": first[0].tolist(),
     }
-    with (output_dir / "v1b_generation_preflight.json").open("w", encoding="utf-8") as handle:
+    report_name = "ablation_generation_preflight.json" if getattr(model, "ablation_mode", None) else "v1b_generation_preflight.json"
+    with (output_dir / report_name).open("w", encoding="utf-8") as handle:
         json.dump(report, handle, ensure_ascii=False, indent=2)
-    print("[V1B_GENERATION_PREFLIGHT] " + json.dumps(report, ensure_ascii=False), flush=True)
+    label = "C_ABLATION_GENERATION_PREFLIGHT" if getattr(model, "ablation_mode", None) else "V1B_GENERATION_PREFLIGHT"
+    print(f"[{label}] " + json.dumps(report, ensure_ascii=False), flush=True)
 
 
 def construct_with_v0_initialization_audit(
     base, seed: int, output_dir: Path, *, visual_prompt_mode: str = "split18",
 ):
     """Compare every shared trainable tensor against fresh same-seed V0."""
+    if visual_prompt_mode in ABLATION_CLASSES:
+        model = ABLATION_CLASSES[visual_prompt_mode](base, init_seed=seed)
+        with (output_dir / "v1_shared_initialization_audit.json").open("w", encoding="utf-8") as handle:
+            json.dump(model.initialization_audit, handle, indent=2)
+        print("[V1_SHARED_INITIALIZATION_AUDIT] " + json.dumps(model.initialization_audit))
+        return model
     if visual_prompt_mode in {"deep5_l16_23", "deep20_split_lr_l16_23"} and len(base.model.visual.blocks) != 24:
         raise ValueError(
             "Deep5 experiment requires exactly 24 visual blocks before any "
@@ -441,6 +484,7 @@ def main() -> int:
         choices=(
             "split18", "unified20", "deep5_l16_23",
             "deep20_split_lr_l16_23", "direct_summary", "evidence_token",
+            "c_static", "c_qmap", "c_no_visual",
         ),
         default="split18",
     )
@@ -500,6 +544,7 @@ def main() -> int:
         "unified20": EXPECTED_TRAINABLE_VISUAL20,
         "deep5_l16_23": EXPECTED_TRAINABLE_DEEP5,
         "deep20_split_lr_l16_23": EXPECTED_TRAINABLE_DEEP20_SPLIT_LR,
+        **EXPECTED_TOTALS,
     }[args.visual_prompt_mode]
     if sum(counts.values()) != expected_trainable:
         raise RuntimeError("V1 parameter total changed")
@@ -555,7 +600,7 @@ def main() -> int:
     real_batch_preflight(
         model, dataset, collator, args.output_dir, batch_size=args.batch_size,
     )
-    if args.visual_prompt_mode == "evidence_token":
+    if args.visual_prompt_mode == "evidence_token" or args.visual_prompt_mode in ABLATION_CLASSES:
         if args.dataset != "pathvqa":
             raise ValueError("V1B generation roundtrip is defined only for PathVQA")
         v1b_generation_roundtrip_preflight(
@@ -628,6 +673,8 @@ def main() -> int:
         "total_trainable_parameters": sum(counts.values()),
         "train_metrics": result.metrics,
         "alpha_calibration": getattr(model, "alpha_calibration_audit", None),
+        "ablation_mode": getattr(model, "ablation_mode", None),
+        "ablation_initialization_audit": getattr(model, "initialization_audit", None),
         "peak_gpu_memory_bytes": torch.cuda.max_memory_allocated() if torch.cuda.is_available() else None,
         "preflight": str(args.output_dir / "v1_real_batch_preflight.json"),
         "git_commit": subprocess.run(

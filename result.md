@@ -430,3 +430,7 @@ This file is the concise experiment memory shared by the user and Codex. The com
 
 ### 2026-09-29：消融命名与V1B实现状态
 - 上述879,364参数的去瓶颈共享偏移方案正式简称 **V1A**。V1B已实现但尚无运行结果：完整保留原V1条件头与1,864,963参数，只把生成向量作为第21个独立前缀token，序列为`[P20;b;原chat]`，不再给P20加偏移。A/B同时存在映射与注入接口差异，后续分数差不能解释为单因素效果。
+
+### 2026-09-30：V1B与RSVQA LoRA结果
+- V1B `pathvqa_v1b_evidence_token_norm_fixed_5ep_seed44`，固定epoch5 Validation：57.4533/90.0160/24.9840，Overall较原V1低1.8853，Free-form低2.9037；保留完整映射但改20+1独立token没有保住分数，暂保留原共享偏移。单seed、配对CI未回传，不泛化为所有插入方式无效。输出`pathvqa/outputs/visual_selection_prefix_evidence/pathvqa_v1b_evidence_token_norm_fixed_5ep_seed44_20260929`。
+- RSVQA LoRA `rsvqa_lr_lora_full_model_attention_r8_b4a8_seed44` Test OA87.0552/AA87.7162；四类92/91.6074/74.2789/92.9785。比V1 OA高2.0192，最大题型差在count（5.1578）。本地配置LoRA7,077,888参数、3epochs；V1 1,864,963参数、5epochs，参数少73.6509%，但不可表述同训练预算或精度持平。配对CI待补。输出`RSVQA/outputs/lora/rsvqa_lr_lora_full_model_attention_r8_b4a8_seed44_20260929`。

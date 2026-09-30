@@ -1,3 +1,7 @@
+## 2026-09-30 PathVQA LoRA-r2近似等参数预算对照：代码已准备、尚未运行
+
+独立实验`pathvqa_lora_full_model_attention_r2_norm_fixed_5ep_seed44`，不插入或更改当前C-static→C-qmap→C-noVisual队列。复用现有LoRA全attention训练器，24层ViT qkv/proj及36层LLM q/k/v/o，共192目标；标准r2/alpha4/dropout0.05、rsLoRA关闭，无Prompt。预计并强制审计1,769,472参数，比V1 1,864,963少约5.12%，仅称近似等参数预算。model44/data42，从头5轮、batch2/累积16、LR1e-4、原AdamW/clip1/3% warmup线性衰减、`model_accepts_loss_kwargs=False`；保存epoch3/4/5，仅固定epoch5完整Validation，对原五轮V1 59.3386做图像簇10000次seed42配对总体及题型统计。记录版本、执行提交、参数量、训练耗时和峰值显存；历史r8三轮/未知历史归一化仅作带协议差异标注的参考。独立脚本`pathvqa/run_lora_full_model_attention_r2_norm_fixed_5ep_seed44.sh`，输出`pathvqa/outputs/lora/`；GPU全部由用户执行，无自动关机、Test、其他seed或搜索。当前只实现与本地CPU静态检查，结果回传后再追加两份账本。
+
 ## 2026-09-30 用户确定三项PathVQA消融
 
 实现状态：已准备串行目标`pathvqa_v1_c_ablations_static_qmap_noVisual_5ep_seed44`，等待用户亲自运行。顺序C-static→C-qmap→C-noVisual，失败即停、强制不关机。未找到现有完全匹配结果；运行时仍按完整产物与训练协议核验复用。独立名称`pathvqa_v1_c_static_norm_fixed_5ep_seed44`、`pathvqa_v1_c_qmap_norm_fixed_5ep_seed44`、`pathvqa_v1_c_no_visual_norm_fixed_5ep_seed44`，产物位于`pathvqa/outputs/visual_selection_prefix/ablations/`。参数69,632/1,815,811/1,846,531；C-qmap三条128维向量初始化为原query Linear的bias（Uniform[-1/sqrt128,+1/sqrt128]，即原query在u=0的输出），不加温度或尺度修正，共有参数和全局RNG保持原V1。保存epoch3/4/5、固定epoch5 Validation，按图像簇10000次seed42配对原59.3386。预检核验目标路径切断、保留分支梯度、原生embedding及20-token注入、缓存和保存重载一致；日志保留梯度、训练时间和峰值显存。结果尚未产生，用户回传后立即追加两份本地账本，不将代码准备记为已完成实验。

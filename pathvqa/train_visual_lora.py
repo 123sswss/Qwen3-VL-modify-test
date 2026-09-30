@@ -4,11 +4,13 @@
 from __future__ import annotations
 
 import argparse
+import importlib.metadata
 import json
 import os
 import random
 import re
 import sys
+import subprocess
 from collections import Counter
 from pathlib import Path
 from typing import Any, Dict, List
@@ -85,15 +87,18 @@ class VisualLoRACollator:
 
 
 class EpochAdapterCheckpointCallback(TrainerCallback):
-    def __init__(self, processor: Any, output_dir: Path) -> None:
+    def __init__(self, processor: Any, output_dir: Path, save_epochs=None) -> None:
         self.processor = processor
         self.output_dir = output_dir
         self.completed_epochs = set()
+        self.save_epochs = None if save_epochs is None else frozenset(save_epochs)
 
     def on_epoch_end(self, args, state, control, **kwargs):
         if not state.is_world_process_zero:
             return control
         epoch_id = max(1, int(round(float(state.epoch or 0.0))))
+        if self.save_epochs is not None and epoch_id not in self.save_epochs:
+            return control
         if epoch_id in self.completed_epochs:
             return control
         self.completed_epochs.add(epoch_id)
@@ -140,6 +145,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--rank", type=int, default=DEFAULT_RANK)
     parser.add_argument("--last-n-vision-layers", type=int, default=24)
     parser.add_argument("--epochs", type=int, default=3)
+    parser.add_argument("--save-epochs", type=int, nargs="+")
     parser.add_argument("--seed", type=int, default=44)
     parser.add_argument("--data-seed", type=int, default=42)
     parser.add_argument("--learning-rate", type=float, default=1e-4)
@@ -155,6 +161,8 @@ def parse_args() -> argparse.Namespace:
     args = parser.parse_args()
     if args.epochs < 1:
         parser.error("--epochs must be positive")
+    if args.save_epochs is not None and any(epoch < 1 or epoch > args.epochs for epoch in args.save_epochs):
+        parser.error("--save-epochs must be within the training budget")
     if args.learning_rate <= 0.0:
         parser.error("--learning-rate must be positive")
     if args.batch_size < 1 or args.gradient_accumulation < 1:
@@ -408,6 +416,16 @@ def main() -> int:
     trainer_dir = output_dir / "trainer"
     final_dir = output_dir / "final"
     output_dir.mkdir(parents=True, exist_ok=True)
+    save_epochs = sorted(set(args.save_epochs or range(1, args.epochs + 1)))
+    runtime = {
+        "git_commit": subprocess.run(["git", "rev-parse", "HEAD"], cwd=REPO_ROOT,
+                                     capture_output=True, text=True, check=False).stdout.strip(),
+        "torch": torch.__version__,
+        "transformers": importlib.metadata.version("transformers"),
+        "accelerate": importlib.metadata.version("accelerate"),
+        "peft": importlib.metadata.version("peft"),
+    }
+    print("[LORA_RUNTIME] " + json.dumps(runtime, sort_keys=True))
     if not model_path.is_dir():
         raise FileNotFoundError(f"Base model path not found: {model_path}")
 
@@ -485,6 +503,7 @@ def main() -> int:
         bias="none",
         target_modules=target_modules,
         use_dora=False,
+        use_rslora=False,
     )
     model = get_peft_model(model, peft_config)
     parameter_counts = count_parameters(model)
@@ -568,7 +587,7 @@ def main() -> int:
             )
         )
     else:
-        callbacks.append(EpochAdapterCheckpointCallback(processor, output_dir))
+        callbacks.append(EpochAdapterCheckpointCallback(processor, output_dir, save_epochs))
 
     training_args = TrainingArguments(
         output_dir=str(trainer_dir),
@@ -610,14 +629,23 @@ def main() -> int:
         f"trainer_accumulation={training_args.gradient_accumulation_steps} "
         f"accelerate_accumulation={trainer.accelerator.gradient_accumulation_steps}"
     )
-    if args.correct_loss_accumulation and trainer.model_accepts_loss_kwargs is not False:
+    if args.correct_loss_accumulation and (
+        trainer.model_accepts_loss_kwargs is not False
+        or trainer.accelerator.gradient_accumulation_steps != 1
+    ):
         raise RuntimeError("Failed to enable corrected loss accumulation")
+    if torch.cuda.is_available():
+        torch.cuda.reset_peak_memory_stats()
     train_result = trainer.train()
     if not args.throughput_benchmark:
         trainer.save_metrics("train", train_result.metrics)
         trainer.save_state()
         trainer.save_model(str(final_dir))
         processor.save_pretrained(str(final_dir))
+        missing = [epoch for epoch in save_epochs
+                   if not (output_dir / "checkpoints" / f"epoch_{epoch}" / "adapter_config.json").is_file()]
+        if missing:
+            raise RuntimeError(f"Requested LoRA checkpoints missing: {missing}")
 
     report = {
         "status": "pass",
@@ -628,7 +656,10 @@ def main() -> int:
         "rank": args.rank,
         "alpha": lora_alpha,
         "dropout": LORA_DROPOUT,
+        "use_rslora": False,
+        "use_dora": False,
         "epochs": args.epochs,
+        "saved_epochs": [] if args.throughput_benchmark else save_epochs,
         "seed": args.seed,
         "data_seed": args.data_seed,
         "learning_rate": args.learning_rate,
@@ -636,6 +667,19 @@ def main() -> int:
         "gradient_accumulation_steps": args.gradient_accumulation,
         "effective_batch_size": args.batch_size * args.gradient_accumulation,
         "trainer_model_accepts_loss_kwargs": trainer.model_accepts_loss_kwargs,
+        "accelerator_gradient_accumulation_steps": trainer.accelerator.gradient_accumulation_steps,
+        "loss_accumulation_protocol": "equal_microbatch_mean_trainer_normalized" if args.correct_loss_accumulation else "original_unmodified_trainer_protocol",
+        "runtime": runtime,
+        "peak_gpu_memory_bytes": torch.cuda.max_memory_allocated() if torch.cuda.is_available() else None,
+        "optimizer": {"type": str(training_args.optim), "weight_decay": training_args.weight_decay,
+                      "betas": [training_args.adam_beta1, training_args.adam_beta2],
+                      "eps": training_args.adam_epsilon, "warmup_ratio": training_args.warmup_ratio,
+                      "scheduler": str(training_args.lr_scheduler_type), "max_grad_norm": training_args.max_grad_norm},
+        "parameter_budget_comparison": {
+            "label": "approximately_equal_parameter_budget",
+            "reference_method": "V1", "reference_trainable": 1_864_963,
+            "fewer_parameters_percent": (1_864_963 - int(parameter_counts["trainable"])) / 1_864_963 * 100,
+        } if args.target_scope == "full_model" and args.rank == 2 else None,
         "selected_vision_layers_0based": selected_vision_layers,
         "selected_language_layers_0based": selected_language_layers,
         "target_modules": target_modules,

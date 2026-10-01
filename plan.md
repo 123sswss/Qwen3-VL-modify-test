@@ -1,3 +1,13 @@
+## 2026-10-01 用户确定五项串行收尾实验
+
+顺序：PathVQA最终归一化五轮V1 seed44/45/46各现有epoch5 checkpoint完整Test（仅评估、禁止重训或择优），随后RSVQA-LR静态Visual18+P20、原CoCoOp-style各seed44/data42从头五轮并固定epoch5完整Test。RSVQA两项均microbatch4/累积8，有效batch32，匹配已运行RSVQA V1/LoRA的batch设置；LoRA三轮与本次五轮仍需单列说明。静态69632参数，P20@0.3、S8@3e-5、Av10@1e-4；CoCoOp873120参数，无Visual18/问题条件，P20@0.3、MetaNet@3e-4，沿用历史2560->160->2560共享偏移定义。两项显式修正累积归一化，其他已定初始化/优化/评分不变。RSVQA官方active过滤及count区间评分复用既有接口。
+
+实现时先以metadata明确绑定三seed正确checkpoint，核对缺失/身份错误即停止，不用目录最新匹配猜测。五任务串行失败即停，不自动重试，不覆盖产物；默认不自动关机。完成产物只有在身份与协议完整匹配后才可跳过。仅用户亲自执行GPU操作；助手准备本地代码/CPU检查/提交推送/一键命令。收集PathVQA每seed及均值±样本SD、RSVQA各组OA/AA/题型及现有V1/LoRA配对图像簇CI；所有完成及失败任务即时记两账本，状态更新plan。本批不增加Validation评估、其他seed或调参。
+
+> **2026-10-01 LoRA-r2配对统计已补齐：** V1−LoRA Overall+2.2368，95%图像簇配对CI[1.2824,3.2133]；两份账本已更新，不再列为待提取。不新增GPU实验。
+
+> **2026-10-01 LoRA-r2 b1a32已完成：** seed44固定五轮Validation57.1018，V1同seed高2.2368；已更新两份账本。覆盖旧待运行状态，不重跑。配对文件仅提供服务器路径，尚缺内容；不启动额外训练/推理，后续可只读提取。
+
 > **2026-09-30 三项消融已完成：** C-static56.7343、C-qmap58.7314、C-noVisual57.9805，均seed44五轮Validation，完整记录见两份账本。原队列不重跑、不自动补seed；uniform仍延期至审稿要求。LoRA-r2代码准备状态不等于已运行，本轮未启动任何GPU工作。
 
 ## 2026-09-30 LoRA-r2 OOM后重跑：batch1/累积32，待用户执行
@@ -428,3 +438,12 @@
 7. 不因结果不符合预期而更换数据划分、评价指标或后见阈值。
 8. 不删除、覆盖或静默修正旧实验；所有更正追加记录。
 9. 未经用户明确授权，不在服务器启动训练或推理实验。
+## 2026-10-01 五项固定Test串行：代码准备，待用户启动
+
+顺序固定PathVQA原五轮归一化V1 seed44/45/46 epoch5完整Test（不训练）→RSVQA静态Visual18+P20 seed44五轮epoch5 Test→RSVQA原CoCoOp-style seed44五轮epoch5 Test。入口`run_five_task_test_suite.sh`，不加入其他队列，失败即停，无自动重试或关机，不覆盖旧产物。全部GPU由用户执行。
+
+PathVQA seed44绑定账本`pathvqa_v1_norm_fixed_5ep_seed44_20260926_2`；seed45/46账本尚缺精确目录，入口只枚举精确实验名日期/后缀，逐一检查训练报告、归一化、种子、5epochs、原版布局/参数、原Validation成绩及固定epoch5文件，并要求唯一合法匹配；不按最新选。执行前保存绑定清单及权重SHA256，身份缺失或歧义在首项GPU之前停止。
+
+RSVQA两项microbatch4/累积8、有效32，seed44/data42、5epochs/3%warmup线性、显式loss kwargs=False。静态69632参数，原S8/Av10与P20三档LR；CoCoOp873120参数，只P20+原2560→160→2560 Meta-Net，无Visual18/问题条件，LR .3/3e-4。本条覆盖早期建议CoCoOp加Visual18的草案，不实现该变体。复用active过滤、原始答案监督、count区间评分。原LoRA是3epochs，本次和V1是5epochs，比较明确不同预算。
+
+所有产物在`outputs/five_task_test_suite/suite_*`，逐项保存状态、退出码、执行commit、配置/报告、预测、成绩、成本及两账本/计划追加片段。为守Windows唯一源规则，不在服务器修改受Git管理账本；回传后用CPU-only `--import-results`在本机追加，不做仅账本提交。已匹配完整Test结果可复用，严格核验协议并记录，部分/身份不符结果不能跳过。PathVQA三seed报告均值±样本SD；RSVQA两新基线vsV1及V1vs3epLoRA做10000次seed42图像簇配对OA/AA与四类统计。此次未运行GPU，尚无新实验成绩。

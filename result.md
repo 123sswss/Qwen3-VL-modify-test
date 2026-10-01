@@ -443,3 +443,9 @@ This file is the concise experiment memory shared by the user and Codex. The com
 - 同seed44/归一化五轮/固定epoch5 Validation：C-static 56.7343，较V1 -2.6042 CI[-3.4869,-1.7527]；C-qmap 58.7314，-0.6071 CI[-1.4307,0.1939]；C-noVisual 57.9805，-1.3580 CI[-2.1390,-0.5650]。三者输出均位于`pathvqa/outputs/visual_selection_prefix/ablations/pathvqa_v1_{c_static,c_qmap,c_no_visual}_norm_fixed_5ep_seed44_20260930`。
 - 动态整体与Visual18有当前seed上的总体收益；问题引导地图的总体收益未确定，where下降10.0244且该子组CI低于零。qmap仍有图像条件地图和问题条件层门控，不能写成无问题条件。where不等同空间定位正确；不宣称跨seed机制稳定。
 - Visual18仅18432参数，移除后Free-form低2.5526，80/85净损失来自开放回答，支持保留。uniform继续暂缓；完整分项、配对、成本及路径已记主账本。
+
+### 2026-10-01：LoRA-r2近似等参数对照完成
+- `pathvqa_lora_full_model_attention_r2_norm_fixed_5ep_b1a32_seed44`固定epoch5 Validation：57.1018/88.8000/25.4946；Overall图像簇CI[55.5761,58.5195]。完整V1同seed五轮高2.2368 Overall、2.3931 Free-form。配置参数1,769,472 vsV1 1,864,963，为近似等参数；两者有效batch32，但microbatch1/32与2/16不同，不能隐去。单seed不证明普遍优势。输出`pathvqa/outputs/lora/pathvqa_lora_full_model_attention_r2_norm_fixed_5ep_b1a32_seed44_20261001_1`；`paired_vs_v1_5ep.json`仅回传路径，内容未读，显著性待补。原batch2 OOM保留独立失败记录。
+
+### 2026-10-01：LoRA-r2配对统计补齐
+- 原报告方向LoRA−V1；转为V1收益：Overall+2.2368，图像簇95%CI[1.2824,3.2133]，V1独占462/LoRA独占322，净多140题。Yes/No+2.0800 CI[1.0069,3.1573]；Free-form+2.3931 CI[0.8327,3.9988]。10000次/seed42，6259题832图。该固定checkpoint比较支持V1总体优势；分项探索性，不能外推多seed或消除b1a32/b2a16协议差异。完整报告已追加主账本，覆盖此前配对待回传状态。

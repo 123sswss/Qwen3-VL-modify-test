@@ -6,6 +6,8 @@ from __future__ import annotations
 import argparse
 import json
 import random
+import subprocess
+import importlib.metadata
 from pathlib import Path
 
 import numpy as np
@@ -168,6 +170,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--dataloader-workers", type=int, default=2)
     parser.add_argument("--max-length", type=int, default=2048)
     parser.add_argument("--expected-trainable-parameters", type=int, default=873120)
+    parser.add_argument("--dataset", choices=("pathvqa", "slake", "electrical", "rsvqa_lr"))
+    parser.add_argument("--correct-loss-accumulation", action="store_true")
     args = parser.parse_args()
     if args.prompt_length < 1 or args.bottleneck_dim < 1 or args.epochs < 1:
         parser.error("Prompt length, bottleneck dimension, and epochs must be positive")
@@ -181,9 +185,11 @@ def parse_args() -> argparse.Namespace:
 
 
 def main(dataset_name: str = "pathvqa") -> int:
-    dataset_name = _normalize_dataset_name(dataset_name)
-    display_name = _dataset_display_name(dataset_name)
     args = parse_args()
+    dataset_name = args.dataset or dataset_name
+    if dataset_name != "rsvqa_lr":
+        dataset_name = _normalize_dataset_name(dataset_name)
+    display_name = "RSVQA-LR" if dataset_name == "rsvqa_lr" else _dataset_display_name(dataset_name)
     random.seed(args.seed)
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
@@ -206,7 +212,16 @@ def main(dataset_name: str = "pathvqa") -> int:
         bottleneck_dim=args.bottleneck_dim,
         init_seed=args.seed,
     )
-    dataset = _build_train_dataset(dataset_name, args, processor)
+    if dataset_name == "rsvqa_lr":
+        from RSVQA.data_pipeline import RSVQALRDataset, RSVQADataCollator
+        dataset = RSVQALRDataset(processor, args.data_root, split="train",
+                                seed=args.data_seed, max_length=args.max_length,
+                                enforce_official_counts=True)
+        collator = RSVQADataCollator(processor)
+    else:
+        dataset = _build_train_dataset(dataset_name, args, processor)
+        collator = (PromptTuningCollator(processor) if dataset_name == "pathvqa"
+                    else DynamicPromptCollator(processor, dataset_name))
     trainable = sum(
         parameter.numel()
         for parameter in model.parameters()
@@ -261,16 +276,25 @@ def main(dataset_name: str = "pathvqa") -> int:
             data_seed=args.data_seed,
         ),
         train_dataset=dataset,
-        data_collator=(
-            PromptTuningCollator(processor)
-            if dataset_name == "pathvqa"
-            else DynamicPromptCollator(processor, dataset_name)
-        ),
+        data_collator=collator,
         processing_class=processor,
         callbacks=[callback],
         prompt_lr=args.prompt_learning_rate,
         meta_net_lr=args.meta_net_learning_rate,
     )
+    if args.correct_loss_accumulation:
+        trainer.model_accepts_loss_kwargs = False
+        if trainer.accelerator.gradient_accumulation_steps != 1:
+            raise RuntimeError("CoCoOp corrected accumulation requires Accelerate accumulation=1")
+    runtime = {"torch": torch.__version__, "transformers": importlib.metadata.version("transformers"),
+               "accelerate": importlib.metadata.version("accelerate")}
+    commit = subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True,
+                            text=True, check=True).stdout.strip()
+    print("[COCOOP_RUNTIME] " + json.dumps({"versions": runtime, "git_commit": commit,
+          "model_accepts_loss_kwargs": trainer.model_accepts_loss_kwargs,
+          "batch": args.batch_size, "accumulation": args.gradient_accumulation,
+          "accelerate_accumulation": trainer.accelerator.gradient_accumulation_steps}), flush=True)
+    torch.cuda.reset_peak_memory_stats()
     result = trainer.train()
     final_dir = args.output_dir / "final"
     model.save_cocoop(final_dir)
@@ -287,6 +311,17 @@ def main(dataset_name: str = "pathvqa") -> int:
         "meta_net_learning_rate": args.meta_net_learning_rate,
         "seed": args.seed,
         "data_seed": args.data_seed,
+        "epochs": args.epochs,
+        "batch_size": args.batch_size,
+        "gradient_accumulation": args.gradient_accumulation,
+        "trainer_model_accepts_loss_kwargs": trainer.model_accepts_loss_kwargs,
+        "accelerator_gradient_accumulation_steps": trainer.accelerator.gradient_accumulation_steps,
+        "git_commit": commit, "runtime_versions": runtime,
+        "peak_gpu_memory_bytes": torch.cuda.max_memory_allocated(),
+        "answer_supervision": "raw_release_answer_evaluated_with_official_count_ranges"
+            if dataset_name == "rsvqa_lr" else "dataset_native_answer",
+        "optimizer": {"type": "AdamW", "weight_decay": 0.0, "betas": [.9, .999],
+                      "eps": 1e-8, "warmup_ratio": .03, "scheduler": "linear", "max_grad_norm": 1.0},
         "question_access": False,
         "visual_source": "post_merger_llm_visual_token_mean",
         "prompt_placement": "before_full_chat",

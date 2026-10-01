@@ -1911,3 +1911,326 @@ All paired deltas = ablation minus V1; exclusive counts = ablation-only / V1-onl
 |c_no_visual|why|+4.7619|[0.0000,15.0000]|1/0|
 
 `question_type:yes/no` duplicates the respective yes_no row exactly. Interpretation: full dynamic branch and Visual18 removal have negative overall paired intervals; qmap overall/Free-form intervals cross zero, while exploratory where interval is negative (41 net losses there vs38 overall). Learned fixed queries still produce image-dependent maps, and question dependence through layer gating remains. Thus no proof that all question conditioning is unnecessary or that original maps localize correctly. Visual18 removes only18432 parameters (~0.99% of V1) but costs1.3580 OA, mostly Free-form (80 of85 net errors); counts do not establish independently additive module effects. Paired intervals capture evaluation uncertainty, not training-seed variance. No new experiments scheduled; uniform remains deferred.
+
+### 2026-10-01 - PathVQA full-attention LoRA-r2 b1a32 completed
+
+- Experiment `pathvqa_lora_full_model_attention_r2_norm_fixed_5ep_b1a32_seed44`; PathVQA model seed44/data seed42, normalized from-scratch five epochs, fixed epoch5 Validation. Current local launcher verifies standard rank2/alpha4/dropout0.05,192 targets (visual24 qkv/proj + language36 q/k/v/o), expected1,769,472 trainable parameters, LR1e-4/3% warmup/linear, batch1 accumulation32. Original batch2/accumulation16 run failed OOM and remains a separate failed record. Server train_report/commit/runtime/memory not included in returned excerpt.
+- Returned Overall57.1018, Yes/No88.8000, Free-form25.4946; how8.5271,other14.2857,what19.9765,when0.0000,where67.4817,why4.7619,yes/no88.8000. Overall95% image-cluster CI[55.5761,58.5195],2000 iterations,bootstrap seed42,832clusters.
+- Output `/root/autodl-tmp/Qwen3-VL-modify-test/pathvqa/outputs/lora/pathvqa_lora_full_model_attention_r2_norm_fixed_5ep_b1a32_seed44_20261001_1`. User supplied paired-statistics location `paired_vs_v1_5ep.json` under this root, not its contents; file not present in local checkout. No paired significance inferred.
+- Against original V1 seed44 five-epoch59.3386/90.8800/27.8877: V1 minus LoRA Overall+2.2368, Yes/No+2.0800, Free-form+2.3931; what+2.0800,where+4.8899. V1 parameters1,864,963 vsLoRA1,769,472 (LoRA5.12% fewer than V1): approximately matched, not identical. Both effective batch32 and five epochs, but V1 usesmicrobatch2/accum16 vsLoRA1/32. Matching effective batch does not prove identical optimization; report microbatch difference. One-seed evidence supports V1 advantage under these tested configurations, not universal LoRA superiority/inferiority, paired significance or multi-seed stability.
+- Status: completed, no rerun/new GPU work scheduled. Preserve failed prior run and current independent identity.
+
+### 2026-10-01 - LoRA-r2 paired evidence received (supplement to preceding run)
+
+Correction to preceding pending-statistics status: paired report now received for `pathvqa_lora_full_model_attention_r2_norm_fixed_5ep_b1a32_seed44` vs `pathvqa_v1_norm_fixed_5ep_seed44`. Original JSON direction is LoRA minus V1. Reversing direction, V1 gain Overall+2.236779038185013, image-cluster95%CI[1.2824060634171783,3.2133069013568267]; Yes/No+2.0800 CI[1.0069225928256764,3.157276310487256]; Free-form+2.393107849393747 CI[0.8326933307855736,3.998762297683275]; what+2.0800627943485104 CI[0.431030261896079,3.7037730354840055]; where+4.889975550122244 CI[0.24509803921568626,9.535452322738386]. Bootstrap image_id10000/seed42; overall6259 questions832clusters. V1-only462 vsLoRA-only322, net140, comprising65 Yes/No and75 Free-form. Primary overall interval supports a positive difference between these fixed checkpoints; subgroups are exploratory, not multiplicity-adjusted confirmatory claims. This does not cover training-seed uncertainty or remove the microbatch difference. No new training proposed. All returned details including evaluation/timing and ancillary question-level McNemar statistics preserved below; clustered intervals are the main evidence.
+
+<details><summary>User-supplied paired report excerpt (verbatim; final outer JSON brace absent in attachment)</summary>
+
+```text
+{
+  "experiment": "pathvqa_lora_full_model_attention_r2_norm_fixed_5ep_b1a32_seed44",
+  "baseline": "pathvqa_v1_norm_fixed_5ep_seed44",
+  "bootstrap": {
+    "unit": "image_id",
+    "iterations": 10000,
+    "seed": 42
+  },
+  "validation_summary": {
+    "count": 6259,
+    "overall_accuracy": 57.1018,
+    "yes_no_accuracy": 88.8,
+    "free_form_accuracy": 25.4946,
+    "per_answer_type_accuracy": {
+      "free-form": 25.4946,
+      "yes/no": 88.8
+    },
+    "per_question_type_accuracy": {
+      "how": 8.5271,
+      "other": 14.2857,
+      "what": 19.9765,
+      "when": 0.0,
+      "where": 67.4817,
+      "why": 4.7619,
+      "yes/no": 88.8
+    },
+    "free_form_question_type_macro_accuracy": 19.1722,
+    "clustered_bootstrap": {
+      "point_estimate": 57.1018,
+      "confidence_level": 0.95,
+      "lower": 55.5761,
+      "upper": 58.5195,
+      "iterations": 2000,
+      "seed": 42,
+      "image_clusters": 832
+    },
+    "backend": "lora",
+    "base_model": "/root/autodl-tmp/model",
+    "checkpoint": "/root/autodl-tmp/Qwen3-VL-modify-test/pathvqa/outputs/lora/pathvqa_lora_full_model_attention_r2_norm_fixed_5ep_b1a32_seed44_20261001_1/checkpoints/epoch_5",
+    "v0_intervention": "normal",
+    "v0_question_mask_policy": null,
+    "question_source_policy": null,
+    "dynamic_prompt_component_checkpoint": null,
+    "dynamic_prompt_components": [],
+    "data_root": "/root/autodl-tmp/dataset/pathVQA",
+    "split": "validation",
+    "max_new_tokens": 32,
+    "temperature": 0.0,
+    "answer_mode": "raw",
+    "instruction": "short-answer",
+    "partial_evaluation": false,
+    "timing": {
+      "methodology": {
+        "warmup_runs_excluded": 3,
+        "ttft": "generate start to first generated-token logits ready",
+        "tpot": "token-count-weighted interval between later token logits",
+        "request": "model interface call including preprocessing and decoding",
+        "timing_methods": {
+          "cuda-events-logits-ready-v2": 6259
+        }
+      },
+      "successful_requests": 6259,
+      "model_timed_requests": 6259,
+      "generated_tokens": 17979,
+      "subsequent_tokens": 11720,
+      "ttft_seconds": {
+        "count": 6259,
+        "mean": 0.056907,
+        "p50": 0.055597,
+        "p95": 0.058649,
+        "min": 0.047965,
+        "max": 0.468231
+      },
+      "tpot_per_request_seconds": {
+        "count": 6259,
+        "mean": 0.02987,
+        "p50": 0.029573,
+        "p95": 0.031485,
+        "min": 0.029013,
+        "max": 0.033435
+      },
+      "tpot_weighted_seconds": 0.029841,
+      "decode_tokens_per_second": 33.511,
+      "generation_seconds": {
+        "count": 6259,
+        "mean": 0.112971,
+        "p50": 0.087671,
+        "p95": 0.184068,
+        "min": 0.077325,
+        "max": 0.540737
+      },
+      "request_seconds": {
+        "count": 6259,
+        "mean": 0.127375,
+        "p50": 0.104776,
+        "p95": 0.202106,
+        "min": 0.082484,
+        "max": 0.559724
+      },
+      "model_generated_tokens_per_second": 25.427,
+      "end_to_end_generated_tokens_per_second": 22.552
+    }
+  },
+  "groups": {
+    "overall": {
+      "count": 6259,
+      "baseline_accuracy": 59.33855248442243,
+      "variant_accuracy": 57.10177344623742,
+      "delta": -2.236779038185013,
+      "variant_only_correct": 322,
+      "baseline_only_correct": 462,
+      "mcnemar_exact_p": 6.460871178067552e-07,
+      "clustered_paired_delta_ci": {
+        "confidence_level": 0.95,
+        "lower": -3.2133069013568267,
+        "upper": -1.2824060634171783,
+        "iterations": 10000,
+        "seed": 42,
+        "image_clusters": 832
+      },
+      "question_count": 6259,
+      "image_clusters": 832,
+      "exploratory": false
+    },
+    "yes_no": {
+      "count": 3125,
+      "baseline_accuracy": 90.88,
+      "variant_accuracy": 88.8,
+      "delta": -2.0799999999999983,
+      "variant_only_correct": 117,
+      "baseline_only_correct": 182,
+      "mcnemar_exact_p": 0.0002035765271176517,
+      "clustered_paired_delta_ci": {
+        "confidence_level": 0.95,
+        "lower": -3.157276310487256,
+        "upper": -1.0069225928256764,
+        "iterations": 10000,
+        "seed": 42,
+        "image_clusters": 810
+      },
+      "question_count": 3125,
+      "image_clusters": 810,
+      "exploratory": true
+    },
+    "free_form": {
+      "count": 3134,
+      "baseline_accuracy": 27.887683471601786,
+      "variant_accuracy": 25.49457562220804,
+      "delta": -2.393107849393747,
+      "variant_only_correct": 205,
+      "baseline_only_correct": 280,
+      "mcnemar_exact_p": 0.0007622293399067396,
+      "clustered_paired_delta_ci": {
+        "confidence_level": 0.95,
+        "lower": -3.998762297683275,
+        "upper": -0.8326933307855736,
+        "iterations": 10000,
+        "seed": 42,
+        "image_clusters": 821
+      },
+      "question_count": 3134,
+      "image_clusters": 821,
+      "exploratory": true
+    },
+    "what": {
+      "count": 2548,
+      "baseline_accuracy": 22.05651491365777,
+      "variant_accuracy": 19.97645211930926,
+      "delta": -2.0800627943485104,
+      "variant_only_correct": 166,
+      "baseline_only_correct": 219,
+      "mcnemar_exact_p": 0.007962813205220133,
+      "clustered_paired_delta_ci": {
+        "confidence_level": 0.95,
+        "lower": -3.7037730354840055,
+        "upper": -0.431030261896079,
+        "iterations": 10000,
+        "seed": 42,
+        "image_clusters": 817
+      },
+      "question_count": 2548,
+      "image_clusters": 817,
+      "exploratory": true
+    },
+    "where": {
+      "count": 409,
+      "baseline_accuracy": 72.37163814180929,
+      "variant_accuracy": 67.48166259168704,
+      "delta": -4.889975550122244,
+      "variant_only_correct": 36,
+      "baseline_only_correct": 56,
+      "mcnemar_exact_p": 0.047011561644854,
+      "clustered_paired_delta_ci": {
+        "confidence_level": 0.95,
+        "lower": -9.535452322738386,
+        "upper": -0.24509803921568626,
+        "iterations": 10000,
+        "seed": 42,
+        "image_clusters": 408
+      },
+      "question_count": 409,
+      "image_clusters": 408,
+      "exploratory": true
+    },
+    "question_type:how": {
+      "count": 129,
+      "baseline_accuracy": 10.852713178294573,
+      "variant_accuracy": 8.527131782945736,
+      "delta": -2.325581395348838,
+      "variant_only_correct": 2,
+      "baseline_only_correct": 5,
+      "mcnemar_exact_p": 0.453125,
+      "clustered_paired_delta_ci": {
+        "confidence_level": 0.95,
+        "lower": -8.148148148148149,
+        "upper": 2.4,
+        "iterations": 10000,
+        "seed": 42,
+        "image_clusters": 104
+      },
+      "question_count": 129,
+      "image_clusters": 104,
+      "exploratory": true
+    },
+    "question_type:other": {
+      "count": 14,
+      "baseline_accuracy": 14.285714285714286,
+      "variant_accuracy": 14.285714285714286,
+      "delta": 0.0,
+      "variant_only_correct": 0,
+      "baseline_only_correct": 0,
+      "mcnemar_exact_p": 1.0,
+      "clustered_paired_delta_ci": {
+        "confidence_level": 0.95,
+        "lower": 0.0,
+        "upper": 0.0,
+        "iterations": 10000,
+        "seed": 42,
+        "image_clusters": 8
+      },
+      "question_count": 14,
+      "image_clusters": 8,
+      "exploratory": true
+    },
+    "question_type:when": {
+      "count": 13,
+      "baseline_accuracy": 0.0,
+      "variant_accuracy": 0.0,
+      "delta": 0.0,
+      "variant_only_correct": 0,
+      "baseline_only_correct": 0,
+      "mcnemar_exact_p": 1.0,
+      "clustered_paired_delta_ci": {
+        "confidence_level": 0.95,
+        "lower": 0.0,
+        "upper": 0.0,
+        "iterations": 10000,
+        "seed": 42,
+        "image_clusters": 12
+      },
+      "question_count": 13,
+      "image_clusters": 12,
+      "exploratory": true
+    },
+    "question_type:why": {
+      "count": 21,
+      "baseline_accuracy": 0.0,
+      "variant_accuracy": 4.761904761904762,
+      "delta": 4.761904761904762,
+      "variant_only_correct": 1,
+      "baseline_only_correct": 0,
+      "mcnemar_exact_p": 1.0,
+      "clustered_paired_delta_ci": {
+        "confidence_level": 0.95,
+        "lower": 0.0,
+        "upper": 15.0,
+        "iterations": 10000,
+        "seed": 42,
+        "image_clusters": 20
+      },
+      "question_count": 21,
+      "image_clusters": 20,
+      "exploratory": true
+    },
+    "question_type:yes/no": {
+      "count": 3125,
+      "baseline_accuracy": 90.88,
+      "variant_accuracy": 88.8,
+      "delta": -2.0799999999999983,
+      "variant_only_correct": 117,
+      "baseline_only_correct": 182,
+      "mcnemar_exact_p": 0.0002035765271176517,
+      "clustered_paired_delta_ci": {
+        "confidence_level": 0.95,
+        "lower": -3.157276310487256,
+        "upper": -1.0069225928256764,
+        "iterations": 10000,
+        "seed": 42,
+        "image_clusters": 810
+      },
+      "question_count": 3125,
+      "image_clusters": 810,
+      "exploratory": true
+    }
+  }
+```
+</details>

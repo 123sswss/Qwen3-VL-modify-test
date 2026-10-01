@@ -265,16 +265,28 @@ def real_batch_preflight(
 
 def v1b_generation_roundtrip_preflight(
     model, processor, data_root: Path, cache_dir: Path, output_dir: Path,
+    *, dataset_name: str = "pathvqa",
 ) -> None:
     """Verify one prefix prefill, KV reuse, and checkpoint reload."""
-    store = PathVQAParquetStore(data_root, "validation", cache_dir=cache_dir)
-    row = dict(store.samples[0])
-    image = store.load_image(row)
+    if dataset_name == "rsvqa_lr":
+        from RSVQA.data import load_rsvqa_lr_split
+        from RSVQA.prompts import build_prompt as build_rsvqa_prompt
+        from PIL import Image
+        records, _ = load_rsvqa_lr_split(data_root, "train", require_images=True,
+                                       enforce_official_counts=True)
+        row = records[0]
+        image = Image.open(row["image_path"]).convert("RGB")
+        prompt = build_rsvqa_prompt(row)
+    else:
+        store = PathVQAParquetStore(data_root, "validation", cache_dir=cache_dir)
+        row = dict(store.samples[0])
+        image = store.load_image(row)
+        prompt = build_prompt(str(row["question"]), None)
     try:
         interface = VisualSelectionPrefixInterface.__new__(VisualSelectionPrefixInterface)
         interface.processor = processor
         inputs = interface.prepare_inputs(
-            image, build_prompt(str(row["question"]), None), question=str(row["question"]),
+            image, prompt, question=str(row["question"]),
         )
     finally:
         image.close()
@@ -601,11 +613,12 @@ def main() -> int:
         model, dataset, collator, args.output_dir, batch_size=args.batch_size,
     )
     if args.visual_prompt_mode == "evidence_token" or args.visual_prompt_mode in ABLATION_CLASSES:
-        if args.dataset != "pathvqa":
+        if args.dataset not in {"pathvqa", "rsvqa_lr"}:
             raise ValueError("V1B generation roundtrip is defined only for PathVQA")
         v1b_generation_roundtrip_preflight(
             model, processor, args.data_root,
             args.cache_dir or (args.data_root / ".hf_cache"), args.output_dir,
+            dataset_name=args.dataset,
         )
     torch.random.set_rng_state(cpu_rng)
     if cuda_rng:

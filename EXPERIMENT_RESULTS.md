@@ -1,5 +1,49 @@
 # MMRL Experiment Ledger
 
+## 2026-10-01 SSH只读补齐原五轮V1产物身份
+
+连接`connect.bjb1.seetacloud.com:50241`，只读JSON、日志、文件列表与torch.save ZIP CRC，无torch导入、模型前向、GPU调用或服务器文件写入。修复后的本机校验函数在内存中对真实文件执行，三个PathVQA身份校验及两套RSVQA完整既有评分校验均通过；这不是新训练或Test评估。
+
+以下路径位于`pathvqa/outputs/visual_selection_prefix/`，均固定`checkpoints/epoch_5`，原V1 method、1864963参数、model seed如下/data42、5epochs、保存3/4/5、batch2/累积16、loss kwargs=False、Accelerate累积1。三个历史运行均明确记录torch2.8.0+cu128/Transformers5.0.0/Accelerate1.12.0；原日志确认P20 .3、S8 3e-5、Av10 1e-4，其余条件组1e-4。
+
+| seed | 精确运行目录 | 实际训练提交 | 训练秒 | 报告峰值显存bytes | 已有Validation Overall |
+|---|---|---|---:|---:|---:|
+|44|pathvqa_v1_norm_fixed_5ep_seed44_20260926_2|2957ce297637d65a8dcdb5a075c1528072497590|10863.0715|25011373568|59.3386|
+|45|pathvqa_v1_norm_fixed_5ep_seed45_20260926|f3b9c3922ec44f3388a43b6fc9cf50d28bf30672|10667.1862|25011373568|58.5077|
+|46|pathvqa_v1_norm_fixed_5ep_seed46_20260926|548335ffa98594b478117139c80a5ff128cff8ce|10857.1599|25011373568|58.7314|
+
+明确更正此前seed45/46路径/提交/版本“未知”状态：现由实际产物证实，历史分数不变。seed44前两个无后缀/`_1`目录无train_report，绑定完成的`_2`，不按最新选择。epoch5权重SHA256：44=`18ee0c0f2f3b41f107752b2d160c9c5154bc70b3d8366e5e04a7ba9df8e64aa2`，45=`ec5de2aec77e0783c340207ac51f4ef85f1af7ae5dc5c506170420583efd2796`，46=`ee2915d28a6b8b933cb51fef7682c4d467fe6b3c2651466d4db761b9704e11da`。入口已改为这三个精确路径，仍执行身份与归一化核验。
+
+RSVQA V1 `rsvqa_v1_norm_fixed_5ep_b4a8_seed44_20260929`报告确认五轮、batch4/累积8、1864963参数，训练提交`1ae3d1362dddd9d9ec02074eb9bb45c24325e03e`、上述相同版本、训练10982.6985秒、报告峰值12892518912bytes。既有Test10004题/100图、OA85.0360/AA86.0812评分复核通过。RSVQA LoRA `rsvqa_lr_lora_full_model_attention_r8_b4a8_seed44_20260929`报告确认三轮/r8 alpha16/7077888参数/batch4累积8/归一化False、训练12284.0502秒；既有Test OA87.0552/AA87.7162评分复核通过。该LoRA报告未提供训练commit、运行版本或峰值显存，不补造。此次未新运行五项GPU任务，用户重启后产物仍独立保存。
+
+## 2026-10-01 SSH只读补齐原五轮V1产物身份
+
+连接`connect.bjb1.seetacloud.com:50241`，只读JSON、日志、文件列表与torch.save ZIP CRC，无torch导入、模型前向、GPU调用或服务器文件写入。修复后的本机校验函数在内存中对真实文件执行，三个PathVQA身份校验及两套RSVQA完整既有评分校验均通过；这不是新训练或Test评估。
+
+以下路径位于`pathvqa/outputs/visual_selection_prefix/`，均固定`checkpoints/epoch_5`，原V1 method、1864963参数、model seed如下/data42、5epochs、保存3/4/5、batch2/累积16、loss kwargs=False、Accelerate累积1。三个历史运行均明确记录torch2.8.0+cu128/Transformers5.0.0/Accelerate1.12.0；原日志确认P20 .3、S8 3e-5、Av10 1e-4，其余条件组1e-4。
+
+| seed | 精确运行目录 | 实际训练提交 | 训练秒 | 报告峰值显存bytes | 已有Validation Overall |
+|---|---|---|---:|---:|---:|
+|44|pathvqa_v1_norm_fixed_5ep_seed44_20260926_2|2957ce297637d65a8dcdb5a075c1528072497590|10863.0715|25011373568|59.3386|
+|45|pathvqa_v1_norm_fixed_5ep_seed45_20260926|f3b9c3922ec44f3388a43b6fc9cf50d28bf30672|10667.1862|25011373568|58.5077|
+|46|pathvqa_v1_norm_fixed_5ep_seed46_20260926|548335ffa98594b478117139c80a5ff128cff8ce|10857.1599|25011373568|58.7314|
+
+明确更正此前seed45/46路径/提交/版本“未知”状态：现由实际产物证实，历史分数不变。seed44前两个无后缀/`_1`目录无train_report，绑定完成的`_2`，不按最新选择。epoch5权重SHA256：44=`18ee0c0f2f3b41f107752b2d160c9c5154bc70b3d8366e5e04a7ba9df8e64aa2`，45=`ec5de2aec77e0783c340207ac51f4ef85f1af7ae5dc5c506170420583efd2796`，46=`ee2915d28a6b8b933cb51fef7682c4d467fe6b3c2651466d4db761b9704e11da`。入口已改为这三个精确路径，仍执行身份与归一化核验。
+
+RSVQA V1 `rsvqa_v1_norm_fixed_5ep_b4a8_seed44_20260929`报告确认五轮、batch4/累积8、1864963参数，训练提交`1ae3d1362dddd9d9ec02074eb9bb45c24325e03e`、上述相同版本、训练10982.6985秒、报告峰值12892518912bytes。既有Test10004题/100图、OA85.0360/AA86.0812评分复核通过。RSVQA LoRA `rsvqa_lr_lora_full_model_attention_r8_b4a8_seed44_20260929`报告确认三轮/r8 alpha16/7077888参数/batch4累积8/归一化False、训练12284.0502秒；既有Test OA87.0552/AA87.7162评分复核通过。该LoRA报告未提供训练commit、运行版本或峰值显存，不补造。此次未新运行五项GPU任务，用户重启后产物仍独立保存。
+
+## 2026-10-01 五项Test串行首次预检失败（未启动GPU）
+
+用户执行7461be1五项入口，在绑定原五轮PathVQA V1 seed44时因旧`train_report.json`不含`visual_prompt_mode`而停止。失败目录`/root/autodl-tmp/Qwen3-VL-modify-test/outputs/five_task_test_suite/precheck_failed_20261001_133024_919726`；目标产物`pathvqa/outputs/visual_selection_prefix/pathvqa_v1_norm_fixed_5ep_seed44_20260926_2/checkpoints/epoch_5`。尚未执行三seed Test或RSVQA两项训练，无新Overall/分项；运行库版本未回传。属于预检schema兼容错误，不是checkpoint已证实错误或模型失败。
+
+已核对最初五轮实现c270146：报告没有视觉mode/Av10 LR/optimizer group rates。此次修复仅兼容元数据：缺mode时要求报告与checkpoint均明确原V1 method且无消融，继续严格核对布局、参数、seed、五轮及归一化；分组LR优先原报告，其次原`train.log`，再按报告完整训练commit读取当时V1Trainer字面量，不用当前HEAD/默认值推定。证据缺失、冲突或配置不符仍停。CPU回归覆盖旧schema接受、错误Av10 LR拒绝及无LR证据拒绝；任务顺序、训练和生成协议不变。等待用户亲自重启入口。
+
+## 2026-10-01 五项Test串行首次预检失败（未启动GPU）
+
+用户执行7461be1五项入口，在绑定原五轮PathVQA V1 seed44时因旧`train_report.json`不含`visual_prompt_mode`而停止。失败目录`/root/autodl-tmp/Qwen3-VL-modify-test/outputs/five_task_test_suite/precheck_failed_20261001_133024_919726`；目标产物`pathvqa/outputs/visual_selection_prefix/pathvqa_v1_norm_fixed_5ep_seed44_20260926_2/checkpoints/epoch_5`。尚未执行三seed Test或RSVQA两项训练，无新Overall/分项；运行库版本未回传。属于预检schema兼容错误，不是checkpoint已证实错误或模型失败。
+
+已核对最初五轮实现c270146：报告没有视觉mode/Av10 LR/optimizer group rates。此次修复仅兼容元数据：缺mode时要求报告与checkpoint均明确原V1 method且无消融，继续严格核对布局、参数、seed、五轮及归一化；分组LR优先原报告，其次原`train.log`，再按报告完整训练commit读取当时V1Trainer字面量，不用当前HEAD/默认值推定。证据缺失、冲突或配置不符仍停。CPU回归覆盖旧schema接受、错误Av10 LR拒绝及无LR证据拒绝；任务顺序、训练和生成协议不变。等待用户亲自重启入口。
+
 ## 2026-09-30 PathVQA LoRA-r2 batch2 OOM及batch1重跑准备
 
 - 失败实验：`pathvqa_lora_full_model_attention_r2_norm_fixed_5ep_seed44`，PathVQA，model seed44/data seed42，标准全attention rank2/alpha4，batch2/累积16，计划五轮固定epoch5 Validation。用户回传训练在837/3075步（27%，耗时1:06:37）反向CUDA OOM：申请1.19 GiB，GPU总31.36 GiB、空闲337 MiB，进程31.02 GiB，PyTorch已分配27.84 GiB、保留未分配2.53 GiB。最后已记录epoch1.334；无完成的epoch5成绩，Overall及分项均缺失，不能作为性能结果。

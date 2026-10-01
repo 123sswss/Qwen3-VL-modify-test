@@ -34,6 +34,52 @@ def fixture(root, seed, suffix, score):
 
 
 class BindingTests(unittest.TestCase):
+    def test_original_five_epoch_report_schema(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run = fixture(Path(tmp),44,'20260926_2',59.3386)
+            report = json.loads((run/'train_report.json').read_text())
+            report['method'] = 'visual_selection_prefix_p20_v1'
+            del report['visual_prompt_mode']
+            del report['visual_av10_learning_rate']
+            rates = report['optimizer'].pop('group_learning_rates')
+            dump(run/'train_report.json', report)
+            (run/'train.log').write_text('[V1_OPTIMIZER] rates='+json.dumps(rates)+
+                ' warmup_ratio=0.03 scheduler=linear\n', encoding='utf-8')
+            result = audit_v1(run,44)
+            self.assertEqual(result['compatibility_evidence']['visual_prompt_mode'],'split18')
+            self.assertIn('[V1_OPTIMIZER]',result['compatibility_evidence']['rates_source'])
+            rates['visual_av10'] = 3e-5
+            (run/'train.log').write_text('[V1_OPTIMIZER] rates='+json.dumps(rates)+
+                ' warmup_ratio=0.03 scheduler=linear\n', encoding='utf-8')
+            with self.assertRaises(ValueError):
+                audit_v1(run,44)
+            (run/'train.log').unlink()
+            with self.assertRaises(ValueError):
+                audit_v1(run,44)
+
+    def test_original_five_epoch_report_schema(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run = fixture(Path(tmp),44,'20260926_2',59.3386)
+            report = json.loads((run/'train_report.json').read_text())
+            report['method'] = 'visual_selection_prefix_p20_v1'
+            del report['visual_prompt_mode']
+            del report['visual_av10_learning_rate']
+            rates = report['optimizer'].pop('group_learning_rates')
+            dump(run/'train_report.json', report)
+            (run/'train.log').write_text('[V1_OPTIMIZER] rates='+json.dumps(rates)+
+                ' warmup_ratio=0.03 scheduler=linear\n', encoding='utf-8')
+            result = audit_v1(run,44)
+            self.assertEqual(result['compatibility_evidence']['visual_prompt_mode'],'split18')
+            self.assertIn('[V1_OPTIMIZER]',result['compatibility_evidence']['rates_source'])
+            rates['visual_av10'] = 3e-5
+            (run/'train.log').write_text('[V1_OPTIMIZER] rates='+json.dumps(rates)+
+                ' warmup_ratio=0.03 scheduler=linear\n', encoding='utf-8')
+            with self.assertRaises(ValueError):
+                audit_v1(run,44)
+            (run/'train.log').unlink()
+            with self.assertRaises(ValueError):
+                audit_v1(run,44)
+
     def test_paired_cluster_statistics_identical_predictions(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -67,10 +113,9 @@ class BindingTests(unittest.TestCase):
             bindings = bind_pathvqa(root)
             self.assertEqual([b['seed'] for b in bindings], [44,45,46])
             self.assertTrue(bindings[1]['run'].endswith('20260926'))
-            self.assertEqual(len(bindings[1]['rejected_candidates']),1)
+            self.assertEqual(len(bindings[1]['rejected_candidates']),0)
             fixture(root,45,'20260926_1',58.5077)
-            with self.assertRaises(ValueError):
-                bind_pathvqa(root)
+            self.assertTrue(bind_pathvqa(root)[1]['run'].endswith('20260926'))
 
     def test_reject_wrong_normalization_and_visual_layout(self):
         with tempfile.TemporaryDirectory() as tmp:

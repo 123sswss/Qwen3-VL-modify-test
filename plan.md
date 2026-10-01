@@ -447,3 +447,9 @@ PathVQA seed44绑定账本`pathvqa_v1_norm_fixed_5ep_seed44_20260926_2`；seed45
 RSVQA两项microbatch4/累积8、有效32，seed44/data42、5epochs/3%warmup线性、显式loss kwargs=False。静态69632参数，原S8/Av10与P20三档LR；CoCoOp873120参数，只P20+原2560→160→2560 Meta-Net，无Visual18/问题条件，LR .3/3e-4。本条覆盖早期建议CoCoOp加Visual18的草案，不实现该变体。复用active过滤、原始答案监督、count区间评分。原LoRA是3epochs，本次和V1是5epochs，比较明确不同预算。
 
 所有产物在`outputs/five_task_test_suite/suite_*`，逐项保存状态、退出码、执行commit、配置/报告、预测、成绩、成本及两账本/计划追加片段。为守Windows唯一源规则，不在服务器修改受Git管理账本；回传后用CPU-only `--import-results`在本机追加，不做仅账本提交。已匹配完整Test结果可复用，严格核验协议并记录，部分/身份不符结果不能跳过。PathVQA三seed报告均值±样本SD；RSVQA两新基线vsV1及V1vs3epLoRA做10000次seed42图像簇配对OA/AA与四类统计。此次未运行GPU，尚无新实验成绩。
+## 2026-10-01 五项入口预检兼容修复：待用户重启
+
+首次用户启动在seed44原报告缺`visual_prompt_mode`处停止，未进入GPU，0/5任务完成；失败记录`precheck_failed_20261001_133024_919726`已追加两份账本。最初五轮schema另缺Av10 LR与分组LR，已一并兼容：明确原V1报告/checkpoint method确认原布局，学习率从原训练日志或报告记录的训练commit取证，缺失或矛盾仍停止。CPU回归检查后提交推送，仍用`run_five_task_test_suite.sh`；原顺序、五轮、固定Test、失败即停与不自动关机全部不变。全部GPU由用户执行。
+## 2026-10-01 SSH核实后的精确绑定（覆盖此前路径未知状态）
+
+用户授权SSH只读确认，已验证三套真实原五轮V1 epoch5。入口固定seed44=`pathvqa_v1_norm_fixed_5ep_seed44_20260926_2`、45=`pathvqa_v1_norm_fixed_5ep_seed45_20260926`、46=`pathvqa_v1_norm_fixed_5ep_seed46_20260926`，保留逐项元数据和CRC/SHA256审计。CPU真实产物校验通过，RSVQA两套已有Test评分也已复核；不导入torch、不执行GPU、不写服务器源码。兼容修复与精确路径即将本机提交推送；等待用户同步后亲自重启原五项入口，无自动关机。

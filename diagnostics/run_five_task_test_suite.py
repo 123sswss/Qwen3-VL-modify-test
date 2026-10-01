@@ -6,6 +6,7 @@ Ledger fragments stay with outputs: the Windows checkout remains source of truth
 from __future__ import annotations
 
 import argparse
+import ast
 import hashlib
 import importlib.metadata
 import json
@@ -48,14 +49,60 @@ def audit_archive(path):
         require(archive.testzip() is None, f"Checkpoint CRC failure: {path}")
 
 
+def v1_rates_evidence(run, report):
+    """Read newer reports or recover older fields from actual logs/recorded commit.
+
+    Never substitute current HEAD's defaults for a historical training protocol.
+    """
+    if 'group_learning_rates' in report['optimizer']:
+        return report['optimizer']['group_learning_rates'], 'train_report.optimizer.group_learning_rates'
+    log = run/'train.log'
+    if log.is_file():
+        matches = re.findall(r'\[V1_OPTIMIZER\] rates=(\{[^\r\n]*?\})\s+warmup_ratio=',
+                             log.read_text(encoding='utf-8', errors='replace'))
+        if matches:
+            rates = [json.loads(x) for x in matches]
+            require(all(x == rates[0] for x in rates), f'Conflicting optimizer logs: {run}')
+            return rates[0], str(log) + ':[V1_OPTIMIZER]'
+    commit = report.get('git_commit', '')
+    require(bool(re.fullmatch(r'[0-9a-f]{40}', commit)),
+            f'Missing historical optimizer evidence (log or full training commit): {run}')
+    source = subprocess.run(['git', 'show', commit+':pathvqa/train_visual_selection_prefix.py'],
+                            capture_output=True, text=True, encoding='utf-8', check=False)
+    require(source.returncode == 0, f'Historical training source unavailable: {commit}')
+    tree = ast.parse(source.stdout)
+    values = []
+    for cls in tree.body:
+        if isinstance(cls, ast.ClassDef) and cls.name == 'V1Trainer':
+            for fn in cls.body:
+                if isinstance(fn, ast.FunctionDef) and fn.name == 'create_optimizer':
+                    for node in ast.walk(fn):
+                        if isinstance(node, ast.Assign) and any(
+                                isinstance(t, ast.Name) and t.id == 'rates' for t in node.targets):
+                            try:
+                                values.append(ast.literal_eval(node.value))
+                            except (ValueError, TypeError):
+                                pass
+    require(len(values) == 1 and isinstance(values[0], dict),
+            f'Cannot recover literal historical LR groups: {commit}; provide original optimizer log')
+    return values[0], f'git:{commit}:pathvqa/train_visual_selection_prefix.py:V1Trainer.create_optimizer'
+
+
 def audit_v1(run, seed, dataset="PathVQA", mode="split18", params=1864963):
     report = read(run / "train_report.json")
     config = read(run / "checkpoints/epoch_5/visual_selection_prefix_config.json")
     require(report["dataset"] == dataset and report["model_seed"] == seed and
             report["data_seed"] == 42 and report["epochs"] == 5 and
             5 in report["saved_epochs"], f"Wrong dataset/seed/epoch: {run}")
-    require(report["visual_prompt_mode"] == mode and
-            report["total_trainable_parameters"] == params and
+    # Five-epoch reports predating Visual20 do not contain visual_prompt_mode.
+    # Missing fields can be resolved only by an explicit original method identity.
+    inferred_mode = report.get('visual_prompt_mode')
+    if inferred_mode is None:
+        require(mode == 'split18' and report.get('method') == 'visual_selection_prefix_p20_v1'
+                and config.get('method') == 'visual_selection_prefix_p20_v1'
+                and not config.get('ablation_mode'), f'Missing mode without original V1 evidence: {run}')
+        inferred_mode = 'split18'
+    require(inferred_mode == mode and report["total_trainable_parameters"] == params and
             report["trainer_model_accepts_loss_kwargs"] is False and
             report["accelerator_gradient_accumulation_steps"] == 1,
             f"Wrong architecture/normalization: {run}")
@@ -73,30 +120,36 @@ def audit_v1(run, seed, dataset="PathVQA", mode="split18", params=1864963):
     require(opt["per_device_batch_size"] == (2 if dataset == "PathVQA" else 4)
             and opt["gradient_accumulation_steps"] == (16 if dataset == "PathVQA" else 8)
             and opt["warmup_ratio"] == .03 and opt["scheduler"] == "linear"
-            and opt["max_grad_norm"] == 1 and report["visual_av10_learning_rate"] == 1e-4,
+            and opt["max_grad_norm"] == 1,
             f"Training protocol mismatch: {run}")
-    rates = opt["group_learning_rates"]
+    rates, rates_source = v1_rates_evidence(run, report)
     require(rates.get("p20") == .3 and rates.get("visual_s8") == 3e-5
             and rates.get("visual_av10") == 1e-4, f"Visual18/P20 LR mismatch: {run}")
+    if 'visual_av10_learning_rate' in report:
+        require(report['visual_av10_learning_rate'] == rates['visual_av10'],
+                f'Conflicting Av10 report/log evidence: {run}')
     weights = run / "checkpoints/epoch_5/visual_selection_prefix.pt"
     require(weights.is_file() and weights.stat().st_size > 0, f"Missing weights: {weights}")
     audit_archive(weights)
     return {"run": str(run.resolve()), "checkpoint": str(weights.parent.resolve()),
             "weights_sha256": fingerprint(weights), "report": report,
-            "report_sha256": fingerprint(run / "train_report.json")}
+            "report_sha256": fingerprint(run / "train_report.json"),
+            "compatibility_evidence": {'visual_prompt_mode': inferred_mode,
+                'mode_source': 'report.visual_prompt_mode' if 'visual_prompt_mode' in report
+                    else 'original method in report and checkpoint config',
+                'group_learning_rates': rates, 'rates_source': rates_source}}
 
 
 def bind_pathvqa(root):
     parent = root / "pathvqa/outputs/visual_selection_prefix"
+    # Confirmed by read-only SSH inspection on 2026-10-01, not directory recency.
+    exact_runs = {44: 'pathvqa_v1_norm_fixed_5ep_seed44_20260926_2',
+                  45: 'pathvqa_v1_norm_fixed_5ep_seed45_20260926',
+                  46: 'pathvqa_v1_norm_fixed_5ep_seed46_20260926'}
     bindings = []
     for seed, score in [(44, 59.3386), (45, 58.5077), (46, 58.7314)]:
         name = f"pathvqa_v1_norm_fixed_5ep_seed{seed}"
-        if seed == 44:
-            candidates = [parent / (name + "_20260926_2")]
-        else:
-            candidates = [p for p in parent.glob(name + "_*")
-                          if re.fullmatch(re.escape(name) + r"_\d{8}(?:_\d+)?", p.name)
-                          and (p / "train_report.json").is_file()]
+        candidates = [parent / exact_runs[seed]]
         valid, rejected = [], []
         for run in candidates:
             try:

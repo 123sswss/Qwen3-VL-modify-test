@@ -1,5 +1,21 @@
 # Experiment Result Summary
 
+### 2026-10-01：SSH确认原五轮V1三seed真实路径
+
+原版epoch5已通过CPU只读身份/文件完整性核验：seed44=`pathvqa_v1_norm_fixed_5ep_seed44_20260926_2`，45=`pathvqa_v1_norm_fixed_5ep_seed45_20260926`，46=`pathvqa_v1_norm_fixed_5ep_seed46_20260926`，均位于`pathvqa/outputs/visual_selection_prefix/`。报告确认归一化False、五轮、1864963参数，已有Validation59.3386/58.5077/58.7314不变。补齐历史训练commit/版本/成本见主账本；不再将45/46路径标为未知。修复入口固定这三个路径，不取消身份保护。RSVQA V1/LoRA既有Test文件与评分也通过CPU复核，五项GPU任务尚未重启。
+
+### 2026-10-01：SSH确认原五轮V1三seed真实路径
+
+原版epoch5已通过CPU只读身份/文件完整性核验：seed44=`pathvqa_v1_norm_fixed_5ep_seed44_20260926_2`，45=`pathvqa_v1_norm_fixed_5ep_seed45_20260926`，46=`pathvqa_v1_norm_fixed_5ep_seed46_20260926`，均位于`pathvqa/outputs/visual_selection_prefix/`。报告确认归一化False、五轮、1864963参数，已有Validation59.3386/58.5077/58.7314不变。补齐历史训练commit/版本/成本见主账本；不再将45/46路径标为未知。修复入口固定这三个路径，不取消身份保护。RSVQA V1/LoRA既有Test文件与评分也通过CPU复核，五项GPU任务尚未重启。
+
+### 2026-10-01：五项入口预检schema失败，未运行模型
+
+7461be1入口要求旧五轮seed44报告的`visual_prompt_mode`，导致首次预检停止；产物`outputs/five_task_test_suite/precheck_failed_20261001_133024_919726`，无GPU执行或新分数。已兼容历史字段缺失，用明确原V1 method/布局和原日志或训练commit核对学习率；证据缺失仍停，不取消身份保护。等待用户重启，五项实验定义不变。
+
+### 2026-10-01：五项入口预检schema失败，未运行模型
+
+7461be1入口要求旧五轮seed44报告的`visual_prompt_mode`，导致首次预检停止；产物`outputs/five_task_test_suite/precheck_failed_20261001_133024_919726`，无GPU执行或新分数。已兼容历史字段缺失，用明确原V1 method/布局和原日志或训练commit核对学习率；证据缺失仍停，不取消身份保护。等待用户重启，五项实验定义不变。
+
 ### 2026-09-30：LoRA-r2 batch2运行失败，batch1重跑待执行
 
 `pathvqa_lora_full_model_attention_r2_norm_fixed_5ep_seed44`（PathVQA seed44/data42）在837/3075步反向OOM，无epoch5成绩。用户确认输出后缀`_1`，精确完整路径未回传。改为microbatch1/累积32、有效batch32，从头运行独立`pathvqa_lora_full_model_attention_r2_norm_fixed_5ep_b1a32_seed44`，其余五轮配置不变；仅准备，不代启动GPU，不关机。不能把等效batch相同解释成完全相同优化轨迹。

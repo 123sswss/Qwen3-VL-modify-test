@@ -1,5 +1,7 @@
 # Experiment Result Summary
 
+- 2026-10-08 PathVQA V10三seed：代码准备，尚未运行；44→45→46，各自从零五轮/fixed epoch5 Validation，同seed原V1配对10000/seed42，完整成功后汇总mean±sample std(ddof=1)。专用入口先落盘成功/失败及未运行状态，再等待600秒自动关机。GPU全由用户启动；没有新成绩或稳定性结论。
+
 ### 2026-10-01：SSH确认原五轮V1三seed真实路径
 
 原版epoch5已通过CPU只读身份/文件完整性核验：seed44=`pathvqa_v1_norm_fixed_5ep_seed44_20260926_2`，45=`pathvqa_v1_norm_fixed_5ep_seed45_20260926`，46=`pathvqa_v1_norm_fixed_5ep_seed46_20260926`，均位于`pathvqa/outputs/visual_selection_prefix/`。报告确认归一化False、五轮、1864963参数，已有Validation59.3386/58.5077/58.7314不变。补齐历史训练commit/版本/成本见主账本；不再将45/46路径标为未知。修复入口固定这三个路径，不取消身份保护。RSVQA V1/LoRA既有Test文件与评分也通过CPU复核，五项GPU任务尚未重启。
@@ -499,3 +501,11 @@ This file is the concise experiment memory shared by the user and Codex. The com
 ## 2026-10-08 SLAKE独立V10准备完成，未训练
 
 保留V1问题编码、三层Q/K地图和层门控、P20及原Visual18；用beta加权地图读出单个原生2560维Value摘要，经2560→160→2560 Meta-Net生成共享P20偏移，无重复softmax/除3。移除旧Value LN/64维投影/分块输出头，CPU mock实际逐组核验1,685,923参数，28个共有张量同seed原V1初值一致，输出Normal(0,1e-4)/bias0、Meta-Net LR1e-4。五轮44/42/b2a16、归一化False、固定epoch5完整双语Test，主对照CoCoOp77.03（三轮/无Visual18），参考V1 75.55（五轮）；精确路径绑定并通过CPU核验，不按最新目录猜测。4项本地数值/协议+2项GPU不可见CPU mock检查通过，无真实训练/推理成绩。入口`bash slake/run_v10_weighted_map_metanet_seed44.sh`，失败即停、无关机或额外seed；用户执行所有GPU步骤，结果回传后更新账本。
+
+### 2026-10-08：V10 SLAKE seed44五轮Test完成
+
+- slake_v10_weighted_map_metanet_h160_norm_fixed_5ep_seed44：固定epoch5完整双语Test2094题/180图，1632正确，Overall77.93696（77.94）；CLOSED84.69/OPEN73.45，KVQA58.80/VQA80.73，EN78.13/ZH77.73。原V1地图与Visual18保留，先按问题层权重融合地图、读取一份共同Value摘要，再用统一2560→160→ReLU→2560 Meta-Net生成P20共享偏移。
+- 对同seed五轮V1：+2.3878pp，图像簇配对95%CI[+0.8889,+3.8911]，独占正确135/85，净增50；OPEN+2.6232，CI[+0.7394,+4.5342]；ZH+3.9690，CI[+1.5136,+6.6084]，净增41，EN净增9。分项探索性，不作机制归因。
+- 对三轮CoCoOp：+0.9074pp，CI[-0.3792,+2.2212]，独占100/81，净增19；点估计领先，未确认显著优势。V10五轮且有Visual18，CoCoOp三轮且无Visual18/LR与初始化不同，不能把成绩差异全归地图。
+- 已CPU核验实现参数1,685,923，比V1少179,040（9.6002%）；实际训练报告/版本/执行提交/成本及梯度、激活轨迹未回传。结果支持简化生成头，不证明64维块重叠或梯度被堵。没有新增seed/重训/其他GPU任务。
+- 输出：/root/autodl-tmp/Qwen3-VL-modify-test/slake/outputs/v10/runs/slake_v10_weighted_map_metanet_h160_norm_fixed_5ep_seed44_20261008_174753_716357；epoch5 checkpoint及eval_test/epoch_5/slake_predictions.json、slake_summary.json。完整配对与原文已记主账本；本地记录不单独提交推送。

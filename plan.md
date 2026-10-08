@@ -1,4 +1,22 @@
+## 2026-10-08 用户扩展授权：PathVQA V10三seed串行，结束后自动关机
+
+实现状态：代码已准备，尚未运行。复用 `slake.train_v10` 的模型、优化器、五轮保存和预检，仅新增 PathVQA 数据/Train图像读取以及 model seed 参数；独立入口 `bash pathvqa/run_v10_seeds44_45_46_shutdown.sh`。严格44→45→46，每项完整 Validation 后保存同seed V1配对统计（10000/seed42），全成功才输出三seed mean±sample std(ddof=1)。产物 `pathvqa/outputs/v10/suite_<timestamp>/`，各seed独立子目录，保存 seed_results、final_report、suite_status、ledger_fragment 和逐阶段日志。失败退出码与后续未运行seed落盘后停止。
+
+关机延迟明确为600秒：报告与状态落盘后启动脱离会话的纯CPU计时子进程，实际等待十分钟才调用 `/usr/bin/shutdown`，不向可能忽略延迟参数的AutoDL封装传 `+10`。普通Python队列入口默认不关机；只有上述专用脚本显式启用。关机安排/调用失败另存 shutdown_status.json 和 shutdown.log。助手没有启动GPU或实际关机，结果回传后补两账本。
+
+本条覆盖下方原单seed44及不自动关机设置；V10结构、初始化、学习率和五轮训练协议不变。新增完整队列model seeds44/45/46，data seed均42，各自从零训练并固定epoch5完整PathVQA Validation，不跑Test、不择优、不重训基线。实验名分别为pathvqa_v10_weighted_map_metanet_h160_norm_fixed_5ep_seed44、seed45、seed46，按44→45→46严格串行，各自独立输出。
+
+逐seed配对同seed原五轮V1：44绑定pathvqa/outputs/visual_selection_prefix/pathvqa_v1_norm_fixed_5ep_seed44_20260926_2，45绑定pathvqa/outputs/visual_selection_prefix/pathvqa_v1_norm_fixed_5ep_seed45_20260926，46绑定pathvqa/outputs/visual_selection_prefix/pathvqa_v1_norm_fixed_5ep_seed46_20260926，均读取eval_validation/epoch_5既有预测并核验身份，不按最新目录猜测。保存逐seed图像簇配对CI与Overall/Yes-No/Free-form/问题类型；成功后汇总三seed均值±样本标准差（ddof=1），不选最高seed作为主结果。
+
+用户明确授权本次串行入口结束后自动关机。入口由用户亲自启动，助手只本机准备代码/CPU检查/相关提交推送，绝不直接执行任何GPU或关机操作。成功跑完全部训练、评估、配对和汇总后先落盘总报告/日志/退出码再调用已有AutoDL关机方式。失败仍按既定规则停止，不自动重试；记录失败seed、未运行队列和错误退出码后也关机，避免空闲计费；关机调用失败另行记录。检查stdout重定向/pipefail与退出处理，防止漏记失败或报告尚未写完就关机。结果回传后更新两账本和计划，不做仅账本提交。
+
+## 2026-10-08 用户授权：PathVQA V10单seed五轮Validation
+
+计划实验pathvqa_v10_weighted_map_metanet_h160_norm_fixed_5ep_seed44，尚未执行。完整复用已跑通的SLAKE V10结构、共有初始化及V1五轮训练协议，不调参、不改地图/层权重/Meta-Net，仅迁移到PathVQA。model seed44/data seed42，batch2/accum16，save3/4/5，固定epoch5完整Validation6259题/832图，不跑Test或其他seed。主对照为pathvqa/outputs/visual_selection_prefix/pathvqa_v1_norm_fixed_5ep_seed44_20260926_2/eval_validation/epoch_5（59.3386），做Overall/Yes-No/Free-form/what/where图像簇配对bootstrap10000次seed42；只读取既有基线预测。独立输出，不覆盖SLAKE或原V1；本机实现/CPU检查并提交推送，所有GPU检查、训练、评估由用户亲自启动，失败即停，无重试或自动关机。结果回传后更新两账本及计划，不做账本独立提交。既有CoCoOp可作三轮历史参考，须保留协议差异，不因本次自动安排其重训。
+
 ## 2026-10-08 用户授权：V10在SLAKE单seed试验，训练沿用五轮V1
+
+> **2026-10-08 V10已完成，用户回传固定epoch5完整Test及配对结果：** seed44，1632/2094，Overall77.94，OPEN73.45/CLOSED84.69。对同seed五轮V1 +2.3878pp，图像簇95%配对CI[+0.8889,+3.8911]；对三轮CoCoOp +0.9074pp，CI[-0.3792,+2.2212]。完整记录已补EXPERIMENT_RESULTS.md和result.md；下方“未运行/仅计划”均为此前准备状态，由本条覆盖。简化头部在此配置下有效，不证明64维冗余或梯度阻塞，未确认超越CoCoOp；五轮/三轮及Visual18差异保留。实际train_report与激活/梯度轨迹仍待回传。此次单次授权已完成，不自动安排其他seed、数据集或新变体，无GPU操作由助手执行。
 
 > **实现准备完成，真实训练/Test尚未运行：** 独立`slake/visual_selection_v10.py`、`visual_selection_v10_interface.py`、`slake/train_v10.py`；新config/weights文件名和backend`v10-weighted-map`，原V1不变。入口`bash slake/run_v10_weighted_map_metanet_seed44.sh`，先绑定两条精确基线及9834有效Train/2094 Test，用户启动后先CPU张量检查，再真实Train batch的梯度/单次视觉与LLM/labels/保存重载和cache预检，通过后从头五轮→固定epoch5全语言Test→相对CoCoOp与V1的10000/seed42图像簇配对。失败即停、不重试、不关机。独立输出`slake/outputs/v10/runs/`；预检查放`prechecks/`，不当作训练结果。
 >

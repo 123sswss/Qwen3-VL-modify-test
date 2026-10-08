@@ -73,7 +73,7 @@ class V10Callback(TrainerCallback):
         return control
 
 
-def real_batch_preflight(model, dataset, collator, processor, source, output):
+def real_batch_preflight(model, dataset, collator, processor, source, output, dataset_name="slake"):
     """Train-batch gradients and save/reload/cache audit; no optimizer step."""
     batch = collator([dataset[i] for i in range(2)])
     device = next(model.base_model.parameters()).device
@@ -117,8 +117,13 @@ def real_batch_preflight(model, dataset, collator, processor, source, output):
     row = source.data[0]
     interface = VisualSelectionV10Interface.__new__(VisualSelectionV10Interface)
     interface.processor = processor
-    with Image.open(row["image_path"]) as image:
-        prompt = build_prompt({"_slake_question": row["question"], "_slake_language": row["language"]}, None)
+    image_source = source.load_image(row) if dataset_name == "pathvqa" else Image.open(row["image_path"])
+    with image_source as image:
+        if dataset_name == "pathvqa":
+            from pathvqa.pathvqa_official_eval import build_prompt as pathvqa_prompt
+            prompt = pathvqa_prompt(row["question"], None)
+        else:
+            prompt = build_prompt({"_slake_question": row["question"], "_slake_language": row["language"]}, None)
         inputs = interface.prepare_inputs(image.convert("RGB"), prompt, question=row["question"])
     moved = {key:value.to(device, dtype=torch.bfloat16 if value.is_floating_point() else value.dtype)
              for key,value in inputs.items()}
@@ -162,8 +167,12 @@ def main():
     parser.add_argument("--data-root", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--expected-train-count", type=int, required=True)
+    parser.add_argument("--dataset", choices=("slake", "pathvqa"), default="slake")
+    parser.add_argument("--model-seed", type=int, default=44)
     args = parser.parse_args()
-    seed, data_seed = 44, 42
+    seed, data_seed = args.model_seed, 42
+    experiment = (f"pathvqa_v10_weighted_map_metanet_h160_norm_fixed_5ep_seed{seed}"
+                  if args.dataset == "pathvqa" else EXPERIMENT)
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
@@ -172,22 +181,29 @@ def main():
     versions = {"torch": torch.__version__, "transformers": importlib.metadata.version("transformers"),
                 "accelerate": importlib.metadata.version("accelerate")}
     commit = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
-    print("[V10_RUNTIME] " + json.dumps({"experiment":EXPERIMENT,"versions":versions,"commit":commit}), flush=True)
+    print("[V10_RUNTIME] " + json.dumps({"experiment":experiment,"versions":versions,"commit":commit}), flush=True)
     processor = AutoProcessor.from_pretrained(str(args.model_path), trust_remote_code=True)
     base = AutoModelForImageTextToText.from_pretrained(str(args.model_path), torch_dtype=torch.bfloat16,
                                                     device_map="auto", trust_remote_code=True)
     base.config.use_cache = False
     model = VisualSelectionV10Model(base, init_seed=seed)
-    source = SLAKEDataset(processor, str(args.data_root/"imgs"), questions_path=str(args.data_root/"train.json"),
-                         languages=None, base_types=None, splits=("train",), ce_enabled=True,
-                         seed=data_seed, deterministic_sampling=True, max_length=2048)
+    if args.dataset == "pathvqa":
+        from pathvqa.data_pipeline import PathVQADataset, PathVQADataCollator
+        source = PathVQADataset(processor=processor, data_root=args.data_root, split="train",
+                               ce_enabled=True, seed=data_seed, deterministic_sampling=True, max_length=2048)
+        base_collator = PathVQADataCollator(processor)
+    else:
+        source = SLAKEDataset(processor, str(args.data_root/"imgs"), questions_path=str(args.data_root/"train.json"),
+                             languages=None, base_types=None, splits=("train",), ce_enabled=True,
+                             seed=data_seed, deterministic_sampling=True, max_length=2048)
+        base_collator = SLAKEDataCollator(processor)
     if len(source) != args.expected_train_count:
         raise RuntimeError("V10 effective train sample count differs from CPU manifest audit")
     dataset = RawQuestionDataset(source, processor.tokenizer)
-    collator = RawQuestionCollator(processor, SLAKEDataCollator(processor))
+    collator = RawQuestionCollator(processor, base_collator)
     cpu_rng, cuda_rng = torch.random.get_rng_state(), torch.cuda.get_rng_state_all()
     python_rng, numpy_rng = random.getstate(), np.random.get_state()
-    real_batch_preflight(model, dataset, collator, processor, source, args.output_dir)
+    real_batch_preflight(model, dataset, collator, processor, source, args.output_dir, args.dataset)
     torch.random.set_rng_state(cpu_rng)
     torch.cuda.set_rng_state_all(cuda_rng)
     random.setstate(python_rng)
@@ -212,9 +228,9 @@ def main():
     counts = model._audit_parameters()
     if sum(counts.values()) != EXPECTED_TRAINABLE:
         raise RuntimeError("V10 final parameter count changed")
-    report = {"experiment": EXPERIMENT, "method": METHOD, "dataset": "SLAKE", "model_seed":seed,
+    report = {"experiment": experiment, "method": METHOD, "dataset": "PathVQA" if args.dataset == "pathvqa" else "SLAKE", "model_seed":seed,
               "data_seed":data_seed,"epochs":5,"saved_epochs":sorted(callback.saved),"train_split":"train",
-              "languages":"all","train_samples":len(source),"train_manifest":str(args.data_root/"train.json"),
+              "languages":"all","train_samples":len(source),"train_manifest":None if args.dataset == "pathvqa" else str(args.data_root/"train.json"),
               "base_model":str(args.model_path),"max_length":2048,"workers":2,"bf16":True,
               "trainable_parameters":counts,"total_trainable_parameters":sum(counts.values()),
               "git_commit":commit,"runtime_versions":versions,"train_metrics":result.metrics,

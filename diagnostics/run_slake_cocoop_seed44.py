@@ -109,6 +109,52 @@ def references(path):
     return rows
 
 
+def effective_train_records(rows):
+    """Match SLAKEDataset's existing train-split/empty-answer filtering, without torch."""
+    kept, excluded = [], []
+    for row in rows:
+        split = next((str(row.get(k) or "").strip().lower() for k in ("split", "subset", "set")
+                      if str(row.get(k) or "").strip()), "")
+        answer = row.get("answer", row.get("answers"))
+        if isinstance(answer, list):
+            answer = next((v for v in answer if str(v).strip()), "")
+        reason = "non_train_split" if split and split != "train" else (
+            "empty_answer" if not str(answer or "").strip() else None)
+        if reason:
+            excluded.append({"question_id": record_id(row), "reason": reason})
+        else:
+            kept.append(row)
+    return kept, excluded
+
+
+def training_audit(run, effective_count, data_root):
+    report = read(run / "train_report.json")
+    for key, expected in PROTOCOL.items():
+        require(report[key] == expected, f"Actual training report differs at {key}")
+    for key, expected in {"experiment": EXPERIMENT, "dataset": "SLAKE", "languages": "all",
+            "train_split": "train", "method": "cocoop_style_conditional_prompt_tuning",
+            "question_access": False, "visual_source": "post_merger_llm_visual_token_mean",
+            "prompt_placement": "before_full_chat"}.items():
+        require(report[key] == expected, f"Training source identity mismatch: {key}")
+    require(Path(report["train_manifest"]).resolve() == (data_root / "train.json").resolve(), "Training manifest differs")
+    require(report["train_metrics"]["epoch"] == 3, "Training epoch3 incomplete")
+    require(report["trainer_model_accepts_loss_kwargs"] is False and
+            report["accelerator_gradient_accumulation_steps"] == 1, "Normalization mismatch")
+    require(report["backbone_frozen"] and report["trainable_parameter_groups"] ==
+            {"soft_prompt": 51200, "meta_net": 821920}, "Unexpected trainable modules")
+    require(report["train_samples"] == effective_count, "Effective training sample count mismatch")
+    require(report["saved_epochs"] == [1,2,3], "Saved epoch list mismatch")
+    checkpoint = run / "checkpoints/epoch_3"
+    config = read(checkpoint / "cocoop_prompt_config.json")
+    for key, expected in {"init_seed": 44, "hidden_size": 2560, "prompt_length": 20,
+            "bottleneck_dim": 160, "question_access": False,
+            "prompt_placement": "before_full_chat"}.items():
+        require(config[key] == expected, f"Epoch3 checkpoint mismatch: {key}")
+    weights = checkpoint / "cocoop_prompt.pt"
+    require(weights.is_file() and weights.stat().st_size > 0, "Fixed epoch3 weights missing")
+    return report, checkpoint
+
+
 def scored(eval_dir, refs):
     summary = read(eval_dir / "slake_summary.json")
     require(summary["language"] == "all" and summary["expected_split"] == "test" and
@@ -199,12 +245,16 @@ def main():
     parser.add_argument("--baseline-run", type=Path, default=ROOT / BASELINE)
     parser.add_argument("--output-root", type=Path, default=ROOT / "slake/outputs/cocoop")
     parser.add_argument("--precheck-only", action="store_true", help="CPU files only; never launches model")
+    parser.add_argument("--evaluate-run", type=Path,
+                        help="Evaluate this exact completed run's epoch3 only; NEVER retrain or overwrite it")
     args = parser.parse_args()
     output = args.output_root / (EXPERIMENT + "_" + datetime.now().strftime("%Y%m%d_%H%M%S_%f"))
     output.mkdir(parents=True, exist_ok=False)
+    training_run = args.evaluate_run.resolve() if args.evaluate_run else output
     state = {"experiment": EXPERIMENT, "output": str(output), "stage": "precheck",
              "status": "started", "protocol": PROTOCOL, "shutdown": False,
              "precheck_only": args.precheck_only, "stage_exits": []}
+    state.update(evaluation_only=args.evaluate_run is not None, training_source=str(training_run))
     def save():
         write(output / "stage_status.json", state)
     def command(stage, tokens):
@@ -228,20 +278,29 @@ def main():
         historical = historical_audit(args.history_run)
         refs = references(args.data_root / "test.json")
         train_refs = references(args.data_root / "train.json")
+        effective, excluded = effective_train_records(train_refs)
         for row in train_refs + refs:
             require((args.data_root / "imgs" / row["img_name"]).is_file(), f"Missing image: {row['img_name']}")
         baseline = baseline_audit(args.baseline_run, refs, args.model_path)
         require(len(refs) == 2094, "Official full bilingual Test count differs from verified reference")
         write(output / "historical_protocol_audit.json", historical)
         write(output / "baseline_binding.json", baseline)
+        write(output / "train_sample_audit.json", {"raw_count": len(train_refs),
+              "effective_count": len(effective), "excluded": excluded,
+              "policy": "existing_SLAKEDataset_train_split_and_nonempty_answer"})
         state.update(git_commit=subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip(),
-                     test_count=len(refs), train_count=len(train_refs), status="precheck_passed")
+                     test_count=len(refs), train_count=len(effective), status="precheck_passed")
+        if args.evaluate_run:
+            report, checkpoint = training_audit(training_run, len(effective), args.data_root)
+            write(output / "training_source_binding.json", {"run": str(training_run),
+                  "report": report, "checkpoint": str(checkpoint)})
         save()
         if args.precheck_only:
             state["exit_code"] = 0
             save()
             return 0
-        command("train", [sys.executable, "-m", "pathvqa.train_cocoop", "--dataset", "slake",
+        if not args.evaluate_run:
+            command("train", [sys.executable, "-m", "pathvqa.train_cocoop", "--dataset", "slake",
             "--model-path", args.model_path, "--data-root", args.data_root,
             "--output-dir", output, "--experiment-name", EXPERIMENT,
             "--prompt-length", 20, "--bottleneck-dim", 160, "--expected-trainable-parameters", 873120,
@@ -249,16 +308,7 @@ def main():
             "--epochs", 3, "--seed", 44, "--data-seed", 42, "--batch-size", 2,
             "--gradient-accumulation", 16, "--max-length", 2048, "--dataloader-workers", 2,
             "--correct-loss-accumulation"])
-        report = read(output / "train_report.json")
-        for key, expected in PROTOCOL.items():
-            require(report[key] == expected, f"Actual training report differs at {key}")
-        require(report["trainer_model_accepts_loss_kwargs"] is False and
-                report["accelerator_gradient_accumulation_steps"] == 1, "Normalization mismatch")
-        require(report["backbone_frozen"] and report["trainable_parameter_groups"] ==
-                {"soft_prompt": 51200, "meta_net": 821920}, "Unexpected trainable modules")
-        require(report["train_samples"] == len(train_refs) and report["saved_epochs"] == [1,2,3], "Training subset/checkpoints mismatch")
-        checkpoint = output / "checkpoints/epoch_3"
-        require((checkpoint / "cocoop_prompt.pt").is_file(), "Fixed epoch3 weights missing")
+        report, checkpoint = training_audit(training_run, len(effective), args.data_root)
         eval_dir = output / "eval_test/epoch_3"
         command("eval_test_epoch_3", [sys.executable, "-m", "slake.slake_official_eval",
             "--backend", "cocoop-style", "--base-model", args.model_path, "--checkpoint", checkpoint,
@@ -271,7 +321,8 @@ def main():
         fragment = (f"### {EXPERIMENT}\n\nSLAKE seed44/data42, fixed epoch3 full bilingual Test; "
             f"Overall {summary['overall_accuracy']}; OPEN/CLOSED {summary['per_answer_type_accuracy']}; "
             f"KVQA/VQA {summary['per_question_type_accuracy']}; EN/ZH {summary['per_language_accuracy']}. "
-            f"Parameters 873120; commit {state['git_commit']}; output {output}. "
+            f"Parameters 873120; evaluation commit {state['git_commit']}; training commit "
+            f"{report['git_commit']}; source {training_run}; output {output}. "
             f"Train runtime {report['train_metrics'].get('train_runtime')}; peak allocated GPU bytes "
             f"{report['peak_gpu_memory_bytes']}; versions {report['runtime_versions']}. "
             f"Paired vs V1 {comparison['groups']}; CoCoOp 3 epochs vs V1 5 epochs. "

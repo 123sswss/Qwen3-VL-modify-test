@@ -483,3 +483,5 @@ This file is the concise experiment memory shared by the user and Codex. The com
 ## 2026-10-08 SLAKE原CoCoOp seed44代码准备（未运行）
 
 原P20/H160、873120参数，无Visual18/问题条件；从头3轮、归一化False、完整中英epoch3 Test。已SSH只读核验PathVQA历史报告/配置/日志的结构、学习率和epoch，但历史库版本/batch覆盖值/归一化仍未知，不宣称完整协议相同。SLAKE V1基线精确绑定`slake_v1_norm_fixed_5ep_seed44_20260928`，2094题75.55；新CoCoOp三轮对V1五轮须披露。独立入口`bash slake/run_cocoop_style_seed44.sh`，启动先只读身份/完整性核验；全量Test后图像簇配对10000次seed42，分项探索性。未启动GPU、无新结果、默认不关机；用户回传成功或失败产物后补齐两账本，不改变历史成绩。
+- **2026-10-08 SLAKE CoCoOp运行更正：** 三轮训练成功，epoch1/2/3及final齐全；Test未开始。启动器误将9835条原始清单与9834条有效训练数据等同，空答案qid1622被原SLAKE loader排除，导致训练后核验失败。精确目录`slake_cocoop_style_p20_h160_norm_fixed_3ep_seed44_20261008_125232_604532`，924步、4407.9755秒、873120参数。不是训练失败，不应重训；当前无Test成绩。只读定位，未修改代码或启动GPU；账本留待相关代码提交。
+- **2026-10-08 SLAKE CoCoOp运行更正：** 三轮训练成功，epoch1/2/3及final齐全；Test未开始。启动器误将9835条原始清单与9834条有效训练数据等同，空答案qid1622被原SLAKE loader排除，导致训练后核验失败。精确目录`slake_cocoop_style_p20_h160_norm_fixed_3ep_seed44_20261008_125232_604532`，924步、4407.9755秒、873120参数。不是训练失败，不应重训；当前无Test成绩。只读定位，未修改代码或启动GPU；账本留待相关代码提交。

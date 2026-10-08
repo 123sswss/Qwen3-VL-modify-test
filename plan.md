@@ -1,5 +1,9 @@
 ## 2026-10-08 用户要求SLAKE CoCoOp沿用PathVQA正式Test的参数
 
+> **用户授权继续推理，准备仅评估入口：** `--evaluate-run slake/outputs/cocoop/slake_cocoop_style_p20_h160_norm_fixed_3ep_seed44_20261008_125232_604532`严格核对完成训练的身份/协议/epoch3 checkpoint，只评估2094题完整Test并配对V1；绝不进入训练分支。有效训练计数复用既有split/空答案过滤（9834，排除qid1622），保存排除清单，不改变监督或已训权重。新评估和状态放独立目录，保留原失败日志，GPU仍由用户亲自执行，无关机。
+
+> **运行状态更正：训练已完成，Test被启动器计数核验阻断。** 用户运行`..._20261008_125232_604532`完成924步/epoch3，全部checkpoint存在；9835原始条目包含空答案qid1622，原loader实际训练9834，启动器未复用过滤口径。已CPU只读确认，无GPU操作、不重训、不直接绕过断言。后续应仅修正有效样本审计并准备指定epoch3的评估续跑入口，由用户执行；本次诊断未实施修复。
+
 > **CPU核验已通过：** 本地两项无torch导入的协议/配对统计测试及Python编译检查通过；SSH只执行标准库/纯评分的`--precheck-only`，真实历史报告、完整中英Train/Test图片存在性、V1身份及2094题归档预测/参考答案/评分一致性通过。CPU产物`slake/outputs/cocoop/slake_cocoop_style_p20_h160_norm_fixed_3ep_seed44_20261008_124627_689238`只有预检查记录，不是训练结果，不可当作已运行实验。GPU训练/推理仍等待用户执行。
 
 > **实现状态：代码已准备，尚未运行。** 独立入口 `bash slake/run_cocoop_style_seed44.sh`，实验 `slake_cocoop_style_p20_h160_norm_fixed_3ep_seed44`；启动先只读核验历史报告/配置/日志及明确绑定的V1，失败即停、不重试、不关机。2026-10-08 SSH只读确认历史报告873120参数、LR0.3/3e-4、44/42、epoch3，日志WD0/warmup0.03/linear；历史batch覆盖值、执行commit、库版本及归一化未记录，未知项不当作已验证一致。原始引入源码7b94673的batch2/累积16/max_length2048/workers2/AdamW/bf16是源码旁证，不等于历史实际运行证明。V1精确参照为`slake/outputs/visual_selection_prefix/slake_v1_norm_fixed_5ep_seed44_20260928/eval_test/epoch_5`，2094题、75.55、三轮对五轮预算差异必须保留。新运行归一化False、完整中英Train与epoch3 Test；结果及失败保存在独立目录与ledger_fragment，用户回传后立即追加两份Windows账本。助手未启动GPU操作。

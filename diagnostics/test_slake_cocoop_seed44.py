@@ -4,7 +4,7 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from diagnostics.run_slake_cocoop_seed44 import historical_audit, paired, PROTOCOL, evaluate_slake_predictions
+from diagnostics.run_slake_cocoop_seed44 import historical_audit, paired, PROTOCOL, evaluate_slake_predictions, effective_train_records
 
 
 def write(path, value):
@@ -13,6 +13,13 @@ def write(path, value):
 
 
 class SlakeCoCoOpProtocolTest(unittest.TestCase):
+    def test_existing_dataset_empty_answer_filter(self):
+        rows = [{"qid": 1, "answer": "yes"}, {"qid": 1622, "answer": ""},
+                {"qid": 3, "answer": ["", "no"]}, {"qid": 4, "answer": "yes", "split": "test"}]
+        kept, excluded = effective_train_records(rows)
+        self.assertEqual([x["qid"] for x in kept], [1, 3])
+        self.assertEqual(excluded, [{"question_id": 1622, "reason": "empty_answer"},
+                                    {"question_id": 4, "reason": "non_train_split"}])
     def test_historical_unknown_is_not_current_runtime(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)

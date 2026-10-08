@@ -1,3 +1,19 @@
+## 2026-10-08 用户要求SLAKE CoCoOp沿用PathVQA正式Test的参数
+
+> **CPU核验已通过：** 本地两项无torch导入的协议/配对统计测试及Python编译检查通过；SSH只执行标准库/纯评分的`--precheck-only`，真实历史报告、完整中英Train/Test图片存在性、V1身份及2094题归档预测/参考答案/评分一致性通过。CPU产物`slake/outputs/cocoop/slake_cocoop_style_p20_h160_norm_fixed_3ep_seed44_20261008_124627_689238`只有预检查记录，不是训练结果，不可当作已运行实验。GPU训练/推理仍等待用户执行。
+
+> **实现状态：代码已准备，尚未运行。** 独立入口 `bash slake/run_cocoop_style_seed44.sh`，实验 `slake_cocoop_style_p20_h160_norm_fixed_3ep_seed44`；启动先只读核验历史报告/配置/日志及明确绑定的V1，失败即停、不重试、不关机。2026-10-08 SSH只读确认历史报告873120参数、LR0.3/3e-4、44/42、epoch3，日志WD0/warmup0.03/linear；历史batch覆盖值、执行commit、库版本及归一化未记录，未知项不当作已验证一致。原始引入源码7b94673的batch2/累积16/max_length2048/workers2/AdamW/bf16是源码旁证，不等于历史实际运行证明。V1精确参照为`slake/outputs/visual_selection_prefix/slake_v1_norm_fixed_5ep_seed44_20260928/eval_test/epoch_5`，2094题、75.55、三轮对五轮预算差异必须保留。新运行归一化False、完整中英Train与epoch3 Test；结果及失败保存在独立目录与ledger_fragment，用户回传后立即追加两份Windows账本。助手未启动GPU操作。
+
+只准备/补SLAKE原CoCoOp-style seed44/data42，三轮固定epoch3全语言官方Test；不是五轮方案，不自动加45/46。以PathVQA正式Test对应历史P20/H160训练定义为模板：冻结同Qwen3-VL骨干，P20 embedding-row初始化，原生post-merger视觉token均值，正常初始化2560->160->2560 ReLU Meta-Net，共享P20偏移、位于完整chat前，无Visual18/问题条件；873120参数。P20 LR0.3/MetaNet3e-4，batch2/累积16，max_length2048，AdamW betas0.9/0.999 eps1e-8 WD0，warmup3%/linear，clip1，bf16，workers2。核对历史train_report或实际日志覆盖值，不能只用当前默认值宣称完全一致。
+
+新入口使用已验证的累积归一化修正，并记录Trainer/Accelerate版本与实值；PathVQA旧基线归一化历史若无法证实一致，明确为协议差异，不照搬已知bug或悄悄声称逐位复现。只改SLAKE数据/官方评估，保持原问句和中英样本；不跑Validation，不按Test择优或调参，不自动关机。由用户执行全部GPU操作，工作AI本地实现/CPU检查/提交推送/提供独立命令。精确参数/初始化/runtime审计、Test分项和配对现有V1 seed44（固定epoch5，75.55，轮数不同须披露）均输出；结果完成后记双账本。代码和产物本轮尚未创建。
+
+> **2026-10-08 更正与论文范围：** 电气LoRA-r8为3轮/seed47，V1同为seed47；此前seed44及V1 seed待补状态被此条覆盖。论文用汇总移除退休方法与开发历史，后续正文/表格不再引用。主账本保留历史以追溯。未新增训练或调参。
+
+> **2026-10-08 电气V1成绩已回传：** 675/954=70.75，完全沿用PathVQA配置。电气LoRA-r8补齐3轮/seed44。电气V1不再列为无成绩；精确seed/运行名称/输出路径/报告及配对统计仍待补。不新增训练或调参。
+
+> **2026-10-01 五任务已全部完成：** suite_20261001_134036_879815；PathVQA V1三seed最终Test59.1209±0.7169，RSVQA静态84.4362/CoCoOp86.1455。两账本已记全结果；RSVQA V1对LoRA及新基线的配对统计已补齐。以上任务不再列待跑，不重训、不据Test追加调参。剩余为电气V1/主表基线协议审计及缺口、效率汇总等此前计划；本轮无新增GPU任务。
+
 ## 2026-10-01 用户确定五项串行收尾实验
 
 顺序：PathVQA最终归一化五轮V1 seed44/45/46各现有epoch5 checkpoint完整Test（仅评估、禁止重训或择优），随后RSVQA-LR静态Visual18+P20、原CoCoOp-style各seed44/data42从头五轮并固定epoch5完整Test。RSVQA两项均microbatch4/累积8，有效batch32，匹配已运行RSVQA V1/LoRA的batch设置；LoRA三轮与本次五轮仍需单列说明。静态69632参数，P20@0.3、S8@3e-5、Av10@1e-4；CoCoOp873120参数，无Visual18/问题条件，P20@0.3、MetaNet@3e-4，沿用历史2560->160->2560共享偏移定义。两项显式修正累积归一化，其他已定初始化/优化/评分不变。RSVQA官方active过滤及count区间评分复用既有接口。

@@ -105,6 +105,7 @@ class CoCoOpCallback(TrainerCallback):
         row = {
             "step": int(state.global_step),
             "epoch": float(state.epoch or 0.0),
+            "gradient_measurement": "on_pre_optimizer_step_after_Trainer_clipping",
             "soft_prompt_grad_norm": self._gradient_norm(groups["soft_prompt"]),
             "meta_net_grad_norm": self._gradient_norm(groups["meta_net"]),
             "soft_prompt_norm": float(model.soft_prompt.detach().float().norm()),
@@ -222,6 +223,14 @@ def main(dataset_name: str = "pathvqa") -> int:
         dataset = _build_train_dataset(dataset_name, args, processor)
         collator = (PromptTuningCollator(processor) if dataset_name == "pathvqa"
                     else DynamicPromptCollator(processor, dataset_name))
+    if dataset_name == "slake":
+        if dataset.languages is not None or dataset.base_types is not None:
+            raise RuntimeError("SLAKE CoCoOp requires the complete bilingual training split")
+        print("[SLAKE_COCOOP_DATA_AUDIT] " + json.dumps({
+            "train_manifest": str(args.data_root / "train.json"),
+            "languages": "all", "base_types": "all", "train_samples": len(dataset),
+            "max_length": args.max_length, "workers": args.dataloader_workers,
+        }), flush=True)
     trainable = sum(
         parameter.numel()
         for parameter in model.parameters()
@@ -307,6 +316,12 @@ def main(dataset_name: str = "pathvqa") -> int:
         "prompt_length": args.prompt_length,
         "bottleneck_dim": args.bottleneck_dim,
         "trainable_parameters": trainable,
+        "trainable_parameter_groups": {
+            key: sum(p.numel() for p in parameters)
+            for key, parameters in model.trainable_parameter_groups().items()
+        },
+        "backbone_frozen": all(not p.requires_grad for p in model.base_model.parameters()),
+        "prompt_initialization": "embedding_rows_with_init_seed",
         "prompt_learning_rate": args.prompt_learning_rate,
         "meta_net_learning_rate": args.meta_net_learning_rate,
         "seed": args.seed,
@@ -314,6 +329,16 @@ def main(dataset_name: str = "pathvqa") -> int:
         "epochs": args.epochs,
         "batch_size": args.batch_size,
         "gradient_accumulation": args.gradient_accumulation,
+        "max_length": args.max_length,
+        "dataloader_workers": args.dataloader_workers,
+        "bf16": True,
+        "train_split": "train",
+        "train_manifest": str(args.data_root / "train.json") if dataset_name == "slake" else None,
+        "languages": "all" if dataset_name == "slake" else None,
+        "train_samples": len(dataset),
+        "saved_epochs": sorted(callback.completed_epochs),
+        "loss_accumulation_protocol": "equal_microbatch_mean_trainer_normalized"
+            if args.correct_loss_accumulation else "legacy_automatic_detection_unverified",
         "trainer_model_accepts_loss_kwargs": trainer.model_accepts_loss_kwargs,
         "accelerator_gradient_accumulation_steps": trainer.accelerator.gradient_accumulation_steps,
         "git_commit": commit, "runtime_versions": runtime,

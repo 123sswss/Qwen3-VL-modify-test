@@ -2278,3 +2278,132 @@ Correction to preceding pending-statistics status: paired report now received fo
   }
 ```
 </details>
+
+### 2026-10-01 - Five-task final Test suite completed
+
+Suite `outputs/five_task_test_suite/suite_20261001_134036_879815`, final_status completed. Three PathVQA tasks evaluate existing normalized V1 five-epoch seed44/45/46 checkpoints on Test only (not new training); reuse:false refers to these evaluation outputs. Controlled action is final split evaluation, no architecture change. RSVQA tasks train static Visual18+P20 and original CoCoOp-style (no Visual18/no question conditioning) from scratch, model44/data42, five epochs, batch4/accum8, fixed epoch5 Test, per prior approved plan. Full user-returned identities/paths, per-type scores, costs, commits and paired diagnostics preserved below.
+
+- PathVQA Test V1 OA59.8006/59.1904/58.3718, mean59.1209 +/- sampleSD0.7169, range1.4288. YN90.8685 +/-0.4402, Free-form27.3260 +/-1.0709. These are final Test results; do not replace prior Validation58.8592 +/-0.4299 or mix the two. Per-seed image clusters858. Fixed-checkpoint evaluation costs not supplied separately; reported training seconds are historical checkpoint metadata, not new suite training.
+- RSVQA Test static69,632 params OA84.4362/AA85.7665, CoCoOp873,120 params OA86.1455/AA86.9998; existing V1 OA85.0360/AA86.0812, LoRA OA87.0552/AA87.7162. CoCoOp minus V1 OA+1.1096 CI[0.2599480103979204,1.9890104677769072], whereas AA+0.9186 CI[-0.8172027559063635,2.73161491919151]. Static minus V1 OA-0.5998 CI[-1.5195441367589724,0.38988303508947314], AA-0.3147 CI[-1.6059840159429775,1.0916204130303087]. V1 minus LoRA OA-2.0192 CI[-2.9982010793523886,-1.059576169532187], AA-1.6350 CI[-2.9727912457990078,-0.3457192609781513]. Thus no clear V1 overall advantage over static in this seed, CoCoOp has positive overall advantage with fewer params; no claim V1 is a universally superior parameter-performance tradeoff. LoRA has three epochs vs V1 five, report exposure mismatch.
+- Exploratory count interval accuracy: V1 exceeds static by3.1897, trails CoCoOp by2.4432 and LoRA by5.1578, all corresponding supplied paired intervals exclude zero. This does not prove a pooling mechanism, correct localization, or cross-seed robustness. CoCoOp vs LoRA not directly paired in supplied output. No post-Test tuning proposed; uniform deferred. Existing main-table protocol audits/electrical validation remain separate work.
+
+<details><summary>Full returned suite report</summary>
+
+```text
+[RESULT_ROOT] outputs/five_task_test_suite/suite_20261001_134036_879815
+
+===== pathvqa_v1_5ep_seed44_epoch5_test =====
+Output: /root/autodl-tmp/Qwen3-VL-modify-test/outputs/five_task_test_suite/suite_20261001_134036_879815/pathvqa_v1_5ep_seed44_epoch5_test 复用: False
+Overall: 59.8006
+Yes/No: 91.3742
+Free-form: 28.1799
+Question Types: {'how': 11.5108, 'other': 27.7778, 'what': 23.0208, 'when': 16.6667, 'where': 67.9814, 'why': 0.0, 'yes/no': 91.3742}
+Image-cluster CI: {'point_estimate': 59.8006, 'confidence_level': 0.95, 'lower': 58.4932, 'upper': 61.2312, 'iterations': 2000, 'seed': 42, 'image_clusters': 858}
+Parameters: 1864963 epochs: 5
+Training seconds: 10863.0715 Peak GiB: 23.294
+Training commit: 2957ce297637d65a8dcdb5a075c1528072497590
+
+===== pathvqa_v1_5ep_seed45_epoch5_test =====
+Output: /root/autodl-tmp/Qwen3-VL-modify-test/outputs/five_task_test_suite/suite_20261001_134036_879815/pathvqa_v1_5ep_seed45_epoch5_test 复用: False
+Overall: 59.1904
+Yes/No: 90.6603
+Free-form: 27.6735
+Question Types: {'how': 13.6691, 'other': 27.7778, 'what': 22.4735, 'when': 0.0, 'where': 66.8213, 'why': 4.5455, 'yes/no': 90.6603}
+Image-cluster CI: {'point_estimate': 59.1904, 'confidence_level': 0.95, 'lower': 57.785, 'upper': 60.5836, 'iterations': 2000, 'seed': 42, 'image_clusters': 858}
+Parameters: 1864963 epochs: 5
+Training seconds: 10667.1862 Peak GiB: 23.294
+Training commit: f3b9c3922ec44f3388a43b6fc9cf50d28bf30672
+
+===== pathvqa_v1_5ep_seed46_epoch5_test =====
+Output: /root/autodl-tmp/Qwen3-VL-modify-test/outputs/five_task_test_suite/suite_20261001_134036_879815/pathvqa_v1_5ep_seed46_epoch5_test 复用: False
+Overall: 58.3718
+Yes/No: 90.5711
+Free-form: 26.1245
+Question Types: {'how': 10.7914, 'other': 27.7778, 'what': 21.3426, 'when': 0.0, 'where': 62.877, 'why': 4.5455, 'yes/no': 90.5711}
+Image-cluster CI: {'point_estimate': 58.3718, 'confidence_level': 0.95, 'lower': 57.0134, 'upper': 59.8112, 'iterations': 2000, 'seed': 42, 'image_clusters': 858}
+Parameters: 1864963 epochs: 5
+Training seconds: 10857.1599 Peak GiB: 23.294
+Training commit: 548335ffa98594b478117139c80a5ff128cff8ce
+
+===== rsvqa_static_visual18_p20_norm_fixed_5ep_b4a8_seed44 =====
+Output: /root/autodl-tmp/Qwen3-VL-modify-test/outputs/five_task_test_suite/suite_20261001_134036_879815/rsvqa_static_visual18_p20_norm_fixed_5ep_b4a8_seed44 复用: False
+Overall: 84.4362
+AA: 85.7665
+Question Types: {'rural_urban': 93.0, 'presence': 91.5059, 'count': 65.9315, 'comp': 92.6287}
+Image-cluster CI: {'iterations': 10000, 'seed': 42, 'clusters': 100, 'lower': 83.3966, 'upper': 85.4632}
+Parameters: 69632 epochs: 5
+Training seconds: 10417.5445 Peak GiB: 11.949
+Training commit: 8e4816c69298f158fb297005787fe87d5f544e37
+
+--- 新基线 vs RSVQA V1 （差值=variant−baseline）---
+overall: 85.0360 → 84.4362, delta=-0.5998, CI=[-1.5195441367589724, 0.38988303508947314], 独占正确 variant/baseline=413/473
+rural_urban: 92.0000 → 93.0000, delta=+1.0000, CI=[-3.0, 5.0], 独占正确 variant/baseline=3/2
+presence: 91.0998 → 91.5059, delta=+0.4061, CI=[-0.601619373531827, 1.5311688887324508], 独占正确 variant/baseline=88/76
+count: 69.1211 → 65.9315, delta=-3.1897, CI=[-5.4267790609409134, -0.8532132396220845], 独占正确 variant/baseline=230/324
+comp: 92.1039 → 92.6287, delta=+0.5247, CI=[-0.40110554777895985, 1.4646853726128075], 独占正确 variant/baseline=92/71
+AA delta=-0.3147, CI=[-1.6059840159429775, 1.0916204130303087]
+
+===== rsvqa_cocoop_style_p20_h160_norm_fixed_5ep_b4a8_seed44 =====
+Output: /root/autodl-tmp/Qwen3-VL-modify-test/outputs/five_task_test_suite/suite_20261001_134036_879815/rsvqa_cocoop_style_p20_h160_norm_fixed_5ep_b4a8_seed44 复用: False
+Overall: 86.1455
+AA: 86.9998
+Question Types: {'rural_urban': 92.0, 'presence': 92.0812, 'count': 71.5643, 'comp': 92.3538}
+Image-cluster CI: {'iterations': 10000, 'seed': 42, 'clusters': 100, 'lower': 85.053, 'upper': 87.2203}
+Parameters: 873120 epochs: 5
+Training seconds: 10233.2754 Peak GiB: 11.752
+Training commit: 8e4816c69298f158fb297005787fe87d5f544e37
+
+--- 新基线 vs RSVQA V1 （差值=variant−baseline）---
+overall: 85.0360 → 86.1455, delta=+1.1096, CI=[0.2599480103979204, 1.9890104677769072], 独占正确 variant/baseline=458/347
+rural_urban: 92.0000 → 92.0000, delta=+0.0000, CI=[-6.0, 6.0], 独占正确 variant/baseline=5/5
+presence: 91.0998 → 92.0812, delta=+0.9814, CI=[0.0, 2.0770693278726067], 独占正确 variant/baseline=92/63
+count: 69.1211 → 71.5643, delta=+2.4432, CI=[0.3443466922241245, 4.533233025896379], 独占正确 variant/baseline=278/206
+comp: 92.1039 → 92.3538, delta=+0.2499, CI=[-0.5441537489797639, 1.0283625470601063], 独占正确 variant/baseline=83/73
+AA delta=+0.9186, CI=[-0.8172027559063635, 2.73161491919151]
+
+===== PathVQA Test 三seed均值 ± 样本标准差 =====
+Overall: [59.8006, 59.1904, 58.3718] → 59.1209 ± 0.7169
+Yes/No: [91.3742, 90.6603, 90.5711] → 90.8685 ± 0.4402
+Free-form: [28.1799, 27.6735, 26.1245] → 27.3260 ± 1.0709
+how: 11.9904 ± 1.4976
+other: 27.7778 ± 0.0000
+what: 22.2790 ± 0.8558
+when: 5.5556 ± 9.6225
+where: 65.8932 ± 2.6758
+why: 3.0303 ± 2.6243
+yes/no: 90.8685 ± 0.4402
+
+--- RSVQA V1 − LoRA （差值=variant−baseline）---
+overall: 87.0552 → 85.0360, delta=-2.0192, CI=[-2.9982010793523886, -1.059576169532187], 独占正确 variant/baseline=324/526
+rural_urban: 92.0000 → 92.0000, delta=+0.0000, CI=[-4.0, 4.0], 独占正确 variant/baseline=2/2
+presence: 91.6074 → 91.0998, delta=-0.5076, CI=[-1.5078861306451405, 0.4399360412964955], 独占正确 variant/baseline=79/94
+count: 74.2789 → 69.1211, delta=-5.1578, CI=[-7.332671665187308, -3.0128129514989888], 独占正确 variant/baseline=163/315
+comp: 92.9785 → 92.1039, delta=-0.8746, CI=[-1.9254874165698654, 0.2011591810141015], 独占正确 variant/baseline=80/115
+AA delta=-1.6350, CI=[-2.9727912457990078, -0.3457192609781513]
+预算说明: V1 five epochs versus LoRA three epochs, not equal exposure
+
+[FINAL_STATUS] five_task_suite completed
+```
+</details>
+
+
+### 2026-10-08 - Electrical final V1 result and LoRA-r8 protocol supplement
+
+- User clarification: private electrical Full-Attention LoRA-r8 result677/954=70.9643605870% (70.96%) used3 epochs and model seed44. This resolves previously unspecified epoch/seed in the current summary; score and denominator unchanged. Exact LoRA experiment name/output path/normalization audit remain unprovided. Preserve prior records and use this explicit correction.
+- Completed final V1 electrical evaluation, user-reported675 correct of954 valid samples, accuracy70.7547169811% (70.75%). User confirms the PathVQA V1 configuration transferred completely without changes or electrical-specific tuning. Associated method budget1,864,963 trainable parameters and five-epoch configuration follow the frozen PathVQA V1 definition; actual electrical train_report/parameter audit and evaluation checkpoint not supplied. Model seed, data-seed attestation, exact experiment name, output path, executing commit, split identity, timing/memory, breakdowns, prediction file and paired CI not supplied. Do not assign prior proposed seed47 as observed, and do not fabricate an experiment name or output path.
+- Controlled transfer: frozen normalized five-epoch V1/P20/Visual18/two visual LRs/5-11-17 selection/shared offset, as confirmed by user at configuration level; only dataset changes. Fixed private effective denominator954 consistent with corrected historical electrical scoring; no missing-image automatic credits included in reported count.
+- Descriptive exact count comparisons, V1 minus historical methods: vsstatic663/954 +12 correct (+1.2578616352pp), vsCoCoOp671/954 +4 (+0.4192872117pp), vsLoRA677/954 -2 (-0.2096436059pp), vsoldQDPT681/954 -6 (-0.6289308176pp). Near point estimates do not establish statistical equivalence/noninferiority; methods differ in training seed/epochs and complete protocol compatibility is unaudited. No paired significance or stable cross-seed benefit claimed. V1 parameters76.1061% fewer than oldQDPT and73.6509% fewer thanLoRA based on fixed method budgets.
+- Status: electrical V1 score now received, replacing pending-score status only. Metadata remains pending; no rerun or new GPU experiment scheduled.
+
+
+### 2026-10-08 - Explicit electrical seed correction and paper result scope
+
+- User corrects preceding electrical LoRA-r8 seed44 assertion after checking its training CFG: `model_path=/root/autodl-tmp/model`, `work_dir=./runs/lora`, `seed=47`, `max_length=1024`, `data=build_training_data_config()`. Correct electrical LoRA-r8 protocol is3 epochs/model seed47. Its677/954=70.96% remains unchanged. Preceding seed44 entry is superseded, retained as historical correction trail.
+- User explicitly confirms electrical final V1 also uses model seed47. V1 result675/954=70.75%, unchanged PathVQA configuration and five-epoch budget unchanged. Seed is no longer pending; exact experiment name/output path/train report and paired predictions remain unprovided. StaticP20 andCoCoOp electrical comparisons are likewise seed47. This resolves the reported model-seed mismatch, but epochs differ across methods and numerical proximity does not prove equivalence.
+- Paper scope decision: remove all oldQDPT method results/comparisons/development-history material from paper-facing summary, including PathVQA/SLAKE/electrical tables and retrospective parameter/stability comparisons. Updated EXPERIMENT_SUMMARY_20261008.md is paper-facing and has no oldQDPT rows or history appendix. Primary historical ledger remains intact as provenance, not as material to include in the manuscript. Any future manuscript table should use V1, base, static, CoCoOp andLoRA plus applicable final-method ablations; do not reuse retired method names or scores. No new model execution or experiment scheduled.
+# 2026-10-08 - SLAKE original CoCoOp seed44 preparation and read-only historical audit
+
+- New experiment `slake_cocoop_style_p20_h160_norm_fixed_3ep_seed44`: code prepared, **not run**. Frozen original CoCoOp P20/H160, no Visual18/question input, strict 873,120 = 51,200 P20 + 821,920 Meta-Net. Model44/data42, from scratch three epochs, fixed epoch3 full bilingual official Test; batch2/accum16/max_length2048/workers2, LR0.3/3e-4, original AdamW/clip1/bf16/3% warmup/linear. Explicit `model_accepts_loss_kwargs=False`, Accelerate accumulation must be1; no manual division. Independent user-run entry `slake/run_cocoop_style_seed44.sh`, no shutdown/retry/Validation/other seed.
+- SSH **CPU-file-only** verification on2026-10-08: exact historical PathVQA run `pathvqa/outputs/cocoop/pathvqa_cocoop_style_p20_h160_seed44_20260909/train_report.json` records experiment without date suffix,873120,P20/H160,LR0.3/0.0003,seed44/data42 and completed epoch3/train runtime5962.3328s. Archived epoch3 `cocoop_prompt_config.json` confirms2560/160/P20,shared image bias,before full chat,no question access. `train.log` confirms same LR,epochs3,WD0,warmup0.03/linear. **Historical runtime versions, run commit, batch/accum/workers override values and loss normalization were not recorded; remain unknown.** Introduction source7b94673 supports requested defaults but is not proof of actual historical runtime/overrides. No full training-protocol equivalence claim.
+- Exact SLAKE V1 paired baseline verified: `slake/outputs/visual_selection_prefix/slake_v1_norm_fixed_5ep_seed44_20260928/eval_test/epoch_5`; full Test2094 questions,1582 correct,Overall75.55/CLOSED82.66/OPEN70.83/KVQA55.43/VQA78.49/EN77.29/ZH73.77. Its report confirms five epochs,44/42,originalsplit18,1,864,963 parameters,loss kwargsFalse/Accelerate1,commit327ad6735b60d0830900afc457cd8698189bf2ca; recorded PyTorch2.8.0+cu128/Transformers5.0.0/Accelerate1.12.0. CoCoOp3epochs vs V1fiveepochs must remain disclosed.
+- Startup binds these explicit directories, validates historical report/log/config and full train/Test image files, independently recomputes saved baseline scoring and checks archived question/reference identity. Outputs are independent timestamp directories under `slake/outputs/cocoop/`, including runtime/config/group counts,epoch checkpoints,logs/stage exits,predictions,summary and10000/seed42 image-cluster paired95%CI (Overall and exploratory OPEN/CLOSED/KVQA/VQA/EN/ZH). Server output `ledger_fragment.md` is returned for immediate Windows-ledger append on result handoff; no server source/ledger writes. No new score exists yet, and no GPU operation was started by the assistant.

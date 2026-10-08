@@ -485,3 +485,17 @@ This file is the concise experiment memory shared by the user and Codex. The com
 原P20/H160、873120参数，无Visual18/问题条件；从头3轮、归一化False、完整中英epoch3 Test。已SSH只读核验PathVQA历史报告/配置/日志的结构、学习率和epoch，但历史库版本/batch覆盖值/归一化仍未知，不宣称完整协议相同。SLAKE V1基线精确绑定`slake_v1_norm_fixed_5ep_seed44_20260928`，2094题75.55；新CoCoOp三轮对V1五轮须披露。独立入口`bash slake/run_cocoop_style_seed44.sh`，启动先只读身份/完整性核验；全量Test后图像簇配对10000次seed42，分项探索性。未启动GPU、无新结果、默认不关机；用户回传成功或失败产物后补齐两账本，不改变历史成绩。
 - **2026-10-08 SLAKE CoCoOp运行更正：** 三轮训练成功，epoch1/2/3及final齐全；Test未开始。启动器误将9835条原始清单与9834条有效训练数据等同，空答案qid1622被原SLAKE loader排除，导致训练后核验失败。精确目录`slake_cocoop_style_p20_h160_norm_fixed_3ep_seed44_20261008_125232_604532`，924步、4407.9755秒、873120参数。不是训练失败，不应重训；当前无Test成绩。只读定位，未修改代码或启动GPU；账本留待相关代码提交。
 - **2026-10-08 SLAKE CoCoOp运行更正：** 三轮训练成功，epoch1/2/3及final齐全；Test未开始。启动器误将9835条原始清单与9834条有效训练数据等同，空答案qid1622被原SLAKE loader排除，导致训练后核验失败。精确目录`slake_cocoop_style_p20_h160_norm_fixed_3ep_seed44_20261008_125232_604532`，924步、4407.9755秒、873120参数。不是训练失败，不应重训；当前无Test成绩。只读定位，未修改代码或启动GPU；账本留待相关代码提交。
+
+
+### 2026-10-08：SLAKE CoCoOp seed44 Test77.03
+- 原CoCoOp-style三轮seed44回传Overall77.03；较同seed五轮V1 75.55高1.48，873120参数不到V1一半。Test分项/CI及正式评估路径待补；已有训练目录见主账本。单seed不与V1三seed均值比较宣称稳定胜出。
+- 同为图像条件共享P20偏移，V1增加问题条件选择与视觉适配，额外结构未在所有领域转化为收益；SLAKE/RSVQA优先承认强简单基线，PathVQA选择消融限定贡献边界。冻结V1，不据Test追加调参。
+
+
+### 2026-10-08：SLAKE CoCoOp完整分项与正式评估路径补齐
+- Test2094题1613对/481错，无缺失/额外预测。Overall77.03，CLOSED83.85/OPEN72.50，KVQA59.93/VQA79.53，EN78.04/ZH75.99。比同seed V1多31题；全部分项点估计高于V1，最大KVQA+4.50，不能简单解释为只修正Yes/No。配对CI仍未回传。
+- 评估目录`slake/outputs/cocoop/slake_cocoop_style_p20_h160_norm_fixed_3ep_seed44_20261008_143843_694315`，实际epoch3 checkpoint来自已训`..._20261008_125232_604532`，没有重新训练。正式路径、完整成本/评分/时间字段见主账本。
+- 时间计数47612比2094+3638正好多20*2094，疑似包含P20；不据聚合201.315tokens/s声称输出速度优势。保留回传字段以便审计，评分成绩不因此更改。
+## 2026-10-08 SLAKE独立V10准备完成，未训练
+
+保留V1问题编码、三层Q/K地图和层门控、P20及原Visual18；用beta加权地图读出单个原生2560维Value摘要，经2560→160→2560 Meta-Net生成共享P20偏移，无重复softmax/除3。移除旧Value LN/64维投影/分块输出头，CPU mock实际逐组核验1,685,923参数，28个共有张量同seed原V1初值一致，输出Normal(0,1e-4)/bias0、Meta-Net LR1e-4。五轮44/42/b2a16、归一化False、固定epoch5完整双语Test，主对照CoCoOp77.03（三轮/无Visual18），参考V1 75.55（五轮）；精确路径绑定并通过CPU核验，不按最新目录猜测。4项本地数值/协议+2项GPU不可见CPU mock检查通过，无真实训练/推理成绩。入口`bash slake/run_v10_weighted_map_metanet_seed44.sh`，失败即停、无关机或额外seed；用户执行所有GPU步骤，结果回传后更新账本。

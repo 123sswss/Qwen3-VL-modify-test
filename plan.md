@@ -1,3 +1,22 @@
+## 2026-10-08 用户授权：V10在SLAKE单seed试验，训练沿用五轮V1
+
+> **实现准备完成，真实训练/Test尚未运行：** 独立`slake/visual_selection_v10.py`、`visual_selection_v10_interface.py`、`slake/train_v10.py`；新config/weights文件名和backend`v10-weighted-map`，原V1不变。入口`bash slake/run_v10_weighted_map_metanet_seed44.sh`，先绑定两条精确基线及9834有效Train/2094 Test，用户启动后先CPU张量检查，再真实Train batch的梯度/单次视觉与LLM/labels/保存重载和cache预检，通过后从头五轮→固定epoch5全语言Test→相对CoCoOp与V1的10000/seed42图像簇配对。失败即停、不重试、不关机。独立输出`slake/outputs/v10/runs/`；预检查放`prechecks/`，不当作训练结果。
+>
+> 已验证：本机4项NumPy/AST数值和协议测试及Python编译；服务器GPU完全不可见、内存载入本机代码的2项CPU mock张量测试，逐组实数1,685,923，共有28个张量逐一等于同seed原V1，CPU RNG相同，输出std0.0000998816/bias0，混合图像grid概率守恒/层门控与地图梯度/独立save-load通过。只读baseline预核验通过，CPU产物`slake/outputs/v10/prechecks/slake_v10_weighted_map_metanet_h160_norm_fixed_5ep_seed44_20261008_173524_696069`；未加载真实骨干、未使用GPU或进行训练/正式推理。新头用CPU独立generator状态，不调用全局torch.manual_seed重置CUDA；旧LN/投影/输出头只在构造原V1保留初值时临时存在，最终模型/优化器/存档彻底删除。
+
+状态：仅计划，尚未实现或执行。本条覆盖本轮先前提出的三轮训练、Meta-Net学习率3e-4及CoCoOp初始化建议；用户明确要求训练配置沿用V1。原V1和历史基线保持冻结，本次仅授权以下单次V10，不自动增加seed、重试、其他数据集或参数搜索。
+
+- 实验名：slake_v10_weighted_map_metanet_h160_norm_fixed_5ep_seed44；SLAKE官方完整中英train，从零训练，model seed44/data seed42，保存epoch3/4/5，固定epoch5完整Test（2094题），不跑Validation、不择优。独立产物目录拟用slake/outputs/v10/，不得覆盖既有结果。
+- 结构：保留V1的P20、索引17的S8+Av10 Visual18、128维真实问题编码、索引5/11/17的独立Q/K地图、每图grid_thw概率合并及共同最终merger Value。保留问题条件层门控beta=softmax(layer_gate(u))。融合地图a=sum_l beta_l * merged_map_l，直接读取z=sum_j a_j * V_j；不再softmax，不额外除以3。删除三套Value LayerNorm、2560->64投影、分块拼接及旧192->2560输出头；改为一套带bias的2560->160->ReLU->2560 Meta-Net，输出共享偏移加到20个P20位置。原生视觉与DeepStack路径及真实问题mask不变。
+- 训练：沿用V1的batch2/累积16、max_length2048、workers2、bf16、AdamW/weight_decay0/clip1、3%warmup及跨完整五轮的线性衰减。P20 LR0.3，S8 3e-5，Av10 1e-4，问题编码/QK/层门控/新Meta-Net均1e-4。P20 embedding-row与Visual18 Normal(0,0.02)初始化沿用V1；Meta-Net第一层常规初始化，最终输出层Normal(0,1e-4)、零bias，保留小幅非零初值。显式model_accepts_loss_kwargs=False，Accelerate累积1，不额外手工除loss。
+- 预计参数：1,685,923（P20 51,200，S8 8,192，Av10 10,240，问题编码345,088，地图448,896，层门控387，Meta-Net821,920）；实现后须逐组审计，不把预估当运行实测。独立method/config/checkpoint及推理加载接口，禁止残留旧头参数进入优化器或存档。
+- 比较：主对照为既有CoCoOp seed44完整Test77.03，绑定slake/outputs/cocoop/slake_cocoop_style_p20_h160_norm_fixed_3ep_seed44_20261008_143843_694315/eval_test/epoch_3；历史参考为V1 seed44五轮Test75.55，绑定slake/outputs/visual_selection_prefix/slake_v1_norm_fixed_5ep_seed44_20260928/eval_test/epoch_5。保存预测、Overall及OPEN/CLOSED/KVQA/VQA/EN/ZH，官方图像img_name簇配对bootstrap10000次/seed42。披露V10五轮且有Visual18、CoCoOp三轮且无Visual18，不把胜负全部归因于地图。只使用既有基线预测，不安排基线重训。
+- 执行边界：本机编辑/CPU检查/相关代码commit及push；服务器仅用户运行source /etc/network_turbo后git pull --ff-only同步。所有GPU预检、训练、推理与评估由用户亲自执行；助手不启动。准备一条独立启动命令，失败即停，无自动重试或关机。结果回传后同任务更新EXPERIMENT_RESULTS.md、result.md与本计划，文档不做单独提交。
+
+> **2026-10-08 SLAKE CoCoOp完整Test评估已回传：** 2094题1613正确，分项及评估路径已补两账本。复用既有epoch3，无新训练；仅配对统计内容待补。冻结V1/不自动加seed；计时聚合输出token数疑含P20，效率表使用前先CPU审计。
+
+> **2026-10-08 SLAKE CoCoOp seed44 Test成绩已回传：** 三轮77.03，同seed V1五轮75.55；结果已记账，不重训。分项/配对CI和最终评估路径待回传；45/46未排期。本轮不据Test调参或改变冻结V1。
+
 ## 2026-10-08 用户要求SLAKE CoCoOp沿用PathVQA正式Test的参数
 
 > **用户授权继续推理，准备仅评估入口：** `--evaluate-run slake/outputs/cocoop/slake_cocoop_style_p20_h160_norm_fixed_3ep_seed44_20261008_125232_604532`严格核对完成训练的身份/协议/epoch3 checkpoint，只评估2094题完整Test并配对V1；绝不进入训练分支。有效训练计数复用既有split/空答案过滤（9834，排除qid1622），保存排除清单，不改变监督或已训权重。新评估和状态放独立目录，保留原失败日志，GPU仍由用户亲自执行，无关机。

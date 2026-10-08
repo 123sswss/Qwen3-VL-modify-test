@@ -11,6 +11,7 @@ from typing import Any
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 BACKEND_SPECS = {
+    "v10-weighted-map": ("slake/visual_selection_v10_interface.py", "VisualSelectionV10Interface"),
     "base": ("test/inferQWen3vl.py", "BaselineModelInterface"),
     "mmrl": ("test/inferEngine.py", "ModelInterface"),
     "mmrl-prompt": ("test/inferEngine.py", "ModelInterface"),

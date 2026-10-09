@@ -35,12 +35,13 @@ class V10Trainer(Trainer):
             return self.optimizer
         self.model._audit_parameters()
         groups = self.model.trainable_parameter_groups()
-        if set(groups) != set(GROUP_LRS):
+        rates = getattr(self.model, "group_learning_rates", GROUP_LRS)
+        if set(groups) != set(rates):
             raise RuntimeError("V10 optimizer rate/group mismatch")
         self.optimizer = torch.optim.AdamW([
-            {"params": groups[name], "lr": GROUP_LRS[name], "weight_decay": 0., "group_name": name}
+            {"params": groups[name], "lr": rates[name], "weight_decay": 0., "group_name": name}
             for name in groups], betas=(.9,.999), eps=1e-8)
-        print("[V10_OPTIMIZER] " + json.dumps(GROUP_LRS), flush=True)
+        print("[V10_OPTIMIZER] " + json.dumps(rates), flush=True)
         return self.optimizer
 
 
@@ -161,7 +162,8 @@ def real_batch_preflight(model, dataset, collator, processor, source, output, da
     print("[V10_REAL_BATCH_PREFLIGHT] " + json.dumps(audit), flush=True)
 
 
-def main():
+def main(*, model_class=VisualSelectionV10Model, experiment_override=None,
+         method=METHOD, expected_trainable=EXPECTED_TRAINABLE, group_lrs=GROUP_LRS):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--model-path", type=Path, required=True)
     parser.add_argument("--data-root", type=Path, required=True)
@@ -173,6 +175,8 @@ def main():
     seed, data_seed = args.model_seed, 42
     experiment = (f"pathvqa_v10_weighted_map_metanet_h160_norm_fixed_5ep_seed{seed}"
                   if args.dataset == "pathvqa" else EXPERIMENT)
+    if experiment_override:
+        experiment = experiment_override
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
@@ -186,7 +190,7 @@ def main():
     base = AutoModelForImageTextToText.from_pretrained(str(args.model_path), torch_dtype=torch.bfloat16,
                                                     device_map="auto", trust_remote_code=True)
     base.config.use_cache = False
-    model = VisualSelectionV10Model(base, init_seed=seed)
+    model = model_class(base, init_seed=seed)
     if args.dataset == "pathvqa":
         from pathvqa.data_pipeline import PathVQADataset, PathVQADataCollator
         source = PathVQADataset(processor=processor, data_root=args.data_root, split="train",
@@ -226,9 +230,9 @@ def main():
     if callback.saved != {3,4,5}:
         raise RuntimeError(f"V10 required saved epochs missing: {callback.saved}")
     counts = model._audit_parameters()
-    if sum(counts.values()) != EXPECTED_TRAINABLE:
+    if sum(counts.values()) != expected_trainable:
         raise RuntimeError("V10 final parameter count changed")
-    report = {"experiment": experiment, "method": METHOD, "dataset": "PathVQA" if args.dataset == "pathvqa" else "SLAKE", "model_seed":seed,
+    report = {"experiment": experiment, "method": method, "dataset": "PathVQA" if args.dataset == "pathvqa" else "SLAKE", "model_seed":seed,
               "data_seed":data_seed,"epochs":5,"saved_epochs":sorted(callback.saved),"train_split":"train",
               "languages":"all","train_samples":len(source),"train_manifest":None if args.dataset == "pathvqa" else str(args.data_root/"train.json"),
               "base_model":str(args.model_path),"max_length":2048,"workers":2,"bf16":True,
@@ -239,7 +243,7 @@ def main():
               "loss_accumulation_protocol":"equal_microbatch_mean_trainer_normalized",
               "optimizer":{"type":"AdamW","betas":[.9,.999],"eps":1e-8,"weight_decay":0.,
                            "per_device_batch_size":2,"gradient_accumulation_steps":16,"warmup_ratio":.03,
-                           "scheduler":"linear","max_grad_norm":1.,"group_learning_rates":GROUP_LRS}}
+                           "scheduler":"linear","max_grad_norm":1.,"group_learning_rates":group_lrs}}
     (args.output_dir/"train_report.json").write_text(json.dumps(report,indent=2),encoding="utf-8")
     print("[V10_TRAIN_DONE] " + str(args.output_dir/"checkpoints/epoch_5"),flush=True)
 

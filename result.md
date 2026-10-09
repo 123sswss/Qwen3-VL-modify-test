@@ -1,5 +1,7 @@
 # Experiment Result Summary
 
+- 2026-10-09 V10条件头修正版仅准备：seed44从零五轮/fixed epoch5 Validation，摘要LN＋Meta-Net默认初始化＋LR3e-4组合，总参数预期1,691,043，对原V10 57.7089与V1 59.3386分别配对。原V10不变；不执行其余候选、不增加seed/Test/重试/自动关机。GPU由用户启动，无新成绩或机制结论。
+
 - 2026-10-08 PathVQA V10三seed：代码准备，尚未运行；44→45→46，各自从零五轮/fixed epoch5 Validation，同seed原V1配对10000/seed42，完整成功后汇总mean±sample std(ddof=1)。专用入口先落盘成功/失败及未运行状态，再等待600秒自动关机。GPU全由用户启动；没有新成绩或稳定性结论。
 
 ### 2026-10-01：SSH确认原五轮V1三seed真实路径
@@ -501,6 +503,13 @@ This file is the concise experiment memory shared by the user and Codex. The com
 ## 2026-10-08 SLAKE独立V10准备完成，未训练
 
 保留V1问题编码、三层Q/K地图和层门控、P20及原Visual18；用beta加权地图读出单个原生2560维Value摘要，经2560→160→2560 Meta-Net生成共享P20偏移，无重复softmax/除3。移除旧Value LN/64维投影/分块输出头，CPU mock实际逐组核验1,685,923参数，28个共有张量同seed原V1初值一致，输出Normal(0,1e-4)/bias0、Meta-Net LR1e-4。五轮44/42/b2a16、归一化False、固定epoch5完整双语Test，主对照CoCoOp77.03（三轮/无Visual18），参考V1 75.55（五轮）；精确路径绑定并通过CPU核验，不按最新目录猜测。4项本地数值/协议+2项GPU不可见CPU mock检查通过，无真实训练/推理成绩。入口`bash slake/run_v10_weighted_map_metanet_seed44.sh`，失败即停、无关机或额外seed；用户执行所有GPU步骤，结果回传后更新账本。
+
+### 2026-10-09：V10 PathVQA三seed五轮Validation负结果
+
+- seeds44/45/46 Overall57.7089/55.8236/56.7343，均值56.7556±0.9428；Yes/No89.0773±1.0166，Free-form24.5267±1.1699。
+- 相对同seed V1分别-1.6297/-2.6841/-1.9971pp，三项图像簇配对95%CI均低于零。V1均值58.8592±0.4299；V10平均下降2.1036pp，未改善这三个seed的分散程度。
+- SLAKE单seed简化收益不能推广为普遍过度设计；先融合再Meta-Net同时改变层身份保留、LN和瓶颈，具体损失原因尚未分离。PathVQA继续保留V1，不追加实验。实际时间戳输出路径/训练元数据待回传，完整成绩与统计已记主账本。
+- 自动关机失败：2026-10-09T07:13:52.899933，`[Errno 8] Exec format error: '/usr/bin/shutdown'`；不等于已关机。仅本地账本更新，不独立提交。
 
 ### 2026-10-08：V10 SLAKE seed44五轮Test完成
 

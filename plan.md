@@ -1,3 +1,23 @@
+## 2026-10-09：已授权单次V10条件头修正版，代码准备、尚未运行
+
+实验 `pathvqa_v10_condition_head_ln_default_metanet_h160_lr3e4_norm_fixed_5ep_seed44`。仅组合三项：融合地图读取共同Value后的2560维摘要加可学习LayerNorm；Meta-Net两层权重/bias均为默认Linear初始化；Meta-Net LR3e-4、新LN LR1e-4。原V10模型及存档不改；薄子类在原V10初始化后，用同seed独立CPU随机流重建默认头，共有参数（含Meta-Net第一层）逐张量校验不变。新config/weights/backend独立，预计参数1,691,043（原1,685,923＋LN5,120），启动逐组实数核验。
+
+沿用原五轮协议：44/42、batch2/accum16、3% warmup/linear、clip1、归一化False、保存3/4/5，固定epoch5完整Validation6259题/832图。独立入口 `bash pathvqa/run_v10_head_fixed_seed44.sh`；原V10 seed44依据完整report/config/协议及57.7089分数定位唯一产物，不按最新目录选择；可用 `--original-v10-run` 明确指定。另绑定原V1 seed44目录20260926_2（59.3386）。分别使用既有预测图像簇配对10000/seed42，输出Overall/Yes-No/Free-form/what/where；组合实验不能分别归因三项。
+
+保留已有诊断并增加summary_pre_ln_rms/summary_post_ln_rms；首批梯度为裁剪前，Trainer grad_norm为裁剪前总梯度，on_pre_optimizer_step各组为裁剪后。复用原真实Train预检及保存重载/cache检查，不增加测试套件。仅本机语法/参数算术CPU检查，真实张量初值/梯度核验随用户启动的GPU预检执行，助手未启动。产物 `pathvqa/outputs/v10_head_fixed/<experiment>_<timestamp>/`；失败即停，不重试、不关机、不跑Test/其他seed/剩余候选。结果回传后更新两账本和计划，文档不单独提交。
+
+## 2026-10-09：CoCoOp代码核对后的三次候选（仅讨论，未授权实施/运行）
+
+已核对本地CoCoOp-style：post-merger原生视觉token均值→2560/160/2560 ReLU Meta-Net→共享偏移加到前置P20；无问题条件/Visual18/摘要LN，Meta-Net默认Linear初始化、LR3e-4。V10有Visual18，输出Normal(0,1e-4)/bias0、Meta-Net LR1e-4、固定5轮；CoCoOp历史PathVQA是3轮且累积归一化历史证据不足，不能仅归因地图。PathVQA同Validation三seedCoCoOp56.3136±1.1367，V10为56.7556±0.9428；不能混用CoCoOp Test56.9529或单seed57.4053宣称V10均分更低。
+
+优先候选：1）V10仅在融合后的2560维摘要、Meta-Net之前加LayerNorm，其余固定；2）在候选1基础上采用CoCoOp的Meta-Net默认输出初始化与LR3e-4作为一个明确的优化配置组合，不能分别归因初始化/LR；3）在前两项选定的明确参考配置上加入均匀全局池化路径，地图为(1-lambda)/N+lambda*sum(beta_l*a_l)，lambda=sigmoid(s)，初值0.1，融合摘要后单次LN及同一Meta-Net，保留Visual18，除混合门外不新增第二Meta-Net。lambda=0对应带LN且保留Visual18的CoCoOp-style结构极限，不等于历史原CoCoOp完整协议。三项均为PathVQA seed44、固定5轮Validation讨论候选，无自动训练/关机/其他seed；最终执行定义须等用户选择，不视为已排入执行队列。
+
+更换层位7/15/23（自然第8/16/24层）暂不优先：目前没有证明5/11/17错误，且只影响Key/地图，不改变共同Value仍来自最终merger。原CLIP CoCoOp输入是L2归一化后的全局视觉向量、用于类别相似度分类；本地为未归一化post-merger token均值和生成式CE，只有条件共享偏移的思路迁移。相关结论应保持版本与任务边界。
+
+## 2026-10-09：PathVQA V10三seed队列已完成，自动关机失败
+
+用户回传固定epoch5 Validation：44/45/46 Overall57.7089/55.8236/56.7343，均值56.7556±0.9428，对同seed V1平均-2.1036pp，三项Overall配对CI均低于零。下方“尚未运行”为历史准备状态，由本条覆盖；已补两账本，真实时间戳产物路径/训练元数据待补。授权队列已经结束，不增加seed、重试、调参或其他数据集。自动关机实际调用报Exec format error，未成功，须由用户确认服务器状态并处理；助手未执行GPU或远程关机。
+
 ## 2026-10-08 用户扩展授权：PathVQA V10三seed串行，结束后自动关机
 
 实现状态：代码已准备，尚未运行。复用 `slake.train_v10` 的模型、优化器、五轮保存和预检，仅新增 PathVQA 数据/Train图像读取以及 model seed 参数；独立入口 `bash pathvqa/run_v10_seeds44_45_46_shutdown.sh`。严格44→45→46，每项完整 Validation 后保存同seed V1配对统计（10000/seed42），全成功才输出三seed mean±sample std(ddof=1)。产物 `pathvqa/outputs/v10/suite_<timestamp>/`，各seed独立子目录，保存 seed_results、final_report、suite_status、ledger_fragment 和逐阶段日志。失败退出码与后续未运行seed落盘后停止。

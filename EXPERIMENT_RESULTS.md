@@ -1,5 +1,9 @@
 # MMRL Experiment Ledger
 
+## 2026-10-09 V10条件头修正版准备（未运行，无新成绩）
+
+`pathvqa_v10_condition_head_ln_default_metanet_h160_lr3e4_norm_fixed_5ep_seed44`：PathVQA model44/data42，从零5 epochs，固定epoch5完整Validation；仅组合摘要LN2560、Meta-Net两层默认Linear权重/bias初始化、Meta-Net LR3e-4（LN LR1e-4），原V10其余结构/共有初值/各组LR/监督/累积归一化及训练预算不变。预期1,691,043参数，启动模型/优化器按组核算；没有把CPU算术当作真实GPU实测。独立模型/config/weights/backend/入口，原模型保持原行为。相对既有V10 57.7089、V1 59.3386各自图像簇配对10000次/seed42；子组探索性，不能把组合收益归因单项。输出 `pathvqa/outputs/v10_head_fixed/<experiment>_<timestamp>/`，确切目录/执行commit/成绩/成本/预检实测待用户回传。保留地图/层权重/偏移与梯度诊断，补LN前后摘要RMS；首批与Trainer grad_norm裁剪前、组梯度回调裁剪后。CPU语法及参数算术检查；共有参数逐张量核对、真实前向梯度与cache检查由用户启动既有预检。无Test/其他seed/重试/关机，剩余候选未实施。
+
 ## 2026-10-08 PathVQA V10三seed代码准备（不是已完成实验）
 
 实验 `pathvqa_v10_weighted_map_metanet_h160_norm_fixed_5ep_seed44`、seed45、seed46，尚无分数。保持已跑通V10结构/初始化/学习率，迁移到PathVQA；各自从零五轮，data42、batch2/累积16、归一化False，保存3/4/5，固定epoch5完整Validation，无Test/额外seed/调参。参数1,685,923。精确绑定同seed五轮V1既有产物（44目录20260926_2，45/46目录20260926），复用图像簇配对10000/seed42及全部题型；三项成功后mean±样本std(ddof=1)。输出 `pathvqa/outputs/v10/suite_<timestamp>/`。失败即停且保存错误退出码/未运行队列；本次专用入口用户启动后，无论成功失败均先落盘报告，再独立计时600秒关机，关机失败单列。实现和CPU检查不代表GPU预检/训练/评估已完成。结果回传后补精确分项/成本/提交与真实目录。
@@ -1731,6 +1735,30 @@ pathvqa_v1_deep_visual20_split_lr_l16_23_norm_fixed_5ep_seed44  44      fixed_ep
 [DONE] 已完成实验目标: pathvqa_v1_deep_visual20_split_lr_l16_23_norm_fixed_5ep_seed44
 ```
 </details>
+
+### 2026-10-09：PathVQA V10三seed五轮Validation完成（负结果；自动关机失败）
+
+实验名：`pathvqa_v10_weighted_map_metanet_h160_norm_fixed_5ep_seed44`、`pathvqa_v10_weighted_map_metanet_h160_norm_fixed_5ep_seed45`、`pathvqa_v10_weighted_map_metanet_h160_norm_fixed_5ep_seed46`。数据集PathVQA，固定epoch5完整Validation，6259题/832图；三项按44→45→46执行。受控改动为保留问题编码、三层地图及门控、Visual18/P20，将三份独立LN/64维投影及192维拼接输出头，改为先融合地图、读取单份共同merger Value，再以2560→160→2560 Meta-Net生成共享偏移。沿用已授权V1五轮协议（data seed42、batch2/accum16、归一化修正）；本条成绩及统计来自用户回传，不代表已独立核验远程训练元数据。
+
+| seed | Overall（完整精度） | Yes/No | Free-form | how | other | what | when | where | why |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 44 | 57.70889918517335 | 89.632 | 25.8775 | 9.3023 | 7.1429 | 20.8006 | 0 | 65.2812 | 4.7619 |
+| 45 | 55.82361399584598 | 87.904 | 23.8354 | 8.5271 | 14.2857 | 19.3485 | 0 | 58.6797 | 4.7619 |
+| 46 | 56.73430260424988 | 89.696 | 23.8673 | 10.8527 | 7.1429 | 19.1915 | 0 | 59.4132 | 4.7619 |
+
+同seed原V1 epoch5配对（Overall主指标，非探索性；10000次图像簇bootstrap、seed42、95%置信度；各6259题/832簇）：
+
+| seed | V1 Overall | V10−V1（pp） | V10独占/V1独占 | McNemar exact p | 配对CI（完整精度） |
+| --- | ---: | ---: | ---: | ---: | --- |
+| 44 | 59.33855248442243 | -1.6296532992490782 | 285/387 | 9.498132042054199e-05 | [-2.492766371838962, -0.7465026924460755] |
+| 45 | 58.507748841668 | -2.6841348458220153 | 267/435 | 2.4107166301275105e-10 | [-3.594676850903095, -1.775974131810465] |
+| 46 | 58.7314267454865 | -1.9971241412366183 | 265/390 | 1.1791008224579698e-06 | [-2.854083815283294, -1.1415982749723494] |
+
+三seed均值±样本标准差(ddof=1)：Overall56.7556±0.9428，Yes/No89.0773±1.0166，Free-form24.5267±1.1699；how9.5607±1.1841，other9.5238±4.1239，what19.7802±0.8872，when0±0，where61.1247±3.6183，why4.7619±0，yes/no89.0773±1.0166。原V1 Overall58.8592±0.4299、Free-form27.2602±0.6074；平均Overall下降2.1036pp。三seed配对CI均低于零，不能归为seed44偶然退化；这三个seed的分散程度也没有改善。
+
+修正解释：SLAKE seed44上的简化收益不能推广为原V1头部普遍过度设计。先融合再映射同时改变层身份保留、归一化、瓶颈与优化路径，本次不能独立归因于某一个因素，也不证明两个分别训练的数据集“不相容”。保持原V1为PathVQA参考，不自动追加训练。实际带时间戳输出路径、checkpoint身份、训练耗时/显存及激活诊断本次未回传，待补；预定产物根为`pathvqa/outputs/v10/suite_<timestamp>/`，不得据此猜测实际目录。
+
+自动关机记录：`status=call_failed`，`delay_seconds=600`，`scheduled_unix=1791501232.8998308`，`worker_pid=31559`，`called_at=2026-10-09T07:13:52.899933`，`error=[Errno 8] Exec format error: '/usr/bin/shutdown'`。不能记为已关机。助手未执行GPU或远程关机操作；本条账本保持本地，等待下一次相关代码提交。
 
 ### 2026-09-29 - V1A naming correction and V1B implementation prepared
 

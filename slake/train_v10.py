@@ -124,6 +124,9 @@ def real_batch_preflight(model, dataset, collator, processor, source, output, da
         if dataset_name == "pathvqa":
             from pathvqa.pathvqa_official_eval import build_prompt as pathvqa_prompt
             prompt = pathvqa_prompt(row["question"], None)
+        elif dataset_name == "rsvqa_lr":
+            from RSVQA.prompts import build_prompt as rsvqa_prompt
+            prompt = rsvqa_prompt(row)
         else:
             prompt = build_prompt({"_slake_question": row["question"], "_slake_language": row["language"]}, None)
         inputs = interface.prepare_inputs(image.convert("RGB"), prompt, question=row["question"])
@@ -171,7 +174,7 @@ def main(*, model_class=VisualSelectionV10Model, experiment_override=None,
     parser.add_argument("--data-root", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--expected-train-count", type=int, required=True)
-    parser.add_argument("--dataset", choices=("slake", "pathvqa"), default="slake")
+    parser.add_argument("--dataset", choices=("slake", "pathvqa", "rsvqa_lr"), default="slake")
     parser.add_argument("--model-seed", type=int, default=44)
     parser.add_argument("--epochs", type=int, default=default_epochs)
     parser.add_argument("--save-epochs", type=int, nargs="+", default=list(default_save_epochs))
@@ -203,6 +206,11 @@ def main(*, model_class=VisualSelectionV10Model, experiment_override=None,
         source = PathVQADataset(processor=processor, data_root=args.data_root, split="train",
                                ce_enabled=True, seed=data_seed, deterministic_sampling=True, max_length=2048)
         base_collator = PathVQADataCollator(processor)
+    elif args.dataset == "rsvqa_lr":
+        from RSVQA.data_pipeline import RSVQALRDataset, RSVQADataCollator
+        source = RSVQALRDataset(processor, args.data_root, split="train", ce_enabled=True,
+                               seed=data_seed, deterministic_sampling=True, max_length=2048)
+        base_collator = RSVQADataCollator(processor)
     else:
         source = SLAKEDataset(processor, str(args.data_root/"imgs"), questions_path=str(args.data_root/"train.json"),
                              languages=None, base_types=None, splits=("train",), ce_enabled=True,
@@ -239,9 +247,11 @@ def main(*, model_class=VisualSelectionV10Model, experiment_override=None,
     counts = model._audit_parameters()
     if sum(counts.values()) != expected_trainable:
         raise RuntimeError("V10 final parameter count changed")
-    report = {"experiment": experiment, "method": method, "dataset": "PathVQA" if args.dataset == "pathvqa" else "SLAKE", "model_seed":seed,
+    report = {"experiment": experiment, "method": method, "dataset": {"pathvqa":"PathVQA","slake":"SLAKE","rsvqa_lr":"RSVQA-LR"}[args.dataset], "model_seed":seed,
               "data_seed":data_seed,"epochs":args.epochs,"saved_epochs":sorted(callback.saved),"train_split":"train",
-              "languages":"all","train_samples":len(source),"train_manifest":None if args.dataset == "pathvqa" else str(args.data_root/"train.json"),
+              "languages":"en" if args.dataset == "rsvqa_lr" else "all","train_samples":len(source),
+              "train_manifest":getattr(source,"manifest",None) if args.dataset == "rsvqa_lr" else
+                               None if args.dataset == "pathvqa" else str(args.data_root/"train.json"),
               "base_model":str(args.model_path),"max_length":2048,"workers":2,"bf16":True,
               "trainable_parameters":counts,"total_trainable_parameters":sum(counts.values()),
               "git_commit":commit,"runtime_versions":versions,"train_metrics":result.metrics,

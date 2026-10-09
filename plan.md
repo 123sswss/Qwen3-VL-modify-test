@@ -564,3 +564,11 @@ RSVQA两项microbatch4/累积8、有效32，seed44/data42、5epochs/3%warmup线�
 独立实验 `pathvqa_v10_condition_head_ln_default_metanet_h160_lr3e4_p20lr01_norm_fixed_5ep_seed44`，仅P20基础LR .3→.1，从零PathVQA44/42、五轮保存3/4/5、固定epoch5完整Validation，1691043参数。复用原模型/初始化/训练模块；Meta-Net3e-4、S8 3e-5、Av10及其他组不变，batch2/累积16、归一化False、clip1、3%warmup/五轮linear不变。独立薄训练入口和脚本，原默认配置保持。精确绑定修正版五轮102158_643548（58.6835）及原V1五轮20260926_2（59.3386），复用已有配对10000/42、Overall/Yes-No/FF/what/where流程；记录实际组LR与初始化审计。
 
 所有GPU预检/训练/评估用户执行：`bash pathvqa/run_v10_head_fixed_p20lr01_seed44.sh`。独立v10_head_fixed/<新实验>_<timestamp>输出，失败即停，无重试/关机/Test/其他seed。完成后两账本追加，复用CPU曲线比较原五轮（重点早期P20/偏移、层权重、loss、有效地图熵），不新增模型探针。最后一次探索，不自动追加。
+## 2026-10-10：最后一试P20 LR0.1完成，停止追加探索
+
+修正版五轮PathVQA seed44 P20 LR0.1 Overall58.3160；对原修正版 -0.3675pp，CI[-1.1936,0.4482]，未获明确收益；对V1 -1.0225pp，CI[-1.8899,-0.1622]。已补两账本，覆盖下方准备/待运行状态。本次为用户指定最后一试，授权已完成，不自动追加训练/seed/Test/关机/重试。V1保留为论文主方案，修正版五轮58.6835为探索结果；学习率根因未证实。
+## 2026-10-10 V10修正版跨数据集：SLAKE→RSVQA-LR（准备完成，尚未运行）
+
+用户放弃PathVQA P20 LR0.1方向：删除两份专用入口及共用调度中的low-LR分支，保留历史58.3160记录、预测和checkpoint；代码可由Git恢复，不删除实验产物。新授权仅两项：`slake_v10_condition_head_ln_default_metanet_h160_lr3e4_norm_fixed_5ep_seed44` → `rsvqa_lr_v10_condition_head_ln_default_metanet_h160_lr3e4_norm_fixed_5ep_seed44`，均从零44/42、五轮、保存3/4/5、固定epoch5官方完整Test（SLAKE双语），不额外Validation或seed。沿用PathVQA成功修正版模型、初始化、1691043参数、P20 .3/Meta3e-4/S8 3e-5/Av10 1e-4/LN及其他1e-4、batch2/累积16、clip1、3%warmup/linear、归一化False；不是RSVQA旧4/8配置。
+
+最简实现：两个薄训练入口，共用slake.train_v10增加RSVQA已验证Dataset/Collator及预检prompt适配；复用v10-head-fixed加载器/官方评估。RSVQA active过滤、原始答案监督、count官方区间评分不变。用户启动 `bash run_v10_head_fixed_slake_rsvqa_shutdown.sh`；Bash按顺序train→epoch5Test，失败即停、不重试。独立slake/outputs/v10_head_fixed、RSVQA/outputs/v10_head_fixed产物，suite日志/阶段退出码/最终状态与汇总在outputs/v10_head_fixed_slake_rsvqa/<stamp>/。EXIT trap先落盘并sync，再Bash调用/usr/bin/shutdown，成功或失败均立即关机，调用失败日志另存；不使用Python直接exec或十分钟延迟。全部GPU用户执行；回传后补两账本。不自动追加其他任务。

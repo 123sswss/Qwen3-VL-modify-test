@@ -542,3 +542,9 @@ This file is the concise experiment memory shared by the user and Codex. The com
 - 对三轮CoCoOp：+0.9074pp，CI[-0.3792,+2.2212]，独占100/81，净增19；点估计领先，未确认显著优势。V10五轮且有Visual18，CoCoOp三轮且无Visual18/LR与初始化不同，不能把成绩差异全归地图。
 - 已CPU核验实现参数1,685,923，比V1少179,040（9.6002%）；实际训练报告/版本/执行提交/成本及梯度、激活轨迹未回传。结果支持简化生成头，不证明64维块重叠或梯度被堵。没有新增seed/重训/其他GPU任务。
 - 输出：/root/autodl-tmp/Qwen3-VL-modify-test/slake/outputs/v10/runs/slake_v10_weighted_map_metanet_h160_norm_fixed_5ep_seed44_20261008_174753_716357；epoch5 checkpoint及eval_test/epoch_5/slake_predictions.json、slake_summary.json。完整配对与原文已记主账本；本地记录不单独提交推送。
+## 2026-10-10 最后一试：P20 LR0.1未获收益，结束探索
+
+PathVQA修正版五轮seed44/data42，仅P20 LR0.3→0.1：Overall58.3160/Yes-No90.4320/Free-form26.2923，what21.1538/where66.7482。对修正版58.6835 Overall -0.3675pp，图像簇95%配对CI[-1.1936,0.4482]；对V1 59.3386 -1.0225pp，CI[-1.8899,-0.1622]。不支持降低P20 LR有收益，也不证明两配置等效或学习率总体无关。1691043参数，10737.3951秒，commit b081a5819bb89afc8639808a2f4cbac82fbd01de；服务器产物pathvqa/outputs/v10_head_fixed/pathvqa_v10_condition_head_ln_default_metanet_h160_lr3e4_p20lr01_norm_fixed_5ep_seed44_20261009_205616_564163。完整原文已保存cpu_curve_audit_20261009/v10_p20lr01_user_result.txt；保留V1论文主方案，最后一试结束，不自动追加实验。
+## 2026-10-10 清理P20 LR0.1入口；准备SLAKE/RSVQA-LR
+
+LR0.1既有58.3160及全部历史产物保留，仅清理专用代码。新增V10条件头修正版SLAKE→RSVQA-LR串行seed44/data42，从零五轮、固定epoch5官方Test，恢复P20 .3，batch2/累积16，其余沿PathVQA成功修正版，1691043参数。尚未运行，分数未知；Bash入口退出时先保存日志/状态，再立即/usr/bin/shutdown，成功失败均执行。GPU用户启动，失败停止后续，不重试。

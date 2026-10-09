@@ -1,4 +1,24 @@
+## 2026-10-09 V10条件头修正版：既有epoch3/4完整Validation补评估完成
+
+实验 `pathvqa_v10_condition_head_ln_default_metanet_h160_lr3e4_norm_fixed_5ep_seed44`；PathVQA model seed44/data seed42。用户回传既有epoch3/4 checkpoint完整Validation结果，6259题/832图；仅改变被评估checkpoint轮数，没有新训练/结构/监督改动，epoch5仍为预定主结果。输出根 `/root/autodl-tmp/Qwen3-VL-modify-test/pathvqa/outputs/v10_head_fixed/pathvqa_v10_condition_head_ln_default_metanet_h160_lr3e4_norm_fixed_5ep_seed44_20261009_102158_643548/epoch3_4_validation_20261009_143119`；各轮 `epoch_3` / `epoch_4` 下保存pathvqa_predictions.json及pathvqa_summary.json。epoch5复用原eval_validation/epoch_5产物，不重新评分。
+
+| Epoch | Overall | Yes/No | Free-form | how | other | what | when | where | why |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 3 | 57.1337 | 89.0880 | 25.2712 | 9.3023 | 7.1429 | 19.5055 | 0 | 68.7042 | 4.7619 |
+| 4 | 58.0284 | 89.9200 | 26.2285 | 8.5271 | 14.2857 | 21.0361 | 0 | 66.5037 | 4.7619 |
+| 5（既有主结果） | 58.6835 | 90.2400 | 27.2176 | 10.0775 | 14.2857 | 22.0958 | 0 | 66.9927 | 4.7619 |
+
+epoch4独立图像簇95%CI[56.60,59.46]（用户显示精度），832簇；未回传epoch3 CI或轮间配对统计，不补造。epoch4 TTFT mean/p50/p95/min/max=.051842/.051475/.054881/.036814/.306499秒；TPOT=.019864秒/token，50.342token/s；request mean/p50/p95/min/max=.103692/.0913/.154115/.061564/.455957秒，6259请求。
+
+诊断：Overall逐轮+0.8947/+0.6551pp，Free-form+0.9573/+0.9891pp，what+1.5306/+1.0597pp；where68.7042→66.5037→66.9927，并非各子组同步改善。结合既有训练loss下降，支持该运行到epoch5仍有验证收益，尚未观察到Overall在3–5轮转为过拟合；不证明epoch6+继续提升、不证明加大学习率有效，不把轮间点差当显著差异。单seed且检查了Validation，后续延长属于新增调参实验，应另行授权与记录。助手只本机记录/读取，无GPU操作；不创建仅账本提交或推送。
+
 # MMRL Experiment Ledger
+
+## 2026-10-09 条件头修正版七轮：代码准备，尚未运行
+
+实验 `pathvqa_v10_condition_head_ln_default_metanet_h160_lr3e4_norm_fixed_7ep_seed44`，PathVQA44/42，从零训练；唯一改变总预算5→7，3%warmup/线性衰减随七轮终点重算。结构/共有初值/分组基础LR（Meta3e-4、LN1e-4、P20.3、S8 3e-5、其余1e-4）、batch2/累积16、AdamW/clip1/监督/mask和归一化False均沿用修正版。参数1,691,043。保存并完整Validation评估epoch5/6/7，epoch7预定主结果，不挑最高轮次；分别对既有修正版五轮58.6835及V1五轮59.3386配对图像簇10000/seed42，五个既定分项，子组与5/6轮趋势探索性。独立预算/保存/回调/报告配置，不只是改实验名。
+
+输出 `pathvqa/outputs/v10_head_fixed/<7ep_experiment>_<timestamp>/`，实际目录/提交/训练成本/分数待用户执行回传。保留原训练诊断，CPU绘图从真实state.max_steps及报告warmup比例取坐标，不写死3075/93，末轮loss窗口亦动态。Windows本机语法/Bash及复用既有五轮日志绘图检查通过；没有七轮张量运行或新成绩。启动 `bash pathvqa/run_v10_head_fixed_7ep_seed44.sh`，所有GPU用户执行；失败即停，不重试/关机/Test/其他seed，不自动安排最后候选。结果和失败回传后追加两账本及计划，不覆盖旧五轮产物。
 
 ## 2026-10-09 条件头修正版训练曲线CPU只读分析完成
 

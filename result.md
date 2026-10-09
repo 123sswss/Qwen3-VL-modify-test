@@ -1,3 +1,9 @@
+## 2026-10-09 V10条件头修正版epoch3/4补评估完成
+
+七轮新实验已准备、尚未运行：`pathvqa_v10_condition_head_ln_default_metanet_h160_lr3e4_norm_fixed_7ep_seed44`；仅预算延长，保存/评估5/6/7，固定7主结果，对原修正版5轮58.6835与V1五轮59.3386配对。动态步数绘图；从零训练，不将七轮中的epoch5当作原五轮同轨迹。用户启动GPU，失败即停，无重试/关机/Test/其他seed。
+
+同一PathVQA seed44五轮运行的完整Validation：epoch3/4/5 Overall57.1337/58.0284/58.6835，Yes/No89.0880/89.9200/90.2400，Free-form25.2712/26.2285/27.2176，what19.5055/21.0361/22.0958；where68.7042/66.5037/66.9927。epoch4图像簇95%CI[56.60,59.46]，832图；轮间配对未提供。支持到第五轮仍有总体和开放回答验证收益，不能外推更多轮必涨或认定LR过低。固定epoch5主结果不改。产物 `pathvqa/outputs/v10_head_fixed/pathvqa_v10_condition_head_ln_default_metanet_h160_lr3e4_norm_fixed_5ep_seed44_20261009_102158_643548/epoch3_4_validation_20261009_143119/`（服务器）。无新训练/Test/seed。
+
 # Experiment Result Summary
 
 - 2026-10-09 V10条件头修正版只读曲线：四组图已在 `pathvqa/outputs/cpu_curve_audit_20261009/` 生成。末轮loss窗口均值前半.5752→后半.5480；warmup后仅1/149梯度记录点被clip1限制；LN后RMS≈1、末段偏移/P20≈.32；有效融合地图熵约1→.641，已非均匀。没有长期裁剪或后期尺度爆炸迹象，不证明定位有效，也不能由训练loss下降推断多训泛化收益。缺摘要向量/固定样本轨迹等，不补跑。助手仅CPU/日志读取，无GPU操作。

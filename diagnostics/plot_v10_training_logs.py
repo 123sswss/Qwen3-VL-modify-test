@@ -16,10 +16,13 @@ FONT_PATH = "C:/Windows/Fonts/arial.ttf"
 
 
 def font(size):
-    return ImageFont.truetype(FONT_PATH,size)
+    try:
+        return ImageFont.truetype(FONT_PATH if Path(FONT_PATH).exists() else "DejaVuSans.ttf",size)
+    except OSError:
+        return ImageFont.load_default()
 
 
-def panel(draw, box, title, series, *, log=False, limits=None, warmup=93):
+def panel(draw, box, title, series, *, total_steps, warmup, log=False, limits=None):
     left,top,width,height = box
     draw.text((left,top),title,font=font(23),fill="#111827")
     x0,y0,x1,y1 = left+83,top+60,left+width-30,top+height-115
@@ -29,7 +32,7 @@ def panel(draw, box, title, series, *, log=False, limits=None, warmup=93):
         low,high = math.log10(max(low,1e-12)),math.log10(high)
     margin = (high-low)*.07 if high>low else .1
     low,high = low-margin,high+margin
-    def xx(x): return x0+(x1-x0)*x/3075
+    def xx(x): return x0+(x1-x0)*x/total_steps
     def yy(y):
         value = math.log10(max(y,1e-12)) if log else y
         return y1-(y1-y0)*(value-low)/(high-low)
@@ -39,7 +42,7 @@ def panel(draw, box, title, series, *, log=False, limits=None, warmup=93):
         draw.line((x0,y,x1,y),fill="#e5e7eb",width=1)
         value = 10**tick if log else tick
         draw.text((left+4,y-9),f"{value:.2g}",font=font(17),fill="#4b5563")
-    for tick in (0,615,1230,1845,2460,3075):
+    for tick in np.linspace(0,total_steps,6).round().astype(int):
         x = xx(tick)
         draw.line((x,y0,x,y1),fill="#e5e7eb",width=1)
         draw.text((x-21,y1+8),str(tick),font=font(17),fill="#4b5563")
@@ -53,12 +56,13 @@ def panel(draw, box, title, series, *, log=False, limits=None, warmup=93):
         draw.text((lx+25,ly),label,font=font(15),fill="#374151")
 
 
-def figure(path, title, panels, note):
+def figure(path, title, panels, note, total_steps, warmup):
     image = Image.new("RGB",(1800,1400),"white")
     draw = ImageDraw.Draw(image)
     draw.text((45,22),title,font=font(30),fill="#111827")
     for i,(name,series,kwargs) in enumerate(panels):
-        panel(draw,(35+(i%2)*880,85+(i//2)*605,855,575),name,series,**kwargs)
+        panel(draw,(35+(i%2)*880,85+(i//2)*605,855,575),name,series,
+              total_steps=total_steps,warmup=warmup,**kwargs)
     draw.text((45,1320),note,font=font(17),fill="#475569")
     image.save(path)
 
@@ -77,7 +81,10 @@ def main():
     args = parser.parse_args()
     root = args.input_dir
     report = json.loads((root/"train_report.json").read_text(encoding="utf-8"))
-    state = json.loads((root/"trainer_state.json").read_text(encoding="utf-8"))
+    state_path = root/"trainer_state.json"
+    if not state_path.exists():
+        state_path = root/"trainer/trainer_state.json"
+    state = json.loads(state_path.read_text(encoding="utf-8"))
     diagnostics = [json.loads(line) for line in (root/"v10_diagnostics.jsonl").read_text(encoding="utf-8").splitlines() if line.strip()]
     logs = [row for row in state["log_history"] if "loss" in row]
     steps = [row["step"] for row in logs]
@@ -95,6 +102,8 @@ def main():
     factors = [float(row["learning_rate"])/rates["p20"] for row in logs]
     actual_lrs = {key:[factor*base for factor in factors] for key,base in rates.items()}
     warmup = math.ceil(state["max_steps"]*report["optimizer"]["warmup_ratio"])
+    total_steps = state["max_steps"]
+    total_epochs = int(report["epochs"])
     expected_factors = [(step-1)/warmup if step-1<warmup else
                         max(0.,(state["max_steps"]-(step-1))/(state["max_steps"]-warmup)) for step in steps]
     scheduler_error = max(abs(a-b) for a,b in zip(factors,expected_factors))
@@ -107,7 +116,7 @@ def main():
     figures = []
     def emit(name,title,panels,note):
         file = root/name
-        figure(file,title,panels,note)
+        figure(file,title,panels,note,total_steps,warmup)
         figures.append(name)
     emit("01_loss_lr.png","1. Training loss and group learning rates",[
         ("Loss (20-update averages)",[("raw",steps,losses),("5-point median",steps,smooth)],{}),
@@ -115,9 +124,9 @@ def main():
             ("5-point median",steps,[v if s>warmup else float('nan') for s,v in zip(steps,smooth)])],{}),
         ("Per-group LR (log scale; reconstructed)",[(name,steps,actual_lrs[name]) for name in groups],{"log":True}),
         ("Shared LR factor; P20 logged / base 0.3",[("scheduler factor",steps,factors)],{})],
-        "LRs reconstructed from archived group bases + recorded common scheduler factor. Orange: 93-step warmup.")
+        f"LRs reconstructed from archived group bases + recorded common scheduler factor. Orange: {warmup}-step warmup.")
     emit("02_gradients.png","2. Gradients: preclip and postclip are separate",[
-        ("Preclip total norm (Trainer log)",[("preclip total",steps,gradients),("clip threshold 1",[0,3075],[1,1])],{"log":True}),
+        ("Preclip total norm (Trainer log)",[("preclip total",steps,gradients),("clip threshold 1",[0,total_steps],[1,1])],{"log":True}),
         ("Postclip group norms (callback)",[(name,dsteps,post[name]) for name in groups],{"log":True}),
         ("Global clipping factor at logged updates",[("min(1, 1 / norm)",steps,[min(1.,1/g) for g in gradients])],{}),
         ("Postclip total from group-norm squares",[("postclip total",dsteps,post_total)],{})],
@@ -141,18 +150,19 @@ def main():
                "fused_map_entropy_norm","summary_rms","native_value_rms",
                "layer5_weight","layer11_weight","layer17_weight")
     epoch_loss = {}
-    for epoch in range(1,6):
+    for epoch in range(1,total_epochs+1):
         vals = [v for e,v in zip(epochs,losses) if epoch-1<e<=epoch]
         epoch_loss[str(epoch)] = describe(vals)
     after = [g for s,g in zip(steps,gradients) if s>warmup]
-    final_first = [v for e,v in zip(epochs,losses) if 4<e<=4.5]
-    final_second = [v for e,v in zip(epochs,losses) if 4.5<e<=5]
+    final_first = [v for e,v in zip(epochs,losses) if total_epochs-1<e<=total_epochs-.5]
+    final_second = [v for e,v in zip(epochs,losses) if total_epochs-.5<e<=total_epochs]
     analysis = {"experiment":report["experiment"],"commit":report["git_commit"],
         "global_step":state["global_step"],"trainable_parameters":report["total_trainable_parameters"],
         "train_runtime_seconds":report["train_metrics"]["train_runtime"],
         "peak_gpu_memory_bytes_recorded":report["peak_gpu_memory_bytes"],
-        "sources_sha256":{name:hashlib.sha256((root/name).read_bytes()).hexdigest() for name in
-                           ("train_report.json","trainer_state.json","v10_diagnostics.jsonl","train.log")},
+        "sources_sha256":{name:hashlib.sha256(path.read_bytes()).hexdigest() for name,path in
+                           (("train_report.json",root/"train_report.json"),("trainer_state.json",state_path),
+                            ("v10_diagnostics.jsonl",root/"v10_diagnostics.jsonl"),("train.log",root/"train.log"))},
         "warmup_steps":warmup,"lr_reconstruction_error":scheduler_error,"base_group_lrs":rates,
         "optimizer_log_report_match":True,
         "lr_note":"reconstructed actual group rates; recorded LR is p20; observed factor corresponds to step-1",

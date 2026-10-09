@@ -1,3 +1,15 @@
+## 2026-10-09：用户同意下一试为V10条件头修正版7轮
+
+实现完成，尚未运行：实验 `pathvqa_v10_condition_head_ln_default_metanet_h160_lr3e4_norm_fixed_7ep_seed44`，独立 `pathvqa/train_v10_head_fixed_7ep.py` 默认epochs7/save5,6,7，启动脚本 `bash pathvqa/run_v10_head_fixed_7ep_seed44.sh`。共用训练/回调按真实预算保存并记录，原五轮入口默认不变。先绑定修正版五轮的20261009_102158_643548及原V1五轮seed44的20260926_2；新运行从零训练，无resume/权重加载。完成后CPU绘图→依次完整评估epoch5/6/7→各自对两既有基线配对10000/seed42（Overall/Yes-No/Free-form/what/where）；预定epoch7为主，5/6观察趋势，不择优。保留epoch_scores.json、最终报告/阶段状态/退出码/日志/ledger_fragment。独立产物 `pathvqa/outputs/v10_head_fixed/<7ep_experiment>_<timestamp>/`。
+
+绘图兼容Windows/Linux和训练原目录trainer/trainer_state.json；横轴上限取实际max_steps，warmup从实际max_steps及报告ratio计算，分epoch及末轮窗口按真实训练轮数分组，无3075/93硬编码。最小CPU语法/Bash检查及既有五轮日志绘图兼容检查通过，未跑模型。仅授权这一试，GPU用户执行，失败即停，不重试/关机/Test/其他seed，结果回传后补两账本。
+
+计划PathVQA model seed44/data seed42，从零训练7轮，沿用条件头修正版结构/初始化/分组基础LR/归一化/batch2累积16/clip1/3%warmup；线性衰减覆盖完整7轮，因此与原五轮轨迹不同。保存并完整Validation评估epoch5/6/7，预定epoch7主结果，其他轮仅轨迹诊断；与修正版五轮epoch5（58.6835）及V1五轮seed44 epoch5（59.3386）做图像簇配对。既有入口硬编码五轮及saved_epochs=[3,4,5]，需独立7轮入口及训练配置，不能只改名称。独立产物，不覆盖历史，复用训练诊断并按真实总步数/warmup绘图，禁止硬编码3075/93。尚未实现或运行，GPU用户执行；失败即停，无自动重试/Test/其他seed/关机。余下最后一试不自动安排；完成后补两账本，账本无独立commit/push。
+
+## 2026-10-09：既有epoch3/4 Validation补评估已完成
+
+用户回传同一条件头修正版seed44的epoch3/4/5 Overall57.1337/58.0284/58.6835、Free-form25.2712/26.2285/27.2176。已补两账本；本次补评估授权完成，覆盖下方待运行状态，固定epoch5主checkpoint不变。不自动延长训练、增大LR、增加seed或跑Test；剩余两次训练尝试仍待用户选择。后续若选择延长，应独立记录完整训练时长与scheduler/恢复方式，不能将重排衰减的从零训练与原epoch5简单视为同轨迹。
+
 ## 2026-10-09：条件头修正版已完成；剩余两试暂不指定
 
 新增用户授权只评估既有epoch3、4：入口 `bash pathvqa/run_v10_head_fixed_epoch3_4_validation.sh`，精确绑定条件头修正版seed44的20261009_102158_643548产物，按3→4串行完整Validation，原生成评分协议不变；新目录epoch3_4_validation_<timestamp>，保存预测/summary/日志/退出码及epoch_scores.json。epoch5既有summary仅复用汇总，仍为原主结果，不以最高分重新挑主checkpoint。失败即停，不重训、不跑Test/其他seed/重试/关机，GPU用户执行；结果回传后补两账本。

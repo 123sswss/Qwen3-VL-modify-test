@@ -1,4 +1,4 @@
-"""User-executed single SLAKE V10 train: five epochs, no split evaluation here."""
+"""User-executed V10 training: explicit budget, default five; no evaluation here."""
 from __future__ import annotations
 
 import argparse
@@ -46,8 +46,9 @@ class V10Trainer(Trainer):
 
 
 class V10Callback(TrainerCallback):
-    def __init__(self, output, processor):
+    def __init__(self, output, processor, save_epochs=(3,4,5)):
         self.output, self.processor = output, processor
+        self.save_epochs = set(save_epochs)
         self.saved = set()
 
     def on_pre_optimizer_step(self, args, state, control, **kwargs):
@@ -65,7 +66,7 @@ class V10Callback(TrainerCallback):
 
     def on_epoch_end(self, args, state, control, **kwargs):
         epoch = int(round(float(state.epoch or 0)))
-        if state.is_world_process_zero and epoch in (3,4,5) and epoch not in self.saved:
+        if state.is_world_process_zero and epoch in self.save_epochs and epoch not in self.saved:
             directory = self.output/"checkpoints"/f"epoch_{epoch}"
             kwargs["model"].save_v10(directory)
             self.processor.save_pretrained(directory)
@@ -163,7 +164,8 @@ def real_batch_preflight(model, dataset, collator, processor, source, output, da
 
 
 def main(*, model_class=VisualSelectionV10Model, experiment_override=None,
-         method=METHOD, expected_trainable=EXPECTED_TRAINABLE, group_lrs=GROUP_LRS):
+         method=METHOD, expected_trainable=EXPECTED_TRAINABLE, group_lrs=GROUP_LRS,
+         default_epochs=5, default_save_epochs=(3,4,5)):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--model-path", type=Path, required=True)
     parser.add_argument("--data-root", type=Path, required=True)
@@ -171,7 +173,11 @@ def main(*, model_class=VisualSelectionV10Model, experiment_override=None,
     parser.add_argument("--expected-train-count", type=int, required=True)
     parser.add_argument("--dataset", choices=("slake", "pathvqa"), default="slake")
     parser.add_argument("--model-seed", type=int, default=44)
+    parser.add_argument("--epochs", type=int, default=default_epochs)
+    parser.add_argument("--save-epochs", type=int, nargs="+", default=list(default_save_epochs))
     args = parser.parse_args()
+    if args.epochs < 1 or any(epoch < 1 or epoch > args.epochs for epoch in args.save_epochs):
+        parser.error("Saved epochs must be within the training budget")
     seed, data_seed = args.model_seed, 42
     experiment = (f"pathvqa_v10_weighted_map_metanet_h160_norm_fixed_5ep_seed{seed}"
                   if args.dataset == "pathvqa" else EXPERIMENT)
@@ -213,9 +219,9 @@ def main(*, model_class=VisualSelectionV10Model, experiment_override=None,
     random.setstate(python_rng)
     np.random.set_state(numpy_rng)
     torch.cuda.reset_peak_memory_stats()
-    callback = V10Callback(args.output_dir, processor)
+    callback = V10Callback(args.output_dir, processor, args.save_epochs)
     trainer = V10Trainer(model=model, args=TrainingArguments(
-        output_dir=str(args.output_dir/"trainer"), num_train_epochs=5, per_device_train_batch_size=2,
+        output_dir=str(args.output_dir/"trainer"), num_train_epochs=args.epochs, per_device_train_batch_size=2,
         gradient_accumulation_steps=16, learning_rate=1e-4, weight_decay=0., warmup_ratio=.03,
         lr_scheduler_type="linear", max_grad_norm=1., logging_steps=20, save_strategy="no",
         bf16=True, gradient_checkpointing=False, dataloader_num_workers=2, remove_unused_columns=False,
@@ -227,13 +233,13 @@ def main(*, model_class=VisualSelectionV10Model, experiment_override=None,
     print("[V10_ACCUMULATION] trainer.model_accepts_loss_kwargs=False trainer=16 accelerate=1", flush=True)
     result = trainer.train()
     trainer.save_state()
-    if callback.saved != {3,4,5}:
+    if callback.saved != set(args.save_epochs):
         raise RuntimeError(f"V10 required saved epochs missing: {callback.saved}")
     counts = model._audit_parameters()
     if sum(counts.values()) != expected_trainable:
         raise RuntimeError("V10 final parameter count changed")
     report = {"experiment": experiment, "method": method, "dataset": "PathVQA" if args.dataset == "pathvqa" else "SLAKE", "model_seed":seed,
-              "data_seed":data_seed,"epochs":5,"saved_epochs":sorted(callback.saved),"train_split":"train",
+              "data_seed":data_seed,"epochs":args.epochs,"saved_epochs":sorted(callback.saved),"train_split":"train",
               "languages":"all","train_samples":len(source),"train_manifest":None if args.dataset == "pathvqa" else str(args.data_root/"train.json"),
               "base_model":str(args.model_path),"max_length":2048,"workers":2,"bf16":True,
               "trainable_parameters":counts,"total_trainable_parameters":sum(counts.values()),
@@ -245,7 +251,7 @@ def main(*, model_class=VisualSelectionV10Model, experiment_override=None,
                            "per_device_batch_size":2,"gradient_accumulation_steps":16,"warmup_ratio":.03,
                            "scheduler":"linear","max_grad_norm":1.,"group_learning_rates":group_lrs}}
     (args.output_dir/"train_report.json").write_text(json.dumps(report,indent=2),encoding="utf-8")
-    print("[V10_TRAIN_DONE] " + str(args.output_dir/"checkpoints/epoch_5"),flush=True)
+    print("[V10_TRAIN_DONE] " + str(args.output_dir/"checkpoints"/f"epoch_{args.epochs}"),flush=True)
 
 
 if __name__ == "__main__":

@@ -197,6 +197,7 @@ def main(*, model_class=VisualSelectionV10Model, experiment_override=None,
                                                     device_map="auto", trust_remote_code=True)
     base.config.use_cache = False
     model = model_class(base, init_seed=seed)
+    model.group_learning_rates = dict(group_lrs)
     if args.dataset == "pathvqa":
         from pathvqa.data_pipeline import PathVQADataset, PathVQADataCollator
         source = PathVQADataset(processor=processor, data_root=args.data_root, split="train",

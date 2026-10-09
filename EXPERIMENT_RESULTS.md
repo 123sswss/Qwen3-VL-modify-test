@@ -1,3 +1,29 @@
+## 2026-10-09 V10修正版五轮/七轮既有轨迹CPU只读对比完成
+
+精确绑定PathVQA44/42两次运行：五轮 `pathvqa_v10_condition_head_ln_default_metanet_h160_lr3e4_norm_fixed_5ep_seed44_20261009_102158_643548`（commit4838875e385650d121319599fe776a1f5215733e），七轮 `pathvqa_v10_condition_head_ln_default_metanet_h160_lr3e4_norm_fixed_7ep_seed44_20261009_151030_637257`（b2724f30e18f8b559fa97dd6550677953a87226c），服务器均pathvqa/outputs/v10_head_fixed/下。仅复制既有train.log/report/state/diagnostics及六份Validation summary，Windows NumPy/Pillow计算，无模型/GPU操作、无服务器写入。两报告仅实验名/预算/保存轮数/commit/训练汇总不同；1691043参数、44/42、batch2/accum16、TF5/Accelerate1.12、归一化False、初始化审计相同；未保存数据hash/逐batch顺序，首条前向标量完全相同但初始裁剪后分组梯度略有差异，不宣称反向逐位一致。
+
+3075/warmup93与4305/warmup130，实际分组LR由已记录P20 LR和组基础LR重建并验证step−1线性因子。最早存档loss在update20已分岔3.89994/4.22554，裁剪前梯度9.038/23.337；update21 P20 RMS .138710/.097986、偏移.244323/.227782，而摘要/融合熵差极小。第1轮5/11/17层权重均值五轮.181/.337/.482、七轮.277/.375/.348。七轮第5轮仍约29.49%基础LR，非原五轮续训；同期loss窗口均值.583579高于原五轮.561589。e5 Overall56.4307对旧58.6835下降2.2528pp，已有配对CI[-3.1200,-1.3895]（引用旧统计，不重跑）。
+
+七轮e5/6/7：Overall56.4307/55.7437/55.8396；YesNo89.6000/89.3120/89.9520；FF23.3567/22.2719/21.8251；what19.1130/17.6609/17.3862；where56.7237/57.2127/55.5012。同期loss均值.583579/.539088/.501028；融合熵.640369/.616685/.629579；偏移/P20 .358275/.367037/.355035；LN后约1。裁剪前梯度中位数.538864/.624449/.711785，超过1的记录1/30、2/31、3/31，不是全步裁剪率。各组裁剪后梯度另图展示，不与Trainer裁剪前混用。
+
+结论：前五轮已走不同优化轨迹，后两轮loss继续下降但开放回答继续恶化；无持续地图集中、比例爆炸或长期裁剪限制的直接证据。调度/早期前缀与层门控分岔是线索，不能单独证实过拟合、定位失败或具体LR根因。所有激活来自变化minibatch，缺固定样本向量，不补模型。产物 `pathvqa/outputs/v10_5ep_7ep_cpu_comparison_20261009/`：10张叠加图、index.html、report.md、comparison.json（逐轮分位数/全部梯度组/协议/来源SHA256/缺失项）。相关CPU脚本diagnostics/compare_v10_archived_curves.py；本次结束，不启动训练或增加计划；账本按规则随下次相关代码提交。
+
+## 2026-10-09 V10条件头修正版7轮完成：负结果
+
+实验 `pathvqa_v10_condition_head_ln_default_metanet_h160_lr3e4_norm_fixed_7ep_seed44`，PathVQA model seed44/data seed42，从零7轮，保存及完整Validation评估5/6/7（6259题/832图），固定epoch7主结果。唯一配置改动为预算5→7及随总预算重排的3%warmup/linear；不等于原5轮checkpoint续训。结构、初始化、分组基础LR、batch2/累积16、归一化False保持，30个共有初值核验一致。
+
+| checkpoint | Overall | Yes/No | Free-form | what | where |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| epoch5 | 56.4307 | 89.6000 | 23.3567 | 19.1130 | 56.7237 |
+| epoch6 | 55.7437 | 89.3120 | 22.2719 | 17.6609 | 57.2127 |
+| epoch7（主） | 55.8396 | 89.9520 | 21.8251 | 17.3862 | 55.5012 |
+
+对原修正版5轮58.6835：本次epoch5 Overall -2.252756pp，图像簇95%配对CI[-3.119999,-1.389499]；epoch6 -2.939767，CI[-3.873298,-2.017625]；epoch7 -2.843905，CI[-3.790938,-1.914693]。epoch7 Yes/No -0.2880，CI[-1.277142,0.705168]；Free-form -5.392470，CI[-6.990996,-3.816776]；what -4.709576，CI[-6.383886,-3.046664]；where -11.491443，CI[-16.381418,-6.811418]。对原V1五轮seed44 Overall -3.498961，CI[-4.414125,-2.582697]。配对10000次/seed42；分项探索性。epoch7独立95%CI[54.3426,57.3278]，2000次/seed42/832图；其他所有分轮、分项、配对精确数值及运行元数据保留在 `pathvqa/outputs/cpu_curve_audit_20261009/v10_7ep_user_result.json`（用户附件首条完整JSON）。
+
+参数1691043，训练15073.5807秒，平均train_loss0.6558331658477429，峰值25000120320bytes；commit b2724f30e18f8b559fa97dd6550677953a87226c；Torch2.8.0+cu128/Transformers5.0.0/Accelerate1.12.0。输出根 `/root/autodl-tmp/Qwen3-VL-modify-test/pathvqa/outputs/v10_head_fixed/pathvqa_v10_condition_head_ln_default_metanet_h160_lr3e4_norm_fixed_7ep_seed44_20261009_151030_637257`；checkpoint `checkpoints/epoch_N`，预测/summary `eval_validation/epoch_N/pathvqa_predictions.json`及`pathvqa_summary.json`。
+
+结论：七轮配置失败，主要损失来自开放回答；在epoch5已劣于原5轮计划，不能只归因额外两轮。5→7轮开放回答继续下降，但缺逐步训练loss/梯度/地图诊断，尚不能确定过拟合、优化路径/尺度或地图集中等机制；不能据此宣称Meta-Net LR3e-4本身过高或共同Value是根因。保留原五轮修正版及V1，停止加轮数；余下一试待用户选择。助手仅CPU读取/账本记录，无GPU操作，无仅账本commit/push。
+
 ## 2026-10-09 V10条件头修正版：既有epoch3/4完整Validation补评估完成
 
 实验 `pathvqa_v10_condition_head_ln_default_metanet_h160_lr3e4_norm_fixed_5ep_seed44`；PathVQA model seed44/data seed42。用户回传既有epoch3/4 checkpoint完整Validation结果，6259题/832图；仅改变被评估checkpoint轮数，没有新训练/结构/监督改动，epoch5仍为预定主结果。输出根 `/root/autodl-tmp/Qwen3-VL-modify-test/pathvqa/outputs/v10_head_fixed/pathvqa_v10_condition_head_ln_default_metanet_h160_lr3e4_norm_fixed_5ep_seed44_20261009_102158_643548/epoch3_4_validation_20261009_143119`；各轮 `epoch_3` / `epoch_4` 下保存pathvqa_predictions.json及pathvqa_summary.json。epoch5复用原eval_validation/epoch_5产物，不重新评分。

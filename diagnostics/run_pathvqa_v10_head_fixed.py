@@ -28,7 +28,7 @@ def bind_original(run, model_path, data_root):
     return {"run":str(run),"report":report,"summary":summary}
 
 
-def main(*, seven_epochs=False):
+def main(*, seven_epochs=False, p20_low_lr=False):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--model-path",type=Path,default=Path("/root/autodl-tmp/model"))
     parser.add_argument("--data-root",type=Path,default=Path("/root/autodl-tmp/dataset/pathVQA"))
@@ -36,6 +36,9 @@ def main(*, seven_epochs=False):
     args = parser.parse_args()
     budget = 7 if seven_epochs else 5
     experiment = EXPERIMENT.replace("_5ep_","_7ep_") if seven_epochs else EXPERIMENT
+    if p20_low_lr:
+        experiment = EXPERIMENT.replace("_norm_fixed_", "_p20lr01_norm_fixed_")
+    group_lrs = {**GROUP_LRS, "p20":0.1} if p20_low_lr else GROUP_LRS
     saved_epochs = [5,6,7] if seven_epochs else [3,4,5]
     evaluation_epochs = [5,6,7] if seven_epochs else [5]
     output = ROOT/"pathvqa/outputs/v10_head_fixed"/(experiment+"_"+datetime.now().strftime("%Y%m%d_%H%M%S_%f"))
@@ -63,7 +66,7 @@ def main(*, seven_epochs=False):
     save()
     print("[PATHVQA_V10_HEAD_FIXED_OUTPUT] "+str(output),flush=True)
     try:
-        if seven_epochs:
+        if seven_epochs or p20_low_lr:
             run = ROOT/"pathvqa/outputs/v10_head_fixed"/(EXPERIMENT+"_20261009_102158_643548")
             report = read(run/"train_report.json")
             expected = {"experiment":EXPERIMENT,"method":METHOD,"epochs":5,"model_seed":44,
@@ -93,15 +96,17 @@ def main(*, seven_epochs=False):
                                 "visual-selection-prefix",args.model_path,args.data_root)
         if abs(v1_summary["overall_accuracy"]-59.3386) > .00011:
             raise ValueError("Not the specified V1 59.3386 reference")
-        write(output/"baseline_binding.json",{"head_fixed_5ep" if seven_epochs else "v10":original,"v1":binding})
+        write(output/"baseline_binding.json",{"head_fixed_5ep" if seven_epochs or p20_low_lr else "v10":original,"v1":binding})
         write(output/"requested_config.json",{"experiment":experiment,"method":METHOD,"model_seed":44,
             "data_seed":42,"epochs":budget,"fixed_epoch":budget,"saved_epochs":saved_epochs,
             "evaluation_epochs":evaluation_epochs,"batch":2,"accumulation":16,
-            "group_counts":GROUP_COUNTS,"group_lrs":GROUP_LRS,"total":TOTAL,
+            "group_counts":GROUP_COUNTS,"group_lrs":group_lrs,"total":TOTAL,
             "summary_norm":"LayerNorm(2560)","meta_init":"nn.Linear_default_both_layers",
             "git_commit":state["git_commit"],"gradient_preclip":"real_batch_preflight_and_Trainer_grad_norm",
             "gradient_postclip":"on_pre_optimizer_step_group_norms"})
         train_module = "pathvqa.train_v10_head_fixed_7ep" if seven_epochs else "pathvqa.train_v10_head_fixed"
+        if p20_low_lr:
+            train_module = "pathvqa.train_v10_head_fixed_p20lr01"
         command("train",[sys.executable,"-m",train_module,"--dataset","pathvqa",
             "--model-seed",44,"--model-path",args.model_path,"--data-root",args.data_root,
             "--output-dir",output,"--expected-train-count",19654,
@@ -109,6 +114,8 @@ def main(*, seven_epochs=False):
         report = read(output/"train_report.json")
         if report["method"] != METHOD or report["total_trainable_parameters"] != TOTAL or report["saved_epochs"] != saved_epochs or report["epochs"] != budget:
             raise ValueError("Independent training budget/report differs")
+        if report["optimizer"]["group_learning_rates"] != group_lrs:
+            raise ValueError("Training optimizer groups differ from requested learning rates")
         if seven_epochs:
             command("plot_curves",[sys.executable,"-m","diagnostics.plot_v10_training_logs","--input-dir",output])
         epoch_results = {}
@@ -120,7 +127,7 @@ def main(*, seven_epochs=False):
                 "--data-root",args.data_root,"--split","validation","--output-dir",evaluation])
             summary = validation(evaluation,checkpoint,"v10-head-fixed",args.model_path,args.data_root)
             comparisons = {}
-            reference_name = "head_fixed_5ep" if seven_epochs else "v10"
+            reference_name = "head_fixed_5ep" if seven_epochs or p20_low_lr else "v10"
             for name,run in ((reference_name,Path(original["run"])),("v1",v1)):
                 paired_path = output/f"paired_epoch{epoch}_vs_{name}.json" if seven_epochs else output/f"paired_vs_{name}.json"
                 command(f"paired_epoch{epoch}_vs_{name}",[sys.executable,"-m","diagnostics.compare_pathvqa_v1_training_budget",
@@ -131,11 +138,12 @@ def main(*, seven_epochs=False):
             epoch_results[epoch] = {"summary":summary,"comparisons":comparisons,"primary":epoch==budget}
             write(output/"epoch_scores.json",epoch_results)
         result = {**epoch_results[budget],"primary_epoch":budget,"epoch_results":epoch_results,"train_report":report,
-                  "controlled_change":"training budget 5->7 with warmup/linear scheduler to new endpoint" if seven_epochs else
+                  "controlled_change":"P20 base LR 0.3->0.1 only" if p20_low_lr else
+                                      "training budget 5->7 with warmup/linear scheduler to new endpoint" if seven_epochs else
                                       "LN + default Meta-Net initialization + Meta-Net LR3e-4 combined"}
         write(output/"final_report.json",result)
         (output/"ledger_fragment.md").write_text(f"### {experiment}\noutput={output}\n"+
-            json.dumps(result,ensure_ascii=False,indent=2)+"\nExploratory subgroup CIs; no single-factor attribution.\n",encoding="utf-8")
+            json.dumps(result,ensure_ascii=False,indent=2)+"\nExploratory subgroup CIs.\n",encoding="utf-8")
         state.update(status="completed",stage="completed",exit_code=0)
         print("[V10_HEAD_FIXED_DONE] "+json.dumps(result,ensure_ascii=False),flush=True)
     except Exception as exc:

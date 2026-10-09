@@ -1,5 +1,15 @@
 # Experiment Result Summary
 
+- 2026-10-09 V10条件头修正版只读曲线：四组图已在 `pathvqa/outputs/cpu_curve_audit_20261009/` 生成。末轮loss窗口均值前半.5752→后半.5480；warmup后仅1/149梯度记录点被clip1限制；LN后RMS≈1、末段偏移/P20≈.32；有效融合地图熵约1→.641，已非均匀。没有长期裁剪或后期尺度爆炸迹象，不证明定位有效，也不能由训练loss下降推断多训泛化收益。缺摘要向量/固定样本轨迹等，不补跑。助手仅CPU/日志读取，无GPU操作。
+
+## 2026-10-09 V10条件头修正版已完成（覆盖同名仅准备状态）
+
+- `pathvqa_v10_condition_head_ln_default_metanet_h160_lr3e4_norm_fixed_5ep_seed44`，PathVQA44/42，从零5轮、fixed epoch5完整Validation：Overall58.6835，Yes/No90.2400，Free-form27.2176，what22.0958/where66.9927；1691043参数，训练10773.9051秒，峰值25000120320bytes。
+- 对原V10 +0.9746pp，图像簇配对CI[+0.1117,+1.8222]，独占360/299；对V1 -0.6551pp，CI[-1.5108,+0.1789]，独占286/327。相对V1 where -5.3790pp，探索性CI[-9.5355,-1.2255]；不宣称总体非劣或均匀恢复。
+- LN＋默认初始化＋Meta-Net LR3e-4是组合收益，不能独立归因LR；30个共有初值一致、累积归一化修正通过报告。commit4838875e385650d121319599fe776a1f5215733e。
+- 输出：`/root/autodl-tmp/Qwen3-VL-modify-test/pathvqa/outputs/v10_head_fixed/pathvqa_v10_condition_head_ln_default_metanet_h160_lr3e4_norm_fixed_5ep_seed44_20261009_102158_643548`。精确分项、统计及原文已补主账本；真实训练/诊断轨迹尚未回传，不能据平均loss推断下一档LR；不自动安排余下两试。
+
+
 - 2026-10-09 V10条件头修正版仅准备：seed44从零五轮/fixed epoch5 Validation，摘要LN＋Meta-Net默认初始化＋LR3e-4组合，总参数预期1,691,043，对原V10 57.7089与V1 59.3386分别配对。原V10不变；不执行其余候选、不增加seed/Test/重试/自动关机。GPU由用户启动，无新成绩或机制结论。
 
 - 2026-10-08 PathVQA V10三seed：代码准备，尚未运行；44→45→46，各自从零五轮/fixed epoch5 Validation，同seed原V1配对10000/seed42，完整成功后汇总mean±sample std(ddof=1)。专用入口先落盘成功/失败及未运行状态，再等待600秒自动关机。GPU全由用户启动；没有新成绩或稳定性结论。

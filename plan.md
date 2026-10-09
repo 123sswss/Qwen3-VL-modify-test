@@ -1,3 +1,11 @@
+## 2026-10-09：条件头修正版已完成；剩余两试暂不指定
+
+新增用户授权只评估既有epoch3、4：入口 `bash pathvqa/run_v10_head_fixed_epoch3_4_validation.sh`，精确绑定条件头修正版seed44的20261009_102158_643548产物，按3→4串行完整Validation，原生成评分协议不变；新目录epoch3_4_validation_<timestamp>，保存预测/summary/日志/退出码及epoch_scores.json。epoch5既有summary仅复用汇总，仍为原主结果，不以最高分重新挑主checkpoint。失败即停，不重训、不跑Test/其他seed/重试/关机，GPU用户执行；结果回传后补两账本。
+
+曲线分析完成：SSH只读下载唯一已完成实验 `..._20261009_102158_643548` 的4份日志，本机纯CPU绘制loss+重建组LR、裁剪前/后梯度、LN/偏移尺度、有效融合地图/层权重/摘要RMS。产物 `pathvqa/outputs/cpu_curve_audit_20261009/`，完整口径与缺失项见report.md和两账本；不能用训练下降直接决定延长训练，不按梯度或地图熵单独判贡献。未跑模型/新实验/GPU状态命令、未修改服务器文件；剩余训练候选仍待用户决定。下方“尚未绘图”是历史状态，由本条覆盖。
+
+用户回传PathVQA seed44固定epoch5 Validation Overall58.6835：对原V10 +0.9746pp、配对CI[+0.1117,+1.8222]；对V1 -0.6551pp、CI跨零，where探索性下降5.3790pp。两账本已更新。本条覆盖下方同名尚未运行状态，授权单次实验结束；不追加Test/seed/重试。接下来讨论训练曲线辅助分析，先读已有trainer/trainer_state.json和v10_diagnostics.jsonl；目前只有汇总报告，没有实际轨迹，尚未绘图或实施脚本。余下两试待用户选择，不擅自安排LR扫描或结构修改。
+
 ## 2026-10-09：已授权单次V10条件头修正版，代码准备、尚未运行
 
 实验 `pathvqa_v10_condition_head_ln_default_metanet_h160_lr3e4_norm_fixed_5ep_seed44`。仅组合三项：融合地图读取共同Value后的2560维摘要加可学习LayerNorm；Meta-Net两层权重/bias均为默认Linear初始化；Meta-Net LR3e-4、新LN LR1e-4。原V10模型及存档不改；薄子类在原V10初始化后，用同seed独立CPU随机流重建默认头，共有参数（含Meta-Net第一层）逐张量校验不变。新config/weights/backend独立，预计参数1,691,043（原1,685,923＋LN5,120），启动逐组实数核验。

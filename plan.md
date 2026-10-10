@@ -603,12 +603,14 @@ SLAKE五轮seed44 Overall77.32；RSVQA-LR五轮seed44 OA85.4558/AA85.7081，均2
 - [ ] SLAKE未训练基座：本次无结果，待办保持。
 
 LoRA-r2多seed与C-qmap重做仍可选，未自动授权；不从本次结果触发新调参/训练。
-## 2026-10-10：SLAKE未训练基座英文结果已找回
+## 2026-10-10：SLAKE未训练基座完整中英Test已补齐
 
-- [x] 历史英文Test未训练基座：1061题572正确，53.91，截图确认base/null/en/test。
-- [ ] SLAKE中文或全语言基座：尚未找回；当前全语言2094题主表不能填入英文53.91。可先寻找旧summary/预测和模型身份，无自动GPU评估授权。
+- [x] SLAKE未训练基座完整中英Test：2094题，Overall45.46，EN53.91/ZH36.79；英文单独记录按用户要求替换，不重复计作新实验。
 
-本条更正此前“SLAKE基座未做/无结果”的泛化表述，保留旧状态记录；英文结果原实验名/输出路径/日期/模型版本未提供，按截图单独记录，不宣称已补齐全语言基线。
+本条覆盖此前“SLAKE基座待补”的历史状态；基座评估已完成，精确实验名/输出路径/日期/版本/CI仍未提供，不视为需要重跑，不自动新增GPU任务。
 ## 2026-10-10 SLAKE未训练基座完整Test（入口准备，尚未执行）
 
 最简 `bash slake/run_base_full_test.sh`：原生未微调Qwen3-VL，backend base，不加载checkpoint/Prompt/LoRA，不训练；完整双语官方Test，沿用语言感知短答模板、贪心max32及raw官方评分。独立slake/outputs/base/slake_base_qwen3vl_test_<stamp>/保存预测、summary、日志、commit和退出码。仅用户执行GPU推理，不关机、不重试；结果回传后补两账本。
+## 2026-10-10 RSVQA-LR LoRA-r2吞吐配置调整
+
+用户反馈b1a32预计20小时，授权仅RSVQA-LR改microbatch4/累积8，有效batch32；新实验 `rsvqa_lr_lora_full_model_attention_r2_norm_fixed_5ep_b4a8_seed44`。r2/alpha4、44/42、LR1e-4、五轮/epoch5Test、优化器/裁剪/归一化等不变。SLAKE仍b1a32；独立目录保留旧运行，不自动续训。入口不变：bash RSVQA/run_full_attention_lora_r2_seed44.sh。GPU及停止旧进程均用户执行，助手不启动或检查GPU。等效batch不保证优化轨迹逐位相同，不能保证4倍加速或无OOM；失败即停，不自动重试/关机。

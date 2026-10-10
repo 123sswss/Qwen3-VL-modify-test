@@ -548,3 +548,6 @@ PathVQA修正版五轮seed44/data42，仅P20 LR0.3→0.1：Overall58.3160/Yes-No
 ## 2026-10-10 清理P20 LR0.1入口；准备SLAKE/RSVQA-LR
 
 LR0.1既有58.3160及全部历史产物保留，仅清理专用代码。新增V10条件头修正版SLAKE→RSVQA-LR串行seed44/data42，从零五轮、固定epoch5官方Test，恢复P20 .3，batch2/累积16，其余沿PathVQA成功修正版，1691043参数。尚未运行，分数未知；Bash入口退出时先保存日志/状态，再立即/usr/bin/shutdown，成功失败均执行。GPU用户启动，失败停止后续，不重试。
+## 2026-10-10 V10修正版跨数据集补充
+
+SLAKE五轮seed44：77.32，CLOSED83.61/OPEN73.13，KVQA62.17/VQA79.53，EN78.04/ZH76.57；低于原V10 77.94，高于同seed V1 75.55和三轮CoCoOp77.03（仅点估计，无配对CI）。RSVQA-LR五轮seed44：OA85.4558/AA85.7081，四题型89.0/91.6751/70.0034/92.1539；比V1 OA+0.4198但AA-0.3731，仍低于CoCoOp86.1455和LoRA87.0552。用户输出为各数据集outputs/v10_head_fixed下20261010_002751_59639目录；完整身份/指标见主账本，运行报告/成本/CI待补。跨版本效果依赖任务，修正版不是普遍提升，不触发新调参。表格EXPERIMENT_COMPARISON_20261010.md。

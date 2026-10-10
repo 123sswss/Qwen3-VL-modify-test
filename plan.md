@@ -572,3 +572,9 @@ RSVQA两项microbatch4/累积8、有效32，seed44/data42、5epochs/3%warmup线�
 用户放弃PathVQA P20 LR0.1方向：删除两份专用入口及共用调度中的low-LR分支，保留历史58.3160记录、预测和checkpoint；代码可由Git恢复，不删除实验产物。新授权仅两项：`slake_v10_condition_head_ln_default_metanet_h160_lr3e4_norm_fixed_5ep_seed44` → `rsvqa_lr_v10_condition_head_ln_default_metanet_h160_lr3e4_norm_fixed_5ep_seed44`，均从零44/42、五轮、保存3/4/5、固定epoch5官方完整Test（SLAKE双语），不额外Validation或seed。沿用PathVQA成功修正版模型、初始化、1691043参数、P20 .3/Meta3e-4/S8 3e-5/Av10 1e-4/LN及其他1e-4、batch2/累积16、clip1、3%warmup/linear、归一化False；不是RSVQA旧4/8配置。
 
 最简实现：两个薄训练入口，共用slake.train_v10增加RSVQA已验证Dataset/Collator及预检prompt适配；复用v10-head-fixed加载器/官方评估。RSVQA active过滤、原始答案监督、count官方区间评分不变。用户启动 `bash run_v10_head_fixed_slake_rsvqa_shutdown.sh`；Bash按顺序train→epoch5Test，失败即停、不重试。独立slake/outputs/v10_head_fixed、RSVQA/outputs/v10_head_fixed产物，suite日志/阶段退出码/最终状态与汇总在outputs/v10_head_fixed_slake_rsvqa/<stamp>/。EXIT trap先落盘并sync，再Bash调用/usr/bin/shutdown，成功或失败均立即关机，调用失败日志另存；不使用Python直接exec或十分钟延迟。全部GPU用户执行；回传后补两账本。不自动追加其他任务。
+## 2026-10-10：用户自行完成修正版SLAKE/RSVQA-LR，已补录
+
+SLAKE五轮seed44 Overall77.32；RSVQA-LR五轮seed44 OA85.4558/AA85.7081，均20261010_002751_59639输出。成绩已记两账本并纳入比较表；实际train_report、执行身份、成本及配对CI未回传，不推定新GPU审计。用户这两项完成不代表授权继续训练/调参/其他seed；既有最后一试结束边界保持。
+## 2026-10-10 LoRA-r2 PathVQA正式Test（入口已准备，尚未执行）
+
+仅复用已完成的五轮seed44/data42 b1a32归一化修正LoRA-r2/alpha4固定epoch5。账本精确目录pathvqa/outputs/lora/pathvqa_lora_full_model_attention_r2_norm_fixed_5ep_b1a32_seed44_20261001_1；不按最新目录猜测。入口 `bash pathvqa/run_lora_r2_epoch5_test_seed44.sh`，CPU核对报告/adapter身份，完整官方Test使用既有lora评估默认协议。独立test_epoch5_<stamp>目录保存预测/summary/config/日志/退出码，不覆盖Validation，不重训、不补seed、不关机。GPU用户执行；结果回传后同步两账本。

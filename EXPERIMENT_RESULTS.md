@@ -2652,3 +2652,11 @@ Overall58.3160、Yes/No90.4320、Free-form26.2923；how8.5271/other7.1429/what21
 ## 2026-10-10 LR0.1专用代码清理及跨数据集准备（未运行）
 
 P20 LR0.1既有PathVQA结果58.3160完整记录仍保留；用户要求停止该方向并清理代码，本次仅移除专用train/bash文件和调度分支，不删除任何checkpoint、日志、预测或历史条目，Git可恢复代码。新准备SLAKE→RSVQA-LR V10条件头修正版五轮seed44/data42，实验名分别 `slake_v10_condition_head_ln_default_metanet_h160_lr3e4_norm_fixed_5ep_seed44` 与 `rsvqa_lr_v10_condition_head_ln_default_metanet_h160_lr3e4_norm_fixed_5ep_seed44`；固定epoch5完整Test，不跑Validation。参数1691043，完全沿PathVQA五轮修正版基础LR/初始化/batch2累积16/归一化False/clip1/五轮scheduler，只迁移数据和官方评分。代码准备不代表运行完成，分数未知。独立输出，Bash串行失败即停、日志状态先保存后/usr/bin/shutdown，调用失败日志保存。所有GPU用户执行，结果回传后追加精确实验成绩。
+## 2026-10-10 V10条件头修正版SLAKE与RSVQA-LR完成：用户回传汇总
+
+两项均为条件头修正版（融合摘要LN、默认Linear初始化、Meta-Net基础LR3e-4）；实验名记录5ep/seed44。按本次用户上下文为既定五轮seed44配置迁移，未回传train_report/执行commit/分组LR或实测参数，不能把本机配置视为远程实测。相同结构参数预算1,691,043，仅参考此前PathVQA实测；P20是否沿用0.3需报告核实，不将本次与p20lr01混同。未提供成本、CI、配对和逐步诊断。本条仅记录成绩，不安排额外训练。
+
+1. `slake_v10_condition_head_ln_default_metanet_h160_lr3e4_norm_fixed_5ep_seed44`，SLAKE，按既定入口固定epoch5全语言Test（2094题；本次用户未另报count/split元数据）：Overall77.32，CLOSED83.61/OPEN73.13，KVQA62.17/VQA79.53，EN78.04/ZH76.57。用户输出 `/root/autodl-tmp/Qwen3-VL-modify-test/slake/outputs/v10_head_fixed/slake_v10_condition_head_ln_default_metanet_h160_lr3e4_norm_fixed_5ep_seed44_20261010_002751_59639`。对同seed V1点差+1.77pp，对CoCoOp三轮+0.29pp，对原V10五轮77.94为-0.62pp；不宣称显著性或等效。
+2. `rsvqa_lr_v10_condition_head_ln_default_metanet_h160_lr3e4_norm_fixed_5ep_seed44`，RSVQA-LR，按既定入口固定epoch5 Test（10004题/100图；本次用户未另报count/split元数据）：OA85.4558/AA85.7081，rural_urban89.0/presence91.6751/count70.0034/comp92.1539。用户输出 `/root/autodl-tmp/Qwen3-VL-modify-test/RSVQA/outputs/v10_head_fixed/rsvqa_lr_v10_condition_head_ln_default_metanet_h160_lr3e4_norm_fixed_5ep_seed44_20261010_002751_59639`。对V1 OA+0.4198pp而AA-0.3731pp；对CoCoOp OA-0.6897pp，对LoRA-r8 OA-1.5994pp。AA为题型平均，OA更高不表示各题型均改善。原版V10 RSVQA未回传，不补造。
+
+汇总文件 `EXPERIMENT_COMPARISON_20261010.md` 保留Test/Validation、版本、epoch、seed及历史协议边界；旧QDPT不进入本次表格。两账本/计划即时补录，无仅账本commit/push、无模型/GPU操作。

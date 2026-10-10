@@ -2660,3 +2660,40 @@ P20 LR0.1既有PathVQA结果58.3160完整记录仍保留；用户要求停止该
 2. `rsvqa_lr_v10_condition_head_ln_default_metanet_h160_lr3e4_norm_fixed_5ep_seed44`，RSVQA-LR，按既定入口固定epoch5 Test（10004题/100图；本次用户未另报count/split元数据）：OA85.4558/AA85.7081，rural_urban89.0/presence91.6751/count70.0034/comp92.1539。用户输出 `/root/autodl-tmp/Qwen3-VL-modify-test/RSVQA/outputs/v10_head_fixed/rsvqa_lr_v10_condition_head_ln_default_metanet_h160_lr3e4_norm_fixed_5ep_seed44_20261010_002751_59639`。对V1 OA+0.4198pp而AA-0.3731pp；对CoCoOp OA-0.6897pp，对LoRA-r8 OA-1.5994pp。AA为题型平均，OA更高不表示各题型均改善。原版V10 RSVQA未回传，不补造。
 
 汇总文件 `EXPERIMENT_COMPARISON_20261010.md` 保留Test/Validation、版本、epoch、seed及历史协议边界；旧QDPT不进入本次表格。两账本/计划即时补录，无仅账本commit/push、无模型/GPU操作。
+## 2026-10-10 PathVQA LoRA-r2 seed44固定五轮正式Test完成
+
+实验 `pathvqa_lora_full_model_attention_r2_norm_fixed_5ep_b1a32_seed44`，PathVQA，model seed44/data seed42；复用此前已完成且归一化修正的epoch5 adapter，不重训。已有训练配置为全模型attention r2/alpha4、1769472参数、b1a32、五轮；本次仅补官方Test，6719题/858图像簇（与Validation6259题/832图不同）。用户返回评估及DONE记录，执行评估commit/版本和额外审计字段未回传，不推定。
+
+Overall **57.42**、Yes/No **89.50**（题型字段精度89.5003）、Free-form **25.29**；how12.9496/other44.4444/what19.263/when0/where68.2135/why4.5455/yes-no89.5003。独立图像簇95%CI[56.13,58.72]，858簇；本次未提供bootstrap迭代数/seed，不继承其他实验设置。Overall和Free-form仅两位显示精度，不自行推导未舍入分数。
+
+TTFT 6719次，mean/p50/p95/min/max=.057263/.055732/.064752/.048802/.424054秒；TPOT .030592秒/token，32.688token/s；request mean/p50/p95/min/max=.129926/.106899/.201448/.083828/.666448秒。不作未控制硬件环境的速度比较。
+
+服务器评估根 `/root/autodl-tmp/Qwen3-VL-modify-test/pathvqa/outputs/lora/pathvqa_lora_full_model_attention_r2_norm_fixed_5ep_b1a32_seed44_20261001_1/test_epoch5_20261010_095918_1103`，预测 `pathvqa_predictions.json`、汇总 `pathvqa_summary.json`。DONE相对路径与上述一致；权重身份为同运行目录下既有epoch5 adapter，具体checkpoint完整路径本次未另提供。
+
+与已有同seed V1五轮Test59.8006相比，按显示精度LoRA-r2约低2.38pp；Test配对CI/独占正确数尚未提供，不能复用Validation配对CI或据独立CI判断显著性。结果为单seed近等参数对照，非多seed结论；V1 b2a16与r2 b1a32均有效batch32，须披露microbatch差异。本次补Test计划已完成，结果同步两账本与汇总；不自动补seed、推理、配对、重训。助手仅CPU文件读取/记录，无GPU操作，无仅账本commit/push。
+## 2026-10-10 电气未训练基座、SLAKE LoRA-r2、电气LoRA-r2回传
+
+### 电力电气未训练Qwen3-VL
+
+用户报告55.974分、534正确；沿用该电气数据集954有效样本口径可算534/954=55.9748427673%，与显示数一致。未提供具体评估目录、报告、划分审计/评分器版本或运行身份；不推定未报告元数据。零训练参数/无训练seed。记录为电气基座补评完成（按用户口径），原始显示55.974保留。
+
+### SLAKE全attention LoRA-r2五轮seed44 Test
+
+实验 `slake_lora_full_model_attention_r2_norm_fixed_5ep_b1a32_seed44`；DONE明确fixed_epoch=5/split=test/auto_shutdown=false，2094题。按已准备训练策略model44/data42、r2/alpha4、b1a32、归一化修正、五轮，参数预算1769472；本次未回传train_report或实测参数/成本/commit，不将预算视为新实测。
+
+Overall80.80；CLOSED86.36/OPEN77.11；KVQA68.54/VQA82.59；EN81.43/ZH80.15。TTFT mean/p50/p95/min/max .077956/.053557/.121334/.050037/.439764秒，2094次；TPOT .031103秒/token、32.151token/s；request mean/p50/p95/min/max .151688/.123038/.271338/.085715/.549398秒。未回传独立或配对CI，不补造。
+
+输出根 `/root/autodl-tmp/Qwen3-VL-modify-test/slake/outputs/lora/slake_lora_full_model_attention_r2_norm_fixed_5ep_b1a32_seed44_20261010_101607_1852`，预测 `eval_test/epoch_5/slake_predictions.json`、summary `eval_test/epoch_5/slake_summary.json`。相对同seed V1 Test75.55点差+5.25pp，相对CoCoOp三轮77.03 +3.77pp，相对LoRA-r8三轮81.95 -1.15pp；单seed/三轮五轮预算不同，不认定统计显著或等效。
+
+### 电力电气LoRA-r2：截图核实完成，纠正抄录
+
+2026-10-10用户明确确认先前为抄录错误并要求移除错误数值；以终端截图核实：总972、实际954、跳过18、正确665、错误289、正则提取失败0、百分制分数69.71。665+289=954；665/954=69.7064989518%，与69.71一致，无评分口径冲突。总耗时1714.7秒、平均每题1.8秒。截图来源 `C:/Users/11473/AppData/Local/Temp/codex-clipboard-aea0f0cb-3765-4ed9-8413-93146c570e1f.png`。错误计数及由其推导的比例已按用户要求移除，本段为显式更正记录。精确实验名/epoch/seed/训练报告/输出路径仍未提供，不继承其他电气实验seed47或轮数。与V1 675正确相比少10题、低1.048218pp，暂无配对统计。
+
+两账本/比较表/计划已更新；助手仅CPU读取记录，不执行GPU或追加训练，不做仅账本commit/push。SLAKE-r2 Test及电气基座待办已完成，电气r2评分一致性已由截图确认；RSVQA-r2仍无本次结果。
+## 2026-10-10 找回SLAKE未训练基座历史英文Test（截图证据）
+
+用户截图确认已有未训练推理：backend=base、checkpoint=null、base_model=/root/autodl-tmp/model；questions=/root/autodl-tmp/dataset/slake/test.json，image_root=/root/autodl-tmp/dataset/slake/imgs，language=en，expected_split=test，partial_evaluation=false，base_types=[]。仅完整英文子集1061题，不是当前全中英2094题；partial_evaluation=false表示所选语言完整，不代表全语言。metric=slake_vqa_normalized_exact_match。总1061、正确572、错误489，missing/extra均0，extra_prediction_ids=[]。
+
+Overall53.91（572/1061=53.9114043355%）；CLOSED80.29/OPEN36.90，KVQA35.81/VQA56.85，EN53.91，无ZH结果。生成max_new_tokens32/temperature0/answer_mode=raw/instruction=language-aware-short-answer。训练轮数0、无训练seed、可训练参数0。截图来源 `C:/Users/11473/AppData/Local/Temp/codex-clipboard-baf26c1b-2f41-493e-ba02-7e2f18b8409c.png`；原运行日期/精确实验名/summary输出路径/模型版本/hash/CI/时间数据未提供，不从“很久以前”推定日期或具体骨干版本。
+
+结论：确实存在未训练基座英文Test结果，可在英文子表标历史基线；不能把53.91填进当前全语言Overall列。与现有方法EN字段比较需核对同题ID/模型身份/评分协议，目前不算新配对或显著性。SLAKE基座待办更正为“英文已找回；中文或全语言待补/找回”，不自动跑GPU。助手仅CPU读取/记录，两账本与比较表/计划更新，无账本独立commit/push。

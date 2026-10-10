@@ -551,3 +551,12 @@ LR0.1既有58.3160及全部历史产物保留，仅清理专用代码。新增V1
 ## 2026-10-10 V10修正版跨数据集补充
 
 SLAKE五轮seed44：77.32，CLOSED83.61/OPEN73.13，KVQA62.17/VQA79.53，EN78.04/ZH76.57；低于原V10 77.94，高于同seed V1 75.55和三轮CoCoOp77.03（仅点估计，无配对CI）。RSVQA-LR五轮seed44：OA85.4558/AA85.7081，四题型89.0/91.6751/70.0034/92.1539；比V1 OA+0.4198但AA-0.3731，仍低于CoCoOp86.1455和LoRA87.0552。用户输出为各数据集outputs/v10_head_fixed下20261010_002751_59639目录；完整身份/指标见主账本，运行报告/成本/CI待补。跨版本效果依赖任务，修正版不是普遍提升，不触发新调参。表格EXPERIMENT_COMPARISON_20261010.md。
+## 2026-10-10 LoRA-r2 PathVQA seed44五轮正式Test完成
+
+复用 `pathvqa_lora_full_model_attention_r2_norm_fixed_5ep_b1a32_seed44_20261001_1` epoch5，无重训。Test6719题/858图：Overall57.42、Yes/No89.50（题型精度89.5003）、Free-form25.29；how12.9496/other44.4444/what19.263/when0/where68.2135/why4.5455。独立图像簇95%CI[56.13,58.72]。评估目录 `test_epoch5_20261010_095918_1103`，完整服务器根/时间数据见主账本。相对V1同seed Test59.8006约低2.38pp，但Test配对CI未提供；不复用Validation CI或推断多seed优势。1769472参数、b1a32、五轮训练背景保持。已更新汇总与计划，不追加GPU任务。
+## 2026-10-10 新结果：电气基座与LoRA-r2
+
+电气未训练基座534正确、用户显示55.974（534/954=55.97484%，路径待补）。SLAKE LoRA-r2五轮seed44完整Test2094题Overall80.80，CLOSED86.36/OPEN77.11、KVQA68.54/VQA82.59、EN81.43/ZH80.15；比同seed V1 75.55高5.25pp，无配对CI。输出slake/outputs/lora/slake_lora_full_model_attention_r2_norm_fixed_5ep_b1a32_seed44_20261010_101607_1852。电气r2已由用户截图更正抄录：954有效、665正确/289错误、18跳过、正则失败0，69.71%（665/954=69.7065%），耗时1714.7秒/平均1.8秒。先前错误数值按用户要求移除，无评分口径冲突；seed/轮数/路径待补。比V1少10题约1.05pp，无配对CI。RSVQA-r2本次未回传。
+## 2026-10-10 SLAKE未训练历史结果找回：仅英文Test
+
+截图确认backend=base/checkpoint=null/language=en/test，1061题572正确/489错误，Overall53.91、CLOSED80.29/OPEN36.90、KVQA35.81/VQA56.85、EN53.91，无缺失或额外预测。raw/贪心/32token/language-aware-short-answer。是完整英文子集，不是当前中英2094题Overall；不能混入全语言主表。历史日期/运行名/路径/模型版本待补，英文基座已找回，中文或全语言仍缺；不自动追加GPU评估。

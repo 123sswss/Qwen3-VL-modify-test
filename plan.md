@@ -583,3 +583,32 @@ SLAKE五轮seed44 Overall77.32；RSVQA-LR五轮seed44 OA85.4558/AA85.7081，均2
 分别 `slake_lora_full_model_attention_r2_norm_fixed_5ep_b1a32_seed44` 和 `rsvqa_lr_lora_full_model_attention_r2_norm_fixed_5ep_b1a32_seed44`。完整照抄已完成PathVQA r2实际策略：从零seed44/data42、r2/alpha4/dropout.05、无rsLoRA/Prompt、visual24 qkv/proj+language36 q/k/v/o共192目标、1769472参数；batch1/累积32、LR1e-4、AdamW wd0、clip1、bf16、workers2、max_length2048、3%warmup/五轮linear、归一化False，保存3/4/5，固定epoch5完整官方Test。不是历史r8三轮或RSVQA4/8配置。SLAKE完整双语有效Train/Test；RSVQA active过滤、原始答案监督与count官方区间评分不变。
 
 最简共享bash调用原pathvqa.train_visual_lora（仅增加SLAKE数据分支），两独立入口 `bash slake/run_lora_full_model_attention_r2_seed44.sh` / `bash RSVQA/run_full_attention_lora_r2_seed44.sh`。本次不添加串行队列或关机，不改V10队列。独立输出各数据集outputs/lora/<experiment>_<stamp>/，训练报告/预测/summary/日志/退出码保留；失败即停，无重试、Validation、额外seed/调参。全部GPU用户亲自执行，回传后更新两账本。
+## 2026-10-10：PathVQA LoRA-r2 seed44五轮Test已完成
+
+用户回传Overall57.42/Yes-No89.50/Free-form25.29，6719题/858图，CI[56.13,58.72]；输出为既有20261001_1训练目录下test_epoch5_20261010_095918_1103。覆盖下方“入口准备、尚未执行”状态；本次仅Test评估已结束，已补两账本和比较表。Test配对CI/独占正确数未提供，不自动安排补跑；其他数据集r2既有准备计划保持，不能从本次记录推定已运行。
+## 2026-10-10：用户暂存待办清单（仅记录，不构成启动授权）
+
+- [ ] SLAKE与自建电力电气数据集：补未训练Qwen3-VL基座评估，使用各自正式评估划分和一致评分协议。用户原文“slake的电力电气未训练基线”，本条按SLAKE和电力电气两套基线理解；实际split/入口在执行前核对。
+- [ ] LoRA-r2：补RSVQA-LR与自建电力电气。RSVQA已有代码准备状态，实际完成情况须以运行报告核实；本清单不将准备视为完成，不追加或替代已存在的SLAKE-r2计划。
+- [ ] 可选：LoRA-r2多seed，可做可不做；具体数据集/seed与预算尚未指定，不自动展开。
+- [ ] 可选：考虑重新设计并重做C-qmap消融。用户认为原设计不完善，具体修订先讨论；原结果和原定义保留，不能无声替换。可做可不做，尚未授权实现或训练。
+
+本条仅暂存待办，不启动GPU、训练、推理或其他实验，不擅自增加必做项；所有GPU操作仍由用户亲自执行。
+## 2026-10-10：电气基座、SLAKE-r2完成；电气r2截图更正完成
+
+- [x] 电气未训练基座：534正确，显示55.974（954有效口径）；输出身份待补。
+- [x] SLAKE LoRA-r2五轮seed44正式Test：80.80，2094题，20261010_101607_1852输出；已补账本/比较表。
+- [x] 电气LoRA-r2评分一致性：用户截图确认665/954=69.71%、289错误；先前抄录错误已移除。评估完成，不需重训，seed/轮数/产物身份待补。
+- [ ] RSVQA-LR LoRA-r2：本次无结果，既有待办保持。
+- [ ] SLAKE未训练基座：本次无结果，待办保持。
+
+LoRA-r2多seed与C-qmap重做仍可选，未自动授权；不从本次结果触发新调参/训练。
+## 2026-10-10：SLAKE未训练基座英文结果已找回
+
+- [x] 历史英文Test未训练基座：1061题572正确，53.91，截图确认base/null/en/test。
+- [ ] SLAKE中文或全语言基座：尚未找回；当前全语言2094题主表不能填入英文53.91。可先寻找旧summary/预测和模型身份，无自动GPU评估授权。
+
+本条更正此前“SLAKE基座未做/无结果”的泛化表述，保留旧状态记录；英文结果原实验名/输出路径/日期/模型版本未提供，按截图单独记录，不宣称已补齐全语言基线。
+## 2026-10-10 SLAKE未训练基座完整Test（入口准备，尚未执行）
+
+最简 `bash slake/run_base_full_test.sh`：原生未微调Qwen3-VL，backend base，不加载checkpoint/Prompt/LoRA，不训练；完整双语官方Test，沿用语言感知短答模板、贪心max32及raw官方评分。独立slake/outputs/base/slake_base_qwen3vl_test_<stamp>/保存预测、summary、日志、commit和退出码。仅用户执行GPU推理，不关机、不重试；结果回传后补两账本。

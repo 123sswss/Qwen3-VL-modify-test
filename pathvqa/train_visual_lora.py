@@ -36,6 +36,7 @@ if str(REPO_ROOT) not in sys.path:
 
 from pathvqa.data_pipeline import PathVQADataCollator, PathVQADataset
 from RSVQA.data_pipeline import RSVQADataCollator, RSVQALRDataset
+from slake.data_pipeline import SLAKEDataset
 from pathvqa.throughput_benchmark import (
     ThroughputBenchmarkCallback,
     ThroughputTrainer,
@@ -123,7 +124,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--dataset",
-        choices=("pathvqa", "rsvqa_lr"),
+        choices=("pathvqa", "slake", "rsvqa_lr"),
         default="pathvqa",
     )
     parser.add_argument("--cache-dir", type=Path)
@@ -479,6 +480,12 @@ def main() -> int:
             seed=args.data_seed,
             deterministic_sampling=True,
             max_length=args.max_length,
+        )
+    elif args.dataset == "slake":
+        dataset = SLAKEDataset(
+            processor, str(data_root/"imgs"), questions_path=str(data_root/"train.json"),
+            languages=None, base_types=None, splits=("train",), ce_enabled=True,
+            seed=args.data_seed, deterministic_sampling=True, max_length=args.max_length,
         )
     else:
         dataset = RSVQALRDataset(

@@ -578,3 +578,8 @@ SLAKE五轮seed44 Overall77.32；RSVQA-LR五轮seed44 OA85.4558/AA85.7081，均2
 ## 2026-10-10 LoRA-r2 PathVQA正式Test（入口已准备，尚未执行）
 
 仅复用已完成的五轮seed44/data42 b1a32归一化修正LoRA-r2/alpha4固定epoch5。账本精确目录pathvqa/outputs/lora/pathvqa_lora_full_model_attention_r2_norm_fixed_5ep_b1a32_seed44_20261001_1；不按最新目录猜测。入口 `bash pathvqa/run_lora_r2_epoch5_test_seed44.sh`，CPU核对报告/adapter身份，完整官方Test使用既有lora评估默认协议。独立test_epoch5_<stamp>目录保存预测/summary/config/日志/退出码，不覆盖Validation，不重训、不补seed、不关机。GPU用户执行；结果回传后同步两账本。
+## 2026-10-10 SLAKE与RSVQA-LR全attention LoRA-r2（代码准备，尚未运行）
+
+分别 `slake_lora_full_model_attention_r2_norm_fixed_5ep_b1a32_seed44` 和 `rsvqa_lr_lora_full_model_attention_r2_norm_fixed_5ep_b1a32_seed44`。完整照抄已完成PathVQA r2实际策略：从零seed44/data42、r2/alpha4/dropout.05、无rsLoRA/Prompt、visual24 qkv/proj+language36 q/k/v/o共192目标、1769472参数；batch1/累积32、LR1e-4、AdamW wd0、clip1、bf16、workers2、max_length2048、3%warmup/五轮linear、归一化False，保存3/4/5，固定epoch5完整官方Test。不是历史r8三轮或RSVQA4/8配置。SLAKE完整双语有效Train/Test；RSVQA active过滤、原始答案监督与count官方区间评分不变。
+
+最简共享bash调用原pathvqa.train_visual_lora（仅增加SLAKE数据分支），两独立入口 `bash slake/run_lora_full_model_attention_r2_seed44.sh` / `bash RSVQA/run_full_attention_lora_r2_seed44.sh`。本次不添加串行队列或关机，不改V10队列。独立输出各数据集outputs/lora/<experiment>_<stamp>/，训练报告/预测/summary/日志/退出码保留；失败即停，无重试、Validation、额外seed/调参。全部GPU用户亲自执行，回传后更新两账本。

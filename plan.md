@@ -631,3 +631,6 @@ seed44既有五轮及epoch5 Test不重跑；新增 `pathvqa_lora_full_model_atte
 用户指出旧静态基线含ViT Prompt，不适合作纯LLM P20基线；旧Visual18+P20的84.4362/85.7665及69632参数记录与产物全部保留，不替换或删除。新实验 `rsvqa_lr_static_p20_norm_fixed_5ep_b4a8_seed44`，仅20个LLM前置embedding-row初始化Prompt、51200参数，visual_prompt_length=0，无动态分支，冻结整个骨干。保持旧RSVQA静态基线其余策略44/42、五轮、P20 LR.3、b4a8、AdamW/weight_decay0/clip1、warmup.03/linear、bf16、长度2048、workers2、归一化False；保存3/4/5、固定epoch5完整Test，active过滤/原始答案监督/count官方区间评分不变。
 
 最简复用原StaticPromptTuningModel和训练器，增加RSVQA Dataset分支及可选归一化/保存轮数，不改变旧入口默认值。用户执行 `bash RSVQA/run_static_p20_seed44.sh`；独立RSVQA/outputs/prompt_tuning产物，记录commit/配置、参数量、训练时长/峰值、预测/summary/日志/退出码，失败即停、不重试/关机/额外seed/Validation。GPU用户启动，完成回传后更新两账本。
+## 2026-10-12 RSVQA纯P20入口启用自动关机
+
+用户更新执行要求：`bash RSVQA/run_static_p20_seed44.sh` 成功或失败退出时先保存训练/评估日志、stage及退出码并sync，再由Bash显式调用/usr/bin/shutdown，调用失败保留shutdown.log。覆盖此前同入口“不关机”说明；模型及训练参数不变，无自动重试。GPU仍用户执行。

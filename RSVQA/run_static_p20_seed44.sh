@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Corrected pure P20 baseline; keep old Visual18+P20 artifacts, no shutdown.
+# Corrected pure P20 baseline; save status before Bash shutdown on exit.
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 export PYTHONUNBUFFERED=1
@@ -10,7 +10,19 @@ EXPERIMENT=rsvqa_lr_static_p20_norm_fixed_5ep_b4a8_seed44
 OUT="RSVQA/outputs/prompt_tuning/${EXPERIMENT}_$(date +%Y%m%d_%H%M%S)_$$"
 mkdir -p "$OUT"
 STAGE=train
-trap 'code=$?; printf "stage=%s\nexit_code=%s\n" "$STAGE" "$code" > "$OUT/exit_status.txt"' EXIT
+finish() {
+  local code=$?
+  trap - EXIT
+  set +e
+  printf 'stage=%s\nexit_code=%s\nauto_shutdown=true\n' "$STAGE" "$code" > "$OUT/exit_status.txt"
+  printf 'calling /usr/bin/shutdown %s\n' "$(date -Is)" > "$OUT/shutdown.log"
+  sync
+  /usr/bin/shutdown >> "$OUT/shutdown.log" 2>&1
+  printf 'shutdown_exit_code=%s\n' "$?" >> "$OUT/shutdown.log"
+  sync
+  exit "$code"
+}
+trap finish EXIT
 printf 'experiment=%s\ncommit=%s\nvisual_prompt_length=0\nexpected_trainable=51200\n' \
   "$EXPERIMENT" "$(git rev-parse HEAD)" > "$OUT/config.txt"
 echo "[RSVQA_STATIC_P20_OUTPUT] $OUT"

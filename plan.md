@@ -614,3 +614,12 @@ LoRA-r2多seed与C-qmap重做仍可选，未自动授权；不从本次结果触
 ## 2026-10-10 RSVQA-LR LoRA-r2吞吐配置调整
 
 用户反馈b1a32预计20小时，授权仅RSVQA-LR改microbatch4/累积8，有效batch32；新实验 `rsvqa_lr_lora_full_model_attention_r2_norm_fixed_5ep_b4a8_seed44`。r2/alpha4、44/42、LR1e-4、五轮/epoch5Test、优化器/裁剪/归一化等不变。SLAKE仍b1a32；独立目录保留旧运行，不自动续训。入口不变：bash RSVQA/run_full_attention_lora_r2_seed44.sh。GPU及停止旧进程均用户执行，助手不启动或检查GPU。等效batch不保证优化轨迹逐位相同，不能保证4倍加速或无OOM；失败即停，不自动重试/关机。
+
+## 2026-10-10：CoCoOp-style 100步训练峰值显存待补
+
+用户拟补 PathVQA CoCoOp-style 的100步训练成本测量，用于论文附录A成本表。沿用既有CoCoOp-style结构，记录实际批次配置与PyTorch peak allocated；不以reserved替代allocated。具体启动配置待准备，GPU由用户执行，尚无测量结果。不增加完整训练、评估或其他seed；完成后记录两账本并替换论文待办。
+## 2026-10-12 PathVQA LoRA-r2 seed45→46串行正式Test（已准备，未启动）
+
+seed44既有五轮及epoch5 Test不重跑；新增 `pathvqa_lora_full_model_attention_r2_norm_fixed_5ep_b1a32_seed45` → seed46。从零，仅model seed变45/46，data seed仍42；完全复用44的r2/alpha4/dropout.05、192全attention目标/1769472参数、batch1累积32、LR1e-4、AdamW wd0、clip1、bf16/workers2/长度2048、3%warmup/五轮linear及归一化False，保存3/4/5、固定epoch5完整官方Test。最简bash直接调用已验证训练和评分模块，不补Validation/调参/其他seed，不改seed44普通入口。
+
+用户执行 `bash pathvqa/run_lora_r2_seeds45_46_shutdown.sh`。独立每seed目录，suite输出在pathvqa/outputs/lora/seed45_46_suite_<stamp>/，保留训练/评估日志、执行commit、run_paths、每阶段退出码及最终已完成/失败/未运行seed状态。失败即停、不重试；EXIT trap先落盘sync，再在Bash显式/usr/bin/shutdown，成功失败均立即关机，调用失败记录shutdown.log。全部GPU用户启动；结果回传后补两账本。

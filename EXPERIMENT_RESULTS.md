@@ -2690,10 +2690,24 @@ Overall80.80；CLOSED86.36/OPEN77.11；KVQA68.54/VQA82.59；EN81.43/ZH80.15。TT
 2026-10-10用户明确确认先前为抄录错误并要求移除错误数值；以终端截图核实：总972、实际954、跳过18、正确665、错误289、正则提取失败0、百分制分数69.71。665+289=954；665/954=69.7064989518%，与69.71一致，无评分口径冲突。总耗时1714.7秒、平均每题1.8秒。截图来源 `C:/Users/11473/AppData/Local/Temp/codex-clipboard-aea0f0cb-3765-4ed9-8413-93146c570e1f.png`。错误计数及由其推导的比例已按用户要求移除，本段为显式更正记录。精确实验名/epoch/seed/训练报告/输出路径仍未提供，不继承其他电气实验seed47或轮数。与V1 675正确相比少10题、低1.048218pp，暂无配对统计。
 
 两账本/比较表/计划已更新；助手仅CPU读取记录，不执行GPU或追加训练，不做仅账本commit/push。SLAKE-r2 Test及电气基座待办已完成，电气r2评分一致性已由截图确认；RSVQA-r2仍无本次结果。
-## 2026-10-10 找回SLAKE未训练基座历史英文Test（截图证据）
+## 2026-10-10 SLAKE未训练基座完整中英Test（替换英文单独记录）
 
-用户截图确认已有未训练推理：backend=base、checkpoint=null、base_model=/root/autodl-tmp/model；questions=/root/autodl-tmp/dataset/slake/test.json，image_root=/root/autodl-tmp/dataset/slake/imgs，language=en，expected_split=test，partial_evaluation=false，base_types=[]。仅完整英文子集1061题，不是当前全中英2094题；partial_evaluation=false表示所选语言完整，不代表全语言。metric=slake_vqa_normalized_exact_match。总1061、正确572、错误489，missing/extra均0，extra_prediction_ids=[]。
+用户要求删除不完整的英文单独记录，以本次完整中英Test结果替换；本段为显式更新。未训练基座，训练轮数0、无训练seed、可训练参数0；本次2094题，按用户上下文为SLAKE官方全语言Test。原英文结果已并入EN分项，不再作为单独实验成绩。
 
-Overall53.91（572/1061=53.9114043355%）；CLOSED80.29/OPEN36.90，KVQA35.81/VQA56.85，EN53.91，无ZH结果。生成max_new_tokens32/temperature0/answer_mode=raw/instruction=language-aware-short-answer。训练轮数0、无训练seed、可训练参数0。截图来源 `C:/Users/11473/AppData/Local/Temp/codex-clipboard-baf26c1b-2f41-493e-ba02-7e2f18b8409c.png`；原运行日期/精确实验名/summary输出路径/模型版本/hash/CI/时间数据未提供，不从“很久以前”推定日期或具体骨干版本。
+Overall45.46；CLOSED56.10/OPEN38.39；KVQA34.83/VQA47.02；EN53.91/ZH36.79。TTFT2094次，mean/p50/p95/min/max=.064479/.040970/.110596/.036013/.606166秒；TPOT=.022408秒/token、44.627token/s；request mean/p50/p95/min/max=.132864/.093777/.236998/.062227/.829027秒。以上为用户显示精度，不推导未舍入成绩或正确总数。本次精确实验名、输出路径、运行日期、完整summary元数据/模型版本/hash、CI、生成配置未提供，不继承旧英文运行的其他元数据为当前已核实。
 
-结论：确实存在未训练基座英文Test结果，可在英文子表标历史基线；不能把53.91填进当前全语言Overall列。与现有方法EN字段比较需核对同题ID/模型身份/评分协议，目前不算新配对或显著性。SLAKE基座待办更正为“英文已找回；中文或全语言待补/找回”，不自动跑GPU。助手仅CPU读取/记录，两账本与比较表/计划更新，无账本独立commit/push。
+完整基座Test分数可纳入全语言表，SLAKE未训练基座评估待办已完成；产物身份待补，不自动追加GPU操作。与V1/CoCoOp/LoRA差值仅为点估计，未有新配对统计。两账本/比较表/计划同步替换英文不完整记录，无账本独立commit/push。
+## 2026-10-10 SSH只读补齐PathVQA四条正式Test分项；RSVQA纯P20未找到
+
+通过45783端口CPU只读核对，四份summary均split=test、6719题；未运行任何模型/GPU命令。精确分项如下（百分比，保持原summary精度）：
+
+| 方法 | Overall | Yes/No | Free-form | how | what | when | where | why | other |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| Base | 34.7671 | 67.3409 | 2.1448 | 2.1583 | 1.3499 | 0 | 7.4246 | 0 | 0 |
+| Static P20 seed44 | 55.8268 | 90.3331 | 21.2690 | 7.9137 | 16.4903 | 0 | 57.3086 | 0 | 22.2222 |
+| CoCoOp-style seed44 | 57.7467 | 90.0952 | 25.3500 | 10.7914 | 21.2331 | 0 | 57.5406 | 4.5455 | 27.7778 |
+| LoRA-r8 seed44 | 59.6815 | 91.6121 | 27.7033 | 10.7914 | 21.7074 | 0 | 72.1578 | 4.5455 | 44.4444 |
+
+服务器项目根/root/autodl-tmp/Qwen3-VL-modify-test；源文件依次pathvqa/outputs/base/pathvqa_base_20260826/pathvqa_summary.json；pathvqa/outputs/prompt_tuning/pathvqa_prompt_tuning_len20_seed44_20260827/eval_test/epoch_3/pathvqa_summary.json；pathvqa/outputs/cocoop/pathvqa_cocoop_style_p20_h160_seed44_20260909/eval_test/epoch_3/pathvqa_summary.json；pathvqa/outputs/lora/pathvqa_lora_full_model_attention_r8_seed44_20260830/eval_test/epoch_3/pathvqa_summary.json。后3份绑定各自epoch3 checkpoint，base checkpoint null；不改变此前总体或训练协议记录。
+
+RSVQA-LR：递归检查当前项目内全部rsvqa_summary.json及路径含rsvqa的train_report.json，没有找到seed44纯P20/51200参数的完成报告或Test summary。已知84.4362 OA/85.7665 AA确认为rsvqa_static_visual18_p20_norm_fixed_5ep_b4a8_seed44，train_report method=visual_selection_prefix_c_static、69632参数、visual_prompt_mode=c_static，不能替代纯P20。对应目录outputs/five_task_test_suite/suite_20261001_134036_879815/rsvqa_static_visual18_p20_norm_fixed_5ep_b4a8_seed44/。纯P20 Overall/AA/四类成绩仍缺失，不据此推断其他位置或已删除产物不存在，不补跑实验；本次只读取/记录，账本改动留待相关代码提交。

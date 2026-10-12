@@ -39,8 +39,8 @@ MODEL_BATCH_KEYS = (
 
 
 class PromptTuningCollator:
-    def __init__(self, processor: Any) -> None:
-        self.base = PathVQADataCollator(processor)
+    def __init__(self, processor: Any, collator_class=PathVQADataCollator) -> None:
+        self.base = collator_class(processor)
 
     def __call__(self, features: List[Dict[str, Any]]) -> Dict[str, Any]:
         batch = self.base(features)
@@ -52,15 +52,18 @@ class PromptTuningCollator:
 
 
 class EpochPromptCheckpointCallback(TrainerCallback):
-    def __init__(self, processor: Any, output_dir: Path) -> None:
+    def __init__(self, processor: Any, output_dir: Path, save_epochs=None) -> None:
         self.processor = processor
         self.output_dir = output_dir
         self.completed_epochs = set()
+        self.save_epochs = None if save_epochs is None else set(save_epochs)
 
     def on_epoch_end(self, args, state, control, **kwargs):
         if not state.is_world_process_zero:
             return control
         epoch_id = max(1, int(round(float(state.epoch or 0.0))))
+        if self.save_epochs is not None and epoch_id not in self.save_epochs:
+            return control
         if epoch_id in self.completed_epochs:
             return control
         self.completed_epochs.add(epoch_id)
@@ -135,6 +138,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--visual-prompt-length", type=int, default=0)
     parser.add_argument("--visual-anchor-layer", type=int, default=17)
     parser.add_argument("--epochs", type=int, default=3)
+    parser.add_argument("--save-epochs", type=int, nargs="+")
+    parser.add_argument("--correct-loss-accumulation", action="store_true")
     parser.add_argument(
         "--max-steps",
         type=int,
@@ -169,8 +174,9 @@ def parse_args() -> argparse.Namespace:
 
 
 def main(dataset_name: str = "pathvqa") -> int:
-    dataset_name = _normalize_dataset_name(dataset_name)
-    display_name = _dataset_display_name(dataset_name)
+    if dataset_name != "rsvqa_lr":
+        dataset_name = _normalize_dataset_name(dataset_name)
+    display_name = "RSVQA-LR" if dataset_name == "rsvqa_lr" else _dataset_display_name(dataset_name)
     args = parse_args()
     random.seed(args.seed)
     np.random.seed(args.seed)
@@ -195,7 +201,15 @@ def main(dataset_name: str = "pathvqa") -> int:
         visual_prompt_length=args.visual_prompt_length,
         visual_anchor_layers=(args.visual_anchor_layer,),
     )
-    dataset = _build_train_dataset(dataset_name, args, processor)
+    if dataset_name == "rsvqa_lr":
+        from RSVQA.data_pipeline import RSVQALRDataset, RSVQADataCollator
+        dataset = RSVQALRDataset(processor, args.data_root, split="train", ce_enabled=True,
+                                seed=args.data_seed, deterministic_sampling=True, max_length=args.max_length)
+        collator = PromptTuningCollator(processor, RSVQADataCollator)
+    else:
+        dataset = _build_train_dataset(dataset_name, args, processor)
+        collator = (PromptTuningCollator(processor) if dataset_name == "pathvqa" else
+                    DynamicPromptCollator(processor, dataset_name))
     trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
     expected = (
         args.prompt_length * model.get_input_embeddings().weight.shape[-1]
@@ -223,7 +237,7 @@ def main(dataset_name: str = "pathvqa") -> int:
         f"seed={args.seed} data_seed={args.data_seed}"
     )
 
-    callback = EpochPromptCheckpointCallback(processor, args.output_dir)
+    callback = EpochPromptCheckpointCallback(processor, args.output_dir, args.save_epochs)
     trainer = DualRatePromptTrainer(
         model=model,
         args=TrainingArguments(
@@ -248,16 +262,16 @@ def main(dataset_name: str = "pathvqa") -> int:
             data_seed=args.data_seed,
         ),
         train_dataset=dataset,
-        data_collator=(
-            PromptTuningCollator(processor)
-            if dataset_name == "pathvqa"
-            else DynamicPromptCollator(processor, dataset_name)
-        ),
+        data_collator=collator,
         processing_class=processor,
         callbacks=[callback],
         text_prompt_lr=args.learning_rate,
         visual_prompt_lr=args.visual_learning_rate,
     )
+    if args.correct_loss_accumulation:
+        trainer.model_accepts_loss_kwargs = False
+    print(f"[STATIC_PROMPT_ACCUMULATION] model_accepts_loss_kwargs={trainer.model_accepts_loss_kwargs} "
+          f"trainer={args.gradient_accumulation} accelerate={trainer.accelerator.gradient_accumulation_steps}",flush=True)
     result = trainer.train()
     final_dir = args.output_dir / "final"
     model.save_prompt(final_dir)
@@ -272,6 +286,10 @@ def main(dataset_name: str = "pathvqa") -> int:
         "trainable_parameters": trainable,
         "seed": args.seed,
         "data_seed": args.data_seed,
+        "epochs":args.epochs,"saved_epochs":sorted(callback.completed_epochs),
+        "per_device_train_batch_size":args.batch_size,"gradient_accumulation_steps":args.gradient_accumulation,
+        "learning_rate":args.learning_rate,"trainer_model_accepts_loss_kwargs":trainer.model_accepts_loss_kwargs,
+        "peak_gpu_memory_bytes":torch.cuda.max_memory_allocated(),
         "train_metrics": result.metrics,
     }
     args.output_dir.mkdir(parents=True, exist_ok=True)

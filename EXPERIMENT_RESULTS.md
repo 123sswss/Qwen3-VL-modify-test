@@ -2711,3 +2711,15 @@ Overall45.46；CLOSED56.10/OPEN38.39；KVQA34.83/VQA47.02；EN53.91/ZH36.79。TT
 服务器项目根/root/autodl-tmp/Qwen3-VL-modify-test；源文件依次pathvqa/outputs/base/pathvqa_base_20260826/pathvqa_summary.json；pathvqa/outputs/prompt_tuning/pathvqa_prompt_tuning_len20_seed44_20260827/eval_test/epoch_3/pathvqa_summary.json；pathvqa/outputs/cocoop/pathvqa_cocoop_style_p20_h160_seed44_20260909/eval_test/epoch_3/pathvqa_summary.json；pathvqa/outputs/lora/pathvqa_lora_full_model_attention_r8_seed44_20260830/eval_test/epoch_3/pathvqa_summary.json。后3份绑定各自epoch3 checkpoint，base checkpoint null；不改变此前总体或训练协议记录。
 
 RSVQA-LR：递归检查当前项目内全部rsvqa_summary.json及路径含rsvqa的train_report.json，没有找到seed44纯P20/51200参数的完成报告或Test summary。已知84.4362 OA/85.7665 AA确认为rsvqa_static_visual18_p20_norm_fixed_5ep_b4a8_seed44，train_report method=visual_selection_prefix_c_static、69632参数、visual_prompt_mode=c_static，不能替代纯P20。对应目录outputs/five_task_test_suite/suite_20261001_134036_879815/rsvqa_static_visual18_p20_norm_fixed_5ep_b4a8_seed44/。纯P20 Overall/AA/四类成绩仍缺失，不据此推断其他位置或已删除产物不存在，不补跑实验；本次只读取/记录，账本改动留待相关代码提交。
+## 2026-10-12 RSVQA-LR LoRA-r2五轮seed44完成（用户回传）
+
+实验 `rsvqa_lr_lora_full_model_attention_r2_norm_fixed_5ep_b4a8_seed44`，用户RESULT_ROOT `RSVQA/outputs/lora/rsvqa_lr_lora_full_model_attention_r2_norm_fixed_5ep_b4a8_seed44_20261010_150020_9726`（服务器项目相对路径）。按已准备且用户调整的配置：RSVQA-LR model seed44/data42、全模型attention r2/alpha4、五轮、b4a8、固定epoch5官方Test；本次未回传完整summary/train_report，实际参数/版本/commit/训练成本及count/split审计未提供，不把入口预算1769472视为本次新实测。
+
+用户成绩Overall86.9252、Average Accuracy87.378；rural_urban91.0、presence91.3706、count74.3129、comp92.8286；CI: None。AA按原始显示精度保留，不补造置信区间、配对统计或正确数；既定RSVQA协议为Test10004题/100图、count区间评分，回传未重复给出count字段。预测/summary精确文件路径未提供，只绑定用户RESULT_ROOT。
+
+对既有V1（OA85.0360/AA86.0812）点差OA+1.8892pp/AA+1.2968pp，count+5.1918pp；对LoRA-r8三轮（87.0552/87.7162）点差OA-0.1300/AA-0.3382；对CoCoOp五轮（86.1455/86.9998）OA+0.7797/AA+0.3782；对修正版V10（85.4558/85.7081）OA+1.4694/AA+1.6699。未有配对CI，不认定统计显著、r2/r8等效或多seed结论。
+
+结论：RSVQA近等参数LoRA-r2点估计高于V1，且同为五轮/b4a8，不能用r8更高参数预算解释所有差距。结合SLAKE-r2已有80.80，V1相对近等参数LoRA的优势必须限定在已观察到的PathVQA与电气结果，不能宣称跨领域普遍优势。机制原因未由成绩确定，不推定地图失败、知识不足或计数模块特定缺陷。RSVQA-r2待办已完成；剩余PathVQA-r2多seed/C-qmap重做仍可选，未启动GPU或新实验，无仅账本commit/push。
+## 2026-10-12 RSVQA纯静态P20基线修正准备（未运行）
+
+用户指出原“静态”基线包含Visual18并非纯P20；原rsvqa_static_visual18_p20_norm_fixed_5ep_b4a8_seed44的69632参数、OA84.4362/AA85.7665仍作为Visual18+P20结果保留，不能改名冒充纯P20。新增 `rsvqa_lr_static_p20_norm_fixed_5ep_b4a8_seed44`，仅LLM20个前置静态Prompt/51200参数、ViT无可训练Prompt/无动态分支，从零seed44/data42、五轮、b4a8、LR.3及已修正累积归一化，固定epoch5官方完整Test；其他策略保持，分数尚未知。代码准备后用户亲自执行，独立产物，不覆盖任何历史。

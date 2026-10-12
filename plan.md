@@ -623,3 +623,11 @@ LoRA-r2多seed与C-qmap重做仍可选，未自动授权；不从本次结果触
 seed44既有五轮及epoch5 Test不重跑；新增 `pathvqa_lora_full_model_attention_r2_norm_fixed_5ep_b1a32_seed45` → seed46。从零，仅model seed变45/46，data seed仍42；完全复用44的r2/alpha4/dropout.05、192全attention目标/1769472参数、batch1累积32、LR1e-4、AdamW wd0、clip1、bf16/workers2/长度2048、3%warmup/五轮linear及归一化False，保存3/4/5、固定epoch5完整官方Test。最简bash直接调用已验证训练和评分模块，不补Validation/调参/其他seed，不改seed44普通入口。
 
 用户执行 `bash pathvqa/run_lora_r2_seeds45_46_shutdown.sh`。独立每seed目录，suite输出在pathvqa/outputs/lora/seed45_46_suite_<stamp>/，保留训练/评估日志、执行commit、run_paths、每阶段退出码及最终已完成/失败/未运行seed状态。失败即停、不重试；EXIT trap先落盘sync，再在Bash显式/usr/bin/shutdown，成功失败均立即关机，调用失败记录shutdown.log。全部GPU用户启动；结果回传后补两账本。
+## 2026-10-12：RSVQA-LR LoRA-r2已完成
+
+用户回传五轮seed44 b4a8 OA86.9252/AA87.378，RESULT_ROOT RSVQA/outputs/lora/rsvqa_lr_lora_full_model_attention_r2_norm_fixed_5ep_b4a8_seed44_20261010_150020_9726；CI=None。覆盖此前未运行/未回传状态，已补两账本和表格，不重跑。本次结果不触发模型升级或更多训练；PathVQA-r2 seed45/46与C-qmap重做仍为可选，CoCoOp短测成本及已有预测配对/元数据补齐按既有待办保留。
+## 2026-10-12 RSVQA静态基线修正：纯P20（准备完成，未运行）
+
+用户指出旧静态基线含ViT Prompt，不适合作纯LLM P20基线；旧Visual18+P20的84.4362/85.7665及69632参数记录与产物全部保留，不替换或删除。新实验 `rsvqa_lr_static_p20_norm_fixed_5ep_b4a8_seed44`，仅20个LLM前置embedding-row初始化Prompt、51200参数，visual_prompt_length=0，无动态分支，冻结整个骨干。保持旧RSVQA静态基线其余策略44/42、五轮、P20 LR.3、b4a8、AdamW/weight_decay0/clip1、warmup.03/linear、bf16、长度2048、workers2、归一化False；保存3/4/5、固定epoch5完整Test，active过滤/原始答案监督/count官方区间评分不变。
+
+最简复用原StaticPromptTuningModel和训练器，增加RSVQA Dataset分支及可选归一化/保存轮数，不改变旧入口默认值。用户执行 `bash RSVQA/run_static_p20_seed44.sh`；独立RSVQA/outputs/prompt_tuning产物，记录commit/配置、参数量、训练时长/峰值、预测/summary/日志/退出码，失败即停、不重试/关机/额外seed/Validation。GPU用户启动，完成回传后更新两账本。

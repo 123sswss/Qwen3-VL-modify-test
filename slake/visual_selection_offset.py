@@ -413,11 +413,7 @@ class VisualSelectionOffsetModel(nn.Module):
             valid[b, :vector.shape[0]] = True
         return padded, valid
 
-    def _condition(self, question: torch.Tensor, valid: torch.Tensor, grid: torch.Tensor,
-                   probe: dict[str, Any] | None = None):
-        features = getattr(self, "diagnostic_condition_features", None) or self._features
-        if set(features) != {*LAYERS, "value"}:
-            raise RuntimeError(f"V0 expected layers {LAYERS} and native Value, got {set(features)}")
+    def _question_summary(self, question, valid):
         x = self.text_projection(question)
         x = x * valid.unsqueeze(-1)
         conv = self.question_pointwise(torch.nn.functional.gelu(self.question_depthwise(x.transpose(1, 2))))
@@ -425,6 +421,14 @@ class VisualSelectionOffsetModel(nn.Module):
         pool_logits = self.question_pool(self.question_norm(x)).squeeze(-1)
         pool_logits = pool_logits.masked_fill(~valid, -torch.inf)
         u = (pool_logits.softmax(dim=-1).unsqueeze(-1) * x).sum(dim=1)
+        return u
+
+    def _condition(self, question: torch.Tensor, valid: torch.Tensor, grid: torch.Tensor,
+                   probe: dict[str, Any] | None = None):
+        features = getattr(self, "diagnostic_condition_features", None) or self._features
+        if set(features) != {*LAYERS, "value"}:
+            raise RuntimeError(f"V0 expected layers {LAYERS} and native Value, got {set(features)}")
+        u = self._question_summary(question, valid)
         beta = self.layer_gate(u).softmax(dim=-1)
         if probe is not None:
             probe["layer_weights"] = beta.detach().float().cpu().clone()

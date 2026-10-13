@@ -35,6 +35,7 @@ class VisualSelectionPrefixModel(nn.Module):
     _install_capture_hooks = VisualSelectionOffsetModel._install_capture_hooks
     _install_first_backward_hooks = VisualSelectionOffsetModel._install_first_backward_hooks
     _question_embeddings = VisualSelectionOffsetModel._question_embeddings
+    _question_summary = VisualSelectionOffsetModel._question_summary
     _condition = VisualSelectionOffsetModel._condition
 
     def __init__(self, base_model: nn.Module, init_seed: int = 44) -> None:

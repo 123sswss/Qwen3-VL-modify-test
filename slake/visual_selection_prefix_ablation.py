@@ -12,7 +12,9 @@ from slake.visual_selection_prefix import (
     CONFIG_NAME, WEIGHTS_NAME, EXPECTED_GROUP_COUNTS, VisualSelectionPrefixModel,
 )
 
-EXPECTED_TOTALS = {"c_static": 69_632, "c_qmap": 1_815_811, "c_no_visual": 1_846_531}
+EXPECTED_TOTALS = {"c_static": 69_632, "c_qmap": 1_815_811, "c_no_visual": 1_846_531,
+                   "c_image_only":1_470_339}
+QUESTION_MODULES = ("text_projection", "question_depthwise", "question_pointwise", "question_norm", "question_pool")
 DYNAMIC_MODULES = (
     "text_projection", "question_depthwise", "question_pointwise", "question_norm",
     "question_pool", "query_heads", "key_norms", "key_heads", "layer_gate",
@@ -44,8 +46,12 @@ class V1AblationModel(VisualSelectionPrefixModel):
         if self.ablation_mode == "c_static":
             for name in DYNAMIC_MODULES:
                 delattr(self, name)
-        elif self.ablation_mode == "c_qmap":
+        elif self.ablation_mode in ("c_qmap", "c_image_only"):
             self.query_heads = nn.ModuleList(SharedMapQuery(head.bias) for head in self.query_heads)
+            if self.ablation_mode == "c_image_only":
+                self.layer_gate = SharedLayerLogits(self.layer_gate.bias)
+                for name in QUESTION_MODULES:
+                    delattr(self,name)
         elif self.ablation_mode == "c_no_visual":
             del self.visual_s8
             del self.visual_av10
@@ -69,13 +75,16 @@ class V1AblationModel(VisualSelectionPrefixModel):
             "global_rng_unchanged": True,
             "query_initialization": (
                 "original_Linear128_bias_clone_Uniform(-1/sqrt(128),1/sqrt(128)); original_query_at_u_zero"
-                if self.ablation_mode == "c_qmap" else None
+                if self.ablation_mode in ("c_qmap","c_image_only") else None
             ),
             "query_vectors": (
                 [head.query.detach().cpu().tolist() for head in self.query_heads]
-                if self.ablation_mode == "c_qmap" else None
+                if self.ablation_mode in ("c_qmap","c_image_only") else None
             ),
         }
+        if self.ablation_mode == "c_image_only":
+            self.initialization_audit["layer_logits_initialization"] = "same_seed_parent_layer_gate_bias_clone"
+            self.initialization_audit["layer_logits"] = self.layer_gate.logits.detach().cpu().tolist()
         for handle in self._first_grad_handles:
             handle.remove()
         self._first_grad_handles = []
@@ -98,15 +107,14 @@ class V1AblationModel(VisualSelectionPrefixModel):
         # dynamic partition without placeholder visual parameters.
         groups = {
             "p20": [self.p20],
-            "question_context": list(self.text_projection.parameters())
-            + list(self.question_depthwise.parameters()) + list(self.question_pointwise.parameters())
-            + list(self.question_norm.parameters()) + list(self.question_pool.parameters()),
             "maps": list(self.query_heads.parameters()) + list(self.key_norms.parameters())
             + list(self.key_heads.parameters()),
             "layer_condition": list(self.layer_gate.parameters()) + list(self.value_norms.parameters())
             + list(self.value_blocks.parameters()),
             "prefix_output": list(self.prefix_output.parameters()),
         }
+        if self.ablation_mode != "c_image_only":
+            groups["question_context"] = [p for name in QUESTION_MODULES for p in getattr(self,name).parameters()]
         if self.ablation_mode != "c_no_visual":
             groups.update(visual_s8=[self.visual_s8], visual_av10=[self.visual_av10])
         return groups
@@ -127,6 +135,9 @@ class V1AblationModel(VisualSelectionPrefixModel):
             expected.pop("visual_av10")
         else:
             expected["maps"] = 399_744
+            if self.ablation_mode == "c_image_only":
+                expected.pop("question_context")
+                expected["layer_condition"] -= 384
         counts = {k: sum(p.numel() for p in values) for k, values in groups.items()}
         if counts != expected or sum(counts.values()) != EXPECTED_TOTALS[self.ablation_mode]:
             raise RuntimeError(f"Ablation parameter mismatch: {counts} expected={expected}")
@@ -139,6 +150,11 @@ class V1AblationModel(VisualSelectionPrefixModel):
         if self.ablation_mode == "c_static" and self._ablation_ready:
             return question.new_zeros((question.shape[0], 192)), {}
         return super()._condition(question, valid, grid, probe=probe)
+
+    def _question_summary(self, question, valid):
+        if self.ablation_mode == "c_image_only" and self._ablation_ready:
+            return question.new_zeros((question.shape[0],128))
+        return super()._question_summary(question,valid)
 
     def _prefix_shift(self, condition):
         if self.ablation_mode == "c_static" and self._ablation_ready:
@@ -184,4 +200,17 @@ class V1NoVisualModel(V1AblationModel):
     ablation_mode = "c_no_visual"
 
 
-ABLATION_CLASSES = {cls.ablation_mode: cls for cls in (V1StaticModel, V1QMapModel, V1NoVisualModel)}
+class SharedLayerLogits(nn.Module):
+    def __init__(self, original_bias):
+        super().__init__()
+        self.logits = nn.Parameter(original_bias.detach().float().clone())
+
+    def forward(self,u):
+        return self.logits.unsqueeze(0).expand(u.shape[0],-1)
+
+
+class V1ImageOnlyModel(V1AblationModel):
+    ablation_mode = "c_image_only"
+
+
+ABLATION_CLASSES = {cls.ablation_mode: cls for cls in (V1StaticModel, V1QMapModel, V1NoVisualModel,V1ImageOnlyModel)}

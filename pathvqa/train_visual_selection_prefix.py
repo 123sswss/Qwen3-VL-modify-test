@@ -188,6 +188,9 @@ def real_batch_preflight(
     if hasattr(model, "calibrate_alpha_from_first_batch"):
         alpha_calibration = model.calibrate_alpha_from_first_batch(moved)
     model.train()
+    if getattr(model,"ablation_mode",None) == "c_image_only":
+        model.diagnostic_probe = {}
+        model.diagnostic_capture_features = True
     output = model(**moved)
     if output.loss is None or not bool(torch.isfinite(output.loss)):
         raise RuntimeError("V1 real batch has missing/nonfinite loss")
@@ -220,6 +223,10 @@ def real_batch_preflight(
         required = tuple(name for name in required if not name.startswith("query_heads.")) + tuple(
             f"query_heads.{i}.query" for i in range(3)
         )
+    if mode == "c_image_only":
+        required = tuple(name for name in required if not name.startswith(
+            ("text_projection.","question_","layer_gate.","query_heads."))) + (
+            "layer_gate.logits",) + tuple(f"query_heads.{i}.query" for i in range(3))
     inactive = [name for name in required if model.first_backward_gradients.get(name, 0) <= 0]
     if inactive:
         raise RuntimeError(f"V1 real batch inactive parameters: {inactive}")
@@ -242,6 +249,25 @@ def real_batch_preflight(
                     raise RuntimeError("C-qmap retains question-to-query gradient")
             path_audit["question_to_map_query_disconnected"] = True
             path_audit["question_layer_gate_gradient_positive"] = model.first_backward_gradients["layer_gate.weight"] > 0
+        elif mode == "c_image_only":
+            from slake.visual_selection_prefix_ablation import QUESTION_MODULES
+            if any(hasattr(model,name) for name in QUESTION_MODULES):
+                raise RuntimeError("Image-only retained a question encoder")
+            model.diagnostic_condition_features = {
+                k:v.to(device=device) for k,v in model.diagnostic_probe["features"].items()}
+            if torch.equal(moved["question_source_ids"],moved["question_source_ids"].flip(0)):
+                raise RuntimeError("Image-only preflight needs two distinct real questions")
+            with torch.no_grad():
+                q,valid = model._question_embeddings(moved["question_source_ids"],moved["question_source_mask"])
+                a,_ = model._condition(q,valid,moved["image_grid_thw"])
+                b,_ = model._condition(q.flip(0),valid.flip(0),moved["image_grid_thw"])
+                error = float((model._prefix_shift(a)-model._prefix_shift(b)).abs().max())
+            model.diagnostic_condition_features = None
+            model.diagnostic_probe = None
+            model.diagnostic_capture_features = False
+            if error != 0:
+                raise RuntimeError(f"Image-only offset depends on question: {error}")
+            path_audit.update(question_encoder_absent=True,same_image_swapped_questions_offset_max_error=error)
         else:
             if hasattr(model, "visual_s8") or hasattr(model, "visual_av10") or not model.skip_visual_prompt:
                 raise RuntimeError("C-noVisual retains visual Prompt injection")
@@ -496,7 +522,7 @@ def main() -> int:
         choices=(
             "split18", "unified20", "deep5_l16_23",
             "deep20_split_lr_l16_23", "direct_summary", "evidence_token",
-            "c_static", "c_qmap", "c_no_visual",
+            "c_static", "c_qmap", "c_no_visual", "c_image_only",
         ),
         default="split18",
     )

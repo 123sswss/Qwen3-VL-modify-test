@@ -634,3 +634,10 @@ seed44既有五轮及epoch5 Test不重跑；新增 `pathvqa_lora_full_model_atte
 ## 2026-10-12 RSVQA纯P20入口启用自动关机
 
 用户更新执行要求：`bash RSVQA/run_static_p20_seed44.sh` 成功或失败退出时先保存训练/评估日志、stage及退出码并sync，再由Bash显式调用/usr/bin/shutdown，调用失败保留shutdown.log。覆盖此前同入口“不关机”说明；模型及训练参数不变，无自动重试。GPU仍用户执行。
+## 2026-10-13 Image-only selection（V1独立消融已准备，尚未运行）
+
+实验 `pathvqa_v1_image_only_selection_norm_fixed_5ep_seed44`，PathVQA44/data42从零五轮；同时断开问题→三层地图Query和问题→层权重，不是旧C-qmap。三个128维FP32共享Query克隆同seed完整父V1 query_heads.bias，三个FP32全局logits克隆layer_gate.bias并softmax；删除问题projection/conv/LN/pool及优化器参数。保留三层Key/合并概率/共同Value、三套LN及2560→64投影、192拼接、输出头、Visual18及P20，真实问句仍完整输入LLM。保留初值逐张量对父V1一致、替换CPU/CUDA RNG不变，启动实数核验1470339（P20 51200/S8 8192/Av10 10240/maps399744/layer_condition506883/output494080）。
+
+继承原训练策略P20 .3/S8 3e-5/Av10及动态保留组1e-4，b2a16、归一化False、clip1/warmup.03/五轮linear；保存3/4/5、固定epoch5完整Validation，分别对原V1五轮20260926_2和旧C-qmap20260930产物配对图像簇10000/42，Overall/Yes-No/FF/what/where，子组探索性。GPU预检固定捕获图像特征交换真实问题，偏移要求完全相等，并核验删除编码器、共享Query/global logits及其余梯度，继承地图熵/尺度/裁剪后梯度诊断及保存重载/prefill-cache预检。无新层/调参/额外seed/Test/重试/关机，GPU用户执行。
+
+独立用户入口 `bash pathvqa/run_v1_image_only_selection_seed44.sh`，独立ablations/<experiment>_<stamp>产物；旧C-qmap不改。本机仅CPU语法/AST参数算术检查，不加载真实骨干；GPU实数和梯度核验留给用户启动预检。成功失败日志/阶段退出码保存，结果回传后追加两账本。

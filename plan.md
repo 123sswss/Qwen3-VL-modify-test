@@ -641,3 +641,16 @@ seed44既有五轮及epoch5 Test不重跑；新增 `pathvqa_lora_full_model_atte
 继承原训练策略P20 .3/S8 3e-5/Av10及动态保留组1e-4，b2a16、归一化False、clip1/warmup.03/五轮linear；保存3/4/5、固定epoch5完整Validation，分别对原V1五轮20260926_2和旧C-qmap20260930产物配对图像簇10000/42，Overall/Yes-No/FF/what/where，子组探索性。GPU预检固定捕获图像特征交换真实问题，偏移要求完全相等，并核验删除编码器、共享Query/global logits及其余梯度，继承地图熵/尺度/裁剪后梯度诊断及保存重载/prefill-cache预检。无新层/调参/额外seed/Test/重试/关机，GPU用户执行。
 
 独立用户入口 `bash pathvqa/run_v1_image_only_selection_seed44.sh`，独立ablations/<experiment>_<stamp>产物；旧C-qmap不改。本机仅CPU语法/AST参数算术检查，不加载真实骨干；GPU实数和梯度核验留给用户启动预检。成功失败日志/阶段退出码保存，结果回传后追加两账本。
+## 2026-10-13 ②LoRA公平性审计、③SLAKE小样本分析完成
+
+已SSH11254纯CPU完成5个实际LoRA运行身份/配置/192目标核验、旧r8优化器字节码补证、失败/选择依据边界、V1与LoRA预算/microbatch差异表；已固定SLAKE2094配对身份、60题seed42分层抽样及逐例读图审阅、多标签计数与6案例。独立产物本机pathvqa/outputs/cpu_lora_slake_audit_20261013/cpu_lora_slake_audit_20261013_v2/及服务器outputs/cpu_lora_slake_audit_20261013_v2/，报告与JSON已同步，服务器源码/运行实验未改。分析源码在本机diagnostics/audit_lora_and_slake_cpu.py、render_slake_review_cpu.py、finalize_lora_slake_audit_cpu.py，暂不提交。
+
+待补：用户说可能另一实例、先跳过的电气r2 seed/epoch/精确路径及SLAKE-r8 81.95实际产物；电气r8 70.96实际产物也未绑定，现有69.92语言-only候选不能代填；旧PathVQA-r8历史loss归一化版本证据；精确超参文献出处及真正搜索依据没有记录，不能包装成完成网格搜索。医学/标注个案需专家核对，若不安排核对则保留不确定，不更改评分、不运行新模型或训练。本次到报告停止，不自动补测。
+## 2026-10-13 Image-only selection完成（覆盖此前待运行状态）
+
+用户回传成功：PathVQA44/42 epoch5 Validation57.7728，对V1总体-1.5657pp/CI[-2.4046,-0.7351]，对C-qmap -0.9586/CI[-1.8153,-0.1258]，两账本完整追加。输出pathvqa/outputs/visual_selection_prefix/ablations/pathvqa_v1_image_only_selection_norm_fixed_5ep_seed44_20261013_110855_1161。单seed与容量变化限制保留；无需自动补seed/Test/变体/重试。预检实测、运行commit/库版本及成本待现有报告补证，不补跑模型。账本保持本地留待下一次相关代码提交。
+## 2026-10-13 V20探索：更深三层（已准备，尚未运行）
+
+用户确认只探索前述优先方案：完整V1的读取层代码5/11/17→7/15/23（自然8/16/24），仍三张图分别读取同一native merger Value、各自LN/64投影/层权重、192拼接/共享P20偏移；不是V10融合，也不加第四层。Visual18仍索引17，结构维度/1864963参数及原训练配置不变。独立类VisualSelectionPrefixV20Model/method名与读取层元数据；默认V1常量不变，加载时严格核对版本和层号，不错读原V1。GPU启动构造同seed父V1逐张量审计全部初值（包括输出头），恢复随机流后构造V20；只读层不同，保留原真实Train预检/有限梯度/原图网格/单次prefill/save-load/cache审计和map7/15/23诊断。
+
+实验pathvqa_v20_deeper_three_l7_15_23_norm_fixed_5ep_seed44，44/42从零五轮/b2a16/归一化False、原组LR/clip1/warmup.03/linear，保存3/4/5，固定epoch5完整Validation，对V1五轮59.3386配对图像簇10000/42，Overall/Yes-No/FF/what/where，子组探索性。用户入口bash pathvqa/run_v20_deeper_three_seed44.sh，独立pathvqa/outputs/v20/<experiment>_<stamp>/产物；失败即停，无Test/自动关机/重试/其他seed/第四层方案。V1论文主版本保持不变；结果回传后更新两账本。

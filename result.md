@@ -569,3 +569,11 @@ PathVQA四份Test6719题已SSH只读确认，分项顺序Yes-No/FF/how/what/when
 ## 2026-10-12 RSVQA纯P20基线准备
 
 旧84.4362 OA/85.7665 AA为Visual18+P20（69632参数），保留原记录。新准备rsvqa_lr_static_p20_norm_fixed_5ep_b4a8_seed44：只训练LLM前置20个Prompt（51200参数），ViT完全冻结且无Prompt，无条件生成器；44/42、五轮、b4a8、LR.3、累积修正False，固定epoch5官方Test。独立产物、尚未运行，结果未知；GPU用户执行，不关机、不重试。
+## 2026-10-13 LoRA配置审计与SLAKE错误审阅完成
+
+5套实际LoRA产物（PathVQA r2/r8、SLAKE r2、RSVQA r2/r8）由report+adapter+safetensors头核实192目标（视觉48、语言144）；r2 1769472、r8 7077888，alpha/r2、dropout.05、LR1e-4。r2五轮、r8三轮；PathVQA/SLAKE r2 b1a32而V1 b2a16，RSVQA同b4a8，不称完全公平。旧r8优化器由标准库pickle字节码补齐，PathVQA旧归一化未知；电气r2seed/轮数/路径、论文电气r8及SLAKE-r8实际产物暂缺，用户允许跳过，现存旧电气69.92/语言-only候选不能代填。
+
+SLAKE2094题V1/r2官方成绩75.55/80.80，r2独占171/V1独占61/共错341，KVQA净+35、VQA净+75。固定40/20分层抽样seed42逐图审60题，多标签视觉39/知识16/表达27/标注疑义27，49不确定，不当总体比例。样本显示中英/肯定词形及答案粒度造成双向失分，不能把5.25pp全解释为知识或定位能力；涉及医学/标注的个案不作临床裁定。完整表、配置选择说明、来源索引、60例与6案例在pathvqa/outputs/cpu_lora_slake_audit_20261013/cpu_lora_slake_audit_20261013_v2/，同步服务器outputs同名v2目录。纯CPU、无模型/进程/GPU状态操作，无新实验或仅账本提交。
+## 2026-10-13 V1 Image-only selection完成
+
+PathVQA44/42、五轮固定epoch5 Validation：Overall57.7728/Yes-No89.6000/FF26.0370/what21.3501/where63.0807。对完整V1 Overall-1.5657pp，图像簇配对95%CI[-2.4046,-0.7351]；对仍含问题层门控的C-qmap -0.9586，CI[-1.8153,-0.1258]，均10000/42。相对V1 where-9.2910（探索性CI[-13.2353,-5.3790]）；相对C-qmap where+0.7335、CI跨零，新增总体损失主要为Yes-No净39题/总60题。支持完整问题条件分支在该固定seed下有净收益，但不证明定位正确/稳定性/跨领域普适；编码器删除同时减少参数容量，不作纯信息单因素因果归因。输出ablations/pathvqa_v1_image_only_selection_norm_fixed_5ep_seed44_20261013_110855_1161，完整路径/全部CI/分项见账本。初始化预检和成本元数据待回传；实验完成，停止，无新训练。

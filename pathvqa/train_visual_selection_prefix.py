@@ -26,6 +26,7 @@ from RSVQA.data_pipeline import RSVQADataCollator, RSVQALRDataset
 from slake.data_pipeline import SLAKEDataCollator, SLAKEDataset
 from slake.visual_selection_offset import VisualSelectionOffsetModel
 from slake.visual_selection_prefix import EXPECTED_TRAINABLE, VisualSelectionPrefixModel
+from slake.visual_selection_prefix_v20 import VisualSelectionPrefixV20Model
 from slake.visual_selection_prefix_ablation import ABLATION_CLASSES, EXPECTED_TOTALS
 from slake.visual_selection_prefix_direct import (
     EXPECTED_TRAINABLE_DIRECT,
@@ -294,6 +295,8 @@ def v1b_generation_roundtrip_preflight(
     *, dataset_name: str = "pathvqa",
 ) -> None:
     """Verify one prefix prefill, KV reuse, and checkpoint reload."""
+    is_v20 = isinstance(model,VisualSelectionPrefixV20Model)
+    standard_prefix = bool(getattr(model,"ablation_mode",None)) or is_v20
     if dataset_name == "rsvqa_lr":
         from RSVQA.data import load_rsvqa_lr_split
         from RSVQA.prompts import build_prompt as build_rsvqa_prompt
@@ -304,7 +307,7 @@ def v1b_generation_roundtrip_preflight(
         image = Image.open(row["image_path"]).convert("RGB")
         prompt = build_rsvqa_prompt(row)
     else:
-        store = PathVQAParquetStore(data_root, "validation", cache_dir=cache_dir)
+        store = PathVQAParquetStore(data_root, "train" if is_v20 else "validation", cache_dir=cache_dir)
         row = dict(store.samples[0])
         image = store.load_image(row)
         prompt = build_prompt(str(row["question"]), None)
@@ -338,11 +341,11 @@ def v1b_generation_roundtrip_preflight(
                 )
             if model.diagnostic_prefill_calls - before != 1:
                 raise RuntimeError("V1 prefix did not inject exactly once during cached generation")
-            prefix_tokens = 20 if getattr(model, "ablation_mode", None) else TOTAL_PREFIX_TOKENS
+            prefix_tokens = 20 if standard_prefix else TOTAL_PREFIX_TOKENS
             return output[:, native_length + prefix_tokens:].detach().cpu()
 
         first = greedy()
-        checkpoint = output_dir / ("preflight_ablation_roundtrip" if getattr(model, "ablation_mode", None) else "preflight_v1b_roundtrip")
+        checkpoint = output_dir / ("preflight_v20_roundtrip" if is_v20 else "preflight_ablation_roundtrip" if standard_prefix else "preflight_v1b_roundtrip")
         model.save_v1(checkpoint)
         with torch.no_grad():
             model.p20[0, 0].add_(1.0)
@@ -355,17 +358,17 @@ def v1b_generation_roundtrip_preflight(
         model.train(was_training)
     report = {
         "question_id": row["question_id"],
-        "prefix_tokens": 20 if getattr(model, "ablation_mode", None) else TOTAL_PREFIX_TOKENS,
-        "layout": "P20_then_native_chat" if getattr(model, "ablation_mode", None) else "P20_then_one_evidence_then_native_chat",
+        "prefix_tokens": 20 if standard_prefix else TOTAL_PREFIX_TOKENS,
+        "layout": "P20_then_native_chat" if standard_prefix else "P20_then_one_evidence_then_native_chat",
         "single_prefill_injection": True,
         "kv_cache_reused_without_reinjection": True,
         "roundtrip_equal": True,
         "generated_tokens": first[0].tolist(),
     }
-    report_name = "ablation_generation_preflight.json" if getattr(model, "ablation_mode", None) else "v1b_generation_preflight.json"
+    report_name = "v20_generation_preflight.json" if is_v20 else "ablation_generation_preflight.json" if standard_prefix else "v1b_generation_preflight.json"
     with (output_dir / report_name).open("w", encoding="utf-8") as handle:
         json.dump(report, handle, ensure_ascii=False, indent=2)
-    label = "C_ABLATION_GENERATION_PREFLIGHT" if getattr(model, "ablation_mode", None) else "V1B_GENERATION_PREFLIGHT"
+    label = "V20_GENERATION_PREFLIGHT" if is_v20 else "C_ABLATION_GENERATION_PREFLIGHT" if standard_prefix else "V1B_GENERATION_PREFLIGHT"
     print(f"[{label}] " + json.dumps(report, ensure_ascii=False), flush=True)
 
 
@@ -379,16 +382,16 @@ def construct_with_v0_initialization_audit(
             json.dump(model.initialization_audit, handle, indent=2)
         print("[V1_SHARED_INITIALIZATION_AUDIT] " + json.dumps(model.initialization_audit))
         return model
-    if visual_prompt_mode in {"deep5_l16_23", "deep20_split_lr_l16_23"} and len(base.model.visual.blocks) != 24:
+    if visual_prompt_mode in {"deep5_l16_23", "deep20_split_lr_l16_23", "v20"} and len(base.model.visual.blocks) != 24:
         raise ValueError(
-            "Deep5 experiment requires exactly 24 visual blocks before any "
+            "This experiment requires exactly 24 visual blocks before any "
             f"experiment modules are constructed; found {len(base.model.visual.blocks)}"
         )
     cpu_rng = torch.random.get_rng_state()
     cuda_rng = torch.cuda.get_rng_state_all() if torch.cuda.is_available() else []
     reference = (
         VisualSelectionPrefixModel(base, init_seed=seed)
-        if visual_prompt_mode == "evidence_token"
+        if visual_prompt_mode in ("evidence_token","v20")
         else VisualSelectionOffsetModel(base, init_seed=seed)
     )
     common = {
@@ -396,7 +399,7 @@ def construct_with_v0_initialization_audit(
         for name, parameter in reference.named_parameters()
         if parameter.requires_grad
         and (
-            visual_prompt_mode == "evidence_token"
+            visual_prompt_mode in ("evidence_token","v20")
             or not name.startswith(("offset_down.", "offset_up."))
         )
     }
@@ -406,6 +409,7 @@ def construct_with_v0_initialization_audit(
         torch.cuda.set_rng_state_all(cuda_rng)
     model_classes = {
         "split18": VisualSelectionPrefixModel,
+        "v20": VisualSelectionPrefixV20Model,
         "direct_summary": VisualSelectionPrefixDirectModel,
         "evidence_token": VisualSelectionPrefixEvidenceModel,
         "unified20": VisualSelectionPrefixVisual20Model,
@@ -417,7 +421,7 @@ def construct_with_v0_initialization_audit(
     actual = {
         name: parameter for name, parameter in model.named_parameters()
         if parameter.requires_grad
-        and (visual_prompt_mode == "evidence_token" or not name.startswith("prefix_output."))
+        and (visual_prompt_mode in ("evidence_token","v20") or not name.startswith("prefix_output."))
         and name != "alpha"
         and name != "visual_prompt20"
         and not name.startswith("visual_deep_prompts.")
@@ -490,7 +494,7 @@ def construct_with_v0_initialization_audit(
         raise RuntimeError(f"V1/V0 common initial values differ: {mismatches}")
     audit = {
         "reference": (
-            f"fresh_V1_seed{seed}" if visual_prompt_mode == "evidence_token"
+            f"fresh_V1_seed{seed}" if visual_prompt_mode in ("evidence_token","v20")
             else f"fresh_V0_seed{seed}"
         ), "equal": True,
         "tensor_count": len(common), "visual_prompt_mode": visual_prompt_mode,
@@ -522,7 +526,7 @@ def main() -> int:
         choices=(
             "split18", "unified20", "deep5_l16_23",
             "deep20_split_lr_l16_23", "direct_summary", "evidence_token",
-            "c_static", "c_qmap", "c_no_visual", "c_image_only",
+            "c_static", "c_qmap", "c_no_visual", "c_image_only", "v20",
         ),
         default="split18",
     )
@@ -577,6 +581,7 @@ def main() -> int:
     counts = model._audit_parameters()
     expected_trainable = {
         "split18": EXPECTED_TRAINABLE,
+        "v20": EXPECTED_TRAINABLE,
         "direct_summary": EXPECTED_TRAINABLE_DIRECT,
         "evidence_token": EXPECTED_TRAINABLE,
         "unified20": EXPECTED_TRAINABLE_VISUAL20,
@@ -638,7 +643,7 @@ def main() -> int:
     real_batch_preflight(
         model, dataset, collator, args.output_dir, batch_size=args.batch_size,
     )
-    if args.visual_prompt_mode == "evidence_token" or args.visual_prompt_mode in ABLATION_CLASSES:
+    if args.visual_prompt_mode in ("evidence_token","v20") or args.visual_prompt_mode in ABLATION_CLASSES:
         if args.dataset not in {"pathvqa", "rsvqa_lr"}:
             raise ValueError("V1B generation roundtrip is defined only for PathVQA")
         v1b_generation_roundtrip_preflight(

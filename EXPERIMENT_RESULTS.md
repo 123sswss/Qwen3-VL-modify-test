@@ -2723,3 +2723,48 @@ RSVQA-LR：递归检查当前项目内全部rsvqa_summary.json及路径含rsvqa�
 ## 2026-10-12 RSVQA纯静态P20基线修正准备（未运行）
 
 用户指出原“静态”基线包含Visual18并非纯P20；原rsvqa_static_visual18_p20_norm_fixed_5ep_b4a8_seed44的69632参数、OA84.4362/AA85.7665仍作为Visual18+P20结果保留，不能改名冒充纯P20。新增 `rsvqa_lr_static_p20_norm_fixed_5ep_b4a8_seed44`，仅LLM20个前置静态Prompt/51200参数、ViT无可训练Prompt/无动态分支，从零seed44/data42、五轮、b4a8、LR.3及已修正累积归一化，固定epoch5官方完整Test；其他策略保持，分数尚未知。代码准备后用户亲自执行，独立产物，不覆盖任何历史。
+## 2026-10-13 LoRA配置公平性与SLAKE固定60题审查（只读CPU完成）
+
+用户授权SSH11254读取现有产物并在独立分析目录写结果；不加载模型、不导入Torch/CUDA、不看GPU状态、不编辑服务器源码、不pull当前运行中的checkout。Windows分析脚本通过stdin送远程标准库执行；本地Pillow制作接触表并逐例查看60题原图，报告/JSON/图同步两端。服务器产物 `/root/autodl-tmp/Qwen3-VL-modify-test/outputs/cpu_lora_slake_audit_20261013_v2`，本机 `pathvqa/outputs/cpu_lora_slake_audit_20261013/cpu_lora_slake_audit_20261013_v2/`；核心文件lora_configuration_report.md、lora_configuration_audit.json、archived_training_args_opcode_evidence.json、slake_error_analysis_report.md、slake_review_table.md、slake_review_60.json、six_representative_cases.md、抽样/配对JSON与原图/6张接触表。首次CPU脚本调用评分器参数顺序错误，在身份断言处停止（目录无有效诊断结论），修正后v2通过全部身份/评分核验，原训练/预测未动。
+
+实际LoRA核验5项（全部seed44/data42）：PathVQA r2完成目录20261001_1（5轮b1a32）、PathVQA r8 20260830（3轮b1a32）、SLAKE r2 20261010_101607_1852（5轮b1a32）、RSVQA r2 20261010_150020_9726（5轮b4a8）、RSVQA r8 20260929（3轮b4a8）。对应train_report、adapter_config和safetensors仅JSON头交叉核实：24视觉层qkv/proj共48，36语言层q/k/v/o共144，总192目标；adapter中6项是匹配后缀不是实际模块数。r2/alpha4/1769472参数，r8/alpha16/7077888参数，dropout.05/无rsLoRA/无DoRA；LR1e-4、AdamW fused/betas.9,.999/eps1e-8/weight_decay0、clip1/3%warmup/linear。旧r8优化器字段由保存training_args.bin的pickle字节码核实，不执行pickle、不导入模型。PathVQA旧r8归一化历史仍未知；其它四项修正False有报告/日志依据。完整路径/版本/来源hash、固定checkpoint/Test划分及Hyperparameter选择边界在配置报告。
+
+公平性：V1均1864963参数/五轮，PathVQA和SLAKE b2a16、RSVQA b4a8；r2少5.12%是近似等参，不是等参；PathVQA/SLAKE microbatch不同；r8约3.80倍参数且三轮，不能声称等训练预算。r2秩来自参数预算匹配，不是验证搜索最优；alpha/r2和LR继承既有配置，没有精确文献推荐或系统LR/dropout/alpha扫描证据。PathVQA b2a16 r2目录20260930_1在837步OOM，b1a32另有bf16设备错误20260930，其余未完成目录不统称OOM。历史电气rank8/16/32一轮候选存在，但实际r8仅144语言目标/5898240参数，69.92的日志不等于论文70.96参照，不能错绑。用户确认电气r2和SLAKE-r8可能在另一实例、暂跳过；电气r2 seed/epoch/路径，电气r8论文精确产物及SLAKE-r8实际81.95产物均待补，不用默认值代填。
+
+SLAKE配对：精确V1根slake/outputs/visual_selection_prefix/slake_v1_norm_fixed_5ep_seed44_20260928，r2根slake/outputs/lora/slake_lora_full_model_attention_r2_norm_fixed_5ep_b1a32_seed44_20261010_101607_1852；各eval_test/epoch_5，2094题/180图；ID、原问题/图像、参考及存档comparisons逐条吻合，复用现有标准库评分重算75.55/80.80一致。
+
+| 分组 | n | V1% | r2% | r2独占 | V1独占 | 共同错误 |
+|---|---:|---:|---:|---:|---:|---:|
+| Overall | 2094 | 75.5492 | 80.8023 | 171 | 61 | 341 |
+| KVQA | 267 | 55.4307 | 68.5393 | 41 | 6 | 78 |
+| VQA | 1827 | 78.4893 | 82.5944 | 130 | 55 | 263 |
+| OPEN | 1258 | 70.8267 | 77.1065 | 116 | 37 | 251 |
+| CLOSED | 836 | 82.6555 | 86.3636 | 55 | 24 | 90 |
+| EN | 1061 | 77.2856 | 81.4326 | 75 | 31 | 166 |
+| ZH | 1033 | 73.7657 | 80.1549 | 96 | 30 | 175 |
+
+共同正确1521，净增110=5.2531pp。固定random seed42抽r2独占40/V1独占20；8个question_type×answer_type×language组合均覆盖，分层最低1后按最大比例缺额分配，配额/ID/原图均保存。逐例读图审阅（助手，非临床专家/双人标注，无额外LLM裁判）：视觉/属性/定位39，医学功能关联16，表达/语言/粒度27，题目/标注疑义27；多标签重叠，49例保留不确定。r2独占40中24/11/18/16、32不确定；V1独占20中15/5/9/11、17不确定。不是总体错误率或临床正确性审计。
+
+说明性6例qid13892/13372（跨词形/中英同义的双向失分）、13549/12830（功能与列表粒度双方向）、12900（直肠Bottom/Center定位分歧）、12162（图像可见胸部结构但参考Abdomen、r2 Chest，标注疑义）。60题原问题/参考/预测/频次/原图及判断依据完整留存；医学诊断、症状、治疗不凭单图裁定，KVQA标签不等于知识错误原因。结论：r2收益涵盖KVQA与VQA，一部分分歧可由表达/评分约定解释，另有细粒度内容差异但不可据此定模型机制；不修改标签/评分、不补训练。账本及分析代码保持本地，留待相关代码提交，不做仅账本提交。
+## 2026-10-13 V1 Image-only selection：固定epoch5 Validation完成
+
+用户回传完整运行成功。实验 `pathvqa_v1_image_only_selection_norm_fixed_5ep_seed44`，PathVQA model44/data42，从零五轮，固定epoch5 Validation6259题/832图；同时移除地图Query及层门控的问题信息：3×128共享Query克隆父V1 query_heads.bias，3个全局logits克隆layer_gate.bias，删除问题编码器；保留Visual18/P20、Key、三层地图合并、共同Value及完整三套LN/64投影/192拼接输出头。实现预算1470339且启动强制核验；用户本次摘要未附train_report/初始化与换问题预检JSON，不另编造实际执行commit、成本或审计数字（实现commit2e9e781不等于已核实运行commit）。训练协议沿用完整V1 b2a16/五轮/归一化False、原分组LR/clip1/warmup.03/linear。无Test或额外seed。
+
+精确Overall57.7728、Yes-No89.6000、FF26.0370；how9.3023/other14.2857/what21.3501/when0/where63.0807/why0。独立image-cluster95%CI[56.28,59.12]为用户显示精度，832簇，不用独立CI相减替代配对。服务器根 `/root/autodl-tmp/Qwen3-VL-modify-test/pathvqa/outputs/visual_selection_prefix/ablations/pathvqa_v1_image_only_selection_norm_fixed_5ep_seed44_20261013_110855_1161`；预测/summary为eval_validation/epoch_5/pathvqa_predictions.json及pathvqa_summary.json，配对为paired_vs_v1.json和paired_vs_c_qmap.json。
+
+| 对照 | 分组 | 对照% | Image-only% | delta pp | 95%图像簇配对CI | 本次独占/对照独占 | n/图像簇 |
+|---|---|---:|---:|---:|---|---:|---:|
+| V1 | Overall | 59.3386 | 57.7728 | -1.5657 | [-2.4045620006375388,-0.7351482808861248] | 268/366 | 6259/832 |
+| V1 | Yes-No | 90.8800 | 89.6000 | -1.2800 | [-2.3007297529664537,-0.2598077849120133] | 98/138 | 3125/810 |
+| V1 | FF | 27.8877 | 26.0370 | -1.8507 | [-3.151408647374565,-0.5822498968308765] | 170/228 | 3134/821 |
+| V1 | what | 22.0565 | 21.3501 | -0.7064 | [-2.079170293436176,0.7224376576969865] | 149/167 | 2548/817 |
+| V1 | where | 72.3716 | 63.0807 | -9.2910 | [-13.235294117647058,-5.378973105134475] | 17/55 | 409/408 |
+| C-qmap | Overall | 58.7314 | 57.7728 | -0.9586 | [-1.8152512590656693,-0.12579920051422747] | 314/374 | 6259/832 |
+| C-qmap | Yes-No | 90.8480 | 89.6000 | -1.2480 | [-2.304018437900128,-0.19125186113043668] | 125/164 | 3125/810 |
+| C-qmap | FF | 26.7071 | 26.0370 | -0.6701 | [-1.963902407912649,0.6093747555499928] | 189/210 | 3134/821 |
+| C-qmap | what | 22.2135 | 21.3501 | -0.8634 | [-2.1328305197035875,0.36662123199210916] | 135/157 | 2548/817 |
+| C-qmap | where | 62.3472 | 63.0807 | +0.7335 | [-4.166666666666667,5.392156862745098] | 52/49 | 409/408 |
+
+全部配对bootstrap图像簇10000次/seed42，子组探索性，未作多重检验校正。TTFT count6259/mean.051283/p50.051016/p95.053664/min.03618/max.345323秒；TPOT .019781秒/token、50.554token/s；请求mean.103168/p50.090013/p95.150068/min.060944/max.490007秒。训练时间、显存、实际库版本未回传，不填。
+
+解释：Image-only相对完整V1净少98正确，相对C-qmap净少60；两个总体配对区间均负，支持在此固定seed/预算下保留问题信息的动态条件分支有收益。C-qmap仍有问题→层门控，而Image-only连该路径及编码器也删除，后者增加损失主要计数来自Yes-No（39/60），不是where进一步下降（where点差+0.7335且区间跨零）。完整V1的where高于两种固定Query模型，是问题引导选择的探索性证据，不能宣称地图定位正确或每层有独立贡献。删分支同时改变容量/训练参数量，不能将差异全部归因纯信息来源；单seed不证明稳定性或跨领域结论。按授权完成即停止，不追加训练/Test/seed；本次仅CPU记录，不做仅账本提交。

@@ -301,7 +301,7 @@ class VisualSelectionOffsetModel(nn.Module):
 
     def _install_capture_hooks(self) -> None:
         visual = self.base_model.model.visual
-        for index in LAYERS:
+        for index in getattr(self,"selection_layers",LAYERS):
             def capture(_module, _args, output, layer=index):
                 if self._active:
                     if not torch.is_tensor(output):
@@ -426,8 +426,9 @@ class VisualSelectionOffsetModel(nn.Module):
     def _condition(self, question: torch.Tensor, valid: torch.Tensor, grid: torch.Tensor,
                    probe: dict[str, Any] | None = None):
         features = getattr(self, "diagnostic_condition_features", None) or self._features
-        if set(features) != {*LAYERS, "value"}:
-            raise RuntimeError(f"V0 expected layers {LAYERS} and native Value, got {set(features)}")
+        layers = getattr(self,"selection_layers",LAYERS)
+        if set(features) != {*layers, "value"}:
+            raise RuntimeError(f"Selection expected layers {layers} and native Value, got {set(features)}")
         u = self._question_summary(question, valid)
         beta = self.layer_gate(u).softmax(dim=-1)
         if probe is not None:
@@ -447,7 +448,7 @@ class VisualSelectionOffsetModel(nn.Module):
         )
         blocks = []
         diagnostics: dict[str, torch.Tensor] = {}
-        for li, layer in enumerate(LAYERS):
+        for li, layer in enumerate(layers):
             h_all = features[layer]
             if h_all.shape[0] != sum(patches):
                 raise RuntimeError(f"ViT layer {layer} contains unexpected prompt/padding tokens")

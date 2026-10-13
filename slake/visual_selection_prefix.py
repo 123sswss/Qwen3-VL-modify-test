@@ -29,6 +29,8 @@ EXPECTED_GROUP_COUNTS = {
 
 class VisualSelectionPrefixModel(nn.Module):
     """Frozen Qwen3-VL, native Visual18, and one shared conditional P20 shift."""
+    method_name = "visual_selection_prefix_p20_v1"
+    selection_layers = LAYERS
 
     # Reuse the audited V0 selection algorithm verbatim; neither V0's offset
     # modules nor its write-to-question path are instantiated by this class.
@@ -289,8 +291,8 @@ class VisualSelectionPrefixModel(nn.Module):
         path = Path(output_dir)
         path.mkdir(parents=True, exist_ok=True)
         config = {
-            "method": "visual_selection_prefix_p20_v1", "init_seed": self.init_seed,
-            "layers": list(LAYERS), "question_width": QUESTION_WIDTH,
+            "method": self.method_name, "init_seed": self.init_seed,
+            "layers": list(self.selection_layers), "question_width": QUESTION_WIDTH,
             "block_width": BLOCK_WIDTH, "condition_width": 192,
             "visual_tokens": [8, 10], "prefix_tokens": 20,
             "output_init_distribution": "normal", "output_init_std": OUTPUT_INIT_STD,
@@ -307,7 +309,7 @@ class VisualSelectionPrefixModel(nn.Module):
         path = Path(checkpoint_dir)
         with (path / CONFIG_NAME).open("r", encoding="utf-8") as handle:
             config = json.load(handle)
-        if config.get("method") != "visual_selection_prefix_p20_v1" or tuple(config.get("layers", ())) != LAYERS:
+        if config.get("method") != self.method_name or tuple(config.get("layers", ())) != self.selection_layers:
             raise ValueError("V1 checkpoint architecture mismatch")
         if int(config["init_seed"]) != self.init_seed:
             raise ValueError("V1 checkpoint seed mismatch")

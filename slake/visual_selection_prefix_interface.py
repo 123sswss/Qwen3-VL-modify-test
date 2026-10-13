@@ -11,6 +11,7 @@ from PIL import Image
 from transformers import AutoModelForImageTextToText, AutoProcessor
 
 from slake.visual_selection_prefix import CONFIG_NAME, VisualSelectionPrefixModel
+from slake.visual_selection_prefix_v20 import VisualSelectionPrefixV20Model
 from slake.visual_selection_prefix_ablation import ABLATION_CLASSES
 from slake.visual_selection_prefix_direct import VisualSelectionPrefixDirectModel
 from slake.visual_selection_prefix_evidence import VisualSelectionPrefixEvidenceModel
@@ -53,6 +54,8 @@ class VisualSelectionPrefixInterface:
             model_class = VisualSelectionPrefixDeep5Model
         elif method == VisualSelectionPrefixDeep20SplitLRModel.method_name:
             model_class = VisualSelectionPrefixDeep20SplitLRModel
+        elif method == VisualSelectionPrefixV20Model.method_name:
+            model_class = VisualSelectionPrefixV20Model
         else:
             model_class = VisualSelectionPrefixModel
         self.model = model_class(base, init_seed=int(config["init_seed"]))

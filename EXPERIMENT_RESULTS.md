@@ -2812,3 +2812,9 @@ Overall57.8846、Yes-No90.8160、Free-form25.0479；how6.9767/other7.1429/what20
 ## 2026-10-14 原V1读写头学习率探索：代码准备，无新成绩
 
 实验pathvqa_v1_read_write_lr3e4_norm_fixed_5ep_seed44，PathVQA model44/data42，从零五轮，固定epoch5 Validation。唯一训练配置变更：三套value_blocks与prefix_output含bias基础LR1e-4→3e-4；Value LN、layer_gate、maps与问题编码仍1e-4，P20 .3/S8 3e-5/Av10 1e-4。原V1层5/11/17、结构/初始化/1864963参数/batch2accum16/归一化False/3%warmup线性五轮/clip1/监督不变。不把V10的LN＋默认初始化＋LR组合收益归因于LR。独立output pathvqa/outputs/visual_selection_prefix/<experiment>_<timestamp>_<pid>；固定与原V1五轮seed44目录20260926_2/59.3386配对10000次seed42，分项探索性。保存3/4/5及原诊断，新增每组实际LR及裁剪后梯度。启动入口pathvqa/run_v1_read_write_lr3e4_seed44.sh，用户亲自执行GPU；失败即停，不自动重试/关机/Test/其他seed。实际分数、成本、运行commit和预检实测尚未知，结果回传后立即追加。
+
+## 2026-10-14 PathVQA读写LR探索：用户回报58.88；SLAKE迁移准备
+
+PathVQA实验pathvqa_v1_read_write_lr3e4_norm_fixed_5ep_seed44，model44/data42、从零五轮固定epoch5 Validation，用户回报Overall约58.88；相对同seed原V1 Validation59.3386约-0.46pp，不能与正式Test59.8006混比。其余分项、精确分数、配对CI、实际输出路径/commit/成本未回传，明确待补；不以点差宣称显著退化。
+
+新准备slake_v1_read_write_lr3e4_norm_fixed_5ep_seed44，保持同一LR变体与原V1结构/初值/1864963参数，仅迁移SLAKE与官方评分。完整双语Train，从零五轮44/42，batch2accum16/归一化False/3%warmup linear/clip1；P20 .3/S8 3e-5/Av10、maps、问题编码、Value LN和层门控1e-4；三套value_blocks及prefix_output含bias3e-4。保存3/4/5，固定epoch5完整双语Test，不根据Test调参或择优。精确参照slake/outputs/visual_selection_prefix/slake_v1_norm_fixed_5ep_seed44_20260928/eval_test/epoch_5（75.55），既有CPU身份/评分核验与图像簇10000/seed42配对函数复用。独立输出slake/outputs/visual_selection_prefix/<experiment>_<timestamp>_<pid>，日志/退出状态/配对JSON及ledger_fragment落盘；无新成绩，GPU仅用户执行，无自动关机/重试/其他seed/Validation。

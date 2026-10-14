@@ -589,3 +589,7 @@ PathVQA44/42五轮epoch5 Validation：V20读取7/15/23，Visual18仍17，Overall
 ## 2026-10-14 原V1读写投影LR3e-4：尚未运行
 
 仅value_blocks与prefix_output基础LR提高三倍；LN、问题门控及地图保持1e-4，原五轮V1 PathVQA44/42、固定epoch5 Validation，1864963参数。不是V10/V20，未有成绩；相对原V1 59.3386配对，全部GPU由用户启动，无Test/其他seed/自动关机。
+
+## 2026-10-14 V1读写LR3e-4探索进展
+
+PathVQA五轮seed44 Validation用户回报约58.88，对原59.3386约-0.46pp；精确分项/配对CI/路径待补，不与59.8006 Test混比。SLAKE同配置seed44五轮固定epoch5全语言Test入口已准备，尚未运行，对原75.55配对；只检验数据集依赖性，不自动根据Test继续调参。

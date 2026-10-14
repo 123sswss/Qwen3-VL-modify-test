@@ -662,3 +662,7 @@ seed44既有五轮及epoch5 Test不重跑；新增 `pathvqa_lora_full_model_atte
 ## 2026-10-14 最后一试：原V1读写投影LR3e-4（已准备，尚未运行）
 
 用户确认以原五轮V1 PathVQA44/42从零训练，仅value_blocks三套2560→64投影与prefix_output 192→2560含bias的基础LR由1e-4改3e-4。optimizer单独拆value_projection，LN/问题层门控仍1e-4；maps/question_context/P20/Visual18及初始化、1864963参数、5/11/17层、batch2累积16/归一化False/clip1/warmup3%/linear不变。保存3/4/5，固定epoch5完整Validation，与精确绑定原V1 59.3386按图像簇10000/42配对。入口bash pathvqa/run_v1_read_write_lr3e4_seed44.sh；独立目录，不使用V20/V10，不跑Test/其他seed/重试/自动关机。全部GPU用户执行。保留原模型参数分组审计，新增优化器分组唯一覆盖核验及实际LR/裁剪后分组梯度日志；CPU检查不代替真实预检，成绩待回传。
+
+## 2026-10-14 SLAKE原V1读写投影LR3e-4（已准备，尚未运行）
+
+用户确认迁移本次读写LR探索：原V1模型44/data42从零五轮，仅value_blocks与prefix_output LR3e-4，其他组/初始化/结构1864963参数/5,11,17层/Visual18/P20/batch2accum16/归一化False/clip1/3%warmup linear不变。完整中英Train，保存3/4/5，固定epoch5完整双语Test；绑定slake_v1_norm_fixed_5ep_seed44_20260928的75.55，复用预测图像簇10000/seed42配对，分项探索性。入口slake/run_v1_read_write_lr3e4_seed44.sh，独立产物，失败即停，不自动关机/重试/Validation/其他seed或调参。GPU用户启动；结果回传后同步账本。

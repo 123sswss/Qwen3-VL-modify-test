@@ -74,6 +74,23 @@ def export_images(out,data):
     assert offset==6719
     print('CPU image export:',len(candidates),'groups')
 
+def select(out):
+    candidates=read(out/'candidates.json')
+    index={r['question_id']:r for c in candidates for r in c['rows']}
+    groups=[('main_heart',[513,524,435],
+             'Clear four-chamber gross image; entity/right-side question, inverse location question, and an atrium error. Spatial interpretation needs expert confirmation.'),
+            ('main_testis',[2212,2313,2269],
+             'Clear paired gross regions; disease/knowledge question, normal-region location, and abscess-entity error. Location baseline differences are exact-match wording; gonococcal causation cannot be established from this image.'),
+            ('appendix_burn',[5911,5918,5915],
+             'Clear hand/skin injury; burn attribute, tissue location, and open-image answer granularity error. Thermal burns versus thermal burn is an exact-match issue.')]
+    selected=[]
+    for name,ids,reason in groups:
+        rows=[index[f'pathvqa:test:{i}'] for i in ids]
+        assert len({r['image_id'] for r in rows})==1
+        selected.append({'name':name,'image_id':rows[0]['image_id'],'rationale_before_maps':reason,'rows':rows})
+    write(out/'selected_cases.json',selected)
+    print('Selection frozen before maps:',[r['question_id'] for c in selected for r in c['rows']])
+
 def maps(out,data):
     import torch
     from pathvqa.data_pipeline import PathVQAParquetStore
@@ -178,9 +195,10 @@ def render(out):
     print('Rendered cases:',len(cases),'common scale',bound)
 
 if __name__=='__main__':
-    p=argparse.ArgumentParser();p.add_argument('stage',choices=['candidates','images','maps','render']);p.add_argument('--output',type=Path,required=True);p.add_argument('--data',type=Path,default=Path('/root/autodl-tmp/dataset/pathVQA'))
+    p=argparse.ArgumentParser();p.add_argument('stage',choices=['candidates','images','select','maps','render']);p.add_argument('--output',type=Path,required=True);p.add_argument('--data',type=Path,default=Path('/root/autodl-tmp/dataset/pathVQA'))
     a=p.parse_args()
     if a.stage=='candidates':candidates(a.output)
     elif a.stage=='images':export_images(a.output,a.data)
+    elif a.stage=='select':select(a.output)
     elif a.stage=='maps':maps(a.output,a.data)
     else:render(a.output)

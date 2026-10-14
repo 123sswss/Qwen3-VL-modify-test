@@ -141,6 +141,20 @@ def maps(out,data):
         'protocol':'eval/inference_mode, single prefill per question, no answer supervision, no parameter update',
         'geometry':'native merger row-major [H/2,W/2]; sum each consecutive 2x2 merge group; prompt tokens excluded'})
 
+def control(out,data):
+    original=read(out/'selected_cases.json')[0]
+    repeat=out/'determinism_control'
+    repeat.mkdir(exist_ok=True)
+    write(repeat/'selected_cases.json',[dict(original,rows=original['rows'][:1])])
+    maps(repeat,data)
+    a=read(out/'raw_maps.json')[0];b=read(repeat/'raw_maps.json')[0]
+    errors={str(l):max(abs(x-y) for ar,br in zip(a['maps'][str(l)],b['maps'][str(l)]) for x,y in zip(ar,br)) for l in (5,11,17)}
+    errors['layer_weights']=max(abs(x-y) for x,y in zip(a['layer_weights'],b['layer_weights']))
+    assert a['question_id']==b['question_id'] and a['grid_thw']==b['grid_thw']
+    write(out/'determinism_check.json',{'question_id':a['question_id'],'maximum_absolute_differences':errors,
+        'tolerance':1e-6,'passed':all(x<=1e-6 for x in errors.values()),'mode':'independent reload, same image and question; one additional prefill'})
+    assert all(x<=1e-6 for x in errors.values())
+
 def render(out):
     import numpy as np
     from PIL import Image,ImageDraw,ImageFont
@@ -148,10 +162,14 @@ def render(out):
     font=ImageFont.truetype(str(fontpath),20); small=ImageFont.truetype(str(fontpath),17)
     cases=read(out/'selected_cases.json'); probes={p['question_id']:p for p in read(out/'raw_maps.json')}
     scales=[np.log2(np.maximum(np.array(v)*np.array(v).size,1e-12)) for p in probes.values() for v in p['maps'].values()]
-    bound=max(float(np.abs(a).max()) for a in scales)
-    assert bound>0
+    lower=min(float(a.min()) for a in scales)
+    upper=max(float(a.max()) for a in scales)
+    assert lower<0<upper
+    raw_max=max(float(np.array(v).max()) for p in probes.values() for v in p['maps'].values())
     write(out/'visualization_config.json',{'quantity':'log2(probability / uniform probability)',
-        'global_symmetric_color_range':[-bound,bound],'overlay_alpha':.45,
+        'global_color_range':[lower,upper],'center_uniform':0,'overlay_alpha':.45,
+        'normalization':'two-slope linear color interpolation, common minimum/zero/maximum across all panels',
+        'raw_grid_png_global_probability_max':raw_max,
         'colors':'blue=below uniform, white=uniform, red=above uniform',
         'interpolation':'bilinear overlay; raw probability grids retained in JSON',
         'note':'identical color range/opacity across every selected question and layer'})
@@ -174,31 +192,46 @@ def render(out):
             orig=Image.open(out/'images'/f"{r['image_id']}.png").convert('RGB')
             im=orig.copy();im.thumbnail((225,245));canvas.paste(im,(410,y))
             for x,l in [(650,5),(890,11),(1130,17)]:
-                v=np.array(p['maps'][str(l)],dtype=np.float32);a=np.log2(np.maximum(v*v.size,1e-12))/bound
+                v=np.array(p['maps'][str(l)],dtype=np.float32);log=np.log2(np.maximum(v*v.size,1e-12))
+                a=np.where(log>=0,log/upper,log/abs(lower))
                 rgb=np.ones((*a.shape,3),dtype=np.float32)
                 rgb[...,0]=np.where(a>=0,1,1+a);rgb[...,1]=1-np.abs(a);rgb[...,2]=np.where(a<=0,1,1-a)
                 heat=Image.fromarray((np.clip(rgb,0,1)*255).astype('uint8')).resize(orig.size,Image.Resampling.BILINEAR)
                 overlay=Image.blend(orig,heat,.45);overlay.thumbnail((225,245));canvas.paste(overlay,(x,y))
                 d.text((x,y+253),f"Layer weight: {p['layer_weights'][(5,11,17).index(l)]:.3f}",font=small,fill='black')
-                Image.fromarray((v/v.max()*65535).astype('uint16')).save(out/f"{r['question_id'].replace(':','_')}_layer{l}_grid.png")
+                Image.fromarray((v/raw_max*65535).astype('uint16')).save(out/f"{r['question_id'].replace(':','_')}_layer{l}_grid.png")
             yy=y
             for name in ['QDPT','CoCoOp','LoRA-r8']:
                 answer=r['answers'][name]
                 yy=wrapped(d,f"{name}: {answer['prediction']} [{'correct' if answer['correct'] else 'incorrect'}]",1390,yy,445)+10
         y=canvas.height-85
-        d.text((20,y),f"Common color scale: log2(p / uniform), range [{-bound:.2f}, {bound:.2f}]; overlay opacity 0.45",font=small,fill='black')
+        d.text((20,y),f"Common color scale: log2(p / uniform), range [{lower:.2f}, {upper:.2f}], centered at 0; opacity 0.45",font=small,fill='black')
         for k in range(300):
             a=2*k/299-1;color=(255,int(255*(1-abs(a))),int(255*(1-a))) if a>=0 else (int(255*(1+a)),int(255*(1-abs(a))),255)
             d.line((20+k,y+32,20+k,y+48),fill=color)
         canvas.save(out/f'case_{gi}.png',dpi=(300,300));canvas.save(out/f'case_{gi}.pdf',resolution=180)
         orig.close()
-    print('Rendered cases:',len(cases),'common scale',bound)
+    comparisons=[]
+    import itertools
+    for c in cases:
+        for r,s in itertools.combinations(c['rows'],2):
+            a,b=probes[r['question_id']],probes[s['question_id']]
+            row={'case':c['name'],'question_a':r['question_id'],'question_b':s['question_id'],'map_js_nats':{},'map_total_variation':{}}
+            for l in (5,11,17):
+                p=np.array(a['maps'][str(l)]).flatten();q=np.array(b['maps'][str(l)]).flatten();m=(p+q)/2
+                row['map_js_nats'][str(l)]=float(.5*(np.sum(p*np.log(p/m))+np.sum(q*np.log(q/m))))
+                row['map_total_variation'][str(l)]=float(np.abs(p-q).sum()/2)
+            row['layer_weight_l1']=float(np.abs(np.array(a['layer_weights'])-b['layer_weights']).sum())
+            comparisons.append(row)
+    write(out/'same_image_question_statistics.json',comparisons)
+    print('Rendered cases:',len(cases),'common scale',lower,upper)
 
 if __name__=='__main__':
-    p=argparse.ArgumentParser();p.add_argument('stage',choices=['candidates','images','select','maps','render']);p.add_argument('--output',type=Path,required=True);p.add_argument('--data',type=Path,default=Path('/root/autodl-tmp/dataset/pathVQA'))
+    p=argparse.ArgumentParser();p.add_argument('stage',choices=['candidates','images','select','maps','control','render']);p.add_argument('--output',type=Path,required=True);p.add_argument('--data',type=Path,default=Path('/root/autodl-tmp/dataset/pathVQA'))
     a=p.parse_args()
     if a.stage=='candidates':candidates(a.output)
     elif a.stage=='images':export_images(a.output,a.data)
     elif a.stage=='select':select(a.output)
     elif a.stage=='maps':maps(a.output,a.data)
+    elif a.stage=='control':control(a.output,a.data)
     else:render(a.output)

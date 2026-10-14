@@ -666,3 +666,7 @@ seed44既有五轮及epoch5 Test不重跑；新增 `pathvqa_lora_full_model_atte
 ## 2026-10-14 SLAKE原V1读写投影LR3e-4（已准备，尚未运行）
 
 用户确认迁移本次读写LR探索：原V1模型44/data42从零五轮，仅value_blocks与prefix_output LR3e-4，其他组/初始化/结构1864963参数/5,11,17层/Visual18/P20/batch2accum16/归一化False/clip1/3%warmup linear不变。完整中英Train，保存3/4/5，固定epoch5完整双语Test；绑定slake_v1_norm_fixed_5ep_seed44_20260928的75.55，复用预测图像簇10000/seed42配对，分项探索性。入口slake/run_v1_read_write_lr3e4_seed44.sh，独立产物，失败即停，不自动关机/重试/Validation/其他seed或调参。GPU用户启动；结果回传后同步账本。
+
+## 2026-10-14 SLAKE V1读写LR探索已完成（覆盖此前待运行状态）
+
+固定epoch5完整双语Test2094题：77.793696，对原V1 +2.244508pp，图像簇10000/42配对CI[0.740398,3.790787]，净增47题；两账本已记完整分项、解释边界与精确产物slake/outputs/visual_selection_prefix/slake_v1_read_write_lr3e4_norm_fixed_5ep_seed44_20261014_131109_40238。原主V1与历史结果保留，LR变体作为单seed/Test探索结果；本轮停止，不自动追加GPU任务、seed、调参或训练。实际训练commit/版本、参数与梯度预检、成本待用户既有报告补证；账本本地留待相关代码提交。

@@ -593,3 +593,7 @@ PathVQA44/42五轮epoch5 Validation：V20读取7/15/23，Visual18仍17，Overall
 ## 2026-10-14 V1读写LR3e-4探索进展
 
 PathVQA五轮seed44 Validation用户回报约58.88，对原59.3386约-0.46pp；精确分项/配对CI/路径待补，不与59.8006 Test混比。SLAKE同配置seed44五轮固定epoch5全语言Test入口已准备，尚未运行，对原75.55配对；只检验数据集依赖性，不自动根据Test继续调参。
+
+## 2026-10-14 SLAKE V1读写头LR3e-4：77.79，配对改善
+
+slake_v1_read_write_lr3e4_norm_fixed_5ep_seed44，44/42从零五轮固定epoch5全语言Test，1629/2094=77.793696；CLOSED84.33/OPEN73.45/KVQA63.67/VQA79.86/EN78.89/ZH76.67。对原V1 75.549188提高2.244508pp，图像簇配对95%CI[0.740398,3.790787]，10000/seed42；134题本次独占、87题原版独占，净增47。OPEN +2.6232、KVQA +8.2397、ZH +2.9042的探索性CI低端为正，其他子组CI跨零；KVQA贡献22/47净增，OPEN33/47，分类轴交叠。仅提高value_blocks与prefix_output LR，不改变地图Q/K；体现当前优化配置的SLAKE收益，机制/稳定性待证。PathVQA约58.88的结果仍保留，领域依赖线索尚需更完整证据；本次为Test上的探索实验，停止追加。输出slake/outputs/visual_selection_prefix/slake_v1_read_write_lr3e4_norm_fixed_5ep_seed44_20261014_131109_40238，实际训练报告及commit/成本待补。

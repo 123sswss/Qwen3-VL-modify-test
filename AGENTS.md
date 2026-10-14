@@ -1,5 +1,7 @@
 # Project Instructions
 
+- Temporary exception (2026-10-14, user explicitly authorized): for this PathVQA paper-case task only, the assistant may run GPU forward passes and map export for selected samples. No training or parameter updates. Restore the normal user-executed GPU rule when this task finishes.
+
 - Read `EXPERIMENT_RESULTS.md` before planning, implementing, or interpreting an experiment.
 - Every completed experiment must be added to `EXPERIMENT_RESULTS.md` in the same task, including failed and negative experiments.
 - Record the exact experiment name, dataset, seed, controlled change, Overall score, available breakdowns, diagnostics, and output path.

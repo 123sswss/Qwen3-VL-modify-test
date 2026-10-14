@@ -2818,3 +2818,25 @@ Overall57.8846、Yes-No90.8160、Free-form25.0479；how6.9767/other7.1429/what20
 PathVQA实验pathvqa_v1_read_write_lr3e4_norm_fixed_5ep_seed44，model44/data42、从零五轮固定epoch5 Validation，用户回报Overall约58.88；相对同seed原V1 Validation59.3386约-0.46pp，不能与正式Test59.8006混比。其余分项、精确分数、配对CI、实际输出路径/commit/成本未回传，明确待补；不以点差宣称显著退化。
 
 新准备slake_v1_read_write_lr3e4_norm_fixed_5ep_seed44，保持同一LR变体与原V1结构/初值/1864963参数，仅迁移SLAKE与官方评分。完整双语Train，从零五轮44/42，batch2accum16/归一化False/3%warmup linear/clip1；P20 .3/S8 3e-5/Av10、maps、问题编码、Value LN和层门控1e-4；三套value_blocks及prefix_output含bias3e-4。保存3/4/5，固定epoch5完整双语Test，不根据Test调参或择优。精确参照slake/outputs/visual_selection_prefix/slake_v1_norm_fixed_5ep_seed44_20260928/eval_test/epoch_5（75.55），既有CPU身份/评分核验与图像簇10000/seed42配对函数复用。独立输出slake/outputs/visual_selection_prefix/<experiment>_<timestamp>_<pid>，日志/退出状态/配对JSON及ledger_fragment落盘；无新成绩，GPU仅用户执行，无自动关机/重试/其他seed/Validation。
+
+## 2026-10-14 SLAKE V1读写投影LR3e-4完成：固定epoch5双语Test
+
+实验slake_v1_read_write_lr3e4_norm_fixed_5ep_seed44，SLAKE model seed44/data seed42，从零五轮，保存3/4/5、固定epoch5全语言Test。唯一训练配置改动：value_blocks三套2560→64与prefix_output 192→2560含bias基础LR1e-4→3e-4；保留原V1 5/11/17地图、共同Value、Value LN和问题层门控1e-4、问题编码/maps1e-4、P20 .3/S8 3e-5/Av10 1e-4，原初值/1864963参数/batch2accum16/归一化False/clip1/3%warmup linear五轮及监督评分沿用。用户回传完整summary和paired JSON；2094题、1629正确、465错误，缺失/额外预测均0。精确Overall1629/2094=77.79369627507164，官方显示77.79；CLOSED84.33/OPEN73.45/KVQA63.67/VQA79.86/EN78.89/ZH76.67。
+
+绑定原V1 slake/outputs/visual_selection_prefix/slake_v1_norm_fixed_5ep_seed44_20260928/eval_test/epoch_5（1582/2094）。表中分数由配对正确数计算，CI为variant−baseline百分点评价，10000次、seed42、官方img_name图像簇；子组探索性、未做多重比较校正。
+
+| 分项 | 题数/图像簇 | 原V1 | 本次 | 差值pp | 本次独占/原版独占 | 配对95%CI |
+|---|---|---:|---:|---:|---:|---|
+| Overall |2094/180|75.549188|77.793696|+2.244508|134/87|[0.740397964,3.790786948]|
+| OPEN |1258/180|70.826709|73.449921|+2.623211|88/55|[0.621057966,4.702975068]|
+| CLOSED |836/180|82.655502|84.330144|+1.674641|46/32|[-0.242424242,3.593030026]|
+| KVQA |267/103|55.430712|63.670412|+8.239700|30/8|[3.745222808,13.120738520]|
+| VQA |1827/180|78.489327|79.857690|+1.368363|104/79|[-0.213131689,2.952438354]|
+| EN |1061/96|77.285580|78.887842|+1.602262|57/40|[-0.397219464,3.692905734]|
+| ZH |1033/96|73.765731|76.669894|+2.904163|77/47|[0.739269599,5.268297625]|
+
+Overall净增47题；OPEN净增33/47（70.21%），KVQA净增22/47（46.81%），中文净增30/47（63.83%）。三个分类轴交叠，比例分别解释、不能累加。KVQA题型占12.75%而贡献46.81%净增，提示条件读写优化可能帮助知识型回答；当前证据没有直接测量知识获取、视觉定位或地图质量机制。同seed固定五轮对照支持该LR方案在本次SLAKE运行的净收益；单seed及在Test上的探索性比较限制保留，尚缺稳定性证据。PathVQA同方案用户报约58.88、相对原Validation59.3386约-0.46pp且CI待补，支持数据集依赖的线索，不能视为跨领域普遍改善。
+
+产物根 /root/autodl-tmp/Qwen3-VL-modify-test/slake/outputs/visual_selection_prefix/slake_v1_read_write_lr3e4_norm_fixed_5ep_seed44_20261014_131109_40238；checkpoint checkpoints/epoch_5，预测/summary eval_test/epoch_5/slake_predictions.json与slake_summary.json，paired_vs_v1.json。来源为用户附件 C:/Users/11473/.codex/attachments/6ef0667e-a338-4363-a0cb-d0283e4f0cdc/已粘贴的文本.txt。代码准备提交5e7b85e；实际运行commit/库版本、参数审计/梯度及初始化预检实测、训练耗时/峰值显存本次未回传，标记待补，不能以准备提交代替实测。计时TTFT count2094 mean0.066743/p50 0.043332/p95 0.111187/min0.036273/max0.327175秒；TPOT0.020157秒/token、49.61token/s；request mean0.118714/p50 .089083/p95 .206633/min .060790/max .511097秒；生成5913token/后续3819，3次warmup排除，CUDA events logits-ready-v2，全2094条有效。计时与旧记录为跨运行观察，未构成严格速度对照。
+
+保持原V1主版本及既有结果，本次作为已完成LR探索；停止于结果分析，不自动补seed/重训/调参。两账本和计划更新留本地，随后续相关代码提交。

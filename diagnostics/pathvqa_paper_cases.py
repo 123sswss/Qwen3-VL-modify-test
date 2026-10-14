@@ -224,6 +224,22 @@ def render(out):
             row['layer_weight_l1']=float(np.abs(np.array(a['layer_weights'])-b['layer_weights']).sum())
             comparisons.append(row)
     write(out/'same_image_question_statistics.json',comparisons)
+    import csv
+    with (out/'answers.csv').open('w',encoding='utf-8-sig',newline='') as f:
+        writer=csv.writer(f)
+        writer.writerow(['case','question_id','question','reference','model','prediction','official_correct'])
+        for c in cases:
+            for r in c['rows']:
+                for name,a in r['answers'].items():
+                    writer.writerow([c['name'],r['question_id'],r['question'],r['reference'],name,a['prediction'],a['correct']])
+    (out/'index.html').write_text('<!doctype html><meta charset="utf-8"><title>PathVQA paper cases</title>'
+        '<style>body{font:16px sans-serif;margin:24px}img{width:100%;max-width:1860px}a{margin-right:20px}</style>'
+        '<h1>PathVQA: question-conditioned visual selection</h1><p>Original V1 seed44, epoch5 Test. '
+        'Three layers shown together, common color scale and opacity. Answers are archived predictions.</p>'
+        '<p><a href="README.md">Analysis and caveats</a><a href="raw_maps.json">Raw maps</a>'
+        '<a href="same_image_question_statistics.json">Same-image statistics</a><a href="answers.csv">Answer table</a></p>'
+        + ''.join(f'<h2>Case {i+1}: {c["name"]}</h2><img src="case_{i+1}.png"><p><a href="case_{i+1}.pdf">PDF</a></p>'
+                  for i,c in enumerate(cases)),encoding='utf-8')
     print('Rendered cases:',len(cases),'common scale',lower,upper)
 
 if __name__=='__main__':

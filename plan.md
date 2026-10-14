@@ -670,3 +670,7 @@ seed44既有五轮及epoch5 Test不重跑；新增 `pathvqa_lora_full_model_atte
 ## 2026-10-14 SLAKE V1读写LR探索已完成（覆盖此前待运行状态）
 
 固定epoch5完整双语Test2094题：77.793696，对原V1 +2.244508pp，图像簇10000/42配对CI[0.740398,3.790787]，净增47题；两账本已记完整分项、解释边界与精确产物slake/outputs/visual_selection_prefix/slake_v1_read_write_lr3e4_norm_fixed_5ep_seed44_20261014_131109_40238。原主V1与历史结果保留，LR变体作为单seed/Test探索结果；本轮停止，不自动追加GPU任务、seed、调参或训练。实际训练commit/版本、参数与梯度预检、成本待用户既有报告补证；账本本地留待相关代码提交。
+
+## 2026-10-14 PathVQA论文案例任务完成
+
+用户明确一次性GPU授权后，CPU候选8图95题与原图审核，固定3图9题再导出地图；10次小前向含独立同题重复，确定性差0，完成3组图版/原始概率/对照回答/JS与权重统计及中英文说明，pathvqa/outputs/paper_cases_20261014/。完整原Test复用59.8006，原checkpoint和预测保留，临时AGENTS例外已移除；任务停止，所有后续GPU恢复用户执行。稿件插入与医学专家审阅尚待用户选择，不自动编辑论文。

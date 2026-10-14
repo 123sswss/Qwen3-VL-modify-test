@@ -597,3 +597,7 @@ PathVQA五轮seed44 Validation用户回报约58.88，对原59.3386约-0.46pp；�
 ## 2026-10-14 SLAKE V1读写头LR3e-4：77.79，配对改善
 
 slake_v1_read_write_lr3e4_norm_fixed_5ep_seed44，44/42从零五轮固定epoch5全语言Test，1629/2094=77.793696；CLOSED84.33/OPEN73.45/KVQA63.67/VQA79.86/EN78.89/ZH76.67。对原V1 75.549188提高2.244508pp，图像簇配对95%CI[0.740398,3.790787]，10000/seed42；134题本次独占、87题原版独占，净增47。OPEN +2.6232、KVQA +8.2397、ZH +2.9042的探索性CI低端为正，其他子组CI跨零；KVQA贡献22/47净增，OPEN33/47，分类轴交叠。仅提高value_blocks与prefix_output LR，不改变地图Q/K；体现当前优化配置的SLAKE收益，机制/稳定性待证。PathVQA约58.88的结果仍保留，领域依赖线索尚需更完整证据；本次为Test上的探索实验，停止追加。输出slake/outputs/visual_selection_prefix/slake_v1_read_write_lr3e4_norm_fixed_5ep_seed44_20261014_131109_40238，实际训练报告及commit/成本待补。
+
+## 2026-10-14 正式V1 PathVQA Test案例已完成
+
+3图9题、27张真实5/11/17选择地图与层权重；额外1题独立重复确认map/权重差0。心脏和烧伤问题变化伴随层权重及不同程度地图变化，睾丸地图变化小；措辞匹配/知识关联/回答错误均保留。案例预选后才看map，V1五轮对CoCoOp/r8三轮，不能以定向案例估计总体收益或定位有效性。产物pathvqa/outputs/paper_cases_20261014/：3组PNG/PDF、原始JSON/原图/预测对照、共同色阶、JS/TV、英文图注与边界说明。使用原Test59.8006 checkpoint，GPU前向10次、训练0次，一次性授权结束并恢复用户GPU规则。

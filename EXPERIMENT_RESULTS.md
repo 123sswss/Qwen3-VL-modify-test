@@ -2840,3 +2840,13 @@ Overall净增47题；OPEN净增33/47（70.21%），KVQA净增22/47（46.81%）�
 产物根 /root/autodl-tmp/Qwen3-VL-modify-test/slake/outputs/visual_selection_prefix/slake_v1_read_write_lr3e4_norm_fixed_5ep_seed44_20261014_131109_40238；checkpoint checkpoints/epoch_5，预测/summary eval_test/epoch_5/slake_predictions.json与slake_summary.json，paired_vs_v1.json。来源为用户附件 C:/Users/11473/.codex/attachments/6ef0667e-a338-4363-a0cb-d0283e4f0cdc/已粘贴的文本.txt。代码准备提交5e7b85e；实际运行commit/库版本、参数审计/梯度及初始化预检实测、训练耗时/峰值显存本次未回传，标记待补，不能以准备提交代替实测。计时TTFT count2094 mean0.066743/p50 0.043332/p95 0.111187/min0.036273/max0.327175秒；TPOT0.020157秒/token、49.61token/s；request mean0.118714/p50 .089083/p95 .206633/min .060790/max .511097秒；生成5913token/后续3819，3次warmup排除，CUDA events logits-ready-v2，全2094条有效。计时与旧记录为跨运行观察，未构成严格速度对照。
 
 保持原V1主版本及既有结果，本次作为已完成LR探索；停止于结果分析，不自动补seed/重训/调参。两账本和计划更新留本地，随后续相关代码提交。
+
+## 2026-10-14 PathVQA正式V1 Test论文案例导出完成（一次性GPU授权已结束）
+
+独立任务pathvqa_v1_test_paper_cases_seed44_20261014，使用原五轮V1 model44/data42固定epoch5；训练和checkpoint保持不变，完整Test成绩复用59.8006（6719题）。先CPU核对V1/CoCoOp/r8全部6719题的ID、RGB图像指纹、问题/参考/题型；筛8图95题候选并查看原图，随后在任何地图前固定心脏513/524/435、睾丸2212/2313/2269、烧伤5911/5918/5915，共3图9题。V1来自outputs/five_task_test_suite/suite_20261001_134036_879815/pathvqa_v1_5ep_seed44_epoch5_test，checkpoint为pathvqa/outputs/visual_selection_prefix/pathvqa_v1_norm_fixed_5ep_seed44_20260926_2/checkpoints/epoch_5；CoCoOp/r8分别绑定20260909/20260830的epoch3 Test，三轮/五轮差异明确；r2 Test当前实例未定位，未替代为r8同名。
+
+正式三层代码5/11/17共同merger网格概率与问题层权重导出：单次eval/inference_mode prefill×9，额外独立重载同题513前向×1，三层地图/权重最大绝对差均0，tolerance1e-6通过。GPU前向总10次，无反向/优化器/训练/答案重生成；问题独立分词来源，答案复用已有Test预测。实际模型审计1864963参数；原始地图27张，每图有限且概率和约1，按H/2,W/2真实merger位置对应、排除临时视觉Prompt；三层原始概率/网格/权重保存JSON。显示全局共同log2(p/均匀概率)色阶[-23.032606,6.298742]，以0白色为中心的双侧线性色阶、opacity .45、bilinear；16位grid PNG另用统一全局概率max，避免逐图各自拉伸。
+
+心脏513/524的map5/11/17 JS约1.6636e-5/1.2423e-6/4.6982e-6；513→435约.025157/.000460/.007861，权重由[.830,.007,.163]变[.326,.018,.656]，435仍全部答错。睾丸组最大JS小于.000331、权重L1小于.049，保留弱变化；2313的on the right/on right/right属措辞exact-match差异，病因问题含医学知识，不能仅凭原图验证。烧伤5911→5918 JS约.044637/.001211/.023785，浅/深权重.350/.635→.968/.030；泛问QDPT答hand、参考thermal burn，r8 thermal burns为措辞评分问题。候选为定向定性选择，原图医学判读需专家核实，地图变化与最终正确性分开解释；无新的总体准确率估计/定位因果/稳定性结论。
+
+本机完整产物pathvqa/outputs/paper_cases_20261014/，远程outputs/paper_cases_20261014/：case_1/2/3.png及pdf、index.html、README.md、英文captions.md、raw_maps.json、selected_cases/candidates/policy、answers.csv、同图JS/TV/权重L1统计、确定性与provenance、原图与3份完整历史比较/summary及日志。地图执行commit5a72658，控制4a1a62d，Torch版本见map_provenance；编辑始终本机提交推送、服务器network_turbo后fast-forward pull。CPU首次压缩bytes hash与官方RGB指纹不同而中止，修正后8图通过；GPU首批数据完整落盘，shell收尾变量转义使外层返回1（记录在README），独立控制正确退出。用户明确更新的一次性GPU授权任务结束，AGENTS临时例外已移除，恢复后续GPU用户执行。完成两账本与计划更新，随相关绘图代码提交；停止，不启动其他GPU任务。

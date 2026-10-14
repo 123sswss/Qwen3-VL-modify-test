@@ -654,3 +654,11 @@ seed44既有五轮及epoch5 Test不重跑；新增 `pathvqa_lora_full_model_atte
 用户确认只探索前述优先方案：完整V1的读取层代码5/11/17→7/15/23（自然8/16/24），仍三张图分别读取同一native merger Value、各自LN/64投影/层权重、192拼接/共享P20偏移；不是V10融合，也不加第四层。Visual18仍索引17，结构维度/1864963参数及原训练配置不变。独立类VisualSelectionPrefixV20Model/method名与读取层元数据；默认V1常量不变，加载时严格核对版本和层号，不错读原V1。GPU启动构造同seed父V1逐张量审计全部初值（包括输出头），恢复随机流后构造V20；只读层不同，保留原真实Train预检/有限梯度/原图网格/单次prefill/save-load/cache审计和map7/15/23诊断。
 
 实验pathvqa_v20_deeper_three_l7_15_23_norm_fixed_5ep_seed44，44/42从零五轮/b2a16/归一化False、原组LR/clip1/warmup.03/linear，保存3/4/5，固定epoch5完整Validation，对V1五轮59.3386配对图像簇10000/42，Overall/Yes-No/FF/what/where，子组探索性。用户入口bash pathvqa/run_v20_deeper_three_seed44.sh，独立pathvqa/outputs/v20/<experiment>_<stamp>/产物；失败即停，无Test/自动关机/重试/其他seed/第四层方案。V1论文主版本保持不变；结果回传后更新两账本。
+## 2026-10-14 V20已完成，负结果（覆盖此前待运行）
+
+用户回传PathVQA44/42固定epoch5 Validation57.8846，对原V1-1.4539pp、配对CI[-2.2767,-0.6460]，下降集中FF/where，已同步两账本。独立输出pathvqa/outputs/v20/pathvqa_v20_deeper_three_l7_15_23_norm_fixed_5ep_seed44_20261013_170205_10331。V1论文主版本不变；本轮结束，不自动补seed、四层、换其他层位、Test或调参。运行commit/初值与梯度/缓存预检、成本待既有JSON补证，不补跑模型。账本保持本地，留待相关代码提交。
+
+
+## 2026-10-14 最后一试：原V1读写投影LR3e-4（已准备，尚未运行）
+
+用户确认以原五轮V1 PathVQA44/42从零训练，仅value_blocks三套2560→64投影与prefix_output 192→2560含bias的基础LR由1e-4改3e-4。optimizer单独拆value_projection，LN/问题层门控仍1e-4；maps/question_context/P20/Visual18及初始化、1864963参数、5/11/17层、batch2累积16/归一化False/clip1/warmup3%/linear不变。保存3/4/5，固定epoch5完整Validation，与精确绑定原V1 59.3386按图像簇10000/42配对。入口bash pathvqa/run_v1_read_write_lr3e4_seed44.sh；独立目录，不使用V20/V10，不跑Test/其他seed/重试/自动关机。全部GPU用户执行。保留原模型参数分组审计，新增优化器分组唯一覆盖核验及实际LR/裁剪后分组梯度日志；CPU检查不代替真实预检，成绩待回传。

@@ -95,7 +95,9 @@ class RawQuestionCollator:
 
 
 class V1Trainer(Trainer):
-    def __init__(self, *args, visual_av10_learning_rate: float = 1e-4, **kwargs):
+    def __init__(self, *args, visual_av10_learning_rate: float = 1e-4,
+                 read_write_learning_rate: float = 1e-4, **kwargs):
+        self.read_write_learning_rate = float(read_write_learning_rate)
         self.visual_av10_learning_rate = float(visual_av10_learning_rate)
         if self.visual_av10_learning_rate not in (3e-5, 1e-4):
             raise ValueError("V1 Visual18 Av10 learning rate must be 3e-5 or 1e-4")
@@ -126,8 +128,23 @@ class V1Trainer(Trainer):
             rates["visual_av10"] = self.visual_av10_learning_rate
         if getattr(self.model, "ablation_mode", None):
             rates = {name: rates[name] for name in groups}
+        if self.read_write_learning_rate != 1e-4:
+            # Split optimizer groups only: keep model construction and RNG unchanged.
+            groups = dict(groups)
+            projections = list(self.model.value_blocks.parameters())
+            projection_ids = {id(p) for p in projections}
+            groups["layer_condition"] = [
+                p for p in groups["layer_condition"] if id(p) not in projection_ids
+            ]
+            groups["value_projection"] = projections
+            rates["value_projection"] = self.read_write_learning_rate
+            rates["prefix_output"] = self.read_write_learning_rate
         if set(rates) != set(groups):
             raise RuntimeError(f"V1 optimizer/group mismatch: rates={set(rates)} groups={set(groups)}")
+        grouped = [p for parameters in groups.values() for p in parameters]
+        active = [p for p in self.model.parameters() if p.requires_grad]
+        if len(grouped) != len({id(p) for p in grouped}) or {id(p) for p in grouped} != {id(p) for p in active}:
+            raise RuntimeError("V1 optimizer parameters are not a unique complete partition")
         self.configured_group_learning_rates = dict(rates)
         self.model._audit_parameters()
         self.optimizer = torch.optim.AdamW([
@@ -155,6 +172,14 @@ class V1AuditCallback(TrainerCallback):
                 raise FloatingPointError(f"V1 missing/nonfinite gradient in {name}")
             row[f"{name}_grad_norm"] = math.sqrt(sum(float(g.square().sum()) for g in grads))
         row.update({key: float(value.float()) for key, value in model.debug_context.items()})
+        # These are actual scheduler-adjusted LRs and post-global-clip gradients.
+        for group in kwargs["optimizer"].param_groups:
+            name = group["group_name"]
+            row[f"optimizer_{name}_lr"] = float(group["lr"])
+            row[f"optimizer_{name}_grad_norm_post_clip"] = math.sqrt(sum(
+                float(p.grad.detach().float().square().sum())
+                for p in group["params"] if p.grad is not None
+            ))
         if int(state.global_step) % 20 == 0:
             with self.step_path.open("a", encoding="utf-8") as handle:
                 handle.write(json.dumps(row, ensure_ascii=False) + "\n")
@@ -536,6 +561,8 @@ def main() -> int:
     )
     parser.add_argument("--correct-loss-accumulation", action="store_true",
                         help="Use Trainer's equal-microbatch mean loss scaling; guarded by the read-only audit launcher")
+    parser.add_argument("--read-write-learning-rate", type=float, choices=(1e-4, 3e-4), default=1e-4,
+                        help="Only value_blocks and prefix_output LR; original V1 split18 only")
     args = parser.parse_args()
     if args.epochs <= 0:
         raise ValueError("--epochs must be positive")
@@ -546,6 +573,8 @@ def main() -> int:
         raise ValueError(f"save epochs must be within [1,{args.epochs}]: {save_epochs}")
     if args.visual_prompt_mode != "split18" and args.visual_av10_learning_rate != 1e-4:
         raise ValueError("--visual-av10-learning-rate only applies to split18")
+    if args.read_write_learning_rate != 1e-4 and args.visual_prompt_mode != "split18":
+        raise ValueError("--read-write-learning-rate only applies to original V1 split18")
     print("[V1_RUNTIME] " + json.dumps({
         "experiment": args.experiment_name,
         "dataset": args.dataset,
@@ -559,6 +588,7 @@ def main() -> int:
         "save_epochs": save_epochs,
         "visual_prompt_mode": args.visual_prompt_mode,
         "visual_av10_learning_rate": args.visual_av10_learning_rate,
+        "read_write_learning_rate": args.read_write_learning_rate,
         "batch_size": args.batch_size,
         "gradient_accumulation": args.gradient_accumulation,
         "effective_batch_size": args.batch_size * args.gradient_accumulation,
@@ -658,6 +688,7 @@ def main() -> int:
     trainer = V1Trainer(
         model=model,
         visual_av10_learning_rate=args.visual_av10_learning_rate,
+        read_write_learning_rate=args.read_write_learning_rate,
         args=TrainingArguments(
             output_dir=str(args.output_dir / "trainer"), num_train_epochs=args.epochs,
             per_device_train_batch_size=args.batch_size,
@@ -711,6 +742,7 @@ def main() -> int:
             if args.dataset == "rsvqa_lr" else "dataset_native"
         ),
         "epochs": args.epochs, "saved_epochs": list(save_epochs),
+        "read_write_learning_rate": args.read_write_learning_rate,
         "visual_prompt_mode": args.visual_prompt_mode,
         "visual_av10_learning_rate": args.visual_av10_learning_rate,
         "trainable_parameters": counts,

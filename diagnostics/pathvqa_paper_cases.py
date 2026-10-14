@@ -60,10 +60,16 @@ def export_images(out,data):
                     row=wanted[i]; actual=t.slice(i-offset,1).to_pylist()[0]
                     assert actual['question'].strip()==row['question'] and actual['answer'].strip()==row['reference']
                     im=actual['image']; raw=im['bytes'] if im['bytes'] is not None else Path(im['path']).read_bytes()
-                    assert hashlib.sha256(raw).hexdigest()==row['image_id']
+                    decoded=Image.open(io.BytesIO(raw)).convert('RGB')
+                    digest=hashlib.sha256()
+                    digest.update(decoded.mode.encode('ascii'))
+                    digest.update(f'{decoded.width}x{decoded.height}'.encode('ascii'))
+                    digest.update(decoded.tobytes())
+                    assert digest.hexdigest()==row['image_id']
                     target=out/'images'/f"{row['image_id']}.png"
                     target.parent.mkdir(exist_ok=True)
-                    Image.open(io.BytesIO(raw)).convert('RGB').save(target)
+                    decoded.save(target)
+                    decoded.close()
             offset+=n
     assert offset==6719
     print('CPU image export:',len(candidates),'groups')

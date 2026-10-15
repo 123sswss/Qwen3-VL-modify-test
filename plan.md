@@ -674,3 +674,11 @@ seed44既有五轮及epoch5 Test不重跑；新增 `pathvqa_lora_full_model_atte
 ## 2026-10-14 PathVQA论文案例任务完成
 
 用户明确一次性GPU授权后，CPU候选8图95题与原图审核，固定3图9题再导出地图；10次小前向含独立同题重复，确定性差0，完成3组图版/原始概率/对照回答/JS与权重统计及中英文说明，pathvqa/outputs/paper_cases_20261014/。完整原Test复用59.8006，原checkpoint和预测保留，临时AGENTS例外已移除；任务停止，所有后续GPU恢复用户执行。稿件插入与医学专家审阅尚待用户选择，不自动编辑论文。
+
+## 2026-10-15 三checkpoint三层使用审计（代码准备，GPU导出待用户启动）
+
+固定原V1五轮seed44目录20260926_2、读写LR3e-4实验唯一经报告/实际优化器组验证的20261014_092451_34346、V20五轮seed44目录20261013_170205_10331，均epoch5。读取层5/11/17、5/11/17、7/15/23；实际Validation整体59.3386/58.8752/57.8846仅复用。官方Validation原始顺序前1000题，CPU从Parquet核验RGB指纹/问题/参考及三份预测一致，保存清单SHA256、图片数/题型分布；独立outputs/v1_three_branch_audit_20261015/，完整源身份binding.json。
+
+新导出diagnostics/audit_v1_three_branches.py仅export阶段懒加载Torch；用户串行运行pathvqa/run_three_branch_audit.sh。每题单次eval prefill、真实问题独立分词、原答案/正确性复用；读取真实merger概率、门控、原始/LN/投影/加权64维块，分块输出矩阵精确b_l=W_l ReLU(beta_l projected_summary_l)，bias独立，重建FP32atol1e-5/rtol1e-4并记录绝对/相对误差。同次前向native Value均值经过同LN/投影/gate/head构建uniform表征控制。GPU全部用户执行，助手仅CPU源编辑/检查/服务器核验与统计；失败即停、独立目录不覆盖、不自动重试/关机/训练/评估/Test。
+
+CPU后处理diagnostics/analyze_v1_three_branches.py：所有三层/题型/对错/联合分组的均值中位P10P90、gate<.01/.05/最大权重频率及图片覆盖，真实合并地图熵/TV/最大概率倍率，块/分量范数与范数占比、层间余弦、bias/抵消、真实对uniform分量差；同图不同问的JS和gate变化按问题对统计、重复文本对排除。范数占比仅表征指标、零向量标缺，原顺序子集及对错分组/同图pair依赖限制保留。逐题NPZ/JSONL、分位数CSV、三组对比PNG与简短报告。用户GPU导出后助手继续CPU分析、回传Windows及两账本/计划；当前诊断尚未运行，禁止提前写分支结论。完成后的账本留待下一次相关代码提交。

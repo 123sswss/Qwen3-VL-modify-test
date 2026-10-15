@@ -35,7 +35,7 @@ def analyze(out):
     manifest=read(out/'manifest.json');meta=read(out/'manifest_meta.json')
     digest=hashlib.sha256((out/'manifest.json').read_bytes()).hexdigest()
     assert digest==meta['manifest_sha256'] and len(manifest)==1000
-    all_rows={};summaries={};pairs_all={};headers=[]
+    all_rows={};summaries={};pairs_all={};headers=[];strata_all={}
     for name in ('v1','lr3e4','v20'):
         target=out/name;completed=read(target/'completed.json')
         assert completed['samples']==1000 and completed['manifest_sha256']==digest
@@ -124,12 +124,25 @@ def analyze(out):
             'images_with_any_gate_below_005':sum(any(r['layers'][str(l)]['gate']<.05 for r in rs) for rs in image_gates.values()),
             'images_with_all_gates_below_005':sum(all(r['layers'][str(l)]['gate']<.05 for r in rs) for rs in image_gates.values())}
             for l in layers}
+        strata={}
+        for l in layers:
+            strata[str(l)]={}
+            for label,lo,hi in [('below_001',0,.01),('001_to_005',.01,.05),('005_to_05',.05,.5),('at_least_05',.5,1.000001)]:
+                subset=[r for r in derived if lo<=r['layers'][str(l)]['gate']<hi]
+                strata[str(l)][label]={'n':len(subset),'images':len({r['image_id'] for r in subset}),
+                    'types':{t:sum(r['question_type']==t for r in subset) for t in sorted({r['question_type'] for r in subset})},
+                    'component_norm_share':describe([r['layers'][str(l)]['component_norm_share'] for r in subset]),
+                    'component_norm':describe([r['layers'][str(l)]['component_norm'] for r in subset]),
+                    'map_entropy':describe([r['layers'][str(l)]['map_entropy'] for r in subset]),
+                    'uniform_relative_difference':describe([r['layers'][str(l)]['component_uniform_relative_difference'] for r in subset])}
+        strata_all[name]=strata
         write(target/'derived_rows.json',derived);write(target/'grouped_statistics.json',summary)
         write(target/'same_image_question_pairs.json',question_pairs);write(target/'same_image_summary.json',pair_summary)
+        write(target/'gate_strata.json',strata)
         summaries[name]=summary;pairs_all[name]=pair_summary;all_rows[name]=derived
         header=np.load(target/'head_parameters.npz',allow_pickle=False)
         headers.append({'model':name,'bias_norm':norm(header['bias']),'layer_matrix_frobenius':{str(l):norm(header['weight'][:,j*64:(j+1)*64]) for j,l in enumerate(layers)}})
-    write(out/'comparison.json',{'manifest':meta,'models':summaries,'same_image_question_pairs':pairs_all,'output_head_norms':headers,
+    write(out/'comparison.json',{'manifest':meta,'models':summaries,'same_image_question_pairs':pairs_all,'output_head_norms':headers,'gate_strata':strata_all,
         'definitions':{'component':'W_l ReLU(beta_l projected_LN_summary_l), output bias separate',
         'component_norm_share':'norm(b_l) / sum_l norm(b_l); representation measure, no causal interpretation',
         'cancellation':'1 - norm(sum b_l) / sum norm(b_l), bias excluded unless explicitly named',
@@ -164,18 +177,19 @@ def plot(out,models):
     from PIL import Image,ImageDraw,ImageFont
     path=next(p for p in [Path('C:/Windows/Fonts/arial.ttf'),Path('/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf')] if p.exists())
     font=ImageFont.truetype(str(path),20);small=ImageFont.truetype(str(path),15)
-    sets=[('branch_usage',[('gate','Gate'),('component_norm_share','Output-component norm share'),('weighted_block_norm','Weighted 64-D block norm')]),
-          ('map_characteristics',[('map_entropy','Merged-map normalized entropy'),('map_tv_uniform','TV distance to uniform'),('map_peak_multiplier','Maximum probability / uniform')]),
-          ('uniform_readout',[('component_uniform_relative_difference','Actual/uniform component relative difference'),('component_norm','Output-component norm'),('normalized_summary_norm','Normalized summary norm')])]
+    sets=[('branch_usage',[('gate','Gate'),('component_norm_share','Component norm share'),('weighted_block_norm','Weighted 64-D norm')]),
+          ('map_characteristics',[('map_entropy','Merged-map entropy'),('map_tv_uniform','TV to uniform'),('map_peak_multiplier','Peak / uniform probability')]),
+          ('uniform_readout',[('component_uniform_relative_difference','Actual/uniform relative difference'),('component_norm','Component norm'),('normalized_summary_norm','LN summary norm')])]
     colors=[(51,102,170),(220,125,50),(60,150,100)]
     for filename,metrics in sets:
         image=Image.new('RGB',(1500,940),'white');draw=ImageDraw.Draw(image)
         draw.text((20,10),'Median with P10-P90; original Validation first1000; norm shares are representation metrics',font=font,fill='black')
+        maxima={key:max(s['all']['layers'][l][key]['p90'] for s in models.values() for l in s['all']['layers'])*1.1 or 1 for key,_ in metrics}
         for col,(name,summary) in enumerate(models.items()):
             for row,(key,title) in enumerate(metrics):
                 x=col*500+65;y=row*285+75
                 draw.text((x-35,y-30),f'{name}: {title}',font=small,fill='black')
-                series=list(summary['all']['layers'].items());maximum=max(v[key]['p90'] for _,v in series)*1.1 or 1
+                series=list(summary['all']['layers'].items());maximum=maxima[key]
                 if key in ('gate','component_norm_share','map_entropy','map_tv_uniform'):maximum=1
                 draw.line((x,y,x,y+180,x+370,y+180),fill='gray',width=2)
                 for tick in (0,.5,1):
@@ -187,6 +201,22 @@ def plot(out,models):
                     draw.ellipse((xx-6,coords[1]-6,xx+6,coords[1]+6),fill=colors[j])
                     draw.text((xx-20,y+190),f'L{layer}',font=small,fill='black')
         image.save(out/(filename+'.png'),dpi=(200,200))
+    types=['yes/no','what','where','how','other','when','why']
+    image=Image.new('RGB',(1450,650),'white');draw=ImageDraw.Draw(image)
+    draw.text((20,15),'Middle branch by question type: mean gate / mean component norm share',font=font,fill='black')
+    for col,(name,summary) in enumerate(models.items()):
+        middle=list(summary['all']['layers'])[1];x=25+col*475
+        draw.text((x,65),f'{name}: layer {middle}',font=font,fill='black')
+        for row,t in enumerate(types):
+            s=summary.get('question_type:'+t)
+            if not s:continue
+            y=110+row*67;draw.text((x,y),f'{t} (n={s["n"]})',font=small,fill='black')
+            for k,key in enumerate(['gate','component_norm_share']):
+                v=s['layers'][middle][key]['mean'];xx=x+150+k*135
+                draw.rectangle((xx,y-5,xx+125,y+35),fill=(int(245-170*v),int(245-100*v),int(255-30*v)))
+                draw.text((xx+20,y),f'{v:.3f}',font=font,fill='black')
+    draw.text((25,610),'Same 1000 questions; rare types have small n. Colors use a shared [0,1] scale.',font=small,fill='black')
+    image.save(out/'middle_by_question_type.png',dpi=(200,200))
 
 if __name__=='__main__':
     p=argparse.ArgumentParser();p.add_argument('--output',type=Path,required=True)

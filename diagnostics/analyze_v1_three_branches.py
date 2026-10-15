@@ -11,10 +11,10 @@ import numpy as np
 
 def read(p):return json.loads(p.read_text(encoding='utf-8'))
 def write(p,x):p.write_text(json.dumps(x,ensure_ascii=False,indent=2,allow_nan=False),encoding='utf-8')
-def norm(x):return float(np.linalg.norm(x))
+def norm(x):return float(np.linalg.norm(np.asarray(x,dtype=np.float64)))
 def cosine(a,b):
     d=norm(a)*norm(b)
-    return float(np.clip(np.dot(a,b)/d,-1,1)) if d>1e-12 else None
+    return float(np.clip(np.dot(np.asarray(a,dtype=np.float64),np.asarray(b,dtype=np.float64))/d,-1,1)) if d>1e-12 else None
 def relative(a,b):
     d=(norm(a)+norm(b))/2
     return norm(a-b)/d if d>1e-12 else None
@@ -47,8 +47,8 @@ def analyze(out):
             with np.load(target/row['tensor_file'],allow_pickle=False) as a:
                 beta=a['beta'];maps=a['maps'].reshape(3,-1);components=a['components'];uni=a['uniform_components'];bias=a['output_bias']
                 assert np.allclose(components.sum(0)+bias,a['shift'],atol=1e-5,rtol=1e-4)
-                cn=np.linalg.norm(components,axis=1);total=float(cn.sum());bias_norm=norm(bias)
-                combined=components.sum(0);weighted=a['weighted_blocks']
+                cn=np.linalg.norm(components.astype(np.float64),axis=1);total=float(cn.sum());bias_norm=norm(bias)
+                combined=components.astype(np.float64).sum(0);weighted=a['weighted_blocks']
                 item={k:row[k] for k in ('question_id','image_id','question_type','answer_type','correct','prediction')}
                 item.update({'model':name,'reconstruction_max_abs':row['reconstruction_max_abs'],
                     'reconstruction_relative_l2':row['reconstruction_relative_l2'],'bias_norm':bias_norm,

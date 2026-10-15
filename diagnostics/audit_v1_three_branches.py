@@ -148,6 +148,7 @@ def export(out,name,model_path):
             image=store.load_image(record);require(image_fingerprint(image)==meta['image_id'],'GPU input image identity')
             inputs=interface.prepare_inputs(image,build_prompt(meta['question'],None),question=meta['question'])
             moved={k:v.to(interface.device,dtype=torch.bfloat16 if v.is_floating_point() else v.dtype) for k,v in inputs.items()}
+            require('labels' not in moved,'Prefill must exclude teacher-forcing answers')
             captured={};hooks=[]
             def capture(key):
                 def hook(module,args,result):captured[key]=result.detach().clone()

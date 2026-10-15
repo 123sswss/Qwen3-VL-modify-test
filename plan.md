@@ -674,6 +674,23 @@ seed44既有五轮及epoch5 Test不重跑；新增 `pathvqa_lora_full_model_atte
 ## 2026-10-14 PathVQA论文案例任务完成
 
 用户明确一次性GPU授权后，CPU候选8图95题与原图审核，固定3图9题再导出地图；10次小前向含独立同题重复，确定性差0，完成3组图版/原始概率/对照回答/JS与权重统计及中英文说明，pathvqa/outputs/paper_cases_20261014/。完整原Test复用59.8006，原checkpoint和预测保留，临时AGENTS例外已移除；任务停止，所有后续GPU恢复用户执行。稿件插入与医学专家审阅尚待用户选择，不自动编辑论文。
+## 2026-10-14：拟定V1/V20同前1000题三层使用审计
+
+用户提出前1000样本三层统计并对比8/16/24实验。绑定V1原五轮seed44 20260926_2与V20五轮seed44 20261013_170205_10331，分别代码层5/11/17和7/15/23（自然8/16/24）。推荐统一官方Validation固定顺序前1000题，保存ID/顺序/image_id与清单hash；实际覆盖图片/题型分布报告，前缀样本作为诊断集。两模型同ID/图像/问句/预处理及固定epoch5，复用既有回答，仅问题条件prefill导出，由用户亲自执行GPU。
+
+统计三层beta、有效merger地图熵/偏离均匀、空间top概率、问题对地图变化，以及每层加权64维块/输出偏移分量；使用b_l=W_l ReLU(beta_l projected_summary_l)精确分解，输出bias单列。记录分量范数、范数占比和层间余弦，观察输出方向抵消；比较uniform-Value摘要的分量差异，所有反事实均只作为表征诊断，不重新生成回答。1000题逐题数字+分位数/题型及正确错误分组；原始局部向量数据不足处留待用户prefill导出，助手仅实现CPU/准备启动命令，无GPU。尚未实现或运行，不做删层重训/新Test/V20调参。
+
+
+
+## 2026-10-15 状态更正与取消
+
+- RSVQA-LR纯P20：完成。用户回传五轮seed44正式Test OA84.5162/AA85.4137，精确实验名和产物见两账本；本条覆盖2026-10-12准备状态，论文已换入正式结果。
+- PathVQA LoRA-r2 seed45→46：用户明确取消，多seed扩展停止安排；既有入口与历史记录保留，本条覆盖此前串行待执行计划。
+- PathVQA LoRA-r2 seed44 Test：已完成57.42；与V1的Test配对统计保留为可选CPU分析，尚未回传。
+
+## 2026-10-15 PathVQA r2 seed44 Test配对完成（覆盖此前可选待补状态）
+
+已精确定位r2 test_epoch5_20261010_095918_1103，与原V1固定epoch5正式Test按6719题/858图像核对并完成10000/42图像簇配对：V1−r2 +2.3813pp，95%CI[1.4990,3.2740]。完整分项、独占数、来源hash与报告已保存pathvqa/outputs/test_paired_v1_r2_20261015/并同步两账本。CPU读取/统计，无GPU/训练/评估重跑；seed45/46继续保持取消。账本本地待相关代码提交。
 
 ## 2026-10-15 三checkpoint三层使用审计（代码准备，GPU导出待用户启动）
 
@@ -682,3 +699,20 @@ seed44既有五轮及epoch5 Test不重跑；新增 `pathvqa_lora_full_model_atte
 新导出diagnostics/audit_v1_three_branches.py仅export阶段懒加载Torch；用户串行运行pathvqa/run_three_branch_audit.sh。每题单次eval prefill、真实问题独立分词、原答案/正确性复用；读取真实merger概率、门控、原始/LN/投影/加权64维块，分块输出矩阵精确b_l=W_l ReLU(beta_l projected_summary_l)，bias独立，重建FP32atol1e-5/rtol1e-4并记录绝对/相对误差。同次前向native Value均值经过同LN/投影/gate/head构建uniform表征控制。GPU全部用户执行，助手仅CPU源编辑/检查/服务器核验与统计；失败即停、独立目录不覆盖、不自动重试/关机/训练/评估/Test。
 
 CPU后处理diagnostics/analyze_v1_three_branches.py：所有三层/题型/对错/联合分组的均值中位P10P90、gate<.01/.05/最大权重频率及图片覆盖，真实合并地图熵/TV/最大概率倍率，块/分量范数与范数占比、层间余弦、bias/抵消、真实对uniform分量差；同图不同问的JS和gate变化按问题对统计、重复文本对排除。范数占比仅表征指标、零向量标缺，原顺序子集及对错分组/同图pair依赖限制保留。逐题NPZ/JSONL、分位数CSV、三组对比PNG与简短报告。用户GPU导出后助手继续CPU分析、回传Windows及两账本/计划；当前诊断尚未运行，禁止提前写分支结论。完成后的账本留待下一次相关代码提交。
+## 2026-10-15 三分支审计CPU预核验完成，GPU尚未执行
+
+服务器20976端口只读核对三份训练报告、checkpoint配置、优化器实际LR日志、完整Validation预测；读写LR唯一合格目录pathvqa_v1_read_write_lr3e4_norm_fixed_5ep_seed44_20261014_092451_34346。CPU生成outputs/v1_three_branch_audit_20261015/manifest.json及binding.json，已复制Windows pathvqa/outputs/v1_three_branch_audit_20261015/。官方原始前1000题共122图，题型what428/other1/yes-no475/where79/how14/why1/when2；答案Yes-No475/Free-form525；manifest SHA256 5cc1c48c508266aed345ad98cdeb8f88a39ba74a261a16f85e9c6e8806e9d861。三份原Validation Overall59.3386/58.8752/57.8846。CPU数学分解、懒加载GPU隔离、零向量口径、合成1000题/三模型分析与绘图管线检查通过；真实模型prefill和重建误差待用户串行导出。用户命令bash pathvqa/run_three_branch_audit.sh outputs/v1_three_branch_audit_20261015。当前阶段无GPU操作及分支使用结论；导出后助手按本次授权继续CPU后处理和同步，完成后再更新两账本，账本改动留待下一次相关代码提交。
+
+## 2026-10-15 三分支主审计完成；原始张量镜像同步中
+
+用户GPU导出三模型各1000题成功/exit0，三份manifest hash一致，权重hash不变；助手按授权完成CPU分析与模板/门控分层统计、四张对比图、中文解读，已将报告/逐题机器统计/分位数CSV/4图/身份记录同步Windows pathvqa/outputs/v1_three_branch_audit_20261015/。原V1中层最大gate52.9%、平均输出范数占比52.89%，where组低使用；LR/V20中层使用更高，详细结论和边界见两账本及interpretation.md。原始556M目录tar低速后台下载，finish_raw_sync.py等待对应SCP结束后校验579031040字节与原SHA256并补齐3000 NPZ；raw_sync_status.json当前downloading，最终镜像状态待确认。主分析完成，后续仅当前文件传输/CPU校验解压，无GPU/新训练/评估。两账本和计划保留本地至下次相关代码提交。
+
+## 2026-10-15 原始张量本机同步已由用户取消
+
+用户要求停止原始张量下载并删除本地原始包。本次已停止对应SCP与自动校验解压辅助进程，移除本机未完成tar（85229568字节）、head_transfer_check.npz（1843502字节）及同步辅助脚本。报告、图表、逐题JSON/CSV和分析结果保留；服务器原始NPZ保留，可作为恢复来源。此前“原始张量镜像同步中”状态由本条更正为“用户取消，本机原始文件已清理”，后续不自动下载该原始包。账本改动留本地。
+
+## 2026-10-15 V1读写头LR3e-4三任务串行：代码已准备，待用户启动
+
+变体沿用V1命名read_write_lr3e4，仅value_blocks与prefix_output基础LR升至3e-4；模型、初始化、其他组LR及各数据集原五轮V1协议保持。严格顺序RSVQA-LR seed44（batch4/累积8，固定epoch5 Test）→PathVQA seed45（batch2/累积16，固定epoch5 Validation）→SLAKE seed45（batch2/累积16，固定epoch5双语Test）；全部data seed42、从零五轮、保存3/4/5、归一化修正。参数仍1864963。复用原共享训练与官方评分入口，不增加模型模块。
+
+用户启动bash run_v1_read_write_three_tasks_shutdown.sh；独立时间戳目录保留训练与评分日志、配置和commit。失败即停，保存退出阶段/退出码后sleep 600，再由Bash执行/usr/bin/shutdown并记录调用返回。普通单项入口run_v1_read_write_lr3e4_single.sh保持无自动关机。仅进行本机Bash语法检查，所有GPU操作由用户执行；尚无新分数，回传结果后补两份账本。

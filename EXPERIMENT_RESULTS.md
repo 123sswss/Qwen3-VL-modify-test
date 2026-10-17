@@ -2923,3 +2923,30 @@ LR版中层<.01覆盖0题、<.05覆盖105题；V1与LR“中层gate>=.5”的题
 ## 2026-10-15 原始张量本机同步已由用户取消
 
 用户要求停止原始张量下载并删除本地原始包。本次已停止对应SCP与自动校验解压辅助进程，移除本机未完成tar（85229568字节）、head_transfer_check.npz（1843502字节）及同步辅助脚本。报告、图表、逐题JSON/CSV和分析结果保留；服务器原始NPZ保留，可作为恢复来源。此前“原始张量镜像同步中”状态由本条更正为“用户取消，本机原始文件已清理”，后续不自动下载该原始包。账本改动留本地。
+
+## 2026-10-16 V1读写头LR3e-4三任务完成（用户回传）
+
+控制变量：沿用原V1，仅value_blocks与prefix_output基础LR由1e-4升至3e-4；其余结构、初始化及各数据集原五轮协议保持，1864963参数、data seed42。RSVQA batch4/累积8、PathVQA/SLAKE batch2/累积16；固定epoch5，分别为Test/Validation/完整双语Test。三任务用户回报stage=completed、exit_code=0；本条来源为用户终端摘要，训练commit、成本、完整预测身份及配对CI待产物核验。
+
+| 数据集 | Seed | Overall | 其他指标 |
+| --- | ---: | ---: | --- |
+| RSVQA-LR Test | 44 | 85.7657 | AA86.6287；rural_urban92.0/presence91.4721/count70.1391/comp92.9035 |
+| PathVQA Validation | 45 | 59.2427 | Yes/No90.9440/Free-form27.6324；how10.0775/other7.1429/what22.2920/when0/where69.1932/why4.7619；开放题题型macro18.9112 |
+| SLAKE Test | 45 | 76.93 | CLOSED82.66/OPEN73.13；KVQA56.93/VQA79.86；EN78.61/ZH75.22 |
+
+精确输出根（均相对于服务器项目根）：
+- RSVQA/outputs/visual_selection_prefix/rsvqa_v1_read_write_lr3e4_norm_fixed_5ep_seed44_20261015_215243_3163
+- pathvqa/outputs/visual_selection_prefix/pathvqa_v1_read_write_lr3e4_norm_fixed_5ep_seed45_20261016_024534_10401
+- slake/outputs/visual_selection_prefix/slake_v1_read_write_lr3e4_norm_fixed_5ep_seed45_20261016_080432_18256
+
+相对原V1同seed：RSVQA44 +0.7297pp（85.0360→85.7657），距CoCoOp-style86.1455仍差0.3798pp；PathVQA45 +0.7350pp（58.5077→59.2427）；SLAKE45 +0.62pp（76.31→76.93）。结合已有seed44，PathVQA两seed均值新59.05895/原58.92315，差+0.13580pp；SLAKE两seed均值新77.36185/原75.92959，差约+1.43225pp。PathVQA44下降、45上升；SLAKE两seed同向上升。当前以匹配split的点估计描述，多seed稳定性及配置切换待seed46和产物核验；历史原版结果保持。
+
+## 2026-10-17 V1读写头LR3e-4 PathVQA seed46完成
+
+实验pathvqa_v1_read_write_lr3e4_norm_fixed_5ep_seed46，PathVQA model46/data42，从零五轮固定epoch5完整Validation（6259题、832图像簇）。控制变更沿用本系列：仅value_blocks与prefix_output基础LR1e-4→3e-4；原V1结构、初始化、1864963参数、其他组LR、batch2/累积16、修正归一化、3%warmup与五轮线性衰减保持。来源为用户本轮终端回传，精确summary及运行commit/成本待核验。
+
+Overall59.64（本轮显示两位小数），Yes/No90.6240，Free-form28.75（显示两位）；题型how10.8527/other7.1429/what23.8619/when7.6923/where67.4817/why4.7619/yes-no90.624。独立图像簇95%CI[58.18,61.09]；配对差值CI待补。TTFT count6259 mean.085523/p50 .085247/p95 .091219/min .060196/max .460127秒，TPOT .035026秒/token、28.55token/s；request mean .172869/p50 .145791/p95 .281339/min .100649/max .777915秒。计时为跨运行观察。
+
+服务器输出/root/autodl-tmp/Qwen3-VL-modify-test/pathvqa/outputs/visual_selection_prefix/pathvqa_v1_read_write_lr3e4_norm_fixed_5ep_seed46_20261017_104312_1230；预测/summary为eval_validation/epoch_5/pathvqa_predictions.json及pathvqa_summary.json。
+
+按现有显示精度，读写LR三seed44/45/46 Overall58.8752/59.2427/59.64，均值±样本标准差约59.2526±.3825；原V1为59.3386/58.5077/58.7314，58.8592±.4299。均值提高约.3934pp，各seed点差约-.4634/+.7350/+.9086pp。新LR三seed Free-form27.2176/27.6324/28.75，约27.8667±.7926；原约27.2602±.6074，均值提高约.6065pp。统计保留显示精度边界，待精确JSON统一刷新。三seed支持将新LR列为优先主配置候选；正式Test与原版Test分开保留，最终比较待固定新配置Test。账本本地留待相关代码提交。

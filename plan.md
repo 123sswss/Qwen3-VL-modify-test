@@ -716,3 +716,17 @@ CPU后处理diagnostics/analyze_v1_three_branches.py：所有三层/题型/对�
 变体沿用V1命名read_write_lr3e4，仅value_blocks与prefix_output基础LR升至3e-4；模型、初始化、其他组LR及各数据集原五轮V1协议保持。严格顺序RSVQA-LR seed44（batch4/累积8，固定epoch5 Test）→PathVQA seed45（batch2/累积16，固定epoch5 Validation）→SLAKE seed45（batch2/累积16，固定epoch5双语Test）；全部data seed42、从零五轮、保存3/4/5、归一化修正。参数仍1864963。复用原共享训练与官方评分入口，不增加模型模块。
 
 用户启动bash run_v1_read_write_three_tasks_shutdown.sh；独立时间戳目录保留训练与评分日志、配置和commit。失败即停，保存退出阶段/退出码后sleep 600，再由Bash执行/usr/bin/shutdown并记录调用返回。普通单项入口run_v1_read_write_lr3e4_single.sh保持无自动关机。仅进行本机Bash语法检查，所有GPU操作由用户执行；尚无新分数，回传结果后补两份账本。
+
+## 2026-10-16 读写LR三任务完成回报及后续
+
+RSVQA44 Test85.7657、PathVQA45 Validation59.2427、SLAKE45双语Test76.93，三项completed/exit0；两账本已记用户回传来源、全部分项及输出目录。此前“尚无新分数”状态由本次完成记录更新。后续建议保持同配置补PathVQA seed46五轮Validation和SLAKE seed46五轮双语Test，并以既有预测完成同seed图像簇配对CI；GPU均由用户执行。本次仅CPU记账，未追加启动任务。原始审计张量下载保持用户已取消状态。
+
+## 2026-10-17 读写LR后续计划更新
+
+PathVQA seed46五轮Validation完成，59.64/FF28.75，三seed已齐，两账本同步。遵照用户最新决定，SLAKE seed46从后续计划移除，现有44/45作为主结果及补充验证保留。建议冻结读写LR3e-4，下一步准备其PathVQA三seed固定epoch5 Test及已有预测配对统计，作为主配置切换确认；此条仅记录建议，尚未启动GPU或创建新运行。所有GPU继续由用户亲自执行。
+## 2026-10-17 V1读写头LR3e-4三seed固定epoch5正式Test：已准备，待用户执行
+
+用户要求对read_write_lr3e4版PathVQA seed44/45/46统一Test，仅评估既有五轮epoch5；不重训。绑定精确目录：seed44 pathvqa_v1_read_write_lr3e4_norm_fixed_5ep_seed44_20261014_092451_34346；seed45 pathvqa_v1_read_write_lr3e4_norm_fixed_5ep_seed45_20261016_024534_10401；seed46 pathvqa_v1_read_write_lr3e4_norm_fixed_5ep_seed46_20261017_104312_1230。全部启动前读取train_report/模型配置核验seed、五轮、split18、三层5/11/17、1864963参数、读写LR3e-4及归一化修正，保留训练提交。
+
+入口bash pathvqa/run_v1_read_write_three_seed_test.sh，用户执行所有GPU推理。独立outputs/pathvqa_v1_read_write_three_seed_test_时间戳/保存binding、命令、逐seed日志、完整Test预测/summary与退出状态；失败即停。完成三项后three_seed_summary.json保存逐seed和Overall/YN/FF/题型均值及ddof=1标准差。默认不关机，不覆盖旧Test或Validation，不择优。本机仅CPU语法检查；结果待回传后更新两账本。
+

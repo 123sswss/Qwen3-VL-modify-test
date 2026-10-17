@@ -618,3 +618,11 @@ V1 59.80056556对r2 57.41925882，6719题/858图像簇，V1−r2 +2.38130674pp�
 ## 2026-10-15 原始张量本机同步已由用户取消
 
 用户要求停止原始张量下载并删除本地原始包。本次已停止对应SCP与自动校验解压辅助进程，移除本机未完成tar（85229568字节）、head_transfer_check.npz（1843502字节）及同步辅助脚本。报告、图表、逐题JSON/CSV和分析结果保留；服务器原始NPZ保留，可作为恢复来源。此前“原始张量镜像同步中”状态由本条更正为“用户取消，本机原始文件已清理”，后续不自动下载该原始包。账本改动留本地。
+
+## 2026-10-16 V1读写LR三任务结果
+
+用户回传三任务completed/exit0：RSVQA-LR44 Test85.7657/AA86.6287（原V1 +0.7297pp，CoCoOp差-0.3798pp）；PathVQA45 Validation59.2427/YN90.944/FF27.6324（原V1 +0.7350pp）；SLAKE45完整双语Test76.93/C82.66/O73.13/K56.93/V79.86/EN78.61/ZH75.22（原V1 +0.62pp）。均固定epoch5，仅value_blocks/prefix_output LR3e-4。结合44，Path两seed均值59.05895（原58.92315），SLAKE77.36185（原75.92959）；SLAKE收益同向，Path收益随seed变化。完整路径和分项见EXPERIMENT_RESULTS.md；配对CI及训练元数据待核验，seed46待补。账本留本地。
+
+## 2026-10-17 读写LR PathVQA三seed齐全
+
+用户回传seed46五轮固定epoch5 Validation59.64/YN90.624/FF28.75、832图独立95%CI[58.18,61.09]，what23.8619/where67.4817；输出pathvqa/outputs/visual_selection_prefix/pathvqa_v1_read_write_lr3e4_norm_fixed_5ep_seed46_20261017_104312_1230。以当前显示精度，三seed Overall约59.2526±.3825（原58.8592±.4299），均值+.3934pp；FF约27.8667±.7926（原27.2602±.6074），均值+.6065pp。仅value_blocks/prefix_output LR3e-4。精确summary与配对CI待补；新LR为优先主配置候选，正式Test待固定配置评测，历史Test保留。

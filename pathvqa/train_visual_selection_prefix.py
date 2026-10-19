@@ -573,8 +573,9 @@ def main() -> int:
         raise ValueError(f"save epochs must be within [1,{args.epochs}]: {save_epochs}")
     if args.visual_prompt_mode != "split18" and args.visual_av10_learning_rate != 1e-4:
         raise ValueError("--visual-av10-learning-rate only applies to split18")
-    if args.read_write_learning_rate != 1e-4 and args.visual_prompt_mode != "split18":
-        raise ValueError("--read-write-learning-rate only applies to original V1 split18")
+    read_write_modes = {"split18", "c_qmap", "c_image_only", "c_no_visual", "evidence_token"}
+    if args.read_write_learning_rate != 1e-4 and args.visual_prompt_mode not in read_write_modes:
+        raise ValueError("--read-write-learning-rate requires the complete V1 read/write head")
     print("[V1_RUNTIME] " + json.dumps({
         "experiment": args.experiment_name,
         "dataset": args.dataset,

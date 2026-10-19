@@ -730,3 +730,25 @@ PathVQA seed46五轮Validation完成，59.64/FF28.75，三seed已齐，两账本
 
 入口bash pathvqa/run_v1_read_write_three_seed_test.sh，用户执行所有GPU推理。独立outputs/pathvqa_v1_read_write_three_seed_test_时间戳/保存binding、命令、逐seed日志、完整Test预测/summary与退出状态；失败即停。完成三项后three_seed_summary.json保存逐seed和Overall/YN/FF/题型均值及ddof=1标准差。默认不关机，不覆盖旧Test或Validation，不择优。本机仅CPU语法检查；结果待回传后更新两账本。
 
+
+## 2026-10-17 新LR PathVQA三seed Test已完成
+
+用户回传固定epoch5 Test44/45/46，均值59.0316±.2424，两账本已更新。此前“准备三seed Test”事项由本条更新为已完成。后续仅优先补CPU产物身份与新旧同seed图像簇配对统计、统一正式表；SLAKE46按用户决定省略。主配置选择依据包含PathVQA均值接近且观察波动缩小及SLAKE/RSVQA收益；新旧消融和案例按真实checkpoint/LR分别标注。此轮仅CPU记账，无GPU或新实验启动。
+
+
+## 2026-10-17 论文最终配置与剩余CPU核验
+
+论文按用户确认采用读写头LR3e-4最终配置，并列保留LR1e-4基础配置及其完整证据。待已有产物可访问时，CPU核验新配置三seed Test精确路径、summary与元数据，并计算最终配置seed44对LoRA-r2的Test配对区间。2026-10-17本轮SSH两项已知端口均连接拒绝，未实施统计；本条仅保留CPU核验事项，无新训练/推理/额外seed计划。
+
+
+## 2026-10-18 组件消融扩展暂缓
+
+用户确认：跨数据集组件消融与多seed组件消融均因计算预算受限暂缓。现有组件证据保持PathVQA seed44基础配置Validation，完整模型多seed与跨数据集结果各自用于对应评价。后续在投稿后、准备审稿回复期间，根据资源与审稿意见补充；当前不安排或启动新训练、推理及额外seed。论文消融章节末尾已同步研究范围及后续验证方向。
+## 2026-10-19 最终读写LR3e-4配置四项消融：准备完成，待用户启动
+
+以pathvqa_v1_read_write_lr3e4_norm_fixed_5ep_seed44_20261014_092451_34346为精确父配置及配对参照（Validation58.8752），按c_qmap→c_image_only→c_no_visual→evidence_token串行。复用全部已有消融模型、初始化/梯度/生成预检，仅扩展共享Trainer对这四种完整读写头模式的LR3e-4支持；原默认LR和旧入口保持。value_blocks与prefix_output=3e-4，其余P20=.3、S8=3e-5、Av10与保留动态组=1e-4。
+
+共同PathVQA model44/data42，从零五轮、batch2/累积16、3%warmup与linear、clip1、修正归一化、保存3/4/5、固定epoch5完整Validation；不跑Test/其他seed/重试。C-qmap预计1815811参数，保留问题层门控；Image-only预计1470339参数，删除问题编码器，地图Query及层logit全局共享；C-noVisual预计1846531参数；B预计1864963参数，完整生成头产生b，使用[P20;b;原生chat]的21位置，无额外可学习token基底。实际参数/共有初值/分支梯度等沿用已有用户GPU预检。
+
+入口bash pathvqa/run_v1_read_write_ablation_suite_shutdown.sh。独立suite与逐任务输出、日志、commit、runs.tsv、阶段/退出码；每项固定epoch5评分及相对最终V1图像簇配对CI10000次seed42。失败即停，成功或失败保存状态后sleep600再由Bash调用/usr/bin/shutdown，记录调用返回。GPU均由用户启动，本机只做CPU语法检查；本次无新结果，回传后更新两账本。旧消融作为基础LR1e-4历史记录保留。
+

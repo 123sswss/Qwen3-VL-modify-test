@@ -756,3 +756,15 @@ PathVQA seed46五轮Validation完成，59.64/FF28.75，三seed已齐，两账本
 
 28421服务器只读同步两套固定epoch5评分产物/训练报告和官方Train/Test JSON；本机CPU核验完整2094题/180图及官方评分，配对图像bootstrap10000次seed42。结果V1 77.793696 vs r2 80.802292，差−3.008596pp，CI[−4.405941,−1.657108]，V1/r2独占69/132。按旧规则重新固定40r2独占+20V1独占，52原图全部查看，逐题证据、不确定项、多标签计数及六代表案例已完成；保留基础LR旧审阅。Windows slake/outputs/cpu_final_lr_vs_r2_20261020/集中保存绑定/数据哈希/完整机器统计/报告/图像。两账本同步；任务到报告停止，无GPU、新训练、新推理或调参。
 
+
+## 2026-10-20 已完成：四项高LR消融与论文设置统一
+
+2026-10-19准备的c_qmap、c_image_only、c_no_visual、evidence_token已由用户完成五轮固定epoch5 Validation，Overall依次58.4119/58.4438/58.9871/58.6835，参照完整58.8752，四项Overall配对区间均跨零。已有summary/train_report及where分组审计已本机CPU读取，完整记录补入两账本。该四项事项更新为已完成。
+
+按用户2026-10-20决定，论文PathVQA主结果、多seed、消融与案例统一采用读写LR1e-4；SLAKE、RSVQA-LR采用3e-4。两LR结果和高LR四项消融完整保留附录。PathVQA主配置对r2可复用已完成的Test配对，不再将高LR PathVQA对r2的CPU配对作为当前投稿必补项。跨数据集及多seed组件消融继续按计算预算暂缓。本次只编辑论文和补录已有结果，无GPU或新实验。
+## 2026-10-20 已准备：最终LR C-noVisual补seed45/46
+
+用户要求检验移除Visual18后成绩；复用已有c_no_visual模块及读写LR3e-4优化器，新增最简独立bash串行入口pathvqa/run_v1_read_write_no_visual_seeds45_46.sh。PathVQA model45→46/data42、从零五轮、batch2/累积16、原初始化/其余LR/3%warmup/linear/clip1/监督与mask保持、归一化False、保存3/4/5、固定epoch5完整Validation；实际参数审计沿用1846531。启动前CPU核验两个精确同seed完整最终LR V1产物，评估后各自图像簇配对10000次seed42。
+
+独立输出与runs.tsv/阶段退出码，失败即停、无自动重试、Test或其他配置；本次未要求关机，入口保持开机。所有GPU由用户执行，本机只Bash语法检查。已有seed44消融58.9871保留，回传45/46后统一比较三seed完整总体/分项，不根据单seed或where模板子组决定移除模块。
+

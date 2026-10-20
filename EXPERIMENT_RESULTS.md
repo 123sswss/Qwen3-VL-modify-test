@@ -2999,3 +2999,138 @@ Validation新LR均值59.2526、原58.8592与本条正式Test各自保留。此�
 
 Windows独立产物slake/outputs/cpu_final_lr_vs_r2_20261020/：report.md、paired_v1_minus_r2.json、binding.json、all_paired_rows、sample_60、manual_annotations/reviewed_60、review_table、six_cases、52原图/6接触表及两套原始评分/训练报告和数据清单。服务器28421端口只读取原文件；未修改源码或服务器产物。本机首次分析误用r2 model_seed字段，在计算前KeyError停止；核对实际seed字段后修复并全量通过，未形成错误结果。基础LR既有审阅独立保留，不覆盖。CPU脚本与账本随本次相关代码提交；到报告停止。
 
+
+
+## 2026-10-20 补录：读写LR3e-4四项消融及论文分数据集配置
+
+四项训练与Validation结果由用户完成，本次CPU读取已有summary和train_report补录；完整参照58.8752，6259题/832图像簇，固定epoch5、修正梯度累积归一化。配对区间为用户回传的10000次图像簇bootstrap、seed42，四项Overall区间均跨零。问句分组报告见同目录ablation_overlap_report.md，为事后探索。
+
+```json
+{
+  "experiment": "pathvqa_v1_read_write_lr3e4_c_qmap_norm_fixed_5ep_seed44",
+  "dataset": "PathVQA",
+  "seed": 44,
+  "data_seed": 42,
+  "epochs": 5,
+  "split": "Validation",
+  "controlled_change": "c_qmap",
+  "read_write_lr": 0.0003,
+  "overall": 58.4119,
+  "yes_no": 88.416,
+  "free_form": 28.4939,
+  "per_question_type": {
+    "how": 8.5271,
+    "other": 14.2857,
+    "what": 22.9592,
+    "when": 0.0,
+    "where": 71.8826,
+    "why": 4.7619,
+    "yes/no": 88.416
+  },
+  "parameters": 1815811,
+  "paired_ci_ablation_minus_full": [
+    -1.2727,
+    0.3387
+  ],
+  "output": "pathvqa/outputs/visual_selection_prefix/ablations/pathvqa_v1_read_write_lr3e4_c_qmap_norm_fixed_5ep_seed44_20261019_171742_1166/checkpoints/epoch_5",
+  "local_audit": "E:\\work\\py\\Qwen3-VL-modify-test\\pathvqa\\outputs\\where_seed_audit_20261020\\c_qmap"
+}
+```
+
+```json
+{
+  "experiment": "pathvqa_v1_read_write_lr3e4_c_image_only_norm_fixed_5ep_seed44",
+  "dataset": "PathVQA",
+  "seed": 44,
+  "data_seed": 42,
+  "epochs": 5,
+  "split": "Validation",
+  "controlled_change": "c_image_only",
+  "read_write_lr": 0.0003,
+  "overall": 58.4438,
+  "yes_no": 90.016,
+  "free_form": 26.9623,
+  "per_question_type": {
+    "how": 8.5271,
+    "other": 14.2857,
+    "what": 21.6641,
+    "when": 0.0,
+    "where": 68.2152,
+    "why": 4.7619,
+    "yes/no": 90.016
+  },
+  "parameters": 1470339,
+  "paired_ci_ablation_minus_full": [
+    -1.2263,
+    0.3635
+  ],
+  "output": "pathvqa/outputs/visual_selection_prefix/ablations/pathvqa_v1_read_write_lr3e4_c_image_only_norm_fixed_5ep_seed44_20261019_203001_1166/checkpoints/epoch_5",
+  "local_audit": "E:\\work\\py\\Qwen3-VL-modify-test\\pathvqa\\outputs\\where_seed_audit_20261020\\c_image_only"
+}
+```
+
+```json
+{
+  "experiment": "pathvqa_v1_read_write_lr3e4_c_no_visual_norm_fixed_5ep_seed44",
+  "dataset": "PathVQA",
+  "seed": 44,
+  "data_seed": 42,
+  "epochs": 5,
+  "split": "Validation",
+  "controlled_change": "c_no_visual",
+  "read_write_lr": 0.0003,
+  "overall": 58.9871,
+  "yes_no": 90.272,
+  "free_form": 27.792,
+  "per_question_type": {
+    "how": 7.7519,
+    "other": 14.2857,
+    "what": 22.4882,
+    "when": 7.6923,
+    "where": 69.4377,
+    "why": 4.7619,
+    "yes/no": 90.272
+  },
+  "parameters": 1846531,
+  "paired_ci_ablation_minus_full": [
+    -0.6678,
+    0.8921
+  ],
+  "output": "pathvqa/outputs/visual_selection_prefix/ablations/pathvqa_v1_read_write_lr3e4_c_no_visual_norm_fixed_5ep_seed44_20261019_234027_1166/checkpoints/epoch_5",
+  "local_audit": "E:\\work\\py\\Qwen3-VL-modify-test\\pathvqa\\outputs\\where_seed_audit_20261020\\c_no_visual"
+}
+```
+
+```json
+{
+  "experiment": "pathvqa_v1_read_write_lr3e4_evidence_token_norm_fixed_5ep_seed44",
+  "dataset": "PathVQA",
+  "seed": 44,
+  "data_seed": 42,
+  "epochs": 5,
+  "split": "Validation",
+  "controlled_change": "evidence_token",
+  "read_write_lr": 0.0003,
+  "overall": 58.6835,
+  "yes_no": 90.752,
+  "free_form": 26.7071,
+  "per_question_type": {
+    "how": 7.7519,
+    "other": 7.1429,
+    "what": 21.2716,
+    "when": 7.6923,
+    "where": 69.1932,
+    "why": 0.0,
+    "yes/no": 90.752
+  },
+  "parameters": 1864963,
+  "paired_ci_ablation_minus_full": [
+    -1.0602,
+    0.6757
+  ],
+  "output": "pathvqa/outputs/visual_selection_prefix/ablations/pathvqa_v1_read_write_lr3e4_evidence_token_norm_fixed_5ep_seed44_20261020_024446_1166/checkpoints/epoch_5",
+  "local_audit": "E:\\work\\py\\Qwen3-VL-modify-test\\pathvqa\\outputs\\where_seed_audit_20261020\\evidence_token"
+}
+```
+
+论文设置更新：用户确认PathVQA主结果、多seed、组件消融与案例统一采用读写头LR1e-4；SLAKE/RSVQA-LR主结果采用3e-4。两个LR的全部既有结果和高LR消融继续保存在论文附录，历史账本不替换。SLAKE错误分析更新为20261020高LR对r2的2094题/180簇配对及60题/52图审阅。此呈现选择为回顾性整理，不新增验证集择优声明。

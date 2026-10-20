@@ -752,3 +752,7 @@ PathVQA seed46五轮Validation完成，59.64/FF28.75，三seed已齐，两账本
 
 入口bash pathvqa/run_v1_read_write_ablation_suite_shutdown.sh。独立suite与逐任务输出、日志、commit、runs.tsv、阶段/退出码；每项固定epoch5评分及相对最终V1图像簇配对CI10000次seed42。失败即停，成功或失败保存状态后sleep600再由Bash调用/usr/bin/shutdown，记录调用返回。GPU均由用户启动，本机只做CPU语法检查；本次无新结果，回传后更新两账本。旧消融作为基础LR1e-4历史记录保留。
 
+## 2026-10-20 已完成：SLAKE最终LR V1 seed44与LoRA-r2 Test配对及错误审阅
+
+28421服务器只读同步两套固定epoch5评分产物/训练报告和官方Train/Test JSON；本机CPU核验完整2094题/180图及官方评分，配对图像bootstrap10000次seed42。结果V1 77.793696 vs r2 80.802292，差−3.008596pp，CI[−4.405941,−1.657108]，V1/r2独占69/132。按旧规则重新固定40r2独占+20V1独占，52原图全部查看，逐题证据、不确定项、多标签计数及六代表案例已完成；保留基础LR旧审阅。Windows slake/outputs/cpu_final_lr_vs_r2_20261020/集中保存绑定/数据哈希/完整机器统计/报告/图像。两账本同步；任务到报告停止，无GPU、新训练、新推理或调参。
+

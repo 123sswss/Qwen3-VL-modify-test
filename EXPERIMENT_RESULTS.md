@@ -3134,3 +3134,23 @@ Windows独立产物slake/outputs/cpu_final_lr_vs_r2_20261020/：report.md、pair
 ```
 
 论文设置更新：用户确认PathVQA主结果、多seed、组件消融与案例统一采用读写头LR1e-4；SLAKE/RSVQA-LR主结果采用3e-4。两个LR的全部既有结果和高LR消融继续保存在论文附录，历史账本不替换。SLAKE错误分析更新为20261020高LR对r2的2094题/180簇配对及60题/52图审阅。此呈现选择为回顾性整理，不新增验证集择优声明。
+
+
+## 2026-10-21 待运行：Image-only与C-qmap补seed45/46
+
+用户授权准备四项串行入口：Image-only45→46→C-qmap45→46。复用已有消融实现及读写头3e-4 V1协议，PathVQA data42、五轮、batch2/累积16、归一化修正、保存3/4/5、固定epoch5完整Validation。预计参数分别1470339/1815811。实验名为`pathvqa_v1_read_write_lr3e4_c_image_only_norm_fixed_5ep_seed45`、seed46及`pathvqa_v1_read_write_lr3e4_c_qmap_norm_fixed_5ep_seed45`、seed46；独立时间戳目录位于`pathvqa/outputs/visual_selection_prefix/ablations/`。每项与已绑定同seed完整V1计算图像簇配对CI10000次seed42。入口`pathvqa/run_v1_read_write_qmap_image_only_seeds45_46.sh`，suite保存配置/commit/runs.tsv/阶段退出状态，失败即停、无重试或关机。本机Bash语法检查通过，GPU全部由用户启动；当前无新训练、评分或结果。
+
+## 2026-10-21 用户回传：高LR C-noVisual三seed及论文统一设置
+
+PathVQA，data seed42，model44/45/46，五轮固定epoch5 Validation，读写头3e-4；受控变化为移除Visual18，参数1846531，完整参照1864963。新增45/46实验语义名分别为pathvqa_v1_read_write_lr3e4_c_no_visual_norm_fixed_5ep_seed45及seed46；精确带时间戳输出路径、完整summary和训练报告本轮未提供。源为用户对话回传，未进行GPU操作。
+
+|seed|完整Overall|noVisual Overall|noVisual减完整|
+|---|---:|---:|---:|
+|44|58.8752|58.9871|+0.1118|
+|45|59.2427|59.0030|-0.2397|
+|46|59.6421|58.5077|-1.1344|
+|均值|59.2533|58.8326|-0.4208|
+
+seed46配对图像簇95%CI[-1.9537,-0.3107]，Free-form差-2.2974、what差-2.1978，Yes/No基本持平；其余完整分项和成本未回传。保留旧seed46显示59.64，新用户精度59.6421用于本次三seed汇总。18,432视觉提示参数占完整预算约0.9883%；三运行均值支持保留视觉提示的成本收益判断，收益随seed变化。
+
+论文呈现决定由本条更正20261020分数据集学习率决定：用户确认三个数据集统一采用读写LR3e-4，旧LR压缩为附录单表。已更新接受项2/3/4/7/8/10；主消融项5/6待讨论，案例、分项表与Test配对等项9进入计划待办。未宣称这些待办已完成；旧实验记录全部保留。

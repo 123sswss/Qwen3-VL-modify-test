@@ -645,3 +645,10 @@ V1 59.80056556对r2 57.41925882，6719题/858图像簇，V1−r2 +2.38130674pp�
 
 ## 2026-10-20 论文配置与高LR消融补录
 PathVQA采用读写LR1e-4（Test59.1209±.7169，seed44为59.8006），SLAKE/RSVQA采用3e-4（77.7937/85.7657）。高LR消融C-qmap58.4119、Image-only58.4438、noVisual58.9871、B58.6835，相对完整58.8752的四项Overall配对区间均跨零，完整结果留附录。SLAKE采用最新2094题配对与60题/52图审阅；全部历史结果保留。
+
+
+## 2026-10-21 高LR Visual18三seed与统一配置
+用户回传完整/去Visual18三seed Validation均值59.2533/58.8326，去Visual18平均-0.4208pp；seed46 -1.1344，配对CI[-1.9537,-.3107]，Free-form -2.2974。支持保留18,432参数视觉提示（约.99%），收益有seed差异。论文改回三数据集统一读写LR3e-4，历史LR仅表格留档；消融呈现5/6待讨论，案例与CPU配对更新列入待办。详见主账本新增记录。
+## 2026-10-21 待用户启动：Image-only / C-qmap补seed
+
+新增最简串行入口`pathvqa/run_v1_read_write_qmap_image_only_seeds45_46.sh`，Image-only45→46→C-qmap45→46。沿用高LR五轮V1及固定epoch5 Validation，逐seed配对；失败即停、不自动关机。CPU语法检查完成，尚无新成绩。

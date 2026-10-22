@@ -652,3 +652,7 @@ PathVQA采用读写LR1e-4（Test59.1209±.7169，seed44为59.8006），SLAKE/RSV
 ## 2026-10-21 待用户启动：Image-only / C-qmap补seed
 
 新增最简串行入口`pathvqa/run_v1_read_write_qmap_image_only_seeds45_46.sh`，Image-only45→46→C-qmap45→46。沿用高LR五轮V1及固定epoch5 Validation，逐seed配对；失败即停、不自动关机。CPU语法检查完成，尚无新成绩。
+
+
+## 2026-10-22 Image-only与C-qmap补seed45/46完成
+Image-only45/46 Overall55.9355/57.7409，C-qmap45/46为59.1948/59.7380。结合已有seed44，完整新LR三seed59.2533，Image-only57.3734（平均差约1.88pp），C-qmap59.1149（差约.14pp）。Image-only45/46 Overall配对区间均在零下；C-qmap三次Overall区间均跨零。完整输出路径、分项及用户回传CI见主账本。四项已完成，B/C-static/A各45/46继续待补。

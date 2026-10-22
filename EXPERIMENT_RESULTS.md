@@ -3154,3 +3154,268 @@ PathVQA，data seed42，model44/45/46，五轮固定epoch5 Validation，读写�
 seed46配对图像簇95%CI[-1.9537,-0.3107]，Free-form差-2.2974、what差-2.1978，Yes/No基本持平；其余完整分项和成本未回传。保留旧seed46显示59.64，新用户精度59.6421用于本次三seed汇总。18,432视觉提示参数占完整预算约0.9883%；三运行均值支持保留视觉提示的成本收益判断，收益随seed变化。
 
 论文呈现决定由本条更正20261020分数据集学习率决定：用户确认三个数据集统一采用读写LR3e-4，旧LR压缩为附录单表。已更新接受项2/3/4/7/8/10；主消融项5/6待讨论，案例、分项表与Test配对等项9进入计划待办。未宣称这些待办已完成；旧实验记录全部保留。
+
+
+## 2026-10-22 用户回传完成：新LR Image-only与C-qmap seed45/46
+
+PathVQA，model seed45/46、data seed42，五轮固定epoch5完整Validation，读写头3e-4；沿既有batch2/累积16及修正归一化协议。来源为用户本轮终端回传，本次仅CPU记账与汇总；训练commit、成本、完整train_report及summary本轮未提供。参照同seed完整QDPT；全Validation 6259题，832图像簇。配对方向消融减完整，paired数组顺序为[差值pp,消融独占正确,完整独占正确,95%CI下限,上限]；配对流程沿既有入口图像簇10000次、seed42。记录保留用户回传精度。
+
+```json
+{
+  "mode": "c_image_only",
+  "seed": 45,
+  "overall": 55.9355,
+  "yes_no": 88.448,
+  "free_form": 23.5163,
+  "types": {
+    "how": 8.5271,
+    "other": 7.1429,
+    "what": 19.3093,
+    "when": 7.6923,
+    "where": 56.4792,
+    "why": 4.7619,
+    "yes/no": 88.448
+  },
+  "paired": {
+    "overall": [
+      -3.3072,
+      290,
+      497,
+      -4.1978,
+      -2.3887
+    ],
+    "yes_no": [
+      -2.496,
+      103,
+      181,
+      -3.5714,
+      -1.4276
+    ],
+    "free_form": [
+      -4.1161,
+      187,
+      316,
+      -5.5823,
+      -2.6649
+    ],
+    "what": [
+      -2.9827,
+      148,
+      224,
+      -4.494,
+      -1.4159
+    ],
+    "where": [
+      -12.7139,
+      35,
+      87,
+      -17.8922,
+      -7.5795
+    ]
+  },
+  "experiment": "pathvqa_v1_read_write_lr3e4_c_image_only_norm_fixed_5ep_seed45",
+  "output": "pathvqa/outputs/visual_selection_prefix/ablations/pathvqa_v1_read_write_lr3e4_c_image_only_norm_fixed_5ep_seed45_20261021_104337_1478",
+  "controlled_change": "共享可学习地图Query及全局共享层权重，删除问题编码器"
+}
+```
+
+```json
+{
+  "mode": "c_image_only",
+  "seed": 46,
+  "overall": 57.7409,
+  "yes_no": 89.696,
+  "free_form": 25.8775,
+  "types": {
+    "how": 10.8527,
+    "other": 14.2857,
+    "what": 21.5071,
+    "when": 0,
+    "where": 60.1467,
+    "why": 4.7619,
+    "yes/no": 89.696
+  },
+  "paired": {
+    "overall": [
+      -1.9013,
+      269,
+      388,
+      -2.7268,
+      -1.0628
+    ],
+    "yes_no": [
+      -0.928,
+      106,
+      135,
+      -1.8975,
+      0
+    ],
+    "free_form": [
+      -2.8717,
+      163,
+      253,
+      -4.2031,
+      -1.519
+    ],
+    "what": [
+      -2.3548,
+      124,
+      184,
+      -3.8554,
+      -0.9346
+    ],
+    "where": [
+      -7.335,
+      34,
+      64,
+      -12.0098,
+      -2.6829
+    ]
+  },
+  "experiment": "pathvqa_v1_read_write_lr3e4_c_image_only_norm_fixed_5ep_seed46",
+  "output": "pathvqa/outputs/visual_selection_prefix/ablations/pathvqa_v1_read_write_lr3e4_c_image_only_norm_fixed_5ep_seed46_20261021_135520_1478",
+  "controlled_change": "共享可学习地图Query及全局共享层权重，删除问题编码器"
+}
+```
+
+```json
+{
+  "mode": "c_qmap",
+  "seed": 45,
+  "overall": 59.1948,
+  "yes_no": 89.44,
+  "free_form": 29.0364,
+  "types": {
+    "how": 10.8527,
+    "other": 14.2857,
+    "what": 23.0769,
+    "when": 0,
+    "where": 74.8166,
+    "why": 0,
+    "yes/no": 89.44
+  },
+  "paired": {
+    "overall": [
+      -0.0479,
+      289,
+      292,
+      -0.8351,
+      0.7318
+    ],
+    "yes_no": [
+      -1.504,
+      77,
+      124,
+      -2.3663,
+      -0.642
+    ],
+    "free_form": [
+      1.404,
+      212,
+      168,
+      0.2148,
+      2.6478
+    ],
+    "what": [
+      0.7849,
+      160,
+      140,
+      -0.4853,
+      2.1204
+    ],
+    "where": [
+      5.6235,
+      45,
+      22,
+      1.7115,
+      9.5355
+    ]
+  },
+  "experiment": "pathvqa_v1_read_write_lr3e4_c_qmap_norm_fixed_5ep_seed45",
+  "output": "pathvqa/outputs/visual_selection_prefix/ablations/pathvqa_v1_read_write_lr3e4_c_qmap_norm_fixed_5ep_seed45_20261021_170747_1478",
+  "controlled_change": "共享可学习地图Query，保留问题条件层权重"
+}
+```
+
+```json
+{
+  "mode": "c_qmap",
+  "seed": 46,
+  "overall": 59.738,
+  "yes_no": 90.72,
+  "free_form": 28.8449,
+  "types": {
+    "how": 13.1783,
+    "other": 7.1429,
+    "what": 23.1947,
+    "when": 0,
+    "where": 71.8826,
+    "why": 4.7619,
+    "yes/no": 90.72
+  },
+  "paired": {
+    "overall": [
+      0.0959,
+      268,
+      262,
+      -0.6337,
+      0.8379
+    ],
+    "yes_no": [
+      0.096,
+      112,
+      109,
+      -0.8496,
+      1.0265
+    ],
+    "free_form": [
+      0.0957,
+      156,
+      153,
+      -1.0073,
+      1.2018
+    ],
+    "what": [
+      -0.6672,
+      115,
+      132,
+      -1.8468,
+      0.5092
+    ],
+    "where": [
+      4.401,
+      37,
+      19,
+      0.9732,
+      8.0493
+    ]
+  },
+  "experiment": "pathvqa_v1_read_write_lr3e4_c_qmap_norm_fixed_5ep_seed46",
+  "output": "pathvqa/outputs/visual_selection_prefix/ablations/pathvqa_v1_read_write_lr3e4_c_qmap_norm_fixed_5ep_seed46_20261021_202052_1478",
+  "controlled_change": "共享可学习地图Query，保留问题条件层权重"
+}
+```
+
+三seed（44/45/46）Overall汇总，按已回传显示精度计算样本SD（ddof=1）：
+
+```json
+{
+  "完整QDPT": {
+    "mean": 59.25333333333333,
+    "sample_sd": 0.38356056019008683,
+    "full_minus_variant": 0.0
+  },
+  "Image-only": {
+    "mean": 57.373400000000004,
+    "sample_sd": 1.2939027822831235,
+    "full_minus_variant": 1.8799333333333266
+  },
+  "C-qmap": {
+    "mean": 59.1149,
+    "sample_sd": 0.6666508156448905,
+    "full_minus_variant": 0.13843333333333163
+  }
+}
+```
+
+Image-only三个seed点估计均低于完整模型，seed45/46的Overall配对区间均在零下；完整条件配置平均高约1.88pp。C-qmap总体均值低约0.14pp，三个seed Overall差值区间均跨零；其where三个seed均高于完整模型，保留整体与题型的不同表现。参数容量差异保留，区间针对固定训练模型的图像抽样。未产生新的GPU结果或新逐题统计，不将用户回传标记为本机产物身份复核。

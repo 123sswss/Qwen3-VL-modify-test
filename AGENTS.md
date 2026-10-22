@@ -15,3 +15,7 @@
 - The assistant may execute operations that are guaranteed not to use a GPU, including CPU-only file inspection, source editing, syntax checks, Git operations, log reading, result extraction, and offline statistics over existing artifacts.
 - Add every completed experiment to both records: keep the full exact record in `EXPERIMENT_RESULTS.md` and the concise conclusion in `result.md`.
 - Add, remove, or reschedule planned experiments in `plan.md`.
+
+## Single-task exception: 2026-10-22 paper evidence handoff
+
+- The user explicitly authorizes the assistant to load the final-LR V1 seed44 epoch5 model and export the six fixed PathVQA Test case maps for `server_handoff_20261022.md`. This exception covers only the required case prefill/inference and ends when this handoff is completed. No training, checkpoint updates, new seeds, or full-dataset inference are authorized. The usual user-only GPU rule remains in force for all other tasks.

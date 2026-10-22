@@ -99,11 +99,15 @@ def maps(out,data):
     cfg=read(CHECKPOINT/'visual_selection_prefix_config.json')
     report=read(CHECKPOINT.parent.parent/'train_report.json')
     summary=read(V1_EVAL/'pathvqa_summary.json')
-    assert report['experiment']=='pathvqa_v1_norm_fixed_5ep_seed44' and report['epochs']==5
+    assert report['experiment'] in ('pathvqa_v1_norm_fixed_5ep_seed44', 'pathvqa_v1_read_write_lr3e4_norm_fixed_5ep_seed44') and report['epochs']==5
     assert report['model_seed']==44 and report['trainer_model_accepts_loss_kwargs'] is False
     assert cfg['method']=='visual_selection_prefix_p20_v1' and cfg['init_seed']==44
-    assert abs(summary['overall_accuracy']-59.8006)<1e-4
-    assert Path(summary['checkpoint']).resolve()==CHECKPOINT.resolve()
+    expected_score = 58.9225 if 'read_write_lr3e4' in report['experiment'] else 59.8006
+    assert abs(summary['overall_accuracy']-expected_score)<1e-4
+    if 'read_write_lr3e4' in report['experiment']:
+        rates=report['optimizer']['group_learning_rates']
+        assert rates['value_projection']==rates['prefix_output']==3e-4
+    assert (ROOT / summary['checkpoint']).resolve()==CHECKPOINT.resolve()
     store=PathVQAParquetStore(data,'test')
     records={r['question_id']:r for r in store.samples}
     interface=VisualSelectionPrefixInterface(str(CHECKPOINT),'/root/autodl-tmp/model')
@@ -244,7 +248,10 @@ def render(out):
 
 if __name__=='__main__':
     p=argparse.ArgumentParser();p.add_argument('stage',choices=['candidates','images','select','maps','control','render']);p.add_argument('--output',type=Path,required=True);p.add_argument('--data',type=Path,default=Path('/root/autodl-tmp/dataset/pathVQA'))
+    p.add_argument('--checkpoint',type=Path,default=CHECKPOINT)
+    p.add_argument('--v1-eval',type=Path,default=V1_EVAL)
     a=p.parse_args()
+    CHECKPOINT=a.checkpoint.resolve();V1_EVAL=a.v1_eval.resolve()
     if a.stage=='candidates':candidates(a.output)
     elif a.stage=='images':export_images(a.output,a.data)
     elif a.stage=='select':select(a.output)

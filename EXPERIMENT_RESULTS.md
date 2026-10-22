@@ -3159,6 +3159,8 @@ Test vs r2共同正确3510、共同错误2412。所有题型及另外9组同seed
 
 Windows与服务器报告包：`outputs/paper_final_evidence_20261022_01/`，含README/report、source_manifest、Validation/Test三seedCSV/JSON、paired全题型区间、branch_current_lr表图、cases。PNG/PDF采用统一log2(p/uniform)色阶[-10.661909,5.481860]，打印图opacity0.60，已按页宽检查。旧模型案例和所有历史分数保留。GPU导出进程已退出，单次授权结束；任务到报告交付停止。
 
+制图执行补记：服务器原有Pillow版render成功；后续打印版finalizer因服务器缺reportlab在import阶段退出。无模型执行或产物评分影响，改用Windows现有CPU依赖完成打印PDF、页宽预览、分支图及最终报告，再同步回服务器；未安装或修改服务器Python环境。补强的CPU审计在`outputs/paper_final_evidence_20261022_cpu_refresh/`成功完成，R2实测trainable=1769472、A/C-static独立初始化审计和first1000清单文件SHA256已补入最终source_manifest。原始预测/权重及历史结果均保持原位。
+
 ## 2026-10-21 待运行：Image-only与C-qmap补seed45/46
 
 用户授权准备四项串行入口：Image-only45→46→C-qmap45→46。复用已有消融实现及读写头3e-4 V1协议，PathVQA data42、五轮、batch2/累积16、归一化修正、保存3/4/5、固定epoch5完整Validation。预计参数分别1470339/1815811。实验名为`pathvqa_v1_read_write_lr3e4_c_image_only_norm_fixed_5ep_seed45`、seed46及`pathvqa_v1_read_write_lr3e4_c_qmap_norm_fixed_5ep_seed45`、seed46；独立时间戳目录位于`pathvqa/outputs/visual_selection_prefix/ablations/`。每项与已绑定同seed完整V1计算图像簇配对CI10000次seed42。入口`pathvqa/run_v1_read_write_qmap_image_only_seeds45_46.sh`，suite保存配置/commit/runs.tsv/阶段退出状态，失败即停、无重试或关机。本机Bash语法检查通过，GPU全部由用户启动；当前无新训练、评分或结果。

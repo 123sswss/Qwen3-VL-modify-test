@@ -162,8 +162,8 @@ def main(out):
         '- Raw checkpoint files, complete source predictions and branch NPZ remain at the bound server paths. This package contains only compact reports, source metadata, selected originals and case maps.',
         '- Six authorized prefill calls completed without training or checkpoint writes; answers were reused from complete Test evaluation. GPU exception ends with this handoff.']
     (out/'report.md').write_text('\n'.join(lines)+'\n',encoding='utf-8')
-    with (out/'README.md').open('a',encoding='utf-8') as f:
-        f.write('\n## Completion\nAll requested CPU statistics and six-case GPU maps are complete. See report.md, cases/captions.md and cases/case_1.pdf (heart), case_2.pdf (burn). No missing evaluation or case answer. Print panels use 0.60 opacity and the same shared probability-ratio scale; grid JSON stores unmodified probabilities.\n')
+    header=(out/'README.md').read_text(encoding='utf-8').split('\n## Completion')[0]
+    (out/'README.md').write_text(header+'\n## Completion\nAll requested CPU statistics and six-case GPU maps are complete. See report.md, cases/captions.md and cases/case_1.pdf (heart), case_2.pdf (burn). No missing evaluation or case answer. Print panels use 0.60 opacity and the same shared probability-ratio scale; grid JSON stores unmodified probabilities.\n\nFinal print panels are authored on Windows with its existing ReportLab runtime. The server lacks ReportLab; no server dependency was installed. The CPU collection and GPU map export had already succeeded before that optional server rendering attempt.\n',encoding='utf-8')
     write(out/'completion.json',dict(status='completed',case_prefills=6,new_generation_calls=0,training=False,
         case_maps=18,full_evaluations_run=0,gpu_exception='expired after this task',
         output=str(out),figure_pdf_count=2))

@@ -649,6 +649,10 @@ PathVQA采用读写LR1e-4（Test59.1209±.7169，seed44为59.8006），SLAKE/RSV
 
 ## 2026-10-21 高LR Visual18三seed与统一配置
 用户回传完整/去Visual18三seed Validation均值59.2533/58.8326，去Visual18平均-0.4208pp；seed46 -1.1344，配对CI[-1.9537,-.3107]，Free-form -2.2974。支持保留18,432参数视觉提示（约.99%），收益有seed差异。论文改回三数据集统一读写LR3e-4，历史LR仅表格留档；消融呈现5/6待讨论，案例与CPU配对更新列入待办。详见主账本新增记录。
+## 2026-10-22 最终LR投稿证据包完成
+
+19套既有PathVQA产物已核验，四配置三seedValidation、正式Test三seed分项及全部题型配对存`outputs/paper_final_evidence_20261022_01/`。新LR seed44 Test相对r2+1.5032pp，10000次seed42图片配对CI[.6114,2.3947]；Validation相对C-static/A/B为+2.1409/+2.9717/+.1917，区间[1.2685,3.0074]/[2.0748,3.8366]/[-.6844,1.0574]。A/C-static保留组协议和初始化支持复用。已有新LR分支统计提取完毕；单次授权GPU完成固定心脏/烧伤六题18张地图，回答复用Test，原图/图版/图注/精确网格均已回传。心脏地图随问题变化小，烧伤变化较明显；案例保持定性边界。GPU例外已结束，无训练或全量重评。
+
 ## 2026-10-21 待用户启动：Image-only / C-qmap补seed
 
 新增最简串行入口`pathvqa/run_v1_read_write_qmap_image_only_seeds45_46.sh`，Image-only45→46→C-qmap45→46。沿用高LR五轮V1及固定epoch5 Validation，逐seed配对；失败即停、不自动关机。CPU语法检查完成，尚无新成绩。

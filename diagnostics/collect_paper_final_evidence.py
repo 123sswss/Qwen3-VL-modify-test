@@ -114,13 +114,17 @@ def main(out):
             assert r['question_type']==metric.question_type(r['question'],r['reference'])
         measured=stats(rows)
         assert abs(measured['overall']['accuracy']-summary['overall_accuracy'])<.000051
-        actual=report.get('total_trainable_parameters', report.get('trainable_parameters'))
+        actual=report.get('total_trainable_parameters', report.get('parameter_counts',{}).get('trainable'))
         if params is not None:
             assert actual==params,(name,actual,params)
         files=[run/'train_report.json']+[evaluation/f'pathvqa_{x}.json' for x in ('summary','predictions','comparisons')]
+        init_file=run/'v1_shared_initialization_audit.json'
+        if init_file.exists():
+            files.append(init_file)
         record=dict(name=name,seed=seed,split=split,run=str(run),evaluation=str(evaluation),checkpoint=summary['checkpoint'],
             training_commit=report.get('git_commit'),parameters=actual,metrics=measured,
             optimizer=report.get('optimizer'),summary=summary,report=report,
+            initialization_audit=read(init_file) if init_file.exists() else None,
             files=[dict(path=str(p),sha256=hashlib.sha256(p.read_bytes()).hexdigest(),bytes=p.stat().st_size) for p in files])
         sources.append(record); artifacts[name]=(rows,record)
         print('BOUND',name,measured['overall']['accuracy'],flush=True)
@@ -139,6 +143,8 @@ def main(out):
         for seed,suffix in zip((44,45,46),suffixes):
             run=BASE/'ablations'/f'pathvqa_v1_read_write_lr3e4_{mode}_norm_fixed_5ep_seed{seed}_{suffix}'
             rr=load(f'{family}_{seed}',run,run/'eval_validation/epoch_5',seed,'validation',COUNTS[family])
+            rates=artifacts[f'{family}_{seed}'][1]['report']['optimizer']['group_learning_rates']
+            assert rates['value_projection']==rates['prefix_output']==3e-4
             validations[family][seed]=rr
             write(out/'paired'/f'validation_full_minus_{family}_seed{seed}.json',paired(full[seed],rr))
     extra={
@@ -150,7 +156,9 @@ def main(out):
         rr=load(name,run,run/'eval_validation/epoch_5',44,'validation',params)
         write(out/'paired'/f'validation_full_minus_{name}_seed44.json',paired(full[44],rr))
     r2run=ROOT/'pathvqa/outputs/lora/pathvqa_lora_full_model_attention_r2_norm_fixed_5ep_b1a32_seed44_20261001_1'
-    rr=load('lora_r2_test_44',r2run,r2run/'test_epoch5_20261010_095918_1103',44,'test')
+    rr=load('lora_r2_test_44',r2run,r2run/'test_epoch5_20261010_095918_1103',44,'test',1769472)
+    r2report=artifacts['lora_r2_test_44'][1]['report']
+    assert r2report['rank']==2 and r2report['alpha']==4 and r2report['use_rslora'] is False
     write(out/'paired/test_full_minus_lora_r2_seed44.json',paired(test[44],rr))
 
     def summarize(families,filename):
@@ -190,6 +198,7 @@ def main(out):
     branch=ROOT/'outputs/v1_three_branch_audit_20261015'
     meta=read(branch/'manifest_meta.json'); completed=read(branch/'lr3e4/completed.json')
     assert meta['manifest_sha256']==completed['manifest_sha256']=='5cc1c48c508266aed345ad98cdeb8f88a39ba74a261a16f85e9c6e8806e9d861'
+    assert hashlib.sha256((branch/'manifest.json').read_bytes()).hexdigest()==meta['manifest_sha256']
     assert meta['samples']==1000 and meta['images']==122
     grouped=read(branch/'lr3e4/grouped_statistics.json')
     write(out/'branch_current_lr.json',dict(manifest=meta,completed=completed,groups=grouped,

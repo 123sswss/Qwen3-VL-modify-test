@@ -3136,6 +3136,29 @@ Windows独立产物slake/outputs/cpu_final_lr_vs_r2_20261020/：report.md、pair
 论文设置更新：用户确认PathVQA主结果、多seed、组件消融与案例统一采用读写头LR1e-4；SLAKE/RSVQA-LR主结果采用3e-4。两个LR的全部既有结果和高LR消融继续保存在论文附录，历史账本不替换。SLAKE错误分析更新为20261020高LR对r2的2094题/180簇配对及60题/52图审阅。此呈现选择为回顾性整理，不新增验证集择优声明。
 
 
+## 2026-10-22 已完成：最终LR投稿证据收集、CPU配对及六题新案例地图
+
+依据`sn-article-template/server_handoff_20261022.md`，在10483实例核对19套既有PathVQA训练/评分产物：完整新LR三seed各Validation/Test；Image-only/C-qmap/C-noVisual各三seedValidation；seed44 C-static/A/B与LoRA-r2 Test。既有原始checkpoint、预测与NPZ保持原位；无训练、参数更新、额外seed或全量重新评估。来源路径/训练提交/runtime/optimizer/文件SHA256见独立包`source_manifest.json`。本机实现CPU收集和参数化案例导出入口，4305d0d提交推送后按标准服务器快进同步。
+
+Validation6259题/832图，Test6719题/858图；逐题核对ID、图像、原始问题/答案、官方题型、预测归一化与正确性。汇总采用整数正确数：完整Validation59.25334185±0.3836、Image-only57.37338233±1.2939、C-qmap59.11487458±0.6666、C-noVisual58.83261437±0.2815（样本SD/ddof1，具体末位以JSON为准）。完整Test三seed58.92245870/59.30942104/58.86292603，均值59.03160192±0.2424。总体/Yes-No/Free-form及全部官方题型、题数/簇数、逐seed差和均值/SD存JSON/CSV；旧对话显示值的末位舍入保留，完整减qmap均值本次四位显示0.1385pp。
+
+所有新配对统一完整QDPT减对照，10000次、seed42、逐图像簇percentile95%CI，子组按相应图片抽样。使用NumPy PCG64；历史Python Random区间保持独立，有限次抽样差异不覆盖旧记录。三seedSD与固定模型的图片抽样区间分别报告。
+
+|比较（seed44）|完整/对照Overall|差值pp|95%图像配对CI|完整/对照独占正确|
+|---|---|---:|---|---|
+|Test vs LoRA-r2|58.92245870/57.41925882|+1.50319988|[+0.61138367,+2.39468281]|449/348|
+|Validation vs C-static|58.87521968/56.73430260|+2.14091708|[+1.26847215,+3.00741319]|402/268|
+|Validation vs A|58.87521968/55.90349896|+2.97172072|[+2.07475287,+3.83660829]|482/296|
+|Validation vs B|58.87521968/58.68349577|+0.19172392|[-0.68439448,+1.05735815]|349/337|
+
+Test vs r2共同正确3510、共同错误2412。所有题型及另外9组同seed消融配对见`paired/`。C-static/A训练报告确认五轮、data42、batch2/累积16、corrected normalization、保存3/4/5；两者均删除此次调LR的value_blocks/prefix_output，保留参数组LR保持。C-static初始化报告equal=true；A既有shared-init报告fresh_V0_seed44/equal=true/34张量，并有首批alpha校准RMS比1.0及RNG恢复记录，故seed44可按当前完整参照复用，A仍为整套映射消融。
+
+新LR分支审计复用`outputs/v1_three_branch_audit_20261015/lr3e4`既有结果，固定Validation前1000题/122图，SHA256=`5cc1c48c508266aed345ad98cdeb8f88a39ba74a261a16f85e9c6e8806e9d861`。三层分量范数占比均值约28.35%/55.62%/16.04%，总体/what/where门控与地图熵/范数统计另存表图；这些为表征描述量，未宣称因果贡献。
+
+本次用户单独授权六题GPU案例prefill；AGENTS已登记任务例外并完成后失效。加载精确`pathvqa/outputs/visual_selection_prefix/pathvqa_v1_read_write_lr3e4_norm_fixed_5ep_seed44_20261014_092451_34346/checkpoints/epoch_5`，执行提交4305d0d6ae66ef41a0c46c7ae1ce459c57bb3856，PyTorch2.8.0+cu128。固定心脏513/524/435、烧伤5911/5918/5915，仅eval/inference_mode各一次prefill，无标签、无optimizer，生成调用0；回答来自新LR完整Test存档，CoCoOp/r8保留历史三轮回答及来源。六题共18张真实merger网格地图，层5/11/17及gate、原图RGB校验、两组PNG/PDF、六题答案表、英文图注与18份单图JSON已导出。心脏三题地图JS很小（约2.54e-6至1.34e-4 nats），烧伤题变化更大（约.00109至.03071），不把热图对比当定位有效性证明；保留错误回答和全部预先固定案例。
+
+Windows与服务器报告包：`outputs/paper_final_evidence_20261022_01/`，含README/report、source_manifest、Validation/Test三seedCSV/JSON、paired全题型区间、branch_current_lr表图、cases。PNG/PDF采用统一log2(p/uniform)色阶[-10.661909,5.481860]，打印图opacity0.60，已按页宽检查。旧模型案例和所有历史分数保留。GPU导出进程已退出，单次授权结束；任务到报告交付停止。
+
 ## 2026-10-21 待运行：Image-only与C-qmap补seed45/46
 
 用户授权准备四项串行入口：Image-only45→46→C-qmap45→46。复用已有消融实现及读写头3e-4 V1协议，PathVQA data42、五轮、batch2/累积16、归一化修正、保存3/4/5、固定epoch5完整Validation。预计参数分别1470339/1815811。实验名为`pathvqa_v1_read_write_lr3e4_c_image_only_norm_fixed_5ep_seed45`、seed46及`pathvqa_v1_read_write_lr3e4_c_qmap_norm_fixed_5ep_seed45`、seed46；独立时间戳目录位于`pathvqa/outputs/visual_selection_prefix/ablations/`。每项与已绑定同seed完整V1计算图像簇配对CI10000次seed42。入口`pathvqa/run_v1_read_write_qmap_image_only_seeds45_46.sh`，suite保存配置/commit/runs.tsv/阶段退出状态，失败即停、无重试或关机。本机Bash语法检查通过，GPU全部由用户启动；当前无新训练、评分或结果。

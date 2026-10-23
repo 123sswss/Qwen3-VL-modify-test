@@ -820,6 +820,10 @@ Image-only45/46、C-qmap45/46已由用户完成并回传成绩与配对CI，两�
 论文主消融表已填入Image-only57.3734±1.2939、C-qmap59.1149±.6667；替换对应预期占位结论为实测配置比较与题型解说。完整59.2533±.3836，平均差1.8799/.1384pp；区间方向已统一为完整减Image-only。其余C-static、A、B占位继续保留。全程CPU编辑编译，无GPU。
 
 
+## 2026-10-23 已准备：独立精简V1 / PathVQA
+
+新建`QDPT_V1/`：`model/`仅含原Visual18/5-11-17选择/共同Value/条件P20，`pathvqa/`含Parquet、真实问题独立分词、原答案监督和raw精确匹配评分；根`main.py`提供run/train/eval。硬编码model44/data42、五轮、batch2/累积16、3%warmup/linear/clip1、原分组LR及读写头3e-4、Trainer归一化False，保存3/4/5，固定epoch5评分。移除诊断、消融、兼容与预检。训练参数无CLI覆盖，路径/动作/评估划分可指定。按用户要求不执行测试、训练或推理；当前数值等价及参数实测均未运行验证，论文历史成绩继续绑定原正式入口。目录自含README/requirements/.gitignore及独立Git，源码同时随主项目相关代码提交保存。
+
 ## 2026-10-22 执行中：投稿证据包与六题案例
 
 按server_handoff_20261022.md精确绑定三seed正式Validation/Test、三类消融与单seedA/B/C-static/r2；只读CPU核验、全题型图像簇配对、均值/样本SD及当前LR分支统计。用户本次单独授权助手执行固定心脏/烧伤六题的新LR seed44 GPU prefill与地图导出，完成后该例外失效。新脚本本机实现检查、提交推送后服务器快进同步；独立输出、小型报告/案例回传，原预测/权重/原始NPZ保留服务器。无训练或额外seed。
@@ -831,3 +835,7 @@ Image-only45/46、C-qmap45/46已由用户完成并回传成绩与配对CI，两�
 用户明确暂缓B、C-static、A各seed45/46，共6次训练；当前不准备自动执行、不启动GPU。现有seed44结果继续报告。正文采用计算预算限制说明，多初始化验证和系统性超参搜索留待后续扩展；不把尚未扫参写成已证实的消融波动原因。
 
 论文已撤下这三项的训练占位及预期三seed结论。主三seed消融表保留完整QDPT/C-qmap/Image-only/C-noVisual；C-static移入单seed附录，与A/B共同报告。后续先完成服务器侧已有产物读取、CPU配对/分项汇总、已有分支统计与用户执行的6题案例地图导出。详细清单见sn-article-template/server_handoff_20261022.md。
+
+## 2026-10-22 已完成：投稿证据包写入论文
+
+已将`outputs/paper_final_evidence_20261022_01/`的现有结果写入`sn-article-template/new qdpt-sn.tex`：更新PathVQA seed44 Test分项及对r2的配对统计，统一三seed汇总的整数计数精度；补充五类Validation分项和13组Overall配对结果；A/C-static使用已核验的同协议对照及新参照区间；Discussion与分支附录采用当前模型统计。心脏和烧伤六题的18张地图、层权重与回答已用于正文和附录图，保留固定案例及错误答案，并按实测变化幅度改写解说。旧学习率结果留在单独对照表，历史产物保持原样。以上补数、案例及分支统计的稿件占位已完成；B/C-static/A各seed45/46和此前列出的机制扩展继续按计算预算暂缓。本次执行为本机CPU编辑、制图及编译。

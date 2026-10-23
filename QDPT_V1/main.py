@@ -36,7 +36,7 @@ def train(model, processor, data, output):
             seed=44, data_seed=42),
         train_dataset=TrainSet(data, processor), data_collator=Collator(processor),
         optimizers=(optimizer, None), callbacks=[SaveEpochs(output)])
-    trainer.model_accepts_loss_kwargs = False  # Trainer normalizes by the actual accumulation window.
+    trainer.model_accepts_loss_kwargs = False  # 累积让Trainer自己除
     report = dict(model_seed=44, data_seed=42, epochs=5, saved_epochs=[5],
         per_device_batch_size=2, gradient_accumulation_steps=16, effective_batch_size=32,
         max_length=2048, warmup_ratio=.03, scheduler='linear', max_grad_norm=1.,

@@ -30,6 +30,7 @@ def encode(processor, image, question, answer=None):
         header = processor.tokenizer.encode('<|im_start|>assistant\n', add_special_tokens=False)
         prefix = processor.tokenizer.encode('<|im_start|>assistant', add_special_tokens=False)
         start = next(i for i in range(len(tokens)) if tokens[i:i + len(header)] == header) + len(prefix)
+        # 从这儿算，换行也带上
         labels = inputs['input_ids'].clone()
         labels[:, :start] = -100
         inputs['labels'] = labels

@@ -29,6 +29,7 @@ def score(rows):
     images = sorted(clusters)
     counts = [(sum(clusters[i]), len(clusters[i])) for i in images]
     rng = random.Random(42)
+    # 按图抽，一图的题一起走
     samples = []
     for _ in range(2000):
         draws = [counts[rng.randrange(len(images))] for _ in images]

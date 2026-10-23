@@ -30,7 +30,7 @@ class Visual18(nn.Module):
                 for chunk in tensor.split(lengths)
             ])
 
-        # Temporary prompts have identity rotation; real patch positions stay native.
+        # 临时的转个空，原位置照旧
         if rotary_pos_emb is not None:
             rotary_pos_emb = prepend(rotary_pos_emb, 0)
         if position_embeddings is not None:
@@ -51,6 +51,7 @@ class QDPT(nn.Module):
         self.config = base_model.config
         self.generation_config = base_model.generation_config
         embedding = base_model.get_input_embeddings().weight
+        # P20，抽20行
         rows = torch.randint(len(embedding), (20,), generator=torch.Generator().manual_seed(44))
         self.p20 = nn.Parameter(embedding.detach()[rows.to(embedding.device)].float().clone())
         self.visual_s8 = nn.Parameter(torch.empty(8, 1024, device=embedding.device))
@@ -88,6 +89,7 @@ class QDPT(nn.Module):
 
     def condition(self, question_ids, valid, grid):
         question = self.base_model.get_input_embeddings().weight[question_ids].float()
+        # [b,q,128]
         x = self.text_projection(question) * valid.unsqueeze(-1)
         conv = self.question_pointwise(F.gelu(self.question_depthwise(x.transpose(1, 2))))
         x = (x + conv.transpose(1, 2)) * valid.unsqueeze(-1)
@@ -103,11 +105,12 @@ class QDPT(nn.Module):
             for b, (patches, value) in enumerate(zip(self.features[layer].float().split(counts), values)):
                 keys = self.key_heads[i](self.key_norms[i](patches))
                 probabilities = ((keys * query[b]).sum(-1) / 128**.5).softmax(0)
-                # Native Qwen3-VL packs each spatial 2x2 merge group consecutively.
+                # 4个patch挤1格
                 merged = probabilities.reshape(-1, 4).sum(1)
                 summaries.append((merged[:, None] * value).sum(0))
             z = self.value_blocks[i](self.value_norms[i](torch.stack(summaries)))
             blocks.append(z * beta[:, i, None])
+        # [b,3*64] -> [b,2560]
         return self.prefix_output(F.relu(torch.cat(blocks, -1)))
 
     @contextmanager
@@ -122,6 +125,7 @@ class QDPT(nn.Module):
 
         def conditional_prefix(module, args, kwargs):
             nonlocal done
+            # prefill来一次就行
             if not done:
                 x = kwargs['inputs_embeds']
                 shift = self.condition(question_ids, valid, grid).to(x.dtype)
@@ -177,6 +181,7 @@ class QDPT(nn.Module):
     def save(self, directory):
         directory = Path(directory)
         directory.mkdir(parents=True, exist_ok=True)
+        # 只存学的那点
         torch.save({n: p.detach().cpu() for n, p in self.named_parameters() if p.requires_grad},
                    directory / 'visual_selection_prefix.pt')
 

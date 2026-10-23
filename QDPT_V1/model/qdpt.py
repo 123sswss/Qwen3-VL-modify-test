@@ -18,29 +18,34 @@ class Visual18(nn.Module):
     def forward(self, hidden_states, cu_seqlens, rotary_pos_emb=None,
                 position_embeddings=None, **kwargs):
         owner = self.owner()
+        # [b+1] -> [b]
         lengths = (cu_seqlens[1:] - cu_seqlens[:-1]).tolist()
+        # [8,1024] + [10,1024] -> [18,1024]
         prompt = torch.cat((owner.visual_s8, owner.visual_av10)).to(hidden_states.dtype)
+        # [Σn,1024] -> [Σ(n+18),1024]
         hidden_states = torch.cat([
             torch.cat((prompt, chunk)) for chunk in hidden_states.split(lengths)
         ])
 
         def prepend(tensor, value):
+            # [Σn,d] -> [Σ(n+18),d]
             return torch.cat([
                 torch.cat((chunk.new_full((18, *chunk.shape[1:]), value), chunk))
                 for chunk in tensor.split(lengths)
             ])
 
-        # 临时的转个空，原位置照旧
         if rotary_pos_emb is not None:
             rotary_pos_emb = prepend(rotary_pos_emb, 0)
         if position_embeddings is not None:
             cos, sin = position_embeddings
+            # [18,d]: cos=1, sin=0
             position_embeddings = prepend(cos, 1), prepend(sin, 0)
         if 'max_seqlen' in kwargs:
             kwargs['max_seqlen'] += 18
         cu = cu_seqlens + torch.arange(cu_seqlens.numel(), device=cu_seqlens.device) * 18
         output = self.block(hidden_states, cu.to(cu_seqlens.dtype), rotary_pos_emb,
                             position_embeddings, **kwargs)
+        # [Σ(n+18),1024] -> [Σn,1024]
         return torch.cat([chunk[18:] for chunk in output.split([n + 18 for n in lengths])])
 
 
@@ -51,8 +56,8 @@ class QDPT(nn.Module):
         self.config = base_model.config
         self.generation_config = base_model.generation_config
         embedding = base_model.get_input_embeddings().weight
-        # P20，抽20行
         rows = torch.randint(len(embedding), (20,), generator=torch.Generator().manual_seed(44))
+        # [vocab,2560] -> [20,2560]
         self.p20 = nn.Parameter(embedding.detach()[rows.to(embedding.device)].float().clone())
         self.visual_s8 = nn.Parameter(torch.empty(8, 1024, device=embedding.device))
         self.visual_av10 = nn.Parameter(torch.empty(10, 1024, device=embedding.device))
@@ -88,29 +93,43 @@ class QDPT(nn.Module):
         return hook
 
     def condition(self, question_ids, valid, grid):
+        # [b,q] -> [b,q,2560]
         question = self.base_model.get_input_embeddings().weight[question_ids].float()
-        # [b,q,128]
+        # [b,q,2560] -> [b,q,128]
         x = self.text_projection(question) * valid.unsqueeze(-1)
+        # [b,q,128] -> [b,128,q]
         conv = self.question_pointwise(F.gelu(self.question_depthwise(x.transpose(1, 2))))
+        # [b,128,q] -> [b,q,128]
         x = (x + conv.transpose(1, 2)) * valid.unsqueeze(-1)
+        # [b,q,128] -> [b,q]
         scores = self.question_pool(self.question_norm(x)).squeeze(-1)
+        # [b,q,1] * [b,q,128] -> [b,128]
         u = (scores.masked_fill(~valid, -torch.inf).softmax(-1).unsqueeze(-1) * x).sum(1)
+        # [b,128] -> [b,3]
         beta = self.layer_gate(u).softmax(-1)
+        # [b,3] -> [n₀,...,nᵦ₋₁], nᵢ=tᵢ*hᵢ*wᵢ
         counts = [t * h * w for t, h, w in grid.tolist()]
+        # [Σ(n/4),2560] -> b * [n/4,2560]
         values = self.features['value'].float().split([n // 4 for n in counts])
         blocks = []
         for i, layer in enumerate(LAYERS):
+            # [b,128]
             query = self.query_heads[i](u)
             summaries = []
             for b, (patches, value) in enumerate(zip(self.features[layer].float().split(counts), values)):
+                # [n,1024] -> [n,128]
                 keys = self.key_heads[i](self.key_norms[i](patches))
+                # [n,128] * [128] -> [n]
                 probabilities = ((keys * query[b]).sum(-1) / 128**.5).softmax(0)
-                # 4个patch挤1格
+                # [n] -> [n/4,4] -> [n/4]
                 merged = probabilities.reshape(-1, 4).sum(1)
+                # [n/4,1] * [n/4,2560] -> [2560]
                 summaries.append((merged[:, None] * value).sum(0))
+            # b * [2560] -> [b,2560] -> [b,64]
             z = self.value_blocks[i](self.value_norms[i](torch.stack(summaries)))
+            # [b,64] * [b,1]
             blocks.append(z * beta[:, i, None])
-        # [b,3*64] -> [b,2560]
+        # 3 * [b,64] -> [b,192] -> [b,2560]
         return self.prefix_output(F.relu(torch.cat(blocks, -1)))
 
     @contextmanager
@@ -120,15 +139,19 @@ class QDPT(nn.Module):
         def static_prefix(module, args, output):
             if done:
                 return output
+            # [20,2560] -> [b,20,2560]
             prefix = self.p20.to(output.dtype)[None].expand(output.shape[0], -1, -1)
+            # [b,20,2560] + [b,t,2560] -> [b,t+20,2560]
             return torch.cat((prefix, output[:, 20:]), 1)
 
         def conditional_prefix(module, args, kwargs):
             nonlocal done
-            # prefill来一次就行
             if not done:
+                # [b,t+20,2560]
                 x = kwargs['inputs_embeds']
+                # [b,2560]
                 shift = self.condition(question_ids, valid, grid).to(x.dtype)
+                # [b,20,2560] + [b,1,2560]
                 kwargs['inputs_embeds'] = torch.cat((x[:, :20] + shift[:, None], x[:, 20:]), 1)
                 done = True
             return args, kwargs
@@ -144,13 +167,17 @@ class QDPT(nn.Module):
             self.features.clear()
 
     def call(self, generate, batch):
+        # [b,q], [b,q]
         question_ids = batch.pop('question_source_ids')
         valid = batch.pop('question_source_mask')
         ids = batch['input_ids']
+        # [b,20]
         prefix = ids.new_zeros((ids.shape[0], 20))
+        # [b,t] -> [b,t+20]
         batch['input_ids'] = torch.cat((prefix, ids), 1)
         batch['attention_mask'] = torch.cat((torch.ones_like(prefix), batch['attention_mask']), 1)
         if 'labels' in batch:
+            # [b,20]=-100; [b,t+20]
             batch['labels'] = torch.cat((prefix.new_full(prefix.shape, -100), batch['labels']), 1)
         with self.inject(question_ids, valid, batch['image_grid_thw']):
             fn = self.base_model.generate if generate else self.base_model
@@ -181,7 +208,6 @@ class QDPT(nn.Module):
     def save(self, directory):
         directory = Path(directory)
         directory.mkdir(parents=True, exist_ok=True)
-        # 只存学的那点
         torch.save({n: p.detach().cpu() for n, p in self.named_parameters() if p.requires_grad},
                    directory / 'visual_selection_prefix.pt')
 

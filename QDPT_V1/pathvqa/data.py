@@ -23,15 +23,18 @@ def encode(processor, image, question, answer=None):
     inputs = dict(processor(images=image, text=chat, padding=False, truncation=False,
                             max_length=2048, return_tensors='pt'))
     ids = processor.tokenizer.encode(question, add_special_tokens=False)
+    # [q] -> [1,q]
     inputs['question_source_ids'] = torch.tensor([ids], dtype=torch.long)
+    # [1,q], bool
     inputs['question_source_mask'] = torch.ones((1, len(ids)), dtype=torch.bool)
     if answer is not None:
         tokens = inputs['input_ids'][0].tolist()
         header = processor.tokenizer.encode('<|im_start|>assistant\n', add_special_tokens=False)
         prefix = processor.tokenizer.encode('<|im_start|>assistant', add_special_tokens=False)
         start = next(i for i in range(len(tokens)) if tokens[i:i + len(header)] == header) + len(prefix)
-        # 从这儿算，换行也带上
+        # [1,t]
         labels = inputs['input_ids'].clone()
+        # [:,:start]=-100
         labels[:, :start] = -100
         inputs['labels'] = labels
     return inputs
@@ -62,8 +65,11 @@ class Collator:
     def __call__(self, rows):
         padding = dict(input_ids=self.pad, attention_mask=0, labels=-100,
                        question_source_ids=0, question_source_mask=False)
+        # b * [1,tᵢ] -> [b,t_max]; b * [1,qᵢ] -> [b,q_max]
         batch = {key: pad_sequence([r[key][0] for r in rows], batch_first=True, padding_value=value)
                  for key, value in padding.items()}
+        # b * [nᵢ,p] -> [Σnᵢ,p]
         batch['pixel_values'] = torch.cat([r['pixel_values'] for r in rows])
+        # b * [1,3] -> [b,3]
         batch['image_grid_thw'] = torch.cat([r['image_grid_thw'] for r in rows])
         return batch

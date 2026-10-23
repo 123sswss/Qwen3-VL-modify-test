@@ -29,7 +29,6 @@ def score(rows):
     images = sorted(clusters)
     counts = [(sum(clusters[i]), len(clusters[i])) for i in images]
     rng = random.Random(42)
-    # 按图抽，一图的题一起走
     samples = []
     for _ in range(2000):
         draws = [counts[rng.randrange(len(images))] for _ in images]
@@ -64,7 +63,9 @@ def evaluate(model, processor, data, split, output, checkpoint):
             inputs = {k: v.to(device=device, dtype=torch.bfloat16 if v.is_floating_point() else v.dtype)
                       for k, v in encode(processor, image, question).items()}
             length = inputs['input_ids'].shape[1] + 20
+            # [1,t] -> [1,t+20+g]
             ids = model.generate(**inputs, max_new_tokens=32, do_sample=False, use_cache=True)
+            # [1,t+20+g] -> [1,g]
             answer = processor.batch_decode(ids[:, length:], skip_special_tokens=True)[0].strip()
             item = dict(question_id=f'pathvqa:{split}:{i}', image_id=digest.hexdigest(),
                         question=question, answer=answer)

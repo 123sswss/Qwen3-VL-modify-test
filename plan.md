@@ -822,6 +822,8 @@ Image-only45/46、C-qmap45/46已由用户完成并回传成绩与配对CI，两�
 
 ## 2026-10-23 已准备：独立精简V1 / PathVQA
 
+后续调整：用户要求精简版仅保存epoch5；回调、train_report的saved_epochs及README已统一为[5]。原正式实验入口及历史checkpoint保持原样，未执行测试或GPU操作。
+
 新建`QDPT_V1/`：`model/`仅含原Visual18/5-11-17选择/共同Value/条件P20，`pathvqa/`含Parquet、真实问题独立分词、原答案监督和raw精确匹配评分；根`main.py`提供run/train/eval。硬编码model44/data42、五轮、batch2/累积16、3%warmup/linear/clip1、原分组LR及读写头3e-4、Trainer归一化False，保存3/4/5，固定epoch5评分。移除诊断、消融、兼容与预检。训练参数无CLI覆盖，路径/动作/评估划分可指定。按用户要求不执行测试、训练或推理；当前数值等价及参数实测均未运行验证，论文历史成绩继续绑定原正式入口。目录自含README/requirements/.gitignore及独立Git，源码同时随主项目相关代码提交保存。
 
 ## 2026-10-22 执行中：投稿证据包与六题案例

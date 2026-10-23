@@ -19,7 +19,7 @@ class SaveEpochs(TrainerCallback):
 
     def on_epoch_end(self, args, state, control, **kwargs):
         epoch = round(state.epoch)
-        if epoch in (3, 4, 5):
+        if epoch == 5:
             kwargs['model'].save(self.output / 'checkpoints' / f'epoch_{epoch}')
 
 
@@ -37,7 +37,7 @@ def train(model, processor, data, output):
         train_dataset=TrainSet(data, processor), data_collator=Collator(processor),
         optimizers=(optimizer, None), callbacks=[SaveEpochs(output)])
     trainer.model_accepts_loss_kwargs = False  # Trainer normalizes by the actual accumulation window.
-    report = dict(model_seed=44, data_seed=42, epochs=5, saved_epochs=[3, 4, 5],
+    report = dict(model_seed=44, data_seed=42, epochs=5, saved_epochs=[5],
         per_device_batch_size=2, gradient_accumulation_steps=16, effective_batch_size=32,
         max_length=2048, warmup_ratio=.03, scheduler='linear', max_grad_norm=1.,
         optimizer='AdamW', betas=[.9, .999], eps=1e-8, weight_decay=0.,

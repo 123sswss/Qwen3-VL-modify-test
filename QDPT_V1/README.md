@@ -11,7 +11,7 @@ pathvqa/evaluate.py   贪心推理、官方归一化精确匹配和图像簇CI
 
 模型固定为20个LLM Prompt、索引17的S8＋Av10、索引5/11/17的三张选择地图。三张地图各自读取共同merger Value，经LN和2560→64投影，问题条件层权重调制后拼接，192→2560输出共享偏移。可训练参数目标为1,864,963。
 
-训练固定model seed44、data seed42、5 epochs、batch2/累积16、AdamW(betas=.9/.999, eps=1e-8, weight_decay=0)、clip1、bf16、workers2、3% warmup和五轮线性衰减。P20学习率.3、S8为3e-5、Av10和其余条件分支为1e-4，value_blocks与prefix_output为3e-4。Trainer显式设置`model_accepts_loss_kwargs=False`。保存epoch3/4/5，固定epoch5评分。
+训练固定model seed44、data seed42、5 epochs、batch2/累积16、AdamW(betas=.9/.999, eps=1e-8, weight_decay=0)、clip1、bf16、workers2、3% warmup和五轮线性衰减。P20学习率.3、S8为3e-5、Av10和其余条件分支为1e-4，value_blocks与prefix_output为3e-4。Trainer显式设置`model_accepts_loss_kwargs=False`。仅保存epoch5，固定epoch5评分。
 
 数据目录直接放官方`train-*.parquet`、`validation-*.parquet`、`test-*.parquet`。训练使用完整原始问句和答案，长度预算2048，保留完整序列；监督从assistant标记后的换行开始，包含答案和结束符。问题条件单独分词；推理在原问题后附加`Answer with only a short answer.`，使用贪心生成、最多32个新token和raw评分。图像簇CI固定2000次、seed42。
 

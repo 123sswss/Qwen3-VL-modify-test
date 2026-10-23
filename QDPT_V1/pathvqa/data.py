@@ -65,10 +65,10 @@ class Collator:
     def __call__(self, rows):
         padding = dict(input_ids=self.pad, attention_mask=0, labels=-100,
                        question_source_ids=0, question_source_mask=False)
-        # b * [1,tᵢ] -> [b,t_max]; b * [1,qᵢ] -> [b,q_max]
+        # b * [1,t_i] -> [b,t_max]; b * [1,q_i] -> [b,q_max]
         batch = {key: pad_sequence([r[key][0] for r in rows], batch_first=True, padding_value=value)
                  for key, value in padding.items()}
-        # b * [nᵢ,p] -> [Σnᵢ,p]
+        # b * [n_i,p] -> [sum(n_i),p]
         batch['pixel_values'] = torch.cat([r['pixel_values'] for r in rows])
         # b * [1,3] -> [b,3]
         batch['image_grid_thw'] = torch.cat([r['image_grid_thw'] for r in rows])

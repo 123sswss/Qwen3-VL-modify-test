@@ -22,13 +22,13 @@ class Visual18(nn.Module):
         lengths = (cu_seqlens[1:] - cu_seqlens[:-1]).tolist()
         # [8,1024] + [10,1024] -> [18,1024]
         prompt = torch.cat((owner.visual_s8, owner.visual_av10)).to(hidden_states.dtype)
-        # [Σn,1024] -> [Σ(n+18),1024]
+        # [sum(n),1024] -> [sum(n+18),1024]
         hidden_states = torch.cat([
             torch.cat((prompt, chunk)) for chunk in hidden_states.split(lengths)
         ])
 
         def prepend(tensor, value):
-            # [Σn,d] -> [Σ(n+18),d]
+            # [sum(n),d] -> [sum(n+18),d]
             return torch.cat([
                 torch.cat((chunk.new_full((18, *chunk.shape[1:]), value), chunk))
                 for chunk in tensor.split(lengths)
@@ -45,7 +45,7 @@ class Visual18(nn.Module):
         cu = cu_seqlens + torch.arange(cu_seqlens.numel(), device=cu_seqlens.device) * 18
         output = self.block(hidden_states, cu.to(cu_seqlens.dtype), rotary_pos_emb,
                             position_embeddings, **kwargs)
-        # [Σ(n+18),1024] -> [Σn,1024]
+        # [sum(n+18),1024] -> [sum(n),1024]
         return torch.cat([chunk[18:] for chunk in output.split([n + 18 for n in lengths])])
 
 
@@ -107,9 +107,9 @@ class QDPT(nn.Module):
         u = (scores.masked_fill(~valid, -torch.inf).softmax(-1).unsqueeze(-1) * x).sum(1)
         # [b,128] -> [b,3]
         beta = self.layer_gate(u).softmax(-1)
-        # [b,3] -> [n₀,...,nᵦ₋₁], nᵢ=tᵢ*hᵢ*wᵢ
+        # [b,3] -> [n_0,...,n_(b-1)], n_i=t_i*h_i*w_i
         counts = [t * h * w for t, h, w in grid.tolist()]
-        # [Σ(n/4),2560] -> b * [n/4,2560]
+        # [sum(n/4),2560] -> b * [n/4,2560]
         values = self.features['value'].float().split([n // 4 for n in counts])
         blocks = []
         for i, layer in enumerate(LAYERS):
